@@ -305,6 +305,23 @@ Task { @MainActor in
     assert(restoredUnfused.tone == nil, "neutral stack should carry no tone")
     print("probe: project round-trip OK (fused + unfused stacks, tone)")
 
+    // The container must be a standards-conforming zip, not merely one our
+    // own reader accepts — users will point other tools at these files.
+    func runUnzip(_ arguments: [String]) -> Bool {
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        unzip.arguments = arguments
+        unzip.standardOutput = Pipe()
+        unzip.standardError = Pipe()
+        do { try unzip.run() } catch { return false }
+        unzip.waitUntilExit()
+        return unzip.terminationStatus == 0
+    }
+    guard runUnzip(["-t", "-qq", sessionURL.path]) else {
+        print("probe: PROJECT NOT A VALID ZIP"); exit(1)
+    }
+    print("probe: project zip verified externally OK")
+
     // 3. Model-level fuse + explicit project restore (autosave/autoload is
     // gone — writing the blobs at quit took too long; quit warns instead).
     let model = AppModel()

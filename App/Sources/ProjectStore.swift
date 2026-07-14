@@ -1,17 +1,23 @@
 import Foundation
 import simd
+import zlib
 import HyperfocalKit
 
-/// Serializes a project to a directory bundle (Name.hyperfocal): a JSON
+/// Serializes a project to a single zip file (Name.hyperfocal): a JSON
 /// manifest plus 16-bit raw blobs per fused stack (pixels as UInt16, depth as
 /// 1/64-index fixed point — frame counts up to ~1000 — sharpness scaled to its
 /// global max). Pixel data is embedded because retouch edits cannot be
 /// recomputed; alignment transforms are embedded so retouch sources and
 /// re-fuses work immediately after restore.
 ///
+/// The container is a store-only (uncompressed) zip: deflate on 16-bit image
+/// data is slow for little gain, and stored entries make saves exactly as
+/// fast as loose files while keeping the project one pickable, mailable,
+/// syncable file. Zip64 structures are always written so multi-gigabyte
+/// projects don't silently corrupt at the 4 GB line.
+///
 /// v3 (multi-stack): `manifest.json` holds a stacks array; each fused stack's
-/// blobs live in `stack_NNN/`. v2 single-stack bundles (blobs at the root)
-/// still open, as a one-stack project.
+/// blobs live under `stack_NNN/`.
 enum ProjectStore {
 
     static let fileExtension = "hyperfocal"
@@ -52,28 +58,6 @@ enum ProjectStore {
         var sharpnessFullHeight: Int?
         var sharpnessFrameCount: Int?
         var sharpnessScale: Float?       // global max used for 16-bit quantization
-    }
-
-    /// Legacy single-stack manifest (v2); blobs at the bundle root.
-    private struct ManifestV2: Codable {
-        var version: Int
-        var framePaths: [String]
-        var includedPaths: [String]
-        var transforms: [[Float]]?
-        var resultWidth: Int
-        var resultHeight: Int
-        var hasWorking: Bool
-        var sourceIndex: Int?
-        var gains: [Float]?
-        var slabPaths: [String]?
-        var slabFrameGains: [Float]?
-        var bookmarks: [String: Data]?
-        var colorSpace: String?
-        var sharpnessFactor: Int?
-        var sharpnessFullWidth: Int?
-        var sharpnessFullHeight: Int?
-        var sharpnessFrameCount: Int?
-        var sharpnessScale: Float?
     }
 
     private struct VersionProbe: Codable {
@@ -117,7 +101,7 @@ enum ProjectStore {
 
     static func write(_ project: Project, to url: URL) throws {
         let fm = FileManager.default
-        // Stage the bundle in a temp directory the sandbox can write. The
+        // Stage the file in a temp directory the sandbox can write. The
         // save panel's grant covers exactly the chosen URL — a sibling
         // ".name.tmp" is denied everywhere outside the container, which
         // broke every save. .itemReplacementDirectory returns a writable
@@ -130,8 +114,8 @@ enum ProjectStore {
             ?? fm.temporaryDirectory
         let temp = stagingRoot.appendingPathComponent(url.lastPathComponent)
         try? fm.removeItem(at: temp)
-        try fm.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: temp) }
+        let zip = try ZipWriter(url: temp)
 
         var stackManifests = [StackManifest]()
         for (index, stack) in project.stacks.enumerated() {
@@ -156,17 +140,15 @@ enum ProjectStore {
                 fusedSettings: stack.fusedSettings,
                 tone: stack.tone)
             if let result = stack.result {
-                let dir = temp.appendingPathComponent(stackDirectoryName(index))
-                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                let dir = stackDirectoryName(index)
                 // All blobs are 16-bit: the pixels came from 16-bit sensors and
                 // export at 16-bit, depth is a frame index (1/64-index fixed
                 // point), and sharpness only needs relative magnitude.
-                try writeUnit16(result.pixels, to: dir.appendingPathComponent("result.raw"))
-                try writeFixed16(stack.depth, scale: 64,
-                                 to: dir.appendingPathComponent("depth.raw"))
+                try zip.add("\(dir)/result.raw", fixed16Data(result.pixels, scale: 65535))
+                try zip.add("\(dir)/depth.raw", fixed16Data(stack.depth, scale: 64))
                 if let working = stack.working {
-                    try writeUnit16(working.pixels,
-                                    to: dir.appendingPathComponent("working.raw"))
+                    try zip.add("\(dir)/working.raw",
+                                fixed16Data(working.pixels, scale: 65535))
                 }
                 if let sharpness = stack.sharpness {
                     var flat = [Float]()
@@ -174,8 +156,8 @@ enum ProjectStore {
                                          * (sharpness.planes.first?.count ?? 0))
                     for plane in sharpness.planes { flat.append(contentsOf: plane) }
                     let scale = max(flat.max() ?? 0, 1e-9)
-                    try writeFixed16(flat, scale: 65535 / scale,
-                                     to: dir.appendingPathComponent("sharpness.raw"))
+                    try zip.add("\(dir)/sharpness.raw",
+                                fixed16Data(flat, scale: 65535 / scale))
                     manifest.sharpnessFactor = sharpness.factor
                     manifest.sharpnessFullWidth = sharpness.fullWidth
                     manifest.sharpnessFullHeight = sharpness.fullHeight
@@ -191,8 +173,8 @@ enum ProjectStore {
                                 selectedIndex: project.selectedIndex,
                                 bookmarks: project.bookmarks,
                                 stacks: stackManifests)
-        try JSONEncoder().encode(manifest)
-            .write(to: temp.appendingPathComponent("manifest.json"))
+        try zip.add("manifest.json", JSONEncoder().encode(manifest))
+        try zip.finish()
 
         // Atomic swap: the existing project is only replaced by a fully
         // staged new one (the old delete-then-move destroyed the previous
@@ -211,7 +193,8 @@ enum ProjectStore {
     // MARK: - Read
 
     static func read(from url: URL) throws -> Project {
-        let manifestData = try Data(contentsOf: url.appendingPathComponent("manifest.json"))
+        let zip = try ZipReader(data: try Data(contentsOf: url, options: .mappedIfSafe))
+        let manifestData = try zip.blob("manifest.json")
         let probe = try JSONDecoder().decode(VersionProbe.self, from: manifestData)
         let space = probe.colorSpace ?? "srgb"
         guard space == ImageFile.workingSpaceName else {
@@ -223,36 +206,18 @@ enum ProjectStore {
         case formatVersion:
             let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
             let stacks = try manifest.stacks.enumerated().map { index, stack in
-                try readStack(stack, blobs: url.appendingPathComponent(stackDirectoryName(index)))
+                try readStack(stack) { try zip.blob("\(stackDirectoryName(index))/\($0)") }
             }
             return Project(stacks: stacks, selectedIndex: manifest.selectedIndex,
                            bookmarks: manifest.bookmarks)
-        case 2:
-            let old = try JSONDecoder().decode(ManifestV2.self, from: manifestData)
-            let adapted = StackManifest(
-                name: URL(fileURLWithPath: old.framePaths.first ?? "Stack")
-                    .deletingLastPathComponent().lastPathComponent,
-                enabled: true,
-                framePaths: old.framePaths, includedPaths: old.includedPaths,
-                transforms: old.transforms, hasResult: true,
-                resultWidth: old.resultWidth, resultHeight: old.resultHeight,
-                hasWorking: old.hasWorking, sourceIndex: old.sourceIndex,
-                gains: old.gains, slabPaths: old.slabPaths,
-                slabFrameGains: old.slabFrameGains,
-                sharpnessFactor: old.sharpnessFactor,
-                sharpnessFullWidth: old.sharpnessFullWidth,
-                sharpnessFullHeight: old.sharpnessFullHeight,
-                sharpnessFrameCount: old.sharpnessFrameCount,
-                sharpnessScale: old.sharpnessScale)
-            return Project(stacks: [try readStack(adapted, blobs: url)],
-                           selectedIndex: 0, bookmarks: old.bookmarks)
         default:
             throw NSError(domain: "Hyperfocal", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Unsupported session version \(probe.version)"])
         }
     }
 
-    private static func readStack(_ manifest: StackManifest, blobs dir: URL) throws -> StackPayload {
+    private static func readStack(_ manifest: StackManifest,
+                                  blob: (String) throws -> Data) throws -> StackPayload {
         var payload = StackPayload(
             name: manifest.name,
             enabled: manifest.enabled,
@@ -276,14 +241,14 @@ enum ProjectStore {
         guard manifest.hasResult else { return payload }
 
         let w = manifest.resultWidth, h = manifest.resultHeight
-        let resultPixels = try readUnit16(from: dir.appendingPathComponent("result.raw"),
-                                          expected: w * h * 4)
+        let resultPixels = try readFixed16(try blob("result.raw"), name: "result.raw",
+                                           scale: 65535, expected: w * h * 4)
         payload.result = ImageBuffer(width: w, height: h, pixels: resultPixels)
-        payload.depth = try readFixed16(from: dir.appendingPathComponent("depth.raw"),
+        payload.depth = try readFixed16(try blob("depth.raw"), name: "depth.raw",
                                         scale: 64, expected: w * h)
         if manifest.hasWorking {
-            let pixels = try readUnit16(from: dir.appendingPathComponent("working.raw"),
-                                        expected: w * h * 4)
+            let pixels = try readFixed16(try blob("working.raw"), name: "working.raw",
+                                         scale: 65535, expected: w * h * 4)
             payload.working = ImageBuffer(width: w, height: h, pixels: pixels)
         }
         if let factor = manifest.sharpnessFactor,
@@ -292,7 +257,7 @@ enum ProjectStore {
            let count = manifest.sharpnessFrameCount, count > 0 {
             let planeSize = ((fullW + factor - 1) / factor) * ((fullH + factor - 1) / factor)
             let scale = manifest.sharpnessScale ?? 1
-            let flat = try readFixed16(from: dir.appendingPathComponent("sharpness.raw"),
+            let flat = try readFixed16(try blob("sharpness.raw"), name: "sharpness.raw",
                                        scale: 65535 / max(scale, 1e-9),
                                        expected: planeSize * count)
             let planes = (0..<count).map {
@@ -311,17 +276,8 @@ enum ProjectStore {
         init(_ value: T) { self.value = value }
     }
 
-    /// Unit-range floats (pixels) as UInt16.
-    private static func writeUnit16(_ values: [Float], to url: URL) throws {
-        try writeFixed16(values, scale: 65535, to: url)
-    }
-
-    private static func readUnit16(from url: URL, expected: Int) throws -> [Float] {
-        try readFixed16(from: url, scale: 65535, expected: expected)
-    }
-
     /// Fixed-point 16-bit encoding: stored = round(value * scale).
-    private static func writeFixed16(_ values: [Float], scale: Float, to url: URL) throws {
+    private static func fixed16Data(_ values: [Float], scale: Float) -> Data {
         var samples = [UInt16](repeating: 0, count: values.count)
         let chunks = max(1, values.count / 65536)
         values.withUnsafeBufferPointer { src in
@@ -337,15 +293,15 @@ enum ProjectStore {
                 }
             }
         }
-        try samples.withUnsafeBytes { Data($0) }.write(to: url)
+        return samples.withUnsafeBytes { Data($0) }
     }
 
-    private static func readFixed16(from url: URL, scale: Float, expected: Int) throws -> [Float] {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    private static func readFixed16(_ data: Data, name: String, scale: Float,
+                                    expected: Int) throws -> [Float] {
         guard data.count == expected * 2 else {
             throw NSError(domain: "Hyperfocal", code: 2, userInfo: [
                 NSLocalizedDescriptionKey:
-                    "\(url.lastPathComponent): expected \(expected * 2) bytes, found \(data.count)"])
+                    "\(name): expected \(expected * 2) bytes, found \(data.count)"])
         }
         var values = [Float](repeating: 0, count: expected)
         data.withUnsafeBytes { raw in
@@ -364,5 +320,266 @@ enum ProjectStore {
             }
         }
         return values
+    }
+
+    // MARK: - Zip container
+
+    /// Store-only zip writer, streamed to disk through a FileHandle. Zip64
+    /// sizes/offsets are written unconditionally: projects routinely carry
+    /// multi-hundred-MB blobs and multi-stack files cross 4 GB, and one code
+    /// path beats two. Entry names are ASCII by construction.
+    private final class ZipWriter {
+        private let handle: FileHandle
+        private var offset: UInt64 = 0
+        private var central = Data()
+        private var entryCount: UInt64 = 0
+        private let dosTime: (time: UInt16, date: UInt16)
+
+        init(url: URL) throws {
+            guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+                throw NSError(domain: "Hyperfocal", code: 4, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not create \(url.lastPathComponent)"])
+            }
+            handle = try FileHandle(forWritingTo: url)
+            let c = Calendar(identifier: .gregorian)
+                .dateComponents([.year, .month, .day, .hour, .minute, .second], from: Date())
+            dosTime = (
+                time: UInt16((c.hour! << 11) | (c.minute! << 5) | (c.second! / 2)),
+                date: UInt16(((max(c.year!, 1980) - 1980) << 9) | (c.month! << 5) | c.day!))
+        }
+
+        func add(_ name: String, _ payload: Data) throws {
+            let crc = payload.withUnsafeBytes { buf -> UInt32 in
+                guard var p = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                    return UInt32(crc32(0, nil, 0))
+                }
+                var c = crc32(0, nil, 0)
+                var remaining = buf.count
+                while remaining > 0 {  // crc32 takes a 32-bit length
+                    let n = min(remaining, 1 << 30)
+                    c = crc32(c, p, uInt(n))
+                    p += n
+                    remaining -= n
+                }
+                return UInt32(c)
+            }
+            let nameBytes = Array(name.utf8)
+            let size = UInt64(payload.count)
+            // The blobs are read back as zero-copy UInt16 views of the mapped
+            // file, so every payload must start 2-aligned; a 5-byte unknown-id
+            // extra field flips the parity when the header would land odd.
+            let pad = (offset + UInt64(30 + nameBytes.count + 20)) % 2 == 1
+
+            var local = Data()
+            local.appendLE(UInt32(0x04034b50))
+            local.appendLE(UInt16(45))              // version needed: zip64
+            local.appendLE(UInt16(0))               // flags
+            local.appendLE(UInt16(0))               // method: store
+            local.appendLE(dosTime.time)
+            local.appendLE(dosTime.date)
+            local.appendLE(crc)
+            local.appendLE(UInt32(0xFFFFFFFF))      // sizes live in zip64 extra
+            local.appendLE(UInt32(0xFFFFFFFF))
+            local.appendLE(UInt16(nameBytes.count))
+            local.appendLE(UInt16(pad ? 25 : 20))   // extra length
+            local.append(contentsOf: nameBytes)
+            local.appendLE(UInt16(1))               // zip64 extra field
+            local.appendLE(UInt16(16))
+            local.appendLE(size)                    // uncompressed
+            local.appendLE(size)                    // compressed (= stored)
+            if pad {
+                local.appendLE(UInt16(0x7061))      // alignment pad, skipped by id
+                local.appendLE(UInt16(1))
+                local.append(0)
+            }
+            try handle.write(contentsOf: local)
+            try handle.write(contentsOf: payload)
+
+            central.appendLE(UInt32(0x02014b50))
+            central.appendLE(UInt16(45))            // version made by
+            central.appendLE(UInt16(45))            // version needed
+            central.appendLE(UInt16(0))             // flags
+            central.appendLE(UInt16(0))             // method
+            central.appendLE(dosTime.time)
+            central.appendLE(dosTime.date)
+            central.appendLE(crc)
+            central.appendLE(UInt32(0xFFFFFFFF))
+            central.appendLE(UInt32(0xFFFFFFFF))
+            central.appendLE(UInt16(nameBytes.count))
+            central.appendLE(UInt16(28))            // extra length
+            central.appendLE(UInt16(0))             // comment length
+            central.appendLE(UInt16(0))             // disk
+            central.appendLE(UInt16(0))             // internal attrs
+            central.appendLE(UInt32(0))             // external attrs
+            central.appendLE(UInt32(0xFFFFFFFF))    // offset lives in zip64 extra
+            central.append(contentsOf: nameBytes)
+            central.appendLE(UInt16(1))             // zip64 extra field
+            central.appendLE(UInt16(24))
+            central.appendLE(size)
+            central.appendLE(size)
+            central.appendLE(offset)                // local header offset
+
+            offset += UInt64(local.count) + size
+            entryCount += 1
+        }
+
+        func finish() throws {
+            var tail = central
+            let centralOffset = offset
+            let centralSize = UInt64(central.count)
+
+            tail.appendLE(UInt32(0x06064b50))       // zip64 end of central directory
+            tail.appendLE(UInt64(44))               // size of remaining record
+            tail.appendLE(UInt16(45))
+            tail.appendLE(UInt16(45))
+            tail.appendLE(UInt32(0))                // this disk
+            tail.appendLE(UInt32(0))                // central directory disk
+            tail.appendLE(entryCount)
+            tail.appendLE(entryCount)
+            tail.appendLE(centralSize)
+            tail.appendLE(centralOffset)
+
+            tail.appendLE(UInt32(0x07064b50))       // zip64 EOCD locator
+            tail.appendLE(UInt32(0))
+            tail.appendLE(centralOffset + centralSize)
+            tail.appendLE(UInt32(1))                // total disks
+
+            tail.appendLE(UInt32(0x06054b50))       // classic EOCD, all deferred
+            tail.appendLE(UInt16(0))
+            tail.appendLE(UInt16(0))
+            tail.appendLE(UInt16(0xFFFF))
+            tail.appendLE(UInt16(0xFFFF))
+            tail.appendLE(UInt32(0xFFFFFFFF))
+            tail.appendLE(UInt32(0xFFFFFFFF))
+            tail.appendLE(UInt16(0))                // comment length
+
+            try handle.write(contentsOf: tail)
+            try handle.close()
+        }
+    }
+
+    /// Reads the central directory of a (possibly zip64) zip and exposes
+    /// entries as zero-copy slices of the mapped file. Store-only: entries
+    /// compressed by other tools are rejected, not silently misread. CRCs
+    /// are not verified — every blob is length-checked, and reads already
+    /// touch every byte.
+    private struct ZipReader {
+        private let data: Data
+        private let ranges: [String: Range<Int>]
+
+        init(data: Data) throws {
+            self.data = data
+            func fail(_ reason: String) -> NSError {
+                NSError(domain: "Hyperfocal", code: 5, userInfo: [
+                    NSLocalizedDescriptionKey: "Not a Hyperfocal project (\(reason))"])
+            }
+            func u16(_ o: Int) -> Int { Int(data[o]) | Int(data[o + 1]) << 8 }
+            func u32(_ o: Int) -> UInt64 {
+                UInt64(u16(o)) | UInt64(u16(o + 2)) << 16
+            }
+            func u64(_ o: Int) -> UInt64 { u32(o) | u32(o + 4) << 32 }
+
+            // EOCD: scan back over a possible (foreign) trailing comment.
+            guard data.count >= 22 else { throw fail("truncated") }
+            var eocd = -1
+            var probe = data.count - 22
+            let floor = max(0, data.count - 22 - 65535)
+            while probe >= floor {
+                if u32(probe) == 0x06054b50 { eocd = probe; break }
+                probe -= 1
+            }
+            guard eocd >= 0 else { throw fail("no zip directory") }
+
+            var count = UInt64(u16(eocd + 10))
+            var centralOffset = u32(eocd + 16)
+            if count == 0xFFFF || centralOffset == 0xFFFFFFFF {
+                // Zip64: locator sits directly before the EOCD.
+                let locator = eocd - 20
+                guard locator >= 0, u32(locator) == 0x07064b50 else {
+                    throw fail("bad zip64 locator")
+                }
+                let record = Int(u64(locator + 8))
+                guard record + 56 <= eocd, u32(record) == 0x06064b50 else {
+                    throw fail("bad zip64 directory")
+                }
+                count = u64(record + 32)
+                centralOffset = u64(record + 48)
+            }
+
+            var entries = [String: Range<Int>]()
+            var cursor = Int(centralOffset)
+            for _ in 0..<count {
+                guard cursor + 46 <= data.count, u32(cursor) == 0x02014b50 else {
+                    throw fail("bad directory entry")
+                }
+                let method = u16(cursor + 10)
+                var size = u32(cursor + 24)
+                let nameLen = u16(cursor + 28)
+                let extraLen = u16(cursor + 30)
+                let commentLen = u16(cursor + 32)
+                var localOffset = u32(cursor + 42)
+                guard cursor + 46 + nameLen + extraLen <= data.count else {
+                    throw fail("truncated directory")
+                }
+                let name = String(decoding: data[(cursor + 46)..<(cursor + 46 + nameLen)],
+                                  as: UTF8.self)
+                // Zip64 extra field carries whichever values are deferred, in
+                // order: uncompressed size, compressed size, offset.
+                var extra = cursor + 46 + nameLen
+                let extraEnd = extra + extraLen
+                while extra + 4 <= extraEnd {
+                    let id = u16(extra), len = u16(extra + 2)
+                    if id == 1 {
+                        var field = extra + 4
+                        if size == 0xFFFFFFFF { size = u64(field); field += 8 }
+                        if u32(cursor + 20) == 0xFFFFFFFF { field += 8 }  // compressed
+                        if localOffset == 0xFFFFFFFF { localOffset = u64(field) }
+                    }
+                    extra += 4 + len
+                }
+                guard method == 0 else { throw fail("compressed entry \(name)") }
+                // Data begins after the local header's own (independently
+                // sized) name and extra fields.
+                let lh = Int(localOffset)
+                guard lh + 30 <= data.count, u32(lh) == 0x04034b50 else {
+                    throw fail("bad local header for \(name)")
+                }
+                let start = lh + 30 + u16(lh + 26) + u16(lh + 28)
+                guard start + Int(size) <= data.count else {
+                    throw fail("truncated entry \(name)")
+                }
+                entries[name] = start..<(start + Int(size))
+                cursor += 46 + nameLen + extraLen + commentLen
+            }
+            ranges = entries
+        }
+
+        func blob(_ name: String) throws -> Data {
+            guard let range = ranges[name] else {
+                throw NSError(domain: "Hyperfocal", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "\(name): missing from project"])
+            }
+            // Even offsets (all of ours, by construction) slice the mapping
+            // zero-copy; odd ones — possible in a foreign zip — are copied so
+            // the 16-bit blob views stay aligned.
+            return range.lowerBound % 2 == 0 ? data[range] : data.subdata(in: range)
+        }
+    }
+}
+
+private extension Data {
+    mutating func appendLE(_ v: UInt16) {
+        append(UInt8(v & 0xFF)); append(UInt8(v >> 8))
+    }
+    mutating func appendLE(_ v: UInt32) {
+        for shift in stride(from: 0, to: 32, by: 8) {
+            append(UInt8((v >> shift) & 0xFF))
+        }
+    }
+    mutating func appendLE(_ v: UInt64) {
+        for shift in stride(from: 0, to: 64, by: 8) {
+            append(UInt8((v >> shift) & 0xFF))
+        }
     }
 }
