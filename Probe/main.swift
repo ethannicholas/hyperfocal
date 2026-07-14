@@ -771,8 +771,45 @@ Task { @MainActor in
           neutralData.range(of: Data("crs:".utf8)) == nil else {
         print("probe: NEUTRAL TONE STILL EMBEDDED XMP"); exit(1)
     }
-    try? FileManager.default.removeItem(at: dngDir)
     print("probe: dng embedded tone xmp OK")
+
+    // Both DNG writers must declare a linear render: an explicit linear
+    // ProfileToneCurve (50940) and DefaultBlackRender=None (51110). A
+    // profile without them doesn't render linearly — ACR substitutes its
+    // default S-curve and shadow mapping on top of the baked-in look.
+    func hasLinearRenderTags(_ data: Data) -> Bool {
+        func u16(_ o: Int) -> Int { Int(data[o]) | Int(data[o + 1]) << 8 }
+        func u32(_ o: Int) -> Int { u16(o) | u16(o + 2) << 16 }
+        guard data.count > 8, data[0] == 0x49 else { return false }
+        let ifd = u32(4)
+        var curveOK = false, blackOK = false
+        for i in 0..<u16(ifd) {
+            let o = ifd + 2 + i * 12
+            switch u16(o) {
+            case 50940:
+                let off = u32(o + 8)
+                curveOK = u32(o + 4) == 6 && (0..<6).map {
+                    Float(bitPattern: UInt32(truncatingIfNeeded: u32(off + $0 * 4)))
+                } == [0, 0, 0.5, 0.5, 1, 1]
+            case 51110:
+                blackOK = u32(o + 8) == 1
+            default:
+                break
+            }
+        }
+        return curveOK && blackOK
+    }
+    guard hasLinearRenderTags(neutralData) else {
+        print("probe: SDK DNG MISSING LINEAR RENDER TAGS"); exit(1)
+    }
+    let fallbackDNG = dngDir.appendingPathComponent("fallback.dng")
+    try? DNGWriter.writeUncompressed(reread, to: fallbackDNG)
+    guard let fallbackData = try? Data(contentsOf: fallbackDNG),
+          hasLinearRenderTags(fallbackData) else {
+        print("probe: FALLBACK DNG MISSING LINEAR RENDER TAGS"); exit(1)
+    }
+    try? FileManager.default.removeItem(at: dngDir)
+    print("probe: dng linear render tags OK")
 
     print("probe: ALL PASS")
     exit(0)

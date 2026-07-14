@@ -198,6 +198,25 @@ extern "C" int hyperfocal_write_linear_dng(const uint16_t *rgb,
 		profile->SetForwardMatrix1 (forwardMatrix);
 		profile->SetCalibrationIlluminant1 (lsD65);
 
+		// Explicit linear ProfileToneCurve + DefaultBlackRender=None. A
+		// profile with NO tone curve does not render linearly: ACR (and
+		// dng_render) substitutes the Camera Raw default S-curve, and a
+		// default shadow-mapping pass runs unless the profile opts out.
+		// Our pixels already carry the intended look, so both must be
+		// disabled or Lightroom "overcooks" every import. The midpoint
+		// keeps the curve from ever being classified as a null curve and
+		// dropped. Must match DNGWriter.writeUncompressed's tags 50940 /
+		// 51110 on the Swift side.
+
+		dng_tone_curve linearCurve;
+		linearCurve.fCoord.resize (3);
+		linearCurve.fCoord [0] = dng_point_real64 (0.0, 0.0);
+		linearCurve.fCoord [1] = dng_point_real64 (0.5, 0.5);
+		linearCurve.fCoord [2] = dng_point_real64 (1.0, 1.0);
+		profile->SetToneCurve (linearCurve);
+
+		profile->SetDefaultBlackRender (defaultBlackRender_None);
+
 		negative->AddProfile (profile);
 
 		negative->SetStage1Image (image);

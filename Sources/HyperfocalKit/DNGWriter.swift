@@ -278,9 +278,14 @@ public enum DNGWriter {
                 })),                                                // ColorMatrix1
                 Entry(tag: 50728, value: .rational([(1, 1), (1, 1), (1, 1)])),
                 Entry(tag: 50778, value: .short([21])),             // CalibrationIlluminant1: D65
+                // Explicit linear ProfileToneCurve + DefaultBlackRender=None:
+                // a profile with no tone curve gets ACR's default S-curve and
+                // shadow mapping instead of a linear render (see dng_shim.cpp).
+                Entry(tag: 50940, value: .float32([0, 0, 0.5, 0.5, 1, 1])),
                 Entry(tag: 50964, value: .srational(forwardMatrix.map {
                     (Int32(($0 * 10000).rounded()), Int32(10000))
                 })),                                                // ForwardMatrix1
+                Entry(tag: 51110, value: .long([1])),               // DefaultBlackRender: None
             ]
         }
 
@@ -364,6 +369,7 @@ public enum DNGWriter {
         case long([UInt32])
         case rational([(UInt32, UInt32)])
         case srational([(Int32, Int32)])
+        case float32([Float])
 
         var typeCode: UInt16 {
             switch self {
@@ -373,6 +379,7 @@ public enum DNGWriter {
             case .long: return 4
             case .rational: return 5
             case .srational: return 10
+            case .float32: return 11
             }
         }
 
@@ -384,6 +391,7 @@ public enum DNGWriter {
             case .long(let v): return UInt32(v.count)
             case .rational(let v): return UInt32(v.count)
             case .srational(let v): return UInt32(v.count)
+            case .float32(let v): return UInt32(v.count)
             }
         }
 
@@ -403,6 +411,8 @@ public enum DNGWriter {
                 for (n, den) in v { d.appendLE(n); d.appendLE(den) }
             case .srational(let v):
                 for (n, den) in v { d.appendLE(UInt32(bitPattern: n)); d.appendLE(UInt32(bitPattern: den)) }
+            case .float32(let v):
+                for x in v { d.appendLE(x.bitPattern) }
             }
             return d
         }
