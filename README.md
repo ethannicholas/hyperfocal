@@ -1,0 +1,131 @@
+# Hyperfocal
+
+A focus stacking application for macOS.
+
+[Website](https://ethannicholas.com/hyperfocal) ·
+[Tutorial](https://ethannicholas.com/hyperfocal/tutorial.html)
+
+![Hyperfocal main window: a partially focused source frame on the left, the fully sharp fused result on the right](Site/images/app-fused.png)
+
+## What it does
+
+A camera lens focuses at a single depth plane, and only that plane is
+perfectly sharp. That's often fine, and having a blurred background can be
+desirable for subject separation. But sometimes, especially with macro
+photography, a shallow depth of field is unpleasant and distracting because
+you'd rather have the entire subject in focus at once. The solution to this
+problem is *focus stacking*: shoot many, often dozens or hundreds, of frames
+each with slightly different focus, and then merge the sharpest parts of each
+into one image that has everything you care about in focus at once.
+
+Hyperfocal performs that merge step for you. Drop in a folder of frames and it
+handles every part of the focus stacking process — aligning all of the frames
+to deal with focus breathing and slight shifts, scoring per-pixel sharpness
+across the stack, and rendering a result that takes each pixel from the
+sharpest frames. And because no focus stacking algorithm can perfectly deal
+with complicated objects having translucency, small projections, and the like,
+Hyperfocal offers powerful retouching features so you can obtain a flawless
+result every time.
+
+| ![A mineral specimen where only a small part is in focus](Site/images/cinnabar-1.jpg) | ![The same specimen, entirely in focus](Site/images/cinnabar-stack.jpg) |
+|:--:|:--:|
+| *In this single shot, only a small part of this cinnabar specimen is in focus* | *After fusing dozens of similar shots in Hyperfocal, the entire specimen is sharp* |
+
+## Highlights
+
+- **GPU accelerated.** Hyperfocal takes maximum advantage of Apple Silicon,
+  using compute shaders to run its algorithms on the GPU wherever possible.
+  Registration, warping, sharpness scoring, and depth regularization are all
+  GPU-accelerated.
+
+- **Two fusion engines.** A depth-map engine with halo-aware regularization
+  for clean subjects, and Laplacian-pyramid (PMax) fusion for scenes where
+  structures at different depths overlap. Retouching lets you combine the
+  strengths of both algorithms in a single image.
+
+- **Thoughtful features.** You shot several stacks in the same folder? No
+  problem, Hyperfocal notices the gap in frame timestamps and offers to import
+  them as separate stacks. Turns out the flash didn't fire on some frames? It
+  notices and offers to exclude the offending images rather than destroy your
+  stack. Hyperfocal was created by an experienced macro photographer familiar
+  with the process and its challenges.
+
+- **Retouching that understands stacks.** Paint from any source frame, jump to
+  the sharpest frame under the brush, blend in the PMax rendering where it
+  produced better results, or paint back to the original fusion.
+
+- **Raw in, raw out.** Supports camera raw (NEF, DNG, CR3, ARW, …) input,
+  working in Display P3 end to end, and produces DNG output. Or you can stick
+  to JPG / TIFF if you prefer.
+
+- **Projects and batches.** Multi-stack projects with per-stack results and
+  retouch state, a queue that fuses every stack in a session, export-all, and
+  a full command-line interface for headless batch work.
+
+## Get Hyperfocal
+
+If you'd prefer to skip the build process and the hassle of keeping it up to
+date (and give the author a small tip in the process), Hyperfocal is available
+from the Mac App Store for $5.
+
+To build it yourself for free, you'll need Xcode and
+[XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`):
+
+```sh
+git clone https://github.com/ethannicholas/hyperfocal.git
+cd hyperfocal/App
+xcodegen generate
+open Hyperfocal.xcodeproj
+```
+
+Then run from Xcode. You will need to change the signing certificate to your
+own or to "Sign to Run Locally".
+
+The command-line tool builds with plain SwiftPM:
+
+```sh
+swift build -c release
+BIN=.build/release/hyperfocal-cli
+
+# Fuse a stack (frames in focus order; alignment on by default)
+$BIN fuse shots/DSC_*.NEF -o stacked.tif
+
+# Fuse a whole session: stacks are detected by EXIF capture-time gaps
+$BIN batch session/DSC_*.NEF -o fused/ --gap 10 --auto-exclude
+
+# Generate a synthetic stack with ground truth and check the pipeline
+$BIN synth -o /tmp/synth
+$BIN fuse /tmp/synth/frame_*.tif -o /tmp/out.tif
+$BIN compare /tmp/out.tif /tmp/synth/ground_truth.tif   # prints PSNR
+```
+
+New to focus stacking? Take a look at the
+[tutorial](https://ethannicholas.com/hyperfocal/tutorial.html).
+
+## How it works
+
+1. **Registration.** Each frame is registered against its neighbor (adjacent
+   frames in a focus ramp share the most in-focus content) using Vision
+   homographic registration on gradient-magnitude images, which keeps the
+   defocused content from dragging the alignment. Only the chained 3×3
+   matrices are kept. This handles focus breathing, translation, and rotation;
+   the output canvas is cropped to the region every frame covers.
+
+2. **Fusion.** Each frame is decoded once, warped into reference coordinates
+   (Lanczos-3 with an anti-ringing clamp), folded into fixed-size accumulator
+   planes, and freed. The default `dmap` engine scores per-pixel sharpness
+   across the stack, builds a depth map — which frame is sharpest at every
+   pixel — cleans it up with a confidence-weighted median and an edge-aware
+   guided filter (sharp subjects keep their exact winning frame; featureless
+   regions form smooth ramps; depth stops dead at subject silhouettes, which
+   is what prevents halos), then renders by blending each pixel from the
+   frames nearest its depth. The `pmax` engine is Laplacian-pyramid
+   max-coefficient fusion, better where structures at different depths
+   overlap. Deep stacks can be *slabbed*: overlapping groups pyramid-fused
+   first, then depth-map fused across the slabs.
+
+3. **Export.** 16-bit TIFF/PNG or JPEG in sRGB, Display P3, or ProPhoto; or
+   Linear DNG (written through the vendored Adobe DNG SDK) that Lightroom and
+   Adobe Camera Raw open as an editable raw file, with tone edits embedded as
+   Camera Raw settings. Every format carries the first frame's EXIF —
+   exposure, lens, camera, GPS.

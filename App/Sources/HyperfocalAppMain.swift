@@ -1,0 +1,129 @@
+import SwiftUI
+import HyperfocalKit
+
+/// Quit gate: a project holds retouch edits that can't be recomputed, and
+/// writing it automatically at quit proved too slow — so termination asks
+/// for confirmation when unsaved work exists.
+///
+/// Also disables window tabbing: tabs would show several scenes all bound
+/// to the one shared AppModel — not a multi-project feature, just the same
+/// project rendered twice. (The View menu used to be stripped wholesale for
+/// its tab items, but disabling tabbing removes them at the source, and the
+/// stripper raced SwiftUI's menu reinstalls — a flickering View menu during
+/// fuses — once zoom commands moved in.)
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated { model?.confirmTermination() ?? .terminateNow }
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+}
+
+@main
+struct HyperfocalApp: App {
+    @StateObject private var model = AppModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    var body: some Scene {
+        WindowGroup("Hyperfocal") {
+            ContentView()
+                .environmentObject(model)
+                .frame(minWidth: 980, minHeight: 620)
+                .onAppear { appDelegate.model = model }
+        }
+        .commands {
+            // Standard about panel (icon/name/version/copyright come from the
+            // bundle) plus a credits blurb carrying the Adobe-required DNG
+            // attribution and a link to the repository.
+            CommandGroup(replacing: .appInfo) {
+                Button("About Hyperfocal") {
+                    let attributes: [NSAttributedString.Key: Any] = [
+                        .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                    ]
+                    let credits = NSMutableAttributedString(
+                        string: "https://github.com/ethannicholas/hyperfocal",
+                        attributes: attributes.merging(
+                            [.link: URL(string: "https://github.com/ethannicholas/hyperfocal")!],
+                            uniquingKeysWith: { _, new in new }))
+                    credits.append(NSAttributedString(
+                        string: """
+
+
+                        Includes the Adobe DNG SDK — DNG technology under \
+                        license by Adobe Systems Incorporated. See NOTICE.md \
+                        in the source distribution for all third-party credits.
+                        """,
+                        attributes: attributes))
+                    NSApplication.shared.orderFrontStandardAboutPanel(
+                        options: [.credits: credits])
+                }
+            }
+            CommandGroup(replacing: .newItem) {
+                // Same action as the empty state's "Open Folder…" button,
+                // deliberately named differently: from the File menu the
+                // mental model is starting a project; from the empty window
+                // it's pointing the app at a folder of frames.
+                Button("New Project…") { model.openFrames() }
+                    .keyboardShortcut("n", modifiers: .command)
+                Button("Open Project…") { model.openProjectPanel() }
+                    .keyboardShortcut("o", modifiers: .command)
+                Button("Add Stack Folder…") { model.addStackFolderPanel() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(model.phase.isRunning)
+                Divider()
+                Button("Save Project…") { model.saveProjectPanel() }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(model.phase != .done)
+                Button("Export Result…") { model.exportResult() }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(!model.canExport)
+            }
+            // Route Edit > Undo/Redo to the retouch session (we don't use
+            // NSUndoManager). Enabled whenever a session exists; empty-stack
+            // invocations no-op — the session's canUndo/canRedo changes aren't
+            // republished through the model, deliberately, to keep cursor-move
+            // updates from re-rendering the whole scene.
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo Stroke") { model.retouch?.undo() }
+                    .keyboardShortcut("z", modifiers: .command)
+                    .disabled(model.retouch == nil)
+                Button("Redo Stroke") { model.retouch?.redo() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(model.retouch == nil)
+            }
+            // Replace the default (nonfunctional) help book entry with the
+            // tutorial — someone reaching for Help wants the walkthrough,
+            // not the product landing page.
+            // Zoom lives in the system View menu (the .sidebar placement
+            // anchors there even with no sidebar commands).
+            CommandGroup(after: .sidebar) {
+                Button("Zoom In") { model.zoomIn() }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("Zoom Out") { model.zoomOut() }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Zoom to Fit") { model.viewport.reset() }
+                    .keyboardShortcut("0", modifiers: .command)
+            }
+            CommandGroup(replacing: .help) {
+                Button("Hyperfocal Help") {
+                    // The server 301s http → https; link the final URL.
+                    NSWorkspace.shared.open(
+                        URL(string: "https://ethannicholas.com/hyperfocal/tutorial.html")!)
+                }
+                .keyboardShortcut("?", modifiers: .command)
+            }
+        }
+
+        // The set-and-forget pipeline switches live here (⌘,), out of the
+        // sidebar's way; SettingsView documents each one inline.
+        Settings {
+            SettingsView()
+                .environmentObject(model)
+        }
+    }
+}

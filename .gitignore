@@ -1,0 +1,5 @@
+.build
+dist
+xcuserdata
+Hyperfocal.xcodeproj
+.DS_Store

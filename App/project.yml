@@ -1,0 +1,57 @@
+# XcodeGen spec for the Hyperfocal app target. The engine, vendored Adobe DNG
+# SDK, and CLI live in the SwiftPM package at the repo root; this project holds
+# only the app layer. Regenerate with:  cd App && xcodegen generate
+name: Hyperfocal
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  HyperfocalKit:
+    path: ..
+
+targets:
+  Hyperfocal:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      - Assets.xcassets
+    dependencies:
+      - package: HyperfocalKit
+        product: HyperfocalKit
+    # Sandboxed in every build (not just MAS) so the dev build exercises the
+    # same file-access rules the App Store requires. Frame access outside the
+    # container comes from NSOpenPanel/drag grants, persisted across launches
+    # as security-scoped bookmarks in project manifests (see ProjectStore).
+    entitlements:
+      path: Hyperfocal.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-write: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ethannicholas.hyperfocal
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: "5.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: Y3GFBT2WQ2
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+    info:
+      path: Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # No non-exempt encryption (the app makes no network calls beyond
+        # opening an HTTPS link); answers App Store Connect's per-build
+        # export-compliance question so uploads don't stall on it.
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleDisplayName: Hyperfocal
+        LSApplicationCategoryType: public.app-category.photography
+        NSHumanReadableCopyright: "© 2026 Ethan Nicholas"
+        NSPrincipalClass: NSApplication
+        NSHighResolutionCapable: true

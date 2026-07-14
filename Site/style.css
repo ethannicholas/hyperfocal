@@ -1,0 +1,292 @@
+/* Hyperfocal documentation site. Hand-written; no build step, no external
+   resources. Dark, photographic, quiet. */
+
+:root {
+  --bg: #101114;
+  --bg-raised: #1a1c20;
+  --border: #2a2d33;
+  --text: #d8dade;
+  --text-dim: #9a9ea6;
+  --accent: #5b9bf5;
+  --accent-dim: #3f6db0;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
+        Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Header / nav */
+
+header {
+  border-bottom: 1px solid var(--border);
+  background: rgba(16, 17, 20, 0.92);
+}
+
+.nav {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.nav .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  color: var(--text);
+  margin-right: auto;
+}
+
+.nav .brand img { width: 28px; height: 28px; border-radius: 6px; }
+.nav a { color: var(--text-dim); }
+.nav a:hover { color: var(--text); text-decoration: none; }
+.nav a.current { color: var(--text); font-weight: 600; }
+
+/* Layout */
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 24px 80px;
+}
+
+h1 { font-size: 2.1em; line-height: 1.2; margin: 0.8em 0 0.4em; letter-spacing: -0.02em; }
+h2 { font-size: 1.45em; margin: 2em 0 0.5em; letter-spacing: -0.01em; }
+h3 { font-size: 1.12em; margin: 1.6em 0 0.4em; }
+p, ul, ol { color: var(--text); }
+.dim { color: var(--text-dim); }
+
+/* Hero (index) */
+
+.hero {
+  text-align: center;
+  padding: 48px 0 8px;
+}
+
+.hero img.appicon { width: 108px; height: 108px; }
+.hero h1 { margin: 0.5em 0 0.2em; }
+
+.hero .tagline {
+  font-size: 1.25em;
+  color: var(--text-dim);
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.hero .badges { margin-top: 18px; }
+
+.badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 14px;
+  margin: 0 4px;
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+
+/* Figures */
+
+figure {
+  margin: 28px 0;
+}
+
+figure img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+figure.plain img { border: none; }
+
+figcaption {
+  color: var(--text-dim);
+  font-size: 0.88em;
+  margin-top: 8px;
+  text-align: center;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 640px) {
+  .pair { grid-template-columns: 1fr; }
+}
+
+/* Feature grid (index) */
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 28px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.features li {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.features b { display: block; margin-bottom: 4px; }
+.features li, .features p { font-size: 0.92em; color: var(--text-dim); }
+.features b { color: var(--text); font-size: 1.05em; }
+
+/* Code */
+
+code, pre {
+  font-family: var(--mono);
+  font-size: 0.86em;
+}
+
+code {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+pre {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+
+pre code { background: none; border: none; padding: 0; }
+
+/* Keyboard keys */
+
+kbd {
+  font-family: var(--mono);
+  font-size: 0.82em;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+/* Reference tables / definition blocks */
+
+.ref {
+  margin: 18px 0;
+}
+
+.ref dt {
+  font-weight: 600;
+  margin-top: 16px;
+}
+
+.ref dt .range {
+  font-weight: 400;
+  color: var(--text-dim);
+  font-size: 0.85em;
+  margin-left: 8px;
+}
+
+.ref dd {
+  margin: 4px 0 0 0;
+  color: var(--text-dim);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 18px 0;
+  font-size: 0.92em;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th { color: var(--text-dim); font-weight: 600; }
+td:first-child { white-space: nowrap; }
+
+/* Steps (tutorial) */
+
+.step {
+  border-left: 3px solid var(--accent-dim);
+  padding-left: 20px;
+  margin: 34px 0;
+}
+
+.step h2 { margin-top: 0; }
+.step h2 .n { color: var(--accent); margin-right: 6px; }
+
+/* Callouts */
+
+.note {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 18px 0;
+  font-size: 0.92em;
+  color: var(--text-dim);
+}
+
+.note b { color: var(--text); }
+
+/* Buttons (download links) */
+
+.button {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 9px 20px;
+  font-weight: 600;
+}
+
+.button:hover { background: #6ca7f7; text-decoration: none; }
+
+.button.secondary {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+/* Footer */
+
+footer {
+  border-top: 1px solid var(--border);
+  margin-top: 60px;
+}
+
+footer .inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+  color: var(--text-dim);
+  font-size: 0.85em;
+}

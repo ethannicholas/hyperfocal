@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutorial — Hyperfocal</title>
+<meta name="description" content="From a folder of frames to a finished all-in-focus image: shooting, importing, fusing, reading the depth map, retouching, and exporting with Hyperfocal.">
+<link rel="icon" href="images/icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="images/icon.png" alt=""> Hyperfocal</a>
+    <a href="index.html">Overview</a>
+    <a class="current" href="tutorial.html">Tutorial</a>
+    <a href="https://apps.apple.com/us/app/hyperfocal-focus-stacker/id6789574802">App Store</a>
+    <a href="https://github.com/ethannicholas/hyperfocal">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+<h1>Getting started with Hyperfocal</h1>
+
+<p>This walks you through the whole workflow: shooting a stack, importing it,
+fusing, reading the depth map, fixing what needs fixing, and exporting. If you'd
+like to follow along with the example macro stack, you can download it here:</p>
+
+<p><a class="button" href="sample-stack.zip">Download the sample stack</a>
+<span class="dim">&nbsp;(35 MB, 82 JPEG frames)</span></p>
+
+<div class="step">
+<h2><span class="n">1.</span> Shoot a stack</h2>
+
+<p>Skip this step if you're using the sample. For real subjects:</p>
+
+<ul>
+  <li><b>Lock everything but focus.</b> Manual exposure, fixed ISO, fixed
+  white balance, manual flash power.</li>
+  <li><b>Use a relatively large aperture.</b> You may be used to shooting macro
+  at small apertures like f/16 for more depth of field, but that isn't necessary
+  here. Shooting at a moderate aperture like f/5.6 or f/8 will keep your lens in
+  its comfort zone and avoid softening due to diffraction.</li>
+  <li><b>Use a low ISO.</b> If possible, it's best to use your camera's native
+  ISO. Since focus stacking only works with stationary subjects, you can
+  typically get away with long exposures.</li>
+  <li><b>Step focus from front to back</b> (or back to front — direction
+  doesn't matter, as long as it's consistent). Use your camera's automatic
+  focus shift mode, focus bracketing, a macro rail, or careful manual steps.</li>
+  <li><b>Overlap generously.</b> Each frame's zone of sharpness should
+  overlap the next; when in doubt, use smaller steps and more frames.
+  Stacks often consist of dozens to hundreds of frames.</li>
+  <li><b>Keep the camera and subject perfectly still.</b> You will achieve the
+  best results when neither the camera nor subject move even the slightest bit
+  while shooting. Use a sturdy tripod and be aware that even the small things
+  like the slight movement of the floor caused by walking near the camera 
+  while it is shooting can cause problems.</li>
+  <li><b>Give yourself a margin.</b> It's best to start the stack before
+  anything is in focus and end it past the point where everything went out of
+  focus. If you try to start and stop the stack perfectly, there's a chance
+  you accidentally fail to get any perfectly clear shots of some part of the
+  subject.
+</ul>
+</div>
+
+<div class="step">
+<h2><span class="n">2.</span> Import</h2>
+
+<p>Drop the folder of frames onto the Hyperfocal window (or
+<kbd>⌘N</kbd> and choose it). Keep in mind that:</p>
+
+<ul>
+  <li>Camera raw (NEF, DNG, CR3, ARW, …), TIFF, PNG, and JPEG all work.</li>
+  <li>A folder of subfolders becomes a <b>multi-stack project</b>: each
+  folder of images is its own stack in a tree, each with its own result.</li>
+  <li>If one folder holds several bursts (determined by gaps in the capture
+  times), Hyperfocal will offer to treat them as separate stacks.</li>
+</ul>
+
+<p>Frames load in capture order and appear in the Stack list with a checkbox
+each. The checkboxes control whether or not the frames are considered part of the
+stack. If your stack contains extra frames at the beginning or end that don't
+have any sharp details, you can uncheck them to speed up the fusion process.<p>
+</div>
+
+<div class="step">
+<h2><span class="n">3.</span> Fuse</h2>
+
+<p>Press <b>Fuse Stack</b>. The pipeline runs in three passes: registration
+(carefully aligning each frame), then forming the depth map, then rendering.</p>
+
+<figure>
+  <img src="images/app-fused.png"
+       alt="Hyperfocal after fusing: aligned source frame beside the fused result">
+  <figcaption>After the fuse: the Input pane shows aligned frames warped into the
+  result's coordinate system.</figcaption>
+</figure>
+
+<div class="note"><b>Defaults first.</b> The default fusion parameters are
+right for most stacks. It's best to fuse once with defaults before touching
+anything. Subsequent fuses with the same images are faster because the
+alignment process can be skipped.</div>
+</div>
+
+<div class="step">
+<h2><span class="n">4.</span> Read the depth map</h2>
+
+<p>Switch the Output pane to <b>Depth</b>. Every pixel's brightness encodes
+which frame it was judged sharpest in — if the frames were shot front to back, then
+the closest pixels will be bright and the farthest pixels will be dark.</p>
+
+<figure>
+  <img src="images/depth.png"
+       alt="Depth map of the sample stack: bright specimen against a smoothly ramping background">
+  <figcaption>A healthy depth map for the sample stack: the specimen reads
+  near (bright), the marble ramps smoothly away, and the silhouette is a
+  hard step.</figcaption>
+</figure>
+
+<p>What to look for:</p>
+<ul>
+  <li><b>Smooth ramps</b> across continuous surfaces are correct.</li>
+  <li><b>Salt-and-pepper speckle</b> on featureless areas means the noise
+  floor is too low, and sensor noise is being misinterpreted as actual
+  detail.</li>
+  <li><b>Blotches that follow no structure</b> at subject edges are
+  due to occlusion ambiguity, and may require a different median radius or
+  some retouching work.</li>
+</ul>
+</div>
+
+<div class="step">
+<h2><span class="n">5.</span> Set the noise floor</h2>
+
+<p><b>Drag the Noise floor slider and hold it</b> — the Output pane
+switches to a live preview of the depth map that floor would produce. Raise
+the floor until halos standing off your subject's edges disappear, and stop
+before real detail starts dissolving into its neighbors. Then re-fuse.
+Re-fuses will be faster than the initial fuse because the images don't have
+to be re-aligned.</p>
+</div>
+
+<div class="step">
+<h2><span class="n">6.</span> Adjust tone</h2>
+
+<p>Because it duplicates functionality already found in raw processors like
+Lightroom and Darktable, Hyperfocal's limited built-in editing (Exposure,
+Highlights, Shadows, etc.) may not immediately appear terribly useful. There
+are a few reasons you may wish to give it a chance:</p>
+<ol>
+<li>Editing the raw often involves boosting the shadows. If you significantly
+boost shadow brightness, then fusion errors that would be readily visible in
+a final image may be invisible at the default tone settings. Using
+Hyperfocal's built-in tone editor gets you closer to the desired final image
+and allows you to better see your work while retouching.</li>
+<li>When only simple edits are required, it allows you to go directly to a
+finished TIFF or JPEG instead of having to go through another raw-processing
+step.</li>
+<li>Even when you render a <code>.dng</code>code> output, the
+<code>.xmp</code> sidecar means Lightroom / Darktable / etc. can start with
+the same settings you were already using, so you won't be duplicating
+effort.</li>
+</ol>
+</div>
+
+<div class="step">
+<h2><span class="n">7.</span> Retouch</h2>
+
+<p>Press the <b>Start Retouching</b> button. This allows you to paint from
+the source image in the left pane into the output image in the right pane
+in order to correct any issues where the generated results are imperfect.
+You can paint from three different sources:</p>
+
+<ol>
+<li>Any of the stack's source frames</li>
+<li>The PMax fusion result. PMax is a different focus stacking algorithm
+with different strengths and weaknesses, and it may produce cleaner
+results for the problematic areas of your stack.</p>
+<li>The original (DMap) fusion result. This allows you to "erase" back to
+the original results in case you make a mistake. (Undo is also available
+for simple cases.)</li>
+</ol>
+
+<p>You will most often be painting from the source frames. You can pick
+any frame simply by clicking on it in the Stack panel, but there are a
+few hotkeys to simplify the process:</p>
+
+<ul>
+<li><b>Up arrow</b>: selects the previous frame</li>
+<li><b>Down arrow</b>: selects the next frame</li>
+<li><b>Space</b>: selects the sharpest frame for the region under the
+brush. This may not always give you the desired results right at the error
+location (after all, the whole reason you're retouching that spot is that
+the automatic results were wrong!), but in that case you can generally just
+move the brush a little and hit Space again in a nearby spot, fine-tuning
+from there with the up or down arrow keys if needed.</li>
+</ul>
+
+<p>Click and drag to paint from the selected source. You can edit the
+brush using the Retouching panel controls, or use <kbd>[</kbd> /
+<kbd>]</kbd>, Option + mouse wheel, or Option + two-finger drag to quickly
+adjust brush size.
+
+<p>Let's walk through the process of fixing an actual fusion flaw. Fuse the
+sample stack using the default settings, then zoom in to this spot on the
+edge of the rightmost fluorite crystal (purple cube).</p>
+
+<figure>
+  <img src="images/retouch-1.png"
+       alt="A problematic spot in the image is highlighted by the circular brush">
+  <figcaption>The blurry spot we need to zoom in to.</figcaption>
+</figure>
+
+<p>On a trackpad you can use two-finger pan and pinch zoom to get there, or
+you can click-and-drag to pan and use and the zoom controls bottom of the
+window or in the View menu. Either way, zoom in to get a good look at the
+blurry region shown here.</p>
+
+<figure>
+  <img src="images/retouch-2.png"
+       alt="A close zoom of the problematic spot in the previous image">
+  <figcaption>A zoomed in view. Pressing <kbd>space</kbd> with the brush at
+  this position has automatically selected the sharpest source image for this
+  spot.</figcaption>
+</figure>
+
+<p>If you move your mouse to the position shown and press <kbd>space</kbd>,
+Hyperfocal will automatically select the sharpest source image under the brush
+circle, which should be <code>sample-024.jpg</code>. You can also just pick it
+manually from the list of frames, or use the up and down arrow keys to switch
+between source frames.</p>
+
+<p>This image is now the source that we're painting from. Click and drag in
+the result image to paint from the source image. Some careful brush strokes
+should make quick work of the problematic area.</p>
+
+<figure>
+  <img src="images/retouch-3.png"
+       alt="An image showing that the problematic spot has been mostly cleaned up">
+  <figcaption>The problem spot is mostly cleaned up after painting from
+  sample-024.jpg.</figcaption>
+</figure>
+
+<p>Unfortunately, there's a little bit of a dark blur above the crystal. It turns
+out there aren't perfect source pixels for this spot in <i>any</i> of the source
+images: in every single image it's obscured by a halo of blur from the
+out-of-focus subject on one side or the other.</p>
+
+<p>We can improve the situation by using PMax, a different algorithm which
+tries to infer the true color of pixels obscured by this sort of blur. PMax
+produces <i>overall</i> worse results than DMap, which is why it is not
+Hyperfocal's default algorithm, but it often does a better job in trouble
+spots like this. We can use both algorithms together to produce optimal results:
+DMap (the default algorithm) for most things, and occasionally some pixels
+blended in from the PMax result to clean up trouble spots.</p>
+
+<p>Under the Retouching panel, click on PMax Result as the source to
+retouch from. The first time you do this, Hyperfocal take some time to build
+the PMax version of the image, and then it will show up as your new left-pane
+source image.</p>
+
+<figure>
+  <img src="images/pmax.png"
+       alt="A closeup of the Retouching panel, showing the 'Retouch from' radio buttons">
+  <figcaption>Click PMax Result to paint from the PMax image</figcaption>
+</figure>
+
+<figure>
+  <img src="images/retouch-4.png"
+       alt="A screenshot showing that the PMax result has been generated in the left pane">
+  <figcaption>The PMax result is the source we will be painting from</figcaption>
+</figure>
+
+<p>We can now carefully paint into the image to pull in the cleaner PMax pixels
+for this problematic spot, giving us a much better final result.</p>
+
+<figure>
+  <img src="images/retouch-5.png"
+       alt="The same region after copying in PMax pixels: the blurry spot is gone">
+  <figcaption>This are is much improved after copying some PMax pixels into the result</figcaption>
+</figure>
+
+<div class="step">
+<h2><span class="n">8.</span> Export</h2>
+
+<p>Pick a format in the Export section and press <b>Export Result…</b>:</p>
+
+<ul>
+  <li><b>TIFF / PNG (16-bit)</b> — full-precision lossless output</li>
+  <li><b>JPEG</b> — smaller lossy files for finished results</li>
+  <li><b>DNG</b> — raw output for further processing in tools like
+    Lightroom or Darktable</li>
+</ul>
+
+<p>With several stacks in a project, <b>Export All Fused…</b> writes every
+result to one folder in the chosen format.</p>
+
+<p>Finally, <kbd>⌘S</kbd> saves the whole session — frames, results, depth,
+and retouch state — as a <code>.hyperfocal</code> project you can reopen
+later.</p>
+</div>
+
+</main>
+
+<footer>
+  <div class="inner">
+    Hyperfocal is an MIT-licensed open source project created by Ethan Nicholas ·
+    <a href="https://github.com/ethannicholas/hyperfocal">Source on GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>

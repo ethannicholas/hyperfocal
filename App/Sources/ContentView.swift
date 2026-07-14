@@ -1,0 +1,1231 @@
+import SwiftUI
+import HyperfocalKit
+import UniformTypeIdentifiers
+import Combine
+
+struct ContentView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        HSplitView {
+            sidebar
+                .frame(minWidth: 280, idealWidth: 300, maxWidth: 360)
+            previewSide
+                .frame(minWidth: 620, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            Task {
+                var urls = [URL]()
+                for provider in providers {
+                    if let url = try? await provider.loadURL() {
+                        urls.append(url)
+                    }
+                }
+                if !urls.isEmpty {
+                    await MainActor.run { model.addStacks(urls: urls) }
+                }
+            }
+            return true
+        }
+    }
+
+    // MARK: - Sidebar
+
+    /// The frame list lives outside the Form: a List nested in a grouped Form
+    /// doesn't get its own scrolling.
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            stackPanel
+            Divider()
+            Form {
+                fusionSection
+                toneSection
+                retouchSection
+                exportSection
+            }
+            .formStyle(.grouped)
+        }
+    }
+
+    private var stackPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: model.isCollapsed(.stack) ? "chevron.right" : "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(model.stacks.count > 1 ? "Stacks" : "Stack").font(.headline)
+                Spacer()
+                if !model.frames.isEmpty {
+                    Text("\(model.includedFrames.count) of \(model.frames.count)")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    if !model.isCollapsed(.stack) {
+                        Button("All") { model.includeAll(true) }
+                            .controlSize(.small)
+                        Button("None") { model.includeAll(false) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { model.toggleSection(.stack) }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, model.isCollapsed(.stack) ? 10 : 0)
+
+            if model.isCollapsed(.stack) {
+                EmptyView()
+            } else if model.stacks.isEmpty {
+                VStack(spacing: 10) {
+                    Text("Drop a folder of frames here, or:")
+                        .foregroundStyle(.secondary)
+                    Button("Open Folder…") { model.openFrames() }
+                }
+                .frame(maxWidth: .infinity, minHeight: 120)
+                .padding(.bottom, 10)
+            } else {
+                ScrollViewReader { proxy in
+                    List(selection: $model.selection) {
+                        // One stack keeps the familiar flat list; several show
+                        // as folders with their own checkbox and status.
+                        if model.stacks.count == 1 {
+                            frameRows(of: model.stacks[0])
+                        } else {
+                            ForEach(model.stacks) { stack in
+                                DisclosureGroup(isExpanded: expansionBinding(stack)) {
+                                    frameRows(of: stack)
+                                } label: {
+                                    StackRow(stack: stack,
+                                             isSelected: stack.id == model.selectedStackID,
+                                             status: model.status(of: stack),
+                                             setEnabled: { model.setStackEnabled(stack.id, to: $0) },
+                                             select: { model.selectStack(stack.id) })
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(.inset)
+                    .frame(minHeight: 140, idealHeight: 280, maxHeight: 360)
+                    .onChange(of: model.selection) { _, newValue in
+                        model.selectionChanged()
+                        if let url = newValue.first {
+                            proxy.scrollTo(url)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func frameRows(of stack: Stack) -> some View {
+        let enabled = stack.enabled
+        ForEach(model.listedFrames(of: stack), id: \.self) { url in
+            FrameRow(url: url,
+                     included: model.isIncluded(url, in: stack),
+                     issue: model.frameIssue(url, in: stack),
+                     setIncluded: { model.setIncluded(url, to: $0) })
+                .opacity(enabled ? 1 : 0.4)
+                .disabled(!enabled)
+        }
+    }
+
+    private func expansionBinding(_ stack: Stack) -> Binding<Bool> {
+        Binding(get: { model.expandedStacks.contains(stack.id) },
+                set: { expanded in
+                    if expanded {
+                        model.expandedStacks.insert(stack.id)
+                    } else {
+                        model.expandedStacks.remove(stack.id)
+                    }
+                })
+    }
+
+    /// Clickable section header: chevron + title toggle the section's
+    /// collapsed state (persisted across runs); `trailing` stays live either
+    /// way (buttons handle their own taps before the header's gesture).
+    private func sectionHeader<T: View>(
+        _ title: String, _ section: AppModel.SidebarSection,
+        @ViewBuilder trailing: () -> T
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: model.isCollapsed(section) ? "chevron.right" : "chevron.down")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(title)
+            Spacer()
+            trailing()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { model.toggleSection(section) }
+    }
+
+    private func sectionHeader(_ title: String,
+                               _ section: AppModel.SidebarSection) -> some View {
+        sectionHeader(title, section) { EmptyView() }
+    }
+
+    private var fusionSection: some View {
+        // Set-and-forget switches (alignment, GPU, exposure normalization,
+        // slabbing) live in Settings (⌘,); the sidebar keeps the per-stack
+        // creative controls.
+        Section {
+            if !model.isCollapsed(.fusion) {
+            LabeledSlider(
+                label: "Sharpness σ", value: $model.sharpnessSigma, range: 1...16,
+                format: "%.1f px",
+                help: "Radius of the local-contrast measurement that decides which frame is sharpest at each pixel. Larger values are steadier on smooth, low-texture surfaces; smaller values resolve finer depth detail.")
+            LabeledSlider(
+                label: "Noise floor", value: $model.noiseFloor, range: 0.01...1,
+                format: "%.0f%%", displayScale: 100,
+                help: "Fraction of the image's overall sharpness below which a pixel is treated as featureless and takes its depth from confident neighbors. Drag to preview the depth map this floor would produce: featureless regions inheriting smoothly from their surroundings is normal — raise the floor until glow halos standing off subjects disappear, and stop before real detail starts dissolving into its neighbors.",
+                onEditingChanged: { editing in
+                    if editing {
+                        model.beginNoiseFloorPreview()
+                    } else {
+                        model.endNoiseFloorPreview()
+                    }
+                })
+            LabeledSlider(
+                label: "Median radius", value: $model.medianRadius, range: 0...32,
+                format: "%.0f px",
+                help: "Size of the majority vote that removes isolated wrong-depth patches at edges where the background shows through a defocused subject. 0 disables it.")
+            LabeledSlider(
+                label: "Blend radius", value: $model.blendRadius, range: 0.75...4,
+                format: "%.2f",
+                help: "How many neighboring frames blend together at each pixel when rendering. Wider is smoother across focus transitions, but slightly softer.")
+
+            Button {
+                model.fuse()
+            } label: {
+                Label("Fuse Stack", systemImage: "square.3.layers.3d.down.forward")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.canFuse)
+
+            if model.stacks.filter(\.enabled).count > 1 {
+                let pending = model.pendingStackCount
+                Button {
+                    model.fuseEnabledStacks()
+                } label: {
+                    Label(pending == 1 ? "Fuse 1 Stack" : "Fuse \(pending) Stacks",
+                          systemImage: "square.stack.3d.forward.dottedline")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(model.phase.isRunning || pending == 0)
+                .help("Fuses every enabled stack whose result is missing or out of date (frames or settings changed), one after another with the current settings; bad frames are excluded automatically.")
+            }
+            }
+        } header: {
+            sectionHeader("Fusion", .fusion) {
+                if !model.fusionSettingsAreDefault {
+                    Button("Reset") { model.resetFusionSettings() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                }
+            }
+        }
+    }
+
+    private var toneSection: some View {
+        Section {
+            if !model.isCollapsed(.tone) {
+            LabeledSlider(
+                label: "Exposure", value: $model.tone.exposure, range: -5...5,
+                format: "%+.2f EV",
+                help: "Overall brightness, in stops of linear light — the loupe for judging a fuse in deep shadow. Like every Tone control, it applies to the previews (including retouching) and bakes into TIFF/PNG/JPEG exports; Linear DNG is never affected.")
+            LabeledSlider(
+                label: "Contrast", value: $model.tone.contrast, range: -100...100,
+                format: "%+.0f",
+                help: "S-curve around the midtones: positive deepens shadows and brightens highlights, negative flattens.")
+            LabeledSlider(
+                label: "Highlights", value: $model.tone.highlights, range: -100...100,
+                format: "%+.0f",
+                help: "Brightens or recovers the upper midtones and highlights without moving pure white.")
+            LabeledSlider(
+                label: "Shadows", value: $model.tone.shadows, range: -100...100,
+                format: "%+.0f",
+                help: "Lifts or deepens the shadows without moving pure black — usually the fastest way to inspect a dark fuse.")
+            LabeledSlider(
+                label: "Whites", value: $model.tone.whites, range: -100...100,
+                format: "%+.0f",
+                help: "Moves the white point itself: the very top of the range.")
+            LabeledSlider(
+                label: "Blacks", value: $model.tone.blacks, range: -100...100,
+                format: "%+.0f",
+                help: "Moves the black point itself: the very bottom of the range.")
+            }
+        } header: {
+            sectionHeader("Tone", .tone) {
+                if !model.tone.isNeutral {
+                    Button("Reset") { model.tone = ToneSettings() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var retouchSection: some View {
+        if model.phase == .done {
+            Section {
+                if !model.isCollapsed(.retouch) {
+                    if model.retouchMode, let session = model.retouch {
+                        RetouchControls(session: session,
+                                        onDone: { model.exitRetouch() },
+                                        onReset: { model.resetRetouch() })
+                    } else {
+                        Button {
+                            model.enterRetouch()
+                        } label: {
+                            Label(model.retouch?.hasEdits == true
+                                    ? "Continue Retouching"
+                                    : "Start Retouching",
+                                  systemImage: "paintbrush.pointed")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .disabled(model.result == nil)
+                    }
+                }
+            } header: {
+                sectionHeader("Retouch", .retouch)
+            }
+        }
+    }
+
+    private var exportSection: some View {
+        Section {
+            if !model.isCollapsed(.export) {
+            Picker("Format", selection: $model.exportFormat) {
+                ForEach(AppModel.ExportFormat.allCases) { format in
+                    Text(format.rawValue).tag(format)
+                }
+            }
+            Picker("Color space", selection: $model.exportColorSpace) {
+                ForEach(AppModel.ExportColorSpace.allCases) { space in
+                    Text(space.rawValue).tag(space)
+                }
+            }
+            .disabled(model.exportFormat == .dng)
+            .help("The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw.")
+            if model.exportFormat == .dng && !model.tone.isNeutral {
+                Text("DNG exports stay linear — Tone adjustments won't be baked in.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Button {
+                model.exportResult()
+            } label: {
+                Label(model.outputMode == .depth ? "Export Depth Map…" : "Export Result…",
+                      systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity)
+            }
+            .disabled(!model.canExport)
+
+            if model.fusedStackCount > 1 {
+                Button {
+                    model.exportAllFusedPanel()
+                } label: {
+                    Label("Export All Fused…", systemImage: "square.and.arrow.up.on.square")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(model.phase.isRunning)
+                .help("Writes every fused stack (retouch edits included) to one folder, named after the stacks, in the format and color space above.")
+            }
+            }
+        } header: {
+            sectionHeader("Export", .export)
+        }
+    }
+
+    // MARK: - Preview side
+
+    /// The tone curve as a colorEffect shader (nil = neutral, no effect).
+    /// Both the panes' SwiftUI Images and the retouch source pane use this;
+    /// the self-drawing retouch canvas applies the same curve as a Core
+    /// Image layer filter instead (shaders don't reach AppKit content).
+    private var toneShader: Shader? {
+        guard let lut = model.toneLUT else { return nil }
+        return ShaderLibrary.toneCurve(.image(Image(decorative: lut, scale: 1)),
+                                       .float(0))
+    }
+
+    private var previewSide: some View {
+        VStack(spacing: 0) {
+            if model.retouchMode, let session = model.retouch {
+                RetouchPreviewArea(session: session, toneShader: toneShader,
+                                   tone: model.tone)
+            } else {
+                fusionPreviewPanes
+            }
+            Divider()
+            ZoomBar(viewport: model.viewport) { model.displayedImageSize }
+        }
+        .background(.black.opacity(0.9))
+        .environmentObject(model.viewport)
+    }
+
+    private var fusionPreviewPanes: some View {
+        HStack(spacing: 1) {
+                PreviewPane(
+                    title: inputPaneTitle,
+                    image: inputPaneImage,
+                    nominalSize: inputPaneNominal,
+                    loading: model.inputPreviewLoading && !model.phase.isRunning,
+                    emptyHint: model.inputPreviewError
+                        ?? (model.frames.isEmpty
+                            ? "Start a new project to begin"
+                            : "Select a frame in the Stack list"),
+                    toneShader: toneShader,
+                    header: { EmptyView() }
+                )
+                PreviewPane(
+                    title: "Output",
+                    image: outputImage,
+                    nominalSize: model.outputNominalSize,
+                    loading: false,
+                    emptyHint: model.canFuse ? "Press Fuse Stack" : "No output yet",
+                    // Depth maps and the noise-floor preview are data
+                    // visualizations, not image content — leave them alone.
+                    toneShader: (model.outputMode == .depth
+                                 || model.noiseFloorPreview != nil) ? nil : toneShader,
+                    header: {
+                        Picker("", selection: $model.outputMode) {
+                            ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .controlSize(.small)
+                        .frame(width: 130)
+                        .disabled(model.depthPreview == nil)
+                    }
+                )
+                .overlay(alignment: .bottom) {
+                    if model.phase.isRunning {
+                        VStack(spacing: 6) {
+                            ProgressView(value: model.stageFraction)
+                            HStack {
+                                Text("\(model.batchStatus ?? "")\(model.stageText)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Cancel") { model.cancelFusion() }
+                                    .controlSize(.small)
+                            }
+                        }
+                        .padding(10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .padding(12)
+                    }
+                }
+            }
+    }
+
+    private var outputImage: NSImage? {
+        if let preview = model.noiseFloorPreview { return preview }
+        if model.phase.isRunning { return model.progressive }
+        return model.outputMode == .depth ? model.depthPreview : model.outputPreview
+    }
+
+    // During a run, the input pane cycles through frames as they're processed.
+    private var showProcessingSource: Bool {
+        model.phase.isRunning && model.processingSource != nil
+    }
+
+    private var inputPaneTitle: String {
+        if showProcessingSource, let label = model.processingSourceLabel { return label }
+        guard let url = model.inputPreviewURL else { return "Input" }
+        return url.lastPathComponent + (model.inputPreviewAligned ? " (aligned)" : "")
+    }
+
+    private var inputPaneImage: NSImage? {
+        showProcessingSource ? model.processingSource : model.inputPreview
+    }
+
+    private var inputPaneNominal: CGSize? {
+        showProcessingSource ? model.processingSourceNominalSize : model.inputNominalSize
+    }
+
+}
+
+// MARK: - Retouch preview area
+
+/// Owns observation of the retouch session (panes must live-update with
+/// strokes, source cycling, and the hover cursor).
+struct RetouchPreviewArea: View {
+    @ObservedObject var session: RetouchSession
+    var toneShader: Shader? = nil
+    var tone = ToneSettings()
+
+    var body: some View {
+        HStack(spacing: 1) {
+            PreviewPane(
+                title: "Source: \(session.sourceName)  ↑/↓ cycle · space picks sharpest",
+                image: session.sourceDisplay,
+                nominalSize: session.nominalSize,
+                loading: session.sourceLoading,
+                emptyHint: session.sourceError ?? "Loading source…",
+                loadingStatus: session.sourceStatus,
+                brushCursor: brushCursor,
+                toneShader: toneShader,
+                header: { EmptyView() }
+            )
+            PreviewPane(
+                title: "Retouched Output — drag to paint from source",
+                image: nil,
+                nominalSize: session.nominalSize,
+                loading: false,
+                emptyHint: "",
+                brushCursor: brushCursor,
+                eventOverlay: AnyView(
+                    RetouchOverlay(viewport: viewport,
+                                   imageSize: session.nominalSize,
+                                   session: session)),
+                canvas: AnyView(RetouchCanvas(session: session, viewport: viewport,
+                                              tone: tone)),
+                header: { EmptyView() }
+            )
+        }
+    }
+
+    /// Only offered when a stroke would actually paint — no circle over a
+    /// still-loading source, and none for the rest of a drag that started
+    /// before the source arrived.
+    private var brushCursor: (point: CGPoint, radius: CGFloat)? {
+        guard session.canPaint else { return nil }
+        return session.cursor.map { ($0, CGFloat(session.brushRadius)) }
+    }
+
+    @EnvironmentObject var viewport: ViewportState
+}
+
+// MARK: - Retouch controls
+
+struct RetouchControls: View {
+    @ObservedObject var session: RetouchSession
+    let onDone: () -> Void
+    let onReset: () -> Void
+
+    var body: some View {
+        LabeledSlider(
+            label: "Brush size", value: $session.brushRadius, range: 1...800,
+            format: "%.0f px",
+            help: "Brush radius in image pixels. Painting copies pixels from the aligned source frame into the output.")
+        LabeledSlider(
+            label: "Softness", value: $session.brushSoftness, range: 0...1,
+            format: "%.0f%%", displayScale: 100,
+            help: "Feathered fraction of the brush edge. 0% is hard-edged; 100% fades from the center.")
+        Picker("Retouch from", selection: Binding(
+            get: { session.sourceKind },
+            set: { session.selectKind($0) })) {
+            Text("Source Image").tag(RetouchSession.SourceKind.frame)
+            Text("PMax Result").tag(RetouchSession.SourceKind.pmax)
+            Text("Original Result (erase)").tag(RetouchSession.SourceKind.result)
+        }
+        .pickerStyle(.radioGroup)
+        .help("What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. Original Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.")
+        HStack {
+            Spacer()
+            Button("Revert All", role: .destructive) { onReset() }
+                .disabled(!session.hasEdits)
+        }
+        Text("↑/↓ cycle source frames · space picks the sharpest frame for the brush region · p PMax result · r eraser · ⌥-scroll or [ ] resize the brush · scroll/pinch to navigate")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        Button {
+            onDone()
+        } label: {
+            Label("Done Retouching", systemImage: "checkmark.circle")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+    }
+}
+
+// MARK: - Zoom bar
+
+/// Observes the viewport directly — the label must update live as gestures and
+/// menu picks change the zoom.
+struct ZoomBar: View {
+    @ObservedObject var viewport: ViewportState
+    let imageSize: () -> CGSize
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Spacer()
+            Text("Zoom:")
+                .foregroundStyle(.secondary)
+            Menu {
+                Button("Fit") { viewport.reset() }
+                ForEach(ViewportState.fixedLevels, id: \.self) { level in
+                    Button(ViewportState.percentLabel(level)) {
+                        viewport.mode = .scale(level)
+                    }
+                }
+            } label: {
+                Text(label)
+                    .monospacedDigit()
+                    .frame(width: 60)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Button {
+                viewport.zoom(by: 1 / 1.5, imageSize: imageSize())
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            Button {
+                viewport.zoom(by: 1.5, imageSize: imageSize())
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            Spacer()
+        }
+        .buttonStyle(.borderless)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    private var label: String {
+        switch viewport.mode {
+        case .fit: return "Fit"
+        case .scale(let s): return ViewportState.percentLabel(s)
+        }
+    }
+}
+
+// MARK: - Frame row
+
+/// A stack's folder row in the tree: enable checkbox, name, status glyph,
+/// frame count. Clicking selects the stack (only one stack is selected at a
+/// time; the checkbox *enables* it for the queue, which is independent).
+struct StackRow: View {
+    let stack: Stack
+    let isSelected: Bool
+    let status: AppModel.StackStatus
+    let setEnabled: (Bool) -> Void
+    let select: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Toggle("", isOn: Binding(get: { stack.enabled }, set: { setEnabled($0) }))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .help("Include this stack in Fuse Enabled Stacks. Doesn't change its per-frame checkboxes.")
+            Image(systemName: "square.stack.3d.up")
+                .font(.caption)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            Text(stack.name)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .foregroundStyle(stack.enabled
+                                 ? (isSelected ? Color.accentColor : Color.primary)
+                                 : Color.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            statusGlyph
+            Text("\(stack.frames.count)")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { select() }
+    }
+
+    @ViewBuilder
+    private var statusGlyph: some View {
+        switch status {
+        case .unfused:
+            EmptyView()
+        case .fusing:
+            ProgressView()
+                .controlSize(.small)
+        case .fused:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.caption)
+                .help("Fused — select to view, retouch, or export")
+        case .failed(let message):
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .font(.caption)
+                .help(message)
+        }
+    }
+}
+
+struct FrameRow: View {
+    let url: URL
+    let included: Bool
+    /// Why the last fuse flagged this frame, if it did (misfire, misalignment).
+    let issue: String?
+    let setIncluded: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Toggle("", isOn: Binding(get: { included }, set: { setIncluded($0) }))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+            Text(url.lastPathComponent)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .foregroundStyle(included ? .primary : .secondary)
+            if let issue {
+                Spacer(minLength: 2)
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                    .font(.caption)
+                    .help(issue)
+            }
+        }
+    }
+}
+
+// MARK: - Synced zoomable pane
+
+struct PreviewPane<Header: View>: View {
+    static var headerHeight: CGFloat { 30 }
+
+    let title: String
+    let image: NSImage?
+    /// Coordinate-space size in full-resolution pixels. The bitmap may be lower
+    /// resolution (progressive previews); it is stretched to this space so both
+    /// panes always share one coordinate system.
+    let nominalSize: CGSize?
+    let loading: Bool
+    let emptyHint: String
+    /// Shown under the spinner during long loads (e.g. PMax layer build).
+    var loadingStatus: String? = nil
+    /// Brush circle to draw at an image-space point (retouch mode).
+    var brushCursor: (point: CGPoint, radius: CGFloat)? = nil
+    /// Tone-curve shader applied to the displayed image (not to a canvas —
+    /// canvases tone themselves via layer filters). nil = no adjustment.
+    var toneShader: Shader? = nil
+    /// Custom event layer; defaults to plain pan/zoom.
+    var eventOverlay: AnyView? = nil
+    /// Self-drawing content (retouch canvas); replaces the Image when set.
+    var canvas: AnyView? = nil
+    @ViewBuilder let header: () -> Header
+
+    @EnvironmentObject var viewport: ViewportState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                header()
+            }
+            .padding(.horizontal, 10)
+            .frame(height: Self.headerHeight)
+            .background(.bar)
+
+            GeometryReader { geo in
+                ZStack {
+                    Color.black
+                    if let canvas {
+                        canvas
+                    } else if let image, let nominal = nominalSize {
+                        let scale = viewport.effectiveScale(imageSize: nominal, viewSize: geo.size)
+                        let bitmapScale = nominal.width * scale / CGFloat(max(bitmapWidth(of: image), 1))
+                        // The tone effect wraps a pane-sized, clipped container
+                        // rather than the image view itself: colorEffect
+                        // rasterizes its content in view-local coordinates, and
+                        // a 45 MP image zoomed far in spans >65k points — past
+                        // the half-float ceiling in the rasterizer, which made
+                        // the image vanish when panned toward its far edge.
+                        // Pane-local coordinates stay tiny at any zoom (and the
+                        // shader cost is bounded by pane pixels, not image
+                        // pixels).
+                        ZStack {
+                            Image(nsImage: image)
+                                .resizable()
+                                .interpolation(bitmapScale >= 2 ? .none : .high)
+                                .frame(width: nominal.width * scale,
+                                       height: nominal.height * scale)
+                                .position(x: geo.size.width / 2 - viewport.offset.width * scale,
+                                          y: geo.size.height / 2 - viewport.offset.height * scale)
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .modifier(ToneEffect(shader: toneShader))
+                        // .clipped() clips drawing but NOT hit testing — when
+                        // zoomed, the image's frame extends far past the pane
+                        // and would swallow clicks meant for the zoom bar.
+                        // All interaction happens on PanZoomOverlay anyway.
+                        .allowsHitTesting(false)
+                    } else if loading {
+                        VStack(spacing: 8) {
+                            ProgressView()
+                            if let loadingStatus {
+                                Text(loadingStatus)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } else {
+                        Text(emptyHint)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let brush = brushCursor, let nominal = nominalSize {
+                        let scale = viewport.effectiveScale(imageSize: nominal, viewSize: geo.size)
+                        let diameter = max(2, brush.radius * 2 * scale)
+                        ZStack {
+                            Circle().stroke(.black.opacity(0.6), lineWidth: 3)
+                            Circle().stroke(.white.opacity(0.9), lineWidth: 1.5)
+                        }
+                        .frame(width: diameter, height: diameter)
+                        .position(
+                            x: geo.size.width / 2
+                                + (brush.point.x - nominal.width / 2 - viewport.offset.width) * scale,
+                            y: geo.size.height / 2
+                                + (brush.point.y - nominal.height / 2 - viewport.offset.height) * scale)
+                        .allowsHitTesting(false)
+                    }
+                }
+                .clipped()
+                .overlay {
+                    // Feedback while a *replacement* image decodes (big frames
+                    // take seconds) or a long build shows its forming preview
+                    // (PMax layer); the empty-state spinner handles image==nil.
+                    if loading && image != nil {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            if let loadingStatus {
+                                Text(loadingStatus)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                            .padding(10)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                            .allowsHitTesting(false)
+                    }
+                }
+                .overlay(
+                    eventOverlay
+                        ?? AnyView(PanZoomOverlay(viewport: viewport,
+                                                  imageSize: nominalSize ?? .zero))
+                )
+            }
+        }
+    }
+
+    private func bitmapWidth(of image: NSImage) -> Int {
+        // NSImage(cgImage:size:.zero) sets size (points) equal to the CGImage's
+        // pixels; representations report Retina-scaled pixelsWide, so avoid them.
+        Int(image.size.width)
+    }
+}
+
+/// Conditionally applies the tone-curve color effect (colorEffect itself
+/// takes a non-optional shader).
+struct ToneEffect: ViewModifier {
+    let shader: Shader?
+
+    func body(content: Content) -> some View {
+        if let shader {
+            content.colorEffect(shader)
+        } else {
+            content
+        }
+    }
+}
+
+/// Native event layer: drag-to-pan, two-finger scroll pan, and cursor-anchored
+/// pinch zoom — things SwiftUI gestures can't deliver on macOS.
+class PanZoomEventView: NSView {
+    var viewport: ViewportState?
+    var imageSize: CGSize = .zero
+
+    override var isFlipped: Bool { true }  // top-left origin, matching SwiftUI
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let viewport, imageSize != .zero else { return }
+        viewport.pan(by: CGSize(width: event.scrollingDeltaX,
+                                height: event.scrollingDeltaY),
+                     imageSize: imageSize, paneSize: bounds.size)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let viewport, imageSize != .zero else { return }
+        viewport.pan(by: CGSize(width: event.deltaX, height: event.deltaY),
+                     imageSize: imageSize, paneSize: bounds.size)
+    }
+
+    override func magnify(with event: NSEvent) {
+        guard let viewport, imageSize != .zero else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        viewport.zoom(at: location, in: bounds.size,
+                      by: 1 + event.magnification, imageSize: imageSize)
+    }
+
+    /// Pane coordinates → image pixel coordinates under the current viewport.
+    func imagePoint(from viewPoint: CGPoint) -> CGPoint? {
+        guard let viewport, imageSize != .zero else { return nil }
+        let scale = viewport.effectiveScale(imageSize: imageSize, viewSize: bounds.size)
+        guard scale > 0 else { return nil }
+        return CGPoint(
+            x: (viewPoint.x - bounds.width / 2) / scale
+                + viewport.offset.width + imageSize.width / 2,
+            y: (viewPoint.y - bounds.height / 2) / scale
+                + viewport.offset.height + imageSize.height / 2)
+    }
+}
+
+struct PanZoomOverlay: NSViewRepresentable {
+    let viewport: ViewportState
+    let imageSize: CGSize
+
+    func makeNSView(context: Context) -> PanZoomEventView {
+        PanZoomEventView()
+    }
+
+    func updateNSView(_ view: PanZoomEventView, context: Context) {
+        view.viewport = viewport
+        view.imageSize = imageSize
+        if view.bounds.size != .zero {
+            viewport.lastPaneSize = view.bounds.size
+        }
+    }
+}
+
+/// Retouch-mode event layer: left-drag paints (scroll/pinch still navigate),
+/// hover reports the brush location, ↑/↓ cycle source frames, space auto-picks
+/// the sharpest source for the brush region.
+final class RetouchEventView: PanZoomEventView {
+    var onStrokeBegan: ((CGPoint) -> Void)?
+    var onStrokeMoved: ((CGPoint, CGPoint) -> Void)?
+    var onStrokeEnded: (() -> Void)?
+    var onHover: ((CGPoint?) -> Void)?
+    var onCycleSource: ((Int) -> Void)?
+    var onAutoPick: (() -> Void)?
+    var onBrushResize: ((Double) -> Void)?  // multiplicative factor
+    var onTogglePMax: (() -> Void)?
+    var onToggleResult: (() -> Void)?
+
+    /// Painting happens at a point; the arrow cursor obscures it, the brush
+    /// circle only shows the radius.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .crosshair)
+    }
+
+    private var lastImagePoint: CGPoint?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover?(nil)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        onHover?(imagePoint(from: location))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        let location = convert(event.locationInWindow, from: nil)
+        guard let point = imagePoint(from: location) else { return }
+        lastImagePoint = point
+        onStrokeBegan?(point)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        // Left-drag paints; panning stays on two-finger scroll / pinch.
+        let location = convert(event.locationInWindow, from: nil)
+        guard let point = imagePoint(from: location) else { return }
+        onHover?(point)
+        if let last = lastImagePoint {
+            onStrokeMoved?(last, point)
+        }
+        lastImagePoint = point
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        lastImagePoint = nil
+        onStrokeEnded?()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // Option+scroll resizes the brush (the convention Krita/Affinity/GIMP
+        // settled on); plain scroll still pans.
+        if event.modifierFlags.contains(.option) {
+            onBrushResize?(pow(1.015, -event.scrollingDeltaY))
+            return
+        }
+        super.scrollWheel(with: event)
+        refreshHover(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
+        refreshHover(with: event)
+    }
+
+    /// The image moved under a stationary cursor — re-anchor the brush circle
+    /// to the image point now under the mouse.
+    private func refreshHover(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        onHover?(imagePoint(from: location))
+    }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.charactersIgnoringModifiers {
+        case "[": onBrushResize?(1 / 1.15); return
+        case "]": onBrushResize?(1.15); return
+        case "p": onTogglePMax?(); return
+        case "r": onToggleResult?(); return
+        default: break
+        }
+        switch event.keyCode {
+        case 126: onCycleSource?(-1)   // up arrow → previous frame
+        case 125: onCycleSource?(1)    // down arrow → next frame
+        case 49: onAutoPick?()         // space → sharpest source under brush
+        default: super.keyDown(with: event)
+        }
+    }
+}
+
+/// Direct-drawing canvas for the retouch working image: brush stamps invalidate
+/// only the view rect they touched, and drawing samples the live byte buffer
+/// through a zero-copy CGImage. No per-frame NSImage rebuilds, no full-texture
+/// re-uploads — this is what makes 45 MP painting smooth.
+final class RetouchCanvasNSView: NSView {
+    weak var session: RetouchSession?
+    /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
+    /// re-invoked through the AnyView wrapping when only the viewport changes.
+    var viewport: ViewportState? {
+        didSet {
+            guard viewport !== oldValue else { return }
+            viewportSubscription = viewport?.objectWillChange.sink { [weak self] _ in
+                // objectWillChange fires before the value lands; read it after.
+                DispatchQueue.main.async { self?.viewportDidUpdate() }
+            }
+        }
+    }
+    private var viewportSubscription: AnyCancellable?
+    private var lastScale: CGFloat = -1
+    private var lastOffset: CGSize = .zero
+    private var appliedTone = ToneSettings()
+
+    /// Tones the whole canvas via a Core Image color cube on the backing
+    /// layer — the same curve the pane shader and export use — so painting
+    /// happens under the adjusted view without touching the working pixels.
+    func applyTone(_ tone: ToneSettings) {
+        guard tone != appliedTone else { return }
+        appliedTone = tone
+        wantsLayer = true
+        if tone.isNeutral {
+            layer?.filters = nil
+        } else if let filter = CIFilter(name: "CIColorCubeWithColorSpace") {
+            let dimension = 64
+            filter.setValue(dimension, forKey: "inputCubeDimension")
+            filter.setValue(ToneCurve.colorCubeData(settings: tone,
+                                                    dimension: dimension),
+                            forKey: "inputCubeData")
+            filter.setValue(CGColorSpace(name: CGColorSpace.displayP3),
+                            forKey: "inputColorSpace")
+            layer?.filters = [filter]
+        }
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        needsDisplay = true  // pane resized; recompute fit and redraw
+    }
+
+    func attach(session: RetouchSession) {
+        guard self.session !== session else { return }
+        self.session = session
+        session.onDisplayDirty = { [weak self] imageRect in
+            self?.invalidate(imageRect: imageRect)
+        }
+        needsDisplay = true
+    }
+
+    /// Redraw fully only when the viewport actually moved (cursor-move renders
+    /// must not repaint the canvas).
+    func viewportDidUpdate() {
+        guard let session, let viewport else { return }
+        let scale = viewport.effectiveScale(imageSize: session.nominalSize, viewSize: bounds.size)
+        if scale != lastScale || viewport.offset != lastOffset {
+            lastScale = scale
+            lastOffset = viewport.offset
+            needsDisplay = true
+        }
+    }
+
+    private func invalidate(imageRect: CGRect) {
+        guard let session, let viewport else { return }
+        let imageSize = session.nominalSize
+        let scale = viewport.effectiveScale(imageSize: imageSize, viewSize: bounds.size)
+        let originX = bounds.width / 2 - (viewport.offset.width + imageSize.width / 2) * scale
+        let originY = bounds.height / 2 - (viewport.offset.height + imageSize.height / 2) * scale
+        let viewRect = CGRect(x: originX + imageRect.minX * scale,
+                              y: originY + imageRect.minY * scale,
+                              width: imageRect.width * scale,
+                              height: imageRect.height * scale)
+            .insetBy(dx: -2, dy: -2)
+        setNeedsDisplay(viewRect.intersection(bounds))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+        ctx.fill(dirtyRect)
+        guard let session, let viewport else { return }
+        let imageSize = session.nominalSize
+        let scale = viewport.effectiveScale(imageSize: imageSize, viewSize: bounds.size)
+        let originX = bounds.width / 2 - (viewport.offset.width + imageSize.width / 2) * scale
+        let originY = bounds.height / 2 - (viewport.offset.height + imageSize.height / 2) * scale
+        ctx.interpolationQuality = scale >= 2 ? .none : .low
+        session.withDisplayCGImage { cg in
+            guard let cg else { return }
+            ctx.saveGState()
+            // draw(_:in:) is bottom-up; re-flip within our flipped coordinates.
+            ctx.translateBy(x: 0, y: bounds.height)
+            ctx.scaleBy(x: 1, y: -1)
+            let drawRect = CGRect(x: originX,
+                                  y: bounds.height - originY - imageSize.height * scale,
+                                  width: imageSize.width * scale,
+                                  height: imageSize.height * scale)
+            ctx.draw(cg, in: drawRect)
+            ctx.restoreGState()
+        }
+    }
+}
+
+struct RetouchCanvas: NSViewRepresentable {
+    let session: RetouchSession
+    let viewport: ViewportState
+    var tone = ToneSettings()
+
+    func makeNSView(context: Context) -> RetouchCanvasNSView {
+        let view = RetouchCanvasNSView()
+        // Without this, macOS silently ignores Core Image layer filters.
+        view.layerUsesCoreImageFilters = true
+        view.viewport = viewport
+        view.attach(session: session)
+        view.applyTone(tone)
+        return view
+    }
+
+    func updateNSView(_ view: RetouchCanvasNSView, context: Context) {
+        view.viewport = viewport
+        view.attach(session: session)
+        view.applyTone(tone)
+        view.viewportDidUpdate()
+    }
+}
+
+struct RetouchOverlay: NSViewRepresentable {
+    let viewport: ViewportState
+    let imageSize: CGSize
+    let session: RetouchSession
+
+    func makeNSView(context: Context) -> RetouchEventView {
+        let view = RetouchEventView()
+        view.onStrokeBegan = { [weak session] in session?.beginStroke(at: $0) }
+        view.onStrokeMoved = { [weak session] in session?.continueStroke(from: $0, to: $1) }
+        view.onStrokeEnded = { [weak session] in session?.endStroke() }
+        view.onHover = { [weak session] in session?.cursor = $0 }
+        view.onCycleSource = { [weak session] in session?.cycleSource(by: $0) }
+        view.onAutoPick = { [weak session] in
+            guard let session, let cursor = session.cursor else { return }
+            session.autoPickSource(at: cursor)
+        }
+        view.onBrushResize = { [weak session] in session?.adjustBrushRadius(by: $0) }
+        view.onTogglePMax = { [weak session] in session?.togglePMaxLayer() }
+        view.onToggleResult = { [weak session] in session?.toggleResultLayer() }
+        return view
+    }
+
+    func updateNSView(_ view: RetouchEventView, context: Context) {
+        view.viewport = viewport
+        view.imageSize = imageSize
+        if view.bounds.size != .zero {
+            viewport.lastPaneSize = view.bounds.size
+        }
+    }
+}
+
+// MARK: - Labeled slider with help
+
+struct LabeledSlider: View {
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let format: String
+    /// Multiplier applied to the value for display only (e.g. 100 for percent).
+    var displayScale: Double = 1
+    let help: String
+    var onEditingChanged: ((Bool) -> Void)? = nil
+
+    /// A hair below zero formats as "-0.00" (drag the slider back toward
+    /// zero and stop a fraction short) - show the zero it rounds to instead.
+    private var displayString: String {
+        let s = String(format: format, value * displayScale)
+        if s == String(format: format, -0.0) {
+            return String(format: format, 0.0)
+        }
+        return s
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text(label)
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .help(help)
+                Spacer()
+                Text(displayString)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: $value, in: range) { editing in
+                onEditingChanged?(editing)
+            }
+        }
+        .help(help)
+    }
+}
+
+extension NSItemProvider {
+    func loadURL() async throws -> URL? {
+        try await withCheckedThrowingContinuation { continuation in
+            _ = loadObject(ofClass: URL.self) { url, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: url)
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,1818 @@
+import SwiftUI
+import HyperfocalKit
+import UniformTypeIdentifiers
+
+/// Shared zoom/pan state for the synced preview panes. Offsets are in image
+/// pixels (input and output share dimensions), so both panes track exactly.
+@MainActor
+final class ViewportState: ObservableObject {
+
+    enum ZoomMode: Equatable {
+        case fit
+        case scale(CGFloat)  // view points per image pixel
+    }
+
+    static let fixedLevels: [CGFloat] = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4]
+
+    static func percentLabel(_ scale: CGFloat) -> String {
+        let pct = scale * 100
+        return pct == pct.rounded()
+            ? String(format: "%.0f%%", pct)
+            : String(format: "%.4g%%", pct)
+    }
+
+    @Published var mode: ZoomMode = .fit
+    @Published var offset: CGSize = .zero  // image-pixel displacement of center
+
+    /// Last known pane size, maintained by the event overlay; used to convert
+    /// fit → absolute when zooming via buttons/menu.
+    var lastPaneSize = CGSize(width: 700, height: 700)
+
+    func effectiveScale(imageSize: CGSize, viewSize: CGSize) -> CGFloat {
+        switch mode {
+        case .fit:
+            guard imageSize.width > 0, imageSize.height > 0 else { return 1 }
+            return min(viewSize.width / imageSize.width, viewSize.height / imageSize.height)
+        case .scale(let s):
+            return s
+        }
+    }
+
+    func zoom(by factor: CGFloat, imageSize: CGSize) {
+        let current = effectiveScale(imageSize: imageSize, viewSize: lastPaneSize)
+        mode = .scale(min(max(current * factor, 0.01), 16))
+    }
+
+    /// Zoom anchored at a cursor location (pane coordinates, top-left origin):
+    /// the image point under the cursor stays put.
+    func zoom(at location: CGPoint, in paneSize: CGSize, by factor: CGFloat, imageSize: CGSize) {
+        let oldScale = effectiveScale(imageSize: imageSize, viewSize: paneSize)
+        let newScale = min(max(oldScale * factor, 0.01), 16)
+        guard newScale != oldScale else { return }
+        let dx = location.x - paneSize.width / 2
+        let dy = location.y - paneSize.height / 2
+        offset.width += dx * (1 / oldScale - 1 / newScale)
+        offset.height += dy * (1 / oldScale - 1 / newScale)
+        mode = .scale(newScale)
+        clampOffset(imageSize: imageSize)
+    }
+
+    func pan(by deltaView: CGSize, imageSize: CGSize, paneSize: CGSize) {
+        let scale = effectiveScale(imageSize: imageSize, viewSize: paneSize)
+        guard scale > 0 else { return }
+        offset.width -= deltaView.width / scale
+        offset.height -= deltaView.height / scale
+        clampOffset(imageSize: imageSize)
+    }
+
+    func reset() {
+        mode = .fit
+        offset = .zero
+    }
+
+    func clampOffset(imageSize: CGSize) {
+        offset.width = min(max(offset.width, -imageSize.width / 2), imageSize.width / 2)
+        offset.height = min(max(offset.height, -imageSize.height / 2), imageSize.height / 2)
+    }
+}
+
+@MainActor
+final class AppModel: ObservableObject {
+
+    enum Phase: Equatable {
+        case empty
+        case loaded
+        case running
+        case done
+        case failed(String)
+
+        var isRunning: Bool { self == .running }
+    }
+
+    enum OutputMode: String, CaseIterable {
+        case result = "Result"
+        case depth = "Depth"
+    }
+
+    enum ExportFormat: String, CaseIterable, Identifiable {
+        case tiff = "TIFF (16-bit)"
+        case dng = "DNG (linear raw)"
+        case png = "PNG (16-bit)"
+        case jpeg = "JPEG"
+
+        var id: String { rawValue }
+
+        var fileExtension: String {
+            switch self {
+            case .tiff: return "tif"
+            case .dng: return "dng"
+            case .png: return "png"
+            case .jpeg: return "jpg"
+            }
+        }
+    }
+
+    enum ExportColorSpace: String, CaseIterable, Identifiable {
+        case srgb = "sRGB"
+        case displayP3 = "Display P3"
+        case prophoto = "ProPhoto RGB"
+
+        var id: String { rawValue }
+
+        var cgColorSpace: CGColorSpace? {
+            switch self {
+            case .srgb: return CGColorSpace(name: CGColorSpace.sRGB)
+            case .displayP3: return nil  // the working space; no conversion
+            case .prophoto: return CGColorSpace(name: CGColorSpace.rommrgb)
+            }
+        }
+    }
+
+    @Published var phase: Phase = .empty
+    @Published var frames: [URL] = []
+    @Published var included: Set<URL> = []
+    @Published var selection: Set<URL> = []
+    /// Frames the last fuse flagged as bad, with the reason ("4.1× darker than
+    /// the stack") — shown as a warning badge in the Stack list. Excluded
+    /// frames stay listed with their checkbox cleared, so opting back in is
+    /// just re-checking them.
+    @Published var frameIssues: [URL: String] = [:]
+    /// Decides whether flagged frames get excluded (called off the main thread
+    /// with display lines). Defaults to a blocking alert; the headless probe
+    /// replaces it. Read once at fuse start.
+    var badFramePrompt: (([String]) -> Bool)?
+
+    // Multi-stack project. AppModel's frame/result fields below always mirror
+    // the *selected* stack (so the whole single-stack pipeline — fuse,
+    // retouch, preview — operates unchanged); `selectStack` stashes the
+    // mirrors into the outgoing Stack and installs the incoming one.
+    @Published private(set) var stacks: [Stack] = []
+    @Published var selectedStackID: UUID?
+    @Published var expandedStacks: Set<UUID> = []
+    var selectedStack: Stack? { stacks.first { $0.id == selectedStackID } }
+
+    enum StackStatus {
+        case unfused, fusing, fused, failed(String)
+    }
+
+    // Queue ("Fuse Enabled Stacks") progress prefix, e.g. "Stack 2 of 5 · ".
+    @Published var batchStatus: String?
+    private var batchMode = false
+    /// Probe overrides: answer the burst-split question ((directory name,
+    /// burst count) → load as separate stacks?); receive queue/export
+    /// summaries instead of an alert.
+    var splitChoicePrompt: ((String, Int) -> Bool)?
+    var queueSummaryPresenter: ((String) -> Void)?
+
+    // Settings persist in an explicit suite: an unbundled executable's standard
+    // defaults domain is its *process name*, which changed with each rename —
+    // orphaning saved values. The suite survives renames and future bundling.
+    static let settings = UserDefaults(suiteName: "org.hyperfocal.settings") ?? .standard
+
+    // Fusion parameters
+    @Published var alignFrames: Bool {
+        didSet { Self.settings.set(alignFrames, forKey: "alignFrames") }
+    }
+    @Published var useGPU: Bool {
+        didSet { Self.settings.set(useGPU, forKey: "useGPU") }
+    }
+    // The fusion sliders are per-project creative controls, deliberately
+    // not persisted: with the defaults dialed in, every new project starts
+    // from them (the set-and-forget switches below stay persisted).
+    @Published var sharpnessSigma = defaultSharpnessSigma
+    @Published var noiseFloor: Double = AppModel.defaultNoiseFloor {
+        didSet {
+            if noiseFloorPreviewActive { updateNoiseFloorPreview() }
+        }
+    }
+    @Published var medianRadius = defaultMedianRadius
+    @Published var blendRadius = defaultBlendRadius
+    @Published var normalizeExposure: Bool {
+        didSet { Self.settings.set(normalizeExposure, forKey: "normalizeExposure") }
+    }
+    @Published var slabDeepStacks: Bool {
+        didSet { Self.settings.set(slabDeepStacks, forKey: "slabDeepStacks") }
+    }
+    /// Order each stack's frames by EXIF capture time at load (filename
+    /// order breaks when the camera's file counter rolls over mid-stack).
+    /// Off = filename always wins. Read at load time, not fuse time.
+    @Published var orderByCaptureTime: Bool {
+        didSet { Self.settings.set(orderByCaptureTime, forKey: "orderByCaptureTime") }
+    }
+    /// Sidebar sections the user has collapsed — persisted like the other
+    /// set-and-forget UI preferences.
+    enum SidebarSection: String, CaseIterable {
+        case stack, fusion, tone, retouch, export
+    }
+    @Published var collapsedSections: Set<SidebarSection> {
+        didSet {
+            Self.settings.set(collapsedSections.map(\.rawValue).sorted(),
+                              forKey: "collapsedSections")
+        }
+    }
+
+    func isCollapsed(_ section: SidebarSection) -> Bool {
+        collapsedSections.contains(section)
+    }
+
+    func toggleSection(_ section: SidebarSection) {
+        if collapsedSections.contains(section) {
+            collapsedSections.remove(section)
+        } else {
+            collapsedSections.insert(section)
+        }
+    }
+    /// With the toggle on, slabbing engages at this depth (shallow stacks
+    /// don't need it and the pyramid pass would only cost time). Off by
+    /// default: slabs change what retouching sources from, which surprised
+    /// even the owner — users who know they want it can opt in.
+    static let slabThreshold = 40
+
+    // Progress
+    @Published var stageText = ""
+    @Published var stageFraction = 0.0
+    @Published var progressive: NSImage?
+    @Published var progressiveNominalSize: CGSize?
+    @Published var processingSource: NSImage?
+    @Published var processingSourceLabel: String?
+    @Published var processingSourceNominalSize: CGSize?
+
+    // Results & previews
+    @Published var outputPreview: NSImage?
+    @Published var depthPreview: NSImage?
+    @Published var inputPreview: NSImage?
+    @Published var inputPreviewURL: URL?
+    /// The preview is warped into the fused canvas (alignment transforms
+    /// existed when it was decoded) rather than the raw file.
+    @Published var inputPreviewAligned = false
+    @Published var inputPreviewLoading = false
+    /// Why the selected frame couldn't be shown (missing file, decode failure).
+    /// Without this the pane falls back to the "select a frame" hint, which is
+    /// misleading when a frame IS selected but its volume is unmounted.
+    @Published var inputPreviewError: String?
+    /// True pixel dimensions of the input preview. Do NOT derive this from the
+    /// NSImage: NSCGImageSnapshotRep reports pixelsWide at the display's backing
+    /// scale (2x on Retina), which broke pane synchronization.
+    @Published var inputPixelSize: CGSize?
+    @Published var outputMode: OutputMode = .result
+    /// Lightroom-style tone adjustments (per stack, saved in projects):
+    /// live on every preview — panes and retouch canvas — and baked into
+    /// TIFF/PNG/JPEG exports at full float precision before quantization.
+    /// Linear DNG ignores them by design: that format hands unmodified
+    /// linear data to a real raw developer.
+    @Published var tone = ToneSettings() {
+        didSet {
+            guard oldValue != tone else { return }
+            toneLUT = tone.isNeutral ? nil : Self.lutImage(tone)
+            if !installingStack { hasUnsavedWork = true }
+        }
+    }
+    /// The curve as a 1-D float texture for the preview shader; nil when
+    /// neutral (no effect applied at all).
+    @Published private(set) var toneLUT: CGImage?
+    /// Guards `tone.didSet` against marking stack switches as unsaved edits.
+    private var installingStack = false
+    @Published var exportFormat: ExportFormat {
+        didSet { Self.settings.set(exportFormat.rawValue, forKey: "exportFormat") }
+    }
+    @Published var exportColorSpace: ExportColorSpace {
+        didSet { Self.settings.set(exportColorSpace.rawValue, forKey: "exportColorSpace") }
+    }
+
+    let viewport = ViewportState()
+    private let alignmentCache = AlignmentCache()
+
+    // Retouching
+    @Published var retouchMode = false
+    @Published var retouch: RetouchSession?
+    private(set) var resultDepth: [Float] = []
+    private(set) var resultSharpness: FrameSharpness?
+    // Exposure gains the fusion applied; retouch sources must match them.
+    private(set) var resultGains: [Float]?
+    // Slab images from a slabbed fusion — they are the primary retouch
+    // sources (the result's depth indexes slabs, and each slab is
+    // all-in-focus in its range). Original frames stay available as
+    // secondary sources; these are the exposure gains baked into the slabs,
+    // which frame stamps must reapply.
+    private(set) var slabURLs: [URL]?
+    private(set) var slabFrameGains: [Float]?
+    private var fuseURLs: [URL] = []
+    // What the current result was fused with (selected-stack mirror).
+    private var fusedSettings: FuseSettings?
+
+    private var fusionCancellation: CancellationToken?
+
+    // Noise-floor preview: while the slider is dragged, the output pane shows
+    // the depth map the new floor would produce — the *actual* regularizer
+    // (argmax → confidence threshold → weighted median → jump-flood fill →
+    // cleanup) run on the retained low-res sharpness planes. Below-floor
+    // regions inheriting smoothly from their surroundings is normal and
+    // harmless; blotchy fill basins or halos standing off edges are what the
+    // slider is there to fix. (The old preview blacked out sub-floor pixels,
+    // which read as "problem here" even when the fill would be fine.)
+    @Published var noiseFloorPreview: NSImage?
+    private var noiseFloorPreviewData:
+        (energyMax: [Float], argmax: [Float], concentration: [Float],
+         planes: [[Float]], guide: [Float], width: Int, height: Int,
+         halfWidth: Int, frames: Int)?
+    /// Bumped per compute and on end; compute tasks poll it from worker
+    /// threads (hence the lock, not a plain Int) to abort a fit whose result
+    /// would be discarded — a stale in-flight fit ends within one tier-2 row
+    /// instead of running to completion.
+    private let noiseFloorPreviewGeneration = LockedCounter()
+    /// One compute in flight at a time; a drag tick arriving mid-compute is
+    /// coalesced into a single follow-up with the latest slider value. The
+    /// guided fit costs hundreds of ms at deep-stack scale — unbounded
+    /// per-tick tasks would thrash and starve the display.
+    private var noiseFloorPreviewComputing = false
+    private var noiseFloorPreviewPending = false
+    /// The one-time preview-data build also runs off-main; these keep it
+    /// single-flight and let stack switches / re-fuses orphan a stale build.
+    private var noiseFloorPreviewBuilding = false
+    private var noiseFloorPreviewDataEpoch = 0
+    /// True between begin/end (slider engaged) — the data cache outlives the
+    /// drag, but renders must not.
+    private var noiseFloorPreviewActive = false
+
+    // Retouch edits restored from a saved session (consumed by enterRetouch).
+    private var savedWorking: ImageBuffer?
+    private var savedSourceIndex: Int?
+
+    /// A fused result (or retouch edits on one) exists that no project file
+    /// holds. Set by fuse completion and retouch strokes, cleared by saving
+    /// or opening a project; quitting with it set asks for confirmation.
+    private(set) var hasUnsavedWork = false
+
+    // Security-scoped file access (the app is sandboxed; frames live outside
+    // the container). `grantedRoots` are the URLs the user granted this
+    // session — open-panel/drop selections, or bookmark-resolved roots after
+    // a restore — and are what gets bookmarked into saved projects.
+    // `scopedAccessURLs` are the roots we called startAccessing... on,
+    // balanced with stopAccessing when the project is replaced.
+    private var grantedRoots: [URL] = []
+    private var scopedAccessURLs: [URL] = []
+
+    init() {
+        let d = Self.settings
+        exportFormat = d.string(forKey: "exportFormat")
+            .flatMap { ExportFormat(rawValue: $0) } ?? .tiff
+        exportColorSpace = d.string(forKey: "exportColorSpace")
+            .flatMap { ExportColorSpace(rawValue: $0) } ?? .srgb
+        alignFrames = d.object(forKey: "alignFrames") as? Bool ?? true
+        useGPU = (d.object(forKey: "useGPU") as? Bool ?? true) && MetalEngine.shared != nil
+        for legacy in ["sharpnessSigma", "noiseFloor", "medianRadius", "blendRadius"] {
+            d.removeObject(forKey: legacy)  // fusion sliders no longer persist
+        }
+        normalizeExposure = d.object(forKey: "normalizeExposure") as? Bool ?? true
+        slabDeepStacks = d.object(forKey: "slabDeepStacks") as? Bool ?? false
+        orderByCaptureTime = d.object(forKey: "orderByCaptureTime") as? Bool ?? true
+        collapsedSections = Set((d.stringArray(forKey: "collapsedSections") ?? [])
+            .compactMap(SidebarSection.init))
+
+        // One-time cleanup: earlier builds autosaved the whole project on quit
+        // (hundreds of MB of pixel blobs — the write took too long, which is
+        // why quit now warns about unsaved work instead). The old file lingers
+        // for anyone upgrading past that.
+        try? FileManager.default.removeItem(at: ProjectStore.autosaveURL)
+    }
+
+    // MARK: - Security-scoped access
+
+    /// Bookmarks for every granted root that covers a current frame. Created
+    /// fresh on each save, so stale bookmarks self-heal and folder moves are
+    /// re-tracked. Creation fails harmlessly for roots we can't access.
+    private func currentBookmarks() -> [String: Data]? {
+        var bookmarks = [String: Data]()
+        let allFrames = Set(stacks.flatMap(\.frames)).union(frames)
+        for root in grantedRoots {
+            let covers = allFrames.contains {
+                $0.path == root.path || $0.path.hasPrefix(root.path + "/")
+            }
+            guard covers else { continue }
+            if let data = try? root.bookmarkData(options: .withSecurityScope,
+                                                 includingResourceValuesForKeys: nil,
+                                                 relativeTo: nil) {
+                bookmarks[root.path] = data
+            }
+        }
+        return bookmarks.isEmpty ? nil : bookmarks
+    }
+
+    private func stopScopedAccess() {
+        for url in scopedAccessURLs { url.stopAccessingSecurityScopedResource() }
+        scopedAccessURLs = []
+    }
+
+    /// Resolves saved bookmarks and starts access. `remap` translates a moved
+    /// or renamed root's stored path prefix to where the bookmark found it, so
+    /// persisted frame paths keep working. Staleness needs no handling here:
+    /// the next save re-creates bookmarks from the resolved roots.
+    nonisolated private static func resolveScopedAccess(_ bookmarks: [String: Data]?)
+        -> (roots: [URL], accessed: [URL], remap: [String: String]) {
+        guard let bookmarks else { return ([], [], [:]) }
+        var roots = [URL](), accessed = [URL](), remap = [String: String]()
+        for (path, data) in bookmarks {
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: data,
+                                     options: .withSecurityScope,
+                                     relativeTo: nil,
+                                     bookmarkDataIsStale: &stale) else { continue }
+            if url.startAccessingSecurityScopedResource() { accessed.append(url) }
+            roots.append(url)
+            if url.path != path { remap[path] = url.path }
+        }
+        return (roots, accessed, remap)
+    }
+
+    nonisolated private static func remappedURL(_ url: URL,
+                                                remap: [String: String]) -> URL {
+        guard !remap.isEmpty else { return url }
+        let path = url.path
+        for (old, new) in remap {
+            if path == old { return URL(fileURLWithPath: new) }
+            if path.hasPrefix(old + "/") {
+                return URL(fileURLWithPath: new + path.dropFirst(old.count))
+            }
+        }
+        return url
+    }
+
+    // MARK: - Stack selection
+
+    /// Writes the selected-stack mirrors back into their Stack. The live
+    /// retouch session is reduced to its working pixels (source caches are
+    /// gigabytes; only the selected stack keeps a session).
+    private func stash(into stack: Stack) {
+        stack.frames = frames
+        stack.included = included
+        stack.frameIssues = frameIssues
+        stack.result = result
+        stack.depthResult = depthResult
+        stack.resultDepth = resultDepth
+        stack.resultSharpness = resultSharpness
+        stack.resultGains = resultGains
+        stack.slabURLs = slabURLs
+        stack.slabFrameGains = slabFrameGains
+        stack.fuseURLs = fuseURLs
+        stack.fusedSettings = fusedSettings
+        stack.tone = tone
+        stack.outputPreview = outputPreview
+        stack.depthPreview = depthPreview
+        if case .failed(let message) = phase {
+            stack.failureMessage = message
+        } else {
+            stack.failureMessage = nil
+        }
+        if let session = retouch {
+            stack.savedWorking = session.hasEdits ? session.working : savedWorking
+            stack.savedSourceIndex = session.sourceIndex
+        } else {
+            stack.savedWorking = savedWorking
+            stack.savedSourceIndex = savedSourceIndex
+        }
+    }
+
+    /// Installs a Stack into the selected-stack mirrors, resetting everything
+    /// transient (previews, caches, live retouch session, noise-floor data).
+    private func install(from stack: Stack) {
+        frames = stack.frames
+        included = stack.included
+        frameIssues = stack.frameIssues
+        result = stack.result
+        depthResult = stack.depthResult
+        resultDepth = stack.resultDepth
+        resultSharpness = stack.resultSharpness
+        resultGains = stack.resultGains
+        slabURLs = stack.slabURLs
+        slabFrameGains = stack.slabFrameGains
+        fuseURLs = stack.fuseURLs
+        fusedSettings = stack.fusedSettings
+        installingStack = true
+        tone = stack.tone
+        installingStack = false
+        outputPreview = stack.outputPreview
+        depthPreview = stack.depthPreview
+        savedWorking = stack.savedWorking
+        savedSourceIndex = stack.savedSourceIndex
+        retouch = nil
+        retouchMode = false
+        noiseFloorPreview = nil
+        noiseFloorPreviewData = nil
+        noiseFloorPreviewDataEpoch += 1  // invalidate any in-flight build
+        noiseFloorPreviewActive = false
+        progressive = nil
+        inputCache = [:]
+        inputCacheOrder = []
+        inputPreview = nil
+        inputPreviewURL = nil
+        inputPreviewAligned = false
+        inputPreviewError = nil
+        inputPixelSize = nil
+        viewport.reset()
+        if stack.result != nil {
+            phase = .done
+        } else if let message = stack.failureMessage {
+            phase = .failed(message)
+        } else {
+            phase = frames.isEmpty ? .empty : .loaded
+        }
+        if let first = frames.first {
+            selection = [first]
+            selectionChanged()
+        } else {
+            selection = []
+        }
+    }
+
+    func selectStack(_ id: UUID) {
+        guard id != selectedStackID, !phase.isRunning,
+              let target = stacks.first(where: { $0.id == id }) else { return }
+        if let current = selectedStack { stash(into: current) }
+        selectedStackID = id
+        install(from: target)
+    }
+
+    /// Live status for the tree's glyphs: the selected stack reads the
+    /// mirrors (its Stack object is stale until stashed).
+    func status(of stack: Stack) -> StackStatus {
+        if stack.id == selectedStackID {
+            if phase.isRunning { return .fusing }
+            if result != nil { return .fused }
+            if case .failed(let message) = phase { return .failed(message) }
+            return .unfused
+        }
+        if stack.result != nil { return .fused }
+        if let message = stack.failureMessage { return .failed(message) }
+        return .unfused
+    }
+
+    func setStackEnabled(_ id: UUID, to value: Bool) {
+        guard let stack = stacks.first(where: { $0.id == id }) else { return }
+        objectWillChange.send()
+        stack.enabled = value
+    }
+
+    var fusedStackCount: Int {
+        stacks.filter { $0.id == selectedStackID ? result != nil : $0.result != nil }.count
+    }
+
+    /// True when fusing this stack would produce something its current result
+    /// isn't: no result yet, the included frame set changed, or a fusion
+    /// parameter changed since (per the `FuseSettings` snapshot; projects
+    /// saved before snapshots existed only track frame-set changes).
+    func needsRefuse(_ stack: Stack) -> Bool {
+        let isSelected = stack.id == selectedStackID
+        let stackResult = isSelected ? result : stack.result
+        guard stackResult != nil else { return true }
+        let stackFrames = isSelected ? frames : stack.frames
+        let stackIncluded = isSelected ? included : stack.included
+        let stackFuseURLs = isSelected ? fuseURLs : stack.fuseURLs
+        if stackFrames.filter({ stackIncluded.contains($0) }) != stackFuseURLs { return true }
+        if let snapshot = isSelected ? fusedSettings : stack.fusedSettings,
+           snapshot != currentFuseSettings(frameCount: stackIncluded.count) {
+            return true  // a new fuse would decide differently (incl. slabbing)
+        }
+        return false
+    }
+
+    /// Stacks the queue button would fuse: enabled and out of date.
+    var pendingStackCount: Int {
+        stacks.filter { $0.enabled && needsRefuse($0) }.count
+    }
+
+    private func currentFuseSettings(frameCount: Int) -> FuseSettings {
+        FuseSettings(align: alignFrames,
+                     useGPU: useGPU,
+                     sharpnessSigma: sharpnessSigma,
+                     noiseFloor: noiseFloor,
+                     medianRadius: medianRadius,
+                     blendRadius: blendRadius,
+                     normalizeExposure: normalizeExposure,
+                     slabbed: slabDeepStacks && frameCount >= Self.slabThreshold)
+    }
+
+    // MARK: - Session persistence
+
+    private func captureProject() -> ProjectStore.Project? {
+        if let current = selectedStack { stash(into: current) }
+        guard stacks.contains(where: { $0.result != nil }) else { return nil }
+        let payloads = stacks.map { stack in
+            ProjectStore.StackPayload(
+                name: stack.name,
+                enabled: stack.enabled,
+                frameURLs: stack.frames,
+                includedURLs: stack.included,
+                transforms: alignmentCache.transforms(for: stack.fuseURLs),
+                result: stack.result,
+                depth: stack.resultDepth,
+                sharpness: stack.resultSharpness,
+                working: stack.savedWorking,
+                sourceIndex: stack.savedSourceIndex,
+                gains: stack.resultGains,
+                slabPaths: stack.slabURLs?.map(\.path),
+                slabFrameGains: stack.slabFrameGains,
+                fusedSettings: stack.fusedSettings,
+                tone: stack.tone.isNeutral ? nil : stack.tone)
+        }
+        return ProjectStore.Project(
+            stacks: payloads,
+            selectedIndex: stacks.firstIndex { $0.id == selectedStackID },
+            bookmarks: currentBookmarks())
+    }
+
+    /// Quit-time unsaved-work check (invoked by the app delegate before
+    /// termination). Projects hold retouch edits that can't be recomputed, so
+    /// losing one silently is unacceptable — but writing it automatically
+    /// takes too long at 45 MP (hundreds of MB of blobs), so quitting asks.
+    /// The quit gate's sibling for in-app actions that replace the current
+    /// project: fused results and retouch edits can't be recomputed, so
+    /// anything that discards them asks first. True means proceed.
+    func confirmDiscardingUnsavedWork(message: String, confirmTitle: String) -> Bool {
+        guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return true }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = "Any unsaved work will be lost."
+        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    func confirmTermination() -> NSApplication.TerminateReply {
+        guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Are you sure you want to quit?"
+        alert.informativeText = "Unsaved data will be lost."
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    /// Returns true when a project file was written.
+    @discardableResult
+    func saveProjectPanel() -> Bool {
+        guard captureProject() != nil else { return false }
+        let panel = NSSavePanel()
+        if let type = UTType(filenameExtension: ProjectStore.fileExtension) {
+            panel.allowedContentTypes = [type]
+        }
+        let base = stacks.first?.name ?? "Project"
+        panel.nameFieldStringValue = "\(base).\(ProjectStore.fileExtension)"
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        guard let project = captureProject() else { return false }
+        do {
+            try ProjectStore.write(project, to: url)
+            hasUnsavedWork = false
+            return true
+        } catch {
+            // A failed save must not touch `phase`: the fused result is
+            // still valid, and .failed would disable Save itself (plus
+            // export and retouch) until a pointless re-fuse. Report and
+            // leave the session exactly as it was.
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Couldn't save the project"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            return false
+        }
+    }
+
+    func openProjectPanel() {
+        guard confirmDiscardingUnsavedWork(message: "Open a different project?",
+                                           confirmTitle: "Open Project") else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if let type = UTType(filenameExtension: ProjectStore.fileExtension) {
+            panel.allowedContentTypes = [type]
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openProject(from: url)
+    }
+
+    private struct RestoredStack {
+        let payload: ProjectStore.StackPayload
+        let outputCG: CGImage?
+        let depthCG: CGImage?
+        let depthImage: ImageBuffer?
+    }
+
+    func openProject(from url: URL) {
+        guard !phase.isRunning else { return }
+        phase = .running
+        stageText = "Restoring project…"
+        stageFraction = 0
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let project = try ProjectStore.read(from: url)
+                var restored = [RestoredStack]()
+                for payload in project.stacks {
+                    var outputCG: CGImage? = nil
+                    var depthCG: CGImage? = nil
+                    var depthImage: ImageBuffer? = nil
+                    if let result = payload.result {
+                        outputCG = try ImageFile.cgImage8(from: payload.working ?? result)
+                        let image = DMapFusion.depthImage(
+                            from: payload.depth, width: result.width, height: result.height,
+                            frameCount: max(payload.includedURLs.count, 2))
+                        depthImage = image
+                        depthCG = try ImageFile.cgImage8(from: image)
+                    }
+                    restored.append(RestoredStack(payload: payload, outputCG: outputCG,
+                                                  depthCG: depthCG, depthImage: depthImage))
+                }
+                // Resolve last, after everything that can throw, so a failed
+                // restore never leaves dangling startAccessing calls.
+                let access = Self.resolveScopedAccess(project.bookmarks)
+                let items = restored
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.installRestored(items, selectedIndex: project.selectedIndex,
+                                         access: access)
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.phase = .failed("project restore failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func installRestored(_ restored: [RestoredStack], selectedIndex: Int?,
+                                 access: (roots: [URL], accessed: [URL], remap: [String: String])) {
+        stopScopedAccess()
+        scopedAccessURLs = access.accessed
+        var newStacks = [Stack]()
+        for item in restored {
+            let stackFrames = item.payload.frameURLs.map { Self.remappedURL($0, remap: access.remap) }
+            let stack = Stack(name: item.payload.name, frames: stackFrames)
+            stack.enabled = item.payload.enabled
+            stack.included = Set(item.payload.includedURLs.map { Self.remappedURL($0, remap: access.remap) })
+                .intersection(stackFrames)
+            stack.fuseURLs = stack.frames.filter { stack.included.contains($0) }
+            if let transforms = item.payload.transforms,
+               transforms.count == stack.fuseURLs.count {
+                alignmentCache.store(transforms, for: stack.fuseURLs)
+            }
+            stack.result = item.payload.result
+            stack.resultDepth = item.payload.depth
+            stack.resultSharpness = item.payload.sharpness
+            stack.resultGains = item.payload.gains
+            stack.slabURLs = item.payload.slabPaths.map { $0.map { URL(fileURLWithPath: $0) } }
+            stack.slabFrameGains = item.payload.slabFrameGains
+            stack.fusedSettings = item.payload.fusedSettings
+            stack.tone = item.payload.tone ?? ToneSettings()
+            stack.depthResult = item.depthImage
+            stack.savedWorking = item.payload.working
+            stack.savedSourceIndex = item.payload.sourceIndex
+            stack.outputPreview = item.outputCG.map { NSImage(cgImage: $0, size: .zero) }
+            stack.depthPreview = item.depthCG.map { NSImage(cgImage: $0, size: .zero) }
+            newStacks.append(stack)
+        }
+        // Bookmark-resolved roots become this session's grants, so re-saving
+        // writes fresh bookmarks. Projects saved before bookmarks existed (or
+        // opened non-sandboxed) fall back to the frames' parent folders —
+        // bookmark creation on save succeeds wherever we truly have access.
+        grantedRoots = access.roots.isEmpty
+            ? Array(Set(newStacks.flatMap(\.frames).map { $0.deletingLastPathComponent() }))
+            : access.roots
+        stacks = newStacks
+        expandedStacks = Set(newStacks.map(\.id))
+        hasUnsavedWork = false  // exactly what the opened file holds
+        let index = selectedIndex.flatMap { newStacks.indices.contains($0) ? $0 : nil } ?? 0
+        if newStacks.indices.contains(index) {
+            selectedStackID = newStacks[index].id
+            install(from: newStacks[index])
+        } else {
+            selectedStackID = nil
+            phase = .empty
+        }
+    }
+
+    /// Lock-protected counter readable from any thread — the noise-floor
+    /// preview's compute tasks poll it mid-fit to abort stale work.
+    final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        @discardableResult func bump() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+            return value
+        }
+        func current() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+
+    private(set) var result: ImageBuffer?
+    private(set) var depthResult: ImageBuffer?
+    private var inputCache: [URL: (image: NSImage, pixelSize: CGSize, aligned: Bool)] = [:]
+    private var inputCacheOrder: [URL] = []
+    private var inputDecodeTask: Task<Void, Never>?
+
+    nonisolated static let stackableExtensions: Set<String> =
+        ImageFile.rawExtensions.union(["tif", "tiff", "png", "jpg", "jpeg"])
+
+    var includedFrames: [URL] { frames.filter { included.contains($0) } }
+    // The engine's shipped defaults for the sidebar's fusion sliders —
+    // what the Reset button restores (mirrors DMapFusion.Options defaults).
+    static let defaultSharpnessSigma = 10.0
+    static let defaultNoiseFloor = 0.05
+    static let defaultMedianRadius = 20.0
+    static let defaultBlendRadius = 1.0
+
+    var fusionSettingsAreDefault: Bool {
+        sharpnessSigma == Self.defaultSharpnessSigma
+            && noiseFloor == Self.defaultNoiseFloor
+            && medianRadius == Self.defaultMedianRadius
+            && blendRadius == Self.defaultBlendRadius
+    }
+
+    func resetFusionSettings() {
+        sharpnessSigma = Self.defaultSharpnessSigma
+        noiseFloor = Self.defaultNoiseFloor
+        medianRadius = Self.defaultMedianRadius
+        blendRadius = Self.defaultBlendRadius
+    }
+
+    var canFuse: Bool {
+        includedFrames.count >= 2 && !phase.isRunning
+            && (selectedStack?.enabled ?? true)
+            && (selectedStack.map { needsRefuse($0) } ?? true)
+    }
+    var canExport: Bool { result != nil && !phase.isRunning }
+
+    /// The image size the synced preview panes are currently showing —
+    /// what menu-driven zoom should anchor to.
+    var displayedImageSize: CGSize {
+        retouch?.nominalSize ?? outputNominalSize ?? inputNominalSize
+            ?? CGSize(width: 1, height: 1)
+    }
+
+    func zoomIn() { viewport.zoom(by: 1.5, imageSize: displayedImageSize) }
+    func zoomOut() { viewport.zoom(by: 1 / 1.5, imageSize: displayedImageSize) }
+
+    // MARK: - Frame intake
+
+    func openFrames() {
+        guard confirmDiscardingUnsavedWork(message: "Start a new project?",
+                                           confirmTitle: "New Project") else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose a stack: a folder of frames, or the frames themselves (focus order = name order)."
+        guard panel.runModal() == .OK else { return }
+        ingest(urls: panel.urls)
+    }
+
+    func addStackFolderPanel() {
+        guard !phase.isRunning else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.message = "Add stack folders to the project — each folder of frames becomes its own stack."
+        guard panel.runModal() == .OK else { return }
+        loadStacks(from: panel.urls, replacing: false)
+    }
+
+    func ingest(urls: [URL]) {
+        loadStacks(from: urls, replacing: true)
+    }
+
+    /// Drag-and-drop lands here: drops *add* stacks (like Add Stack Folder…)
+    /// rather than replacing the project, so they never discard work and
+    /// never need to warn.
+    func addStacks(urls: [URL]) {
+        guard !phase.isRunning else { return }
+        loadStacks(from: urls, replacing: false)
+    }
+
+    /// Loading pipeline: scan off-main (directory recursion + EXIF capture
+    /// times over possibly hundreds of files), then assemble stacks on main,
+    /// asking the burst-split question at most once per load.
+    private func loadStacks(from urls: [URL], replacing: Bool) {
+        guard !phase.isRunning else { return }
+        // The panel/drop URLs are exactly what the sandbox granted — folders
+        // when folders were chosen, else the individual files.
+        if replacing {
+            stopScopedAccess()
+            grantedRoots = urls
+        } else {
+            grantedRoots += urls
+        }
+        phase = .running
+        stageText = "Scanning frames…"
+        stageFraction = 0
+        let orderByCaptureTime = orderByCaptureTime
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let groups = Self.scanGroups(urls: urls,
+                                         orderByCaptureTime: orderByCaptureTime)
+            await MainActor.run { [weak self] in
+                self?.installScanned(groups, replacing: replacing)
+            }
+        }
+    }
+
+    /// Every directory (recursively) that directly contains images becomes a
+    /// group; loose files form one group of their own. Each group also carries
+    /// its capture-time burst split for the one-question-per-load dialog.
+    /// `orderByCaptureTime` picks the frame order within each group/burst
+    /// (capture time survives filename-counter rollover; name order when off
+    /// or when any frame is undated).
+    nonisolated private static func scanGroups(urls: [URL], orderByCaptureTime: Bool)
+        -> [(name: String, frames: [URL], bursts: [[URL]])] {
+        let fm = FileManager.default
+        var groups = [(name: String, frames: [URL])]()
+        var loose = [URL]()
+        func collect(directory: URL) {
+            let contents = ((try? fm.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles])) ?? [])
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            let images = contents.filter {
+                stackableExtensions.contains($0.pathExtension.lowercased())
+            }
+            if !images.isEmpty {
+                groups.append((directory.lastPathComponent, images))
+            }
+            for child in contents
+            where (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                collect(directory: child)
+            }
+        }
+        for url in urls.sorted(by: { $0.path < $1.path }) {
+            var isDirectory: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                collect(directory: url)
+            } else if stackableExtensions.contains(url.pathExtension.lowercased()) {
+                loose.append(url)
+            }
+        }
+        if !loose.isEmpty {
+            let name = loose[0].deletingLastPathComponent().lastPathComponent
+            groups.insert((name, loose.sorted { $0.lastPathComponent < $1.lastPathComponent }),
+                          at: 0)
+        }
+        // One EXIF pass per group feeds both the frame order and the burst
+        // split (hundreds of header reads on a card load — don't do it twice).
+        return groups.map { group in
+            let dates = group.frames.map(StackSplitter.captureDate(of:))
+            return (group.name,
+                    StackSplitter.ordered(urls: group.frames, dates: dates,
+                                          byCaptureTime: orderByCaptureTime),
+                    StackSplitter.split(urls: group.frames, dates: dates,
+                                        gap: StackSplitter.defaultGap,
+                                        orderByCaptureTime: orderByCaptureTime))
+        }
+    }
+
+    private func installScanned(_ groups: [(name: String, frames: [URL], bursts: [[URL]])],
+                                replacing: Bool) {
+        var splitChoice: Bool? = nil  // asked at most once per load
+        var newStacks = [Stack]()
+        for group in groups {
+            if group.bursts.filter({ $0.count >= 2 }).count >= 2 {
+                if splitChoice == nil {
+                    splitChoice = askSplitChoice(name: group.name,
+                                                 burstCount: group.bursts.count)
+                }
+                if splitChoice == true {
+                    for (i, burst) in group.bursts.enumerated() {
+                        newStacks.append(Stack(name: "\(group.name) \(i + 1)", frames: burst))
+                    }
+                    continue
+                }
+            }
+            newStacks.append(Stack(name: group.name, frames: group.frames))
+        }
+        if replacing {
+            resetForNewProject()
+            stacks = newStacks
+        } else {
+            if let current = selectedStack { stash(into: current) }
+            stacks += newStacks
+        }
+        disambiguateStackNames()
+        expandedStacks.formUnion(newStacks.map(\.id))
+        if replacing || selectedStackID == nil {
+            if let first = stacks.first {
+                selectedStackID = first.id
+                install(from: first)
+            } else {
+                selectedStackID = nil
+                phase = .empty
+            }
+        } else if let added = newStacks.first {
+            // Appending: jump to the first added stack so it's visible.
+            selectedStackID = added.id
+            install(from: added)
+        } else if let current = selectedStack {
+            install(from: current)  // nothing added; restore the phase
+        }
+    }
+
+    private func askSplitChoice(name: String, burstCount: Int) -> Bool {
+        if let splitChoicePrompt { return splitChoicePrompt(name, burstCount) }
+        let alert = NSAlert()
+        alert.messageText = "“\(name)” looks like \(burstCount) separate stacks"
+        alert.informativeText = "Capture times show \(burstCount) bursts separated by more than \(Int(StackSplitter.defaultGap)) seconds. Load them as separate stacks, or keep each folder as one stack?\n\nThis choice applies to every folder in this load."
+        alert.addButton(withTitle: "Separate Stacks")
+        alert.addButton(withTitle: "One Stack per Folder")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Two folders named "stack" in different parents would collide in the
+    /// tree and in Export All filenames; number the later ones.
+    private func disambiguateStackNames() {
+        var seen = [String: Int]()
+        for stack in stacks {
+            let count = (seen[stack.name] ?? 0) + 1
+            seen[stack.name] = count
+            if count > 1 { stack.name = "\(stack.name) (\(count))" }
+        }
+    }
+
+    private func resetForNewProject() {
+        // Cached alignments must die with the project: a re-opened stack
+        // should register fresh, not silently reuse transforms from a
+        // previous session's load. (Project restore re-seeds the cache from
+        // the stored transforms after this runs.)
+        alignmentCache.removeAll()
+        resetFusionSettings()
+        stacks = []
+        selectedStackID = nil
+        expandedStacks = []
+        hasUnsavedWork = false
+        frames = []
+        included = []
+        selection = []
+        frameIssues = [:]
+        result = nil
+        depthResult = nil
+        resultDepth = []
+        resultSharpness = nil
+        resultGains = nil
+        slabURLs = nil
+        slabFrameGains = nil
+        fuseURLs = []
+        fusedSettings = nil
+        installingStack = true
+        tone = ToneSettings()
+        installingStack = false
+        outputPreview = nil
+        depthPreview = nil
+        progressive = nil
+        retouch = nil
+        retouchMode = false
+        savedWorking = nil
+        savedSourceIndex = nil
+        noiseFloorPreview = nil
+        noiseFloorPreviewData = nil
+        noiseFloorPreviewDataEpoch += 1  // invalidate any in-flight build
+        noiseFloorPreviewActive = false
+        inputPreview = nil
+        inputPreviewURL = nil
+        inputPreviewAligned = false
+        inputPreviewError = nil
+        inputPixelSize = nil
+        inputCache = [:]
+        inputCacheOrder = []
+        viewport.reset()
+    }
+
+    // MARK: - Fuse queue
+
+    /// Fuses every enabled stack that doesn't have a result yet, serially
+    /// (memory is bounded per fuse and one fuse already saturates the GPU —
+    /// parallel stacks don't pay). Re-fusing one stack is what Fuse Stack is
+    /// for. Bad frames are excluded silently — an unattended queue must keep
+    /// moving. Cancel stops the whole queue.
+    func fuseEnabledStacks() {
+        guard !phase.isRunning else { return }
+        if let current = selectedStack { stash(into: current) }
+        let pending = stacks.filter { $0.enabled && needsRefuse($0) }
+        guard !pending.isEmpty else { return }
+        batchMode = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var failures = [String]()
+            for (i, stack) in pending.enumerated() {
+                self.batchStatus = "Stack \(i + 1) of \(pending.count) · "
+                self.selectStack(stack.id)
+                guard self.canFuse else {
+                    failures.append("\(stack.name): fewer than 2 included frames")
+                    continue
+                }
+                self.fuse()
+                while self.phase.isRunning {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                if case .failed(let message) = self.phase {
+                    failures.append("\(stack.name): \(message)")
+                } else if self.phase != .done {
+                    failures.append("Cancelled at \(stack.name).")
+                    break
+                }
+            }
+            self.batchStatus = nil
+            self.batchMode = false
+            if !failures.isEmpty {
+                let summary = failures.joined(separator: "\n")
+                if let presenter = self.queueSummaryPresenter {
+                    presenter(summary)
+                } else {
+                    let alert = NSAlert()
+                    alert.messageText = "Some stacks didn't fuse"
+                    alert.informativeText = summary
+                    alert.runModal()
+                }
+            }
+        }
+    }
+
+    // MARK: - Export all
+
+    func exportAllFusedPanel() {
+        guard fusedStackCount > 0, !phase.isRunning else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.message = "Every fused stack is written to this folder."
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let summary = await self.exportAllFused(to: dir)
+            if let presenter = self.queueSummaryPresenter {
+                presenter(summary)
+            } else {
+                let alert = NSAlert()
+                alert.messageText = "Export finished"
+                alert.informativeText = summary
+                alert.runModal()
+            }
+        }
+    }
+
+    /// Writes every fused stack (retouch edits included) to `directory` in the
+    /// current export format and color space. Returns a summary line per stack.
+    func exportAllFused(to directory: URL) async -> String {
+        if let current = selectedStack { stash(into: current) }
+        let ext = exportFormat.fileExtension
+        let space = exportColorSpace.cgColorSpace
+        var lines = [String]()
+        var count = 0
+        for stack in stacks {
+            guard let image = stack.savedWorking ?? stack.result else { continue }
+            let dest = directory.appendingPathComponent("\(stack.name).\(ext)")
+            let sourceFrame = stack.fuseURLs.first
+            let tone = exportFormat == .dng ? ToneSettings() : stack.tone
+            do {
+                let stackTone = stack.tone ?? ToneSettings()
+                let wantsSidecar = exportFormat == .dng && !stackTone.isNeutral
+                try await Task.detached(priority: .userInitiated) {
+                    var toned = image
+                    ToneCurve.apply(settings: tone, to: &toned)
+                    try ImageFile.save(toned, to: dest, sourceFrame: sourceFrame,
+                                       colorSpace: space)
+                    if wantsSidecar {
+                        try XMPSidecar.embed(tone: stackTone, inDNGAt: dest)
+                    }
+                }.value
+                count += 1
+                lines.append("\(dest.lastPathComponent) ✓")
+            } catch {
+                lines.append("\(stack.name): \(error.localizedDescription)")
+            }
+        }
+        return "\(count) stack\(count == 1 ? "" : "s") exported to “\(directory.lastPathComponent)”.\n\n"
+            + lines.joined(separator: "\n")
+    }
+
+    /// Output pane coordinate space: full-resolution dimensions regardless of
+    /// preview bitmap resolution, so zoom/pan stays in sync with the input pane.
+    var outputNominalSize: CGSize? {
+        if phase.isRunning { return progressiveNominalSize }
+        guard let result else { return nil }
+        return CGSize(width: result.width, height: result.height)
+    }
+
+    var inputNominalSize: CGSize? { inputPixelSize }
+
+    // MARK: - Inclusion
+
+    /// Checkbox semantics: toggling a row that's part of a multi-selection
+    /// applies the row's new state to every selected row. Frames of
+    /// non-selected stacks toggle directly on their Stack.
+    func setIncluded(_ url: URL, to value: Bool) {
+        if !frames.contains(url),
+           let owner = stacks.first(where: { $0.frames.contains(url) }) {
+            objectWillChange.send()
+            if value { owner.included.insert(url) } else { owner.included.remove(url) }
+            return
+        }
+        let targets = selection.contains(url) && selection.count > 1 ? selection : [url]
+        for target in targets {
+            if value { included.insert(target) } else { included.remove(target) }
+        }
+    }
+
+    /// Reads a frame's checkbox through the mirrors for the selected stack.
+    func isIncluded(_ url: URL, in stack: Stack) -> Bool {
+        stack.id == selectedStackID ? included.contains(url) : stack.included.contains(url)
+    }
+
+    func frameIssue(_ url: URL, in stack: Stack) -> String? {
+        stack.id == selectedStackID ? frameIssues[url] : stack.frameIssues[url]
+    }
+
+    /// Frames of a stack as the UI should list them (mirrors for selected).
+    func listedFrames(of stack: Stack) -> [URL] {
+        stack.id == selectedStackID ? frames : stack.frames
+    }
+
+    func includeAll(_ value: Bool) {
+        included = value ? Set(frames) : []
+    }
+
+    // MARK: - Input preview
+
+    func selectionChanged() {
+        guard let url = frames.first(where: { selection.contains($0) }) ?? selection.first else {
+            return  // keep showing the last frame rather than blanking the pane
+        }
+        // A frame from another stack switches stack selection with it.
+        if !frames.contains(url),
+           let owner = stacks.first(where: { $0.frames.contains(url) }),
+           owner.id != selectedStackID {
+            guard !phase.isRunning else { return }
+            selectStack(owner.id)   // resets selection to the stack's first…
+            selection = [url]       // …then honor the actual click
+            showInputFrame(url)
+            return
+        }
+        // In retouch mode the list drives the brush source (and vice versa via
+        // onSourceChanged); skip the normal unaligned preview decode.
+        if retouchMode, let session = retouch {
+            if let index = session.urls.firstIndex(of: url), index != session.sourceIndex {
+                session.selectSource(index)
+            }
+            return
+        }
+        showInputFrame(url)
+    }
+
+    private func showInputFrame(_ url: URL) {
+        // Once alignment transforms exist for the fused frame list, the frame
+        // is shown warped into the fused canvas (same common-coverage crop the
+        // result uses) — a raw decode next to the output reads as misalignment,
+        // not as information. Excluded frames and never-fused stacks still get
+        // the raw file.
+        let alignedURLs = fuseURLs
+        let transforms = alignmentCache.transforms(for: alignedURLs)
+        let alignedIndex = transforms == nil ? nil : alignedURLs.firstIndex(of: url)
+        let aligned = alignedIndex != nil
+        guard url != inputPreviewURL || aligned != inputPreviewAligned else { return }
+        inputPreviewURL = url
+        inputPreviewAligned = aligned
+        inputPreviewError = nil
+        if let cached = inputCache[url], cached.aligned == aligned {
+            inputPreview = cached.image
+            inputPixelSize = cached.pixelSize
+            inputPreviewLoading = false
+            return
+        }
+        inputDecodeTask?.cancel()
+        inputPreviewLoading = true
+        inputDecodeTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let decoded: (image: NSImage, pixelSize: CGSize)? = {
+                let buffer: ImageBuffer?
+                if let alignedIndex {
+                    let source = StackPipeline.makeSource(urls: alignedURLs,
+                                                          transforms: transforms)
+                    buffer = try? source.frame(at: alignedIndex)
+                } else {
+                    buffer = try? ImageFile.load(url: url)
+                }
+                guard let buffer,
+                      let cg = try? ImageFile.cgImage8(from: buffer) else { return nil }
+                return (NSImage(cgImage: cg, size: .zero),
+                        CGSize(width: buffer.width, height: buffer.height))
+            }()
+            let error: String? = decoded != nil ? nil
+                : FileManager.default.fileExists(atPath: url.path)
+                    ? "Can't decode \(url.lastPathComponent)"
+                    : "\(url.lastPathComponent) is missing"
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.inputPreviewURL == url,
+                      self.inputPreviewAligned == aligned else { return }
+                self.inputPreviewLoading = false
+                self.inputPreview = decoded?.image
+                self.inputPixelSize = decoded?.pixelSize
+                self.inputPreviewError = error
+                if let decoded {
+                    let entry = (decoded.image, decoded.pixelSize, aligned)
+                    if self.inputCache.updateValue(entry, forKey: url) == nil {
+                        self.inputCacheOrder.append(url)
+                        if self.inputCacheOrder.count > 4 {
+                            self.inputCache.removeValue(forKey: self.inputCacheOrder.removeFirst())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Fusion
+
+    func fuse() {
+        guard canFuse else { return }
+        phase = .running
+        stageText = "Starting…"
+        stageFraction = 0
+        progressive = nil
+        progressiveNominalSize = nil
+        processingSource = nil
+        processingSourceLabel = nil
+        processingSourceNominalSize = nil
+        retouch = nil
+        retouchMode = false
+        savedWorking = nil
+        savedSourceIndex = nil
+        noiseFloorPreview = nil
+        noiseFloorPreviewData = nil
+        noiseFloorPreviewDataEpoch += 1  // invalidate any in-flight build
+        let urls = includedFrames
+        // Sources can vanish between fuses (unmounted card, moved folder).
+        // Without this check the failure surfaces as an opaque decode error
+        // mid-pipeline — or worse, reads as "nothing happened" because the
+        // previous result stays on screen.
+        let missing = urls.filter { !FileManager.default.fileExists(atPath: $0.path) }
+        if !missing.isEmpty {
+            let names = missing.prefix(4).map(\.lastPathComponent).joined(separator: ", ")
+            let extra = missing.count > 4 ? " and \(missing.count - 4) more" : ""
+            reportFuseFailure("\(missing.count) of \(urls.count) source images are missing "
+                + "(moved, renamed, or deleted?): \(names)\(extra). Restore them, or uncheck "
+                + "them in the Stack list and re-fuse.")
+            return
+        }
+        fuseURLs = urls
+        // Cached aligned previews were warped under the previous fuse list's
+        // transforms/crop; a new fuse can change both.
+        inputCache = [:]
+        inputCacheOrder = []
+        var config = StackPipeline.Configuration()
+        config.align = alignFrames
+        config.preferGPU = useGPU
+        config.fusion = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
+                                           blendRadius: Float(blendRadius),
+                                           noiseFloor: Float(noiseFloor),
+                                           medianRadius: Int(medianRadius),
+                                           normalizeExposure: normalizeExposure)
+        if slabDeepStacks, urls.count >= Self.slabThreshold {
+            config.slabSize = min(32, max(8, Int((Double(urls.count).squareRoot() * 1.6).rounded())))
+            config.slabDirectory = Self.newSlabDirectory()
+        }
+        frameIssues = [:]
+        // Bad frames (misfires, failed alignment): ask before excluding. The
+        // handler runs on the fusion thread; the alert blocks it while the
+        // main thread is free, so there's no deadlock. Batches never prompt —
+        // an unattended queue must keep moving, so they exclude silently (the
+        // summary reports it).
+        let prompt = badFramePrompt ?? (batchMode ? { _ in true } : { lines in
+            DispatchQueue.main.sync {
+                let alert = NSAlert()
+                alert.messageText = lines.count == 1
+                    ? "1 frame looks bad" : "\(lines.count) frames look bad"
+                alert.informativeText = lines.joined(separator: "\n")
+                    + "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse."
+                alert.addButton(withTitle: "Exclude and Continue")
+                alert.addButton(withTitle: "Keep All Frames")
+                return alert.runModal() == .alertFirstButtonReturn
+            }
+        })
+        config.badFrameHandler = { issues in
+            let lines = issues.map { "\(urls[$0.index].lastPathComponent): \($0.summary)" }
+            return prompt(lines) ? Set(issues.map(\.index)) : []
+        }
+        let cache = alignmentCache
+        let cancellation = CancellationToken()
+        fusionCancellation = cancellation
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let result = try StackPipeline.fuseResult(urls: urls, configuration: config,
+                                                          alignmentCache: cache,
+                                                          progress: { update in
+                    func nsImage(_ buffer: ImageBuffer?) -> NSImage? {
+                        guard let buffer, let cg = try? ImageFile.cgImage8(from: buffer) else {
+                            return nil
+                        }
+                        return NSImage(cgImage: cg, size: .zero)
+                    }
+                    let preview = nsImage(update.preview)
+                    let nominal = update.previewFullWidth > 0
+                        ? CGSize(width: update.previewFullWidth, height: update.previewFullHeight)
+                        : nil
+                    let source = nsImage(update.sourcePreview)
+                    let sourceNominal = update.sourceFullWidth > 0
+                        ? CGSize(width: update.sourceFullWidth, height: update.sourceFullHeight)
+                        : nil
+                    let sourceLabel = urls.indices.contains(update.sourceFrameIndex)
+                        ? urls[update.sourceFrameIndex].lastPathComponent
+                        : nil
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.stageText = update.stage.rawValue
+                        // One monotonic bar across the whole fuse: each stage
+                        // owns a window of the overall span, and the max()
+                        // keeps skipped stages (cache hits, no slabs) from
+                        // ever stepping the bar backward.
+                        self.stageFraction = max(self.stageFraction,
+                                                 Self.overallProgress(update.stage,
+                                                                      update.fraction))
+                        if let preview {
+                            self.progressive = preview
+                            if let nominal { self.progressiveNominalSize = nominal }
+                        }
+                        if let source {
+                            self.processingSource = source
+                            self.processingSourceLabel = sourceLabel
+                            if let sourceNominal { self.processingSourceNominalSize = sourceNominal }
+                        }
+                    }
+                }, cancellation: cancellation)
+                let output = result.output
+                let resultCG = try ImageFile.cgImage8(from: output.image)
+                let depthCG = try ImageFile.cgImage8(from: output.depthMap)
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    // Flag bad frames and clear the checkboxes of excluded ones
+                    // (they stay listed — re-checking opts back in). fuseURLs
+                    // must be what was actually fused: retouch sources, saves,
+                    // and exports all key off it.
+                    self.frameIssues = Dictionary(uniqueKeysWithValues:
+                        result.issues.map { (urls[$0.index], $0.summary) })
+                    self.included.subtract(Set(urls).subtracting(result.fusedURLs))
+                    self.fuseURLs = result.fusedURLs
+                    self.result = output.image
+                    self.resultDepth = output.depth
+                    self.resultSharpness = output.sharpness
+                    self.resultGains = output.gains
+                    self.slabFrameGains = result.slabFrameGains
+                    self.installSlabs(result.slabURLs)
+                    // Snapshot what this result was fused with (staleness
+                    // tracking for the Fuse buttons); slabbed = actual outcome.
+                    var snapshot = self.currentFuseSettings(frameCount: 0)
+                    snapshot.slabbed = result.slabURLs != nil
+                    self.fusedSettings = snapshot
+                    self.depthResult = output.depthMap
+                    self.outputPreview = NSImage(cgImage: resultCG, size: .zero)
+                    self.depthPreview = NSImage(cgImage: depthCG, size: .zero)
+                    self.progressive = nil
+                    self.processingSource = nil
+                    self.processingSourceLabel = nil
+                    self.hasUnsavedWork = true
+                    self.phase = .done
+                    // Alignment transforms exist now — swap the Input pane's
+                    // raw decode for the aligned one (it sits next to Output).
+                    if let url = self.inputPreviewURL {
+                        self.inputPreviewURL = nil
+                        self.showInputFrame(url)
+                    }
+                }
+            } catch {
+                // Don't leave partial slab images behind.
+                if let dir = config.slabDirectory {
+                    try? FileManager.default.removeItem(at: dir)
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.processingSource = nil
+                    self.processingSourceLabel = nil
+                    self.progressive = nil
+                    if error is CancellationError {
+                        self.phase = self.frames.isEmpty ? .empty : .loaded
+                    } else {
+                        self.reportFuseFailure("\(error)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// A failed fuse must be unmissable: the previous result stays in the
+    /// panes (still valid), so without an alert the only sign is a small
+    /// warning icon in the Stack list. Batch runs stay silent — an
+    /// unattended queue must keep moving; its per-stack status carries the
+    /// message.
+    /// Testability hook: the probe captures failure messages instead of
+    /// blocking on a modal alert (same pattern as badFramePrompt).
+    var fuseFailureAlertOverride: ((String) -> Void)?
+
+    func reportFuseFailure(_ message: String) {
+        phase = .failed(message)
+        guard !batchMode else { return }
+        if let fuseFailureAlertOverride {
+            fuseFailureAlertOverride(message)
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Fuse failed"
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    /// Maps a per-stage fraction into the fuse's single progress span.
+    /// Windows are rough stage-duration weights; registering and aligning
+    /// share one span because the engine reports them on one 0…1 fraction.
+    static func overallProgress(_ stage: FusionProgress.Stage,
+                                _ fraction: Double) -> Double {
+        let window: (Double, Double)
+        switch stage {
+        case .registering, .aligning: window = (0.00, 0.45)
+        case .slabs: window = (0.45, 0.60)
+        case .depth: window = (0.45, 0.80)
+        case .regularizing: window = (0.80, 0.85)
+        case .render: window = (0.85, 0.99)
+        case .finishing: window = (0.99, 1.00)
+        }
+        return window.0 + (window.1 - window.0) * min(max(fraction, 0), 1)
+    }
+
+    private static func newSlabDirectory() -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory,
+                                               in: .userDomainMask)[0]
+        return support.appendingPathComponent("Hyperfocal/Slabs/\(UUID().uuidString)")
+    }
+
+    /// Installs a fusion's slab images, deleting the previous fusion's slab
+    /// directory (each fuse replaces the retouch sources; a saved project that
+    /// referenced the old slabs can regenerate them by re-fusing).
+    private func installSlabs(_ urls: [URL]?) {
+        let oldDir = slabURLs?.first?.deletingLastPathComponent()
+        slabURLs = urls
+        if let oldDir, oldDir != urls?.first?.deletingLastPathComponent() {
+            try? FileManager.default.removeItem(at: oldDir)
+        }
+    }
+
+    // MARK: - Noise floor preview
+
+    func beginNoiseFloorPreview() {
+        guard phase == .done, let sharpness = resultSharpness, let result,
+              !sharpness.planes.isEmpty else { return }
+        noiseFloorPreviewActive = true
+        if noiseFloorPreviewData != nil {
+            updateNoiseFloorPreview()
+            return
+        }
+        guard !noiseFloorPreviewBuilding else { return }
+        noiseFloorPreviewBuilding = true
+        let epoch = noiseFloorPreviewDataEpoch
+        let sw = sharpness.width, sh = sharpness.height
+        let planes = sharpness.planes
+        let resultImage = result
+        // Off-main: the one-time build scans every retained plane and reduces
+        // them — seconds of work on a deep stack, and grabbing the slider
+        // must not beachball. Ticks arriving before it lands are dropped;
+        // the completion runs one update with the current slider value.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            // Per-pixel argmax across frames (winner energy + index) — the
+            // regularizer's inputs, on the retained low-res grid.
+            let (energyMax, argmax) = sharpness.winnerPlanes()
+            // Guide for the guided regularizer: the fused result's luminance,
+            // reduced to the preview grid. The pipeline itself guides on mean
+            // stack luminance; the all-in-focus result has the same scene
+            // edges and survives project reload (the stack mean isn't
+            // retained), so the preview tracks the real regularizer's
+            // structure without persisting another plane.
+            let guide = DMapFusion.boxDownsample(resultImage.luminancePlane(),
+                                                 width: resultImage.width,
+                                                 height: resultImage.height,
+                                                 factor: DMapFusion.sharpnessDownsample)
+            // The guided fit runs on a 2× decimated grid in the preview
+            // (per-frame planes and concentration reduced once here): tier-2
+            // aggregation is quadratic in grid cells and dominates the tick
+            // cost, and at display scale the coarser fit is invisible. The
+            // fit's spatial mapping handles the factor natively — this is
+            // the same relationship the real pipeline has to full res.
+            let halfPlanes = planes.map {
+                DMapFusion.boxDownsample($0, width: sw, height: sh, factor: 2)
+            }
+            let concentration = DMapFusion.peakConcentrationPlane(planes: halfPlanes)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.noiseFloorPreviewBuilding = false
+                // A stack switch / re-fuse / reset while building: this data
+                // describes the old result — drop it.
+                guard epoch == self.noiseFloorPreviewDataEpoch else { return }
+                self.noiseFloorPreviewData = (energyMax, argmax, concentration,
+                                              halfPlanes, guide, sw, sh,
+                                              (sw + 1) / 2, planes.count)
+                if self.noiseFloorPreviewActive { self.updateNoiseFloorPreview() }
+            }
+        }
+    }
+
+    func endNoiseFloorPreview() {
+        noiseFloorPreviewActive = false
+        noiseFloorPreviewGeneration.bump()  // drop + abort any in-flight compute
+        noiseFloorPreviewPending = false
+        noiseFloorPreview = nil
+    }
+
+    private func updateNoiseFloorPreview() {
+        guard let data = noiseFloorPreviewData else { return }
+        if noiseFloorPreviewComputing {
+            noiseFloorPreviewPending = true
+            return
+        }
+        noiseFloorPreviewComputing = true
+        let counter = noiseFloorPreviewGeneration
+        let generation = counter.bump()
+        var options = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
+                                         noiseFloor: Float(noiseFloor),
+                                         medianRadius: Int(medianRadius))
+        // The preview grid is 1/sharpnessDownsample of full resolution;
+        // scale the spatial parameters to match.
+        options.medianRadius = options.medianRadius > 0
+            ? max(1, options.medianRadius / DMapFusion.sharpnessDownsample) : 0
+        options.guidedRadius = max(1, options.guidedRadius
+                                      / Float(DMapFusion.sharpnessDownsample))
+        // Off-main: the guided fit takes hundreds of ms at deep-stack scale,
+        // and slider drags arrive faster than that. Stale results are dropped.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let depth = DMapFusion.regularizeDepth(
+                bestEnergy: data.energyMax, bestIndex: data.argmax,
+                concentration: data.concentration, concentrationWidth: data.halfWidth,
+                concentrationFactor: 2,  // guided fit on the 2× preview grid
+                planes: data.planes,
+                guide: data.guide,
+                width: data.width, height: data.height,
+                frameCount: data.frames, options: options,
+                isStale: { generation != counter.current() })
+            let image = DMapFusion.depthImage(from: depth, width: data.width,
+                                              height: data.height,
+                                              frameCount: data.frames)
+            let cg = try? ImageFile.cgImage8(from: image)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.noiseFloorPreviewComputing = false
+                defer {
+                    // A drag tick landed mid-compute: run once more with the
+                    // latest slider value.
+                    if self.noiseFloorPreviewPending {
+                        self.noiseFloorPreviewPending = false
+                        if self.noiseFloorPreviewActive { self.updateNoiseFloorPreview() }
+                    }
+                }
+                guard let cg, generation == counter.current() else { return }
+                self.noiseFloorPreview = NSImage(cgImage: cg, size: .zero)
+            }
+        }
+    }
+
+    func cancelFusion() {
+        fusionCancellation?.cancel()
+        stageText = "Cancelling…"
+    }
+
+    // MARK: - Retouching
+
+    func enterRetouch() {
+        guard let result, phase == .done, !resultDepth.isEmpty else { return }
+        if retouch == nil {
+            var source: StackSource
+            var frameSource: StackSource? = nil
+            if let slabURLs, !slabURLs.isEmpty {
+                // Slabbed fusion: the slabs are the primary retouch sources —
+                // already aligned and cropped, and the depth plane indexes
+                // them — but the aligned original frames follow them in the
+                // source list (with the gains their slabs absorbed), so
+                // frame-level focus choice isn't lost.
+                source = StackSource(urls: slabURLs)
+                var frames = StackPipeline.makeSource(
+                    urls: fuseURLs, transforms: alignmentCache.transforms(for: fuseURLs))
+                frames.gains = slabFrameGains
+                frameSource = frames
+            } else {
+                // Rebuild the exact source configuration the fusion used (same
+                // common-coverage crop) so aligned slices match the result.
+                source = StackPipeline.makeSource(
+                    urls: fuseURLs, transforms: alignmentCache.transforms(for: fuseURLs))
+            }
+            // Same exposure gains too, so stamps don't reintroduce flicker.
+            source.gains = resultGains
+            if let w = source.outputWidth, let h = source.outputHeight,
+               w != result.width || h != result.height {
+                // Should be impossible (same deterministic crop as the fusion);
+                // if it ever happens, say so instead of misaligning retouch.
+                FileHandle.standardError.write(Data(
+                    "retouch: source canvas \(w)x\(h) != result \(result.width)x\(result.height)\n".utf8))
+            }
+            retouch = RetouchSession(result: result, depth: resultDepth,
+                                     sharpness: resultSharpness, source: source,
+                                     frameSource: frameSource,
+                                     restoredWorking: savedWorking,
+                                     initialSourceIndex: savedSourceIndex)
+            retouch?.onEdited = { [weak self] in self?.hasUnsavedWork = true }
+            retouch?.onSourceChanged = { [weak self] index in
+                guard let self, let session = self.retouch,
+                      session.urls.indices.contains(index) else { return }
+                self.selection = [session.urls[index]]
+            }
+        }
+        outputMode = .result
+        retouchMode = true
+        // Sync the list to the session's current source immediately.
+        if let session = retouch, session.urls.indices.contains(session.sourceIndex) {
+            selection = [session.urls[session.sourceIndex]]
+        }
+    }
+
+    func exitRetouch() {
+        retouchMode = false
+        // Reflect the edits in the normal output view (and export).
+        if let session = retouch, session.hasEdits,
+           let snapshot = session.makeSnapshotImage() {
+            outputPreview = snapshot
+        }
+    }
+
+    func resetRetouch() {
+        guard let result else { return }
+        retouch?.resetAll(to: result)
+    }
+
+    // MARK: - Export
+
+    func exportResult() {
+        // Retouch edits, once made, are the result.
+        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
+        guard let image = outputMode == .depth ? depthResult : baseImage else { return }
+        let panel = NSSavePanel()
+        let ext = exportFormat.fileExtension
+        if let type = UTType(filenameExtension: ext) {
+            panel.allowedContentTypes = [type]
+        }
+        // Name after the stack's folder — stable and meaningful, unlike
+        // whichever frame happens to be first or selected.
+        let base = (fuseURLs.first ?? frames.first)?
+            .deletingLastPathComponent().lastPathComponent ?? "stacked"
+        let suffix = outputMode == .depth ? " depth" : ""
+        panel.nameFieldStringValue = "\(base)\(suffix).\(ext)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            // Tone bakes into display-referred formats only: DNG stays
+            // linear for raw development, and the depth map is data.
+            var toned = image
+            if outputMode != .depth, exportFormat != .dng {
+                ToneCurve.apply(settings: tone, to: &toned)
+            }
+            try ImageFile.save(toned, to: url, sourceFrame: fuseURLs.first,
+                               colorSpace: exportColorSpace.cgColorSpace)
+            if outputMode != .depth, exportFormat == .dng, !tone.isNeutral {
+                // DNG stays linear; the tone rides along as embedded Camera
+                // Raw XMP, which Lightroom/ACR read as develop settings.
+                try XMPSidecar.embed(tone: tone, inDNGAt: url)
+            }
+        } catch {
+            // Same rule as saveProjectPanel: a failed write doesn't
+            // invalidate the fused result, so don't touch `phase`.
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Couldn't export the image"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
+
+    /// 1024×1 float texture of the tone curve for the preview shader, tagged
+    /// linear gray so color management passes the values through untouched.
+    private static func lutImage(_ settings: ToneSettings) -> CGImage? {
+        let size = 1024
+        let table = ToneCurve.lut(settings: settings, size: size)
+        let data = table.withUnsafeBufferPointer { Data(buffer: $0) }
+        guard let provider = CGDataProvider(data: data as CFData),
+              let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2) else { return nil }
+        return CGImage(
+            width: size, height: 1, bitsPerComponent: 32, bitsPerPixel: 32,
+            bytesPerRow: size * 4, space: space,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue
+                | CGBitmapInfo.floatComponents.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true,
+            intent: .defaultIntent)
+    }
+}

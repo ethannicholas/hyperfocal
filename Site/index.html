@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hyperfocal</title>
+<meta name="description" content="Hyperfocal is a free, native, open-source focus-stacking app and engine for macOS: depth of field beyond what optics allow.">
+<link rel="icon" href="images/icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="images/icon.png" alt=""> Hyperfocal</a>
+    <a class="current" href="index.html">Overview</a>
+    <a href="tutorial.html">Tutorial</a>
+    <a href="https://apps.apple.com/us/app/hyperfocal-focus-stacker/id6789574802">App Store</a>
+    <a href="https://github.com/ethannicholas/hyperfocal">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+<div class="hero">
+  <img class="appicon" src="images/icon.png" alt="Hyperfocal app icon">
+  <h1>Hyperfocal</h1>
+  <p class="tagline">Powerful focus stacking. Free, native, open source.</p>
+  <div class="badges">
+    <span class="badge">macOS 14+</span>
+    <span class="badge">Apple silicon &amp; Intel</span>
+    <span class="badge">MIT licensed</span>
+  </div>
+</div>
+
+<figure>
+  <img src="images/app-fused.png"
+       alt="Hyperfocal main window: a partially focused source frame on the left, the fully sharp fused result on the right">
+</figure>
+
+<h2>What it does</h2>
+
+<p>A camera lens focuses at a single depth plane, and only that plane is
+perfectly sharp. That's often fine, and having a blurred background can be
+desirable for subject separation. But sometimes, especially with macro
+photography, a shallow depth of field is unpleasant and distracting because
+you'd rather have the entire subject in focus at once. The solution to this
+problem is <em>focus stacking</em>: shoot many, often dozens or hundreds, of
+frames each with slightly different focus, and then merge the sharpest parts of
+each into one image that has everything you care about in focus at once.</p>
+
+<p>Hyperfocal performs that merge step for you. Drop in a folder of frames and
+it handles every part of the focus stacking process for you - aligning all of
+the frames to deal with focus breathing and slight shifts, scoring per-pixel
+sharpness across the stack, and rendering a beautiful result that takes each
+pixel from the sharpest frames. And because no focus stacking algorithm can
+perfectly deal with complicated objects having translucency, small projections,
+and the like, Hyperfocal offers powerful retouching features so you can obtain a
+flawless result every time.</p>
+
+<div class="pair">
+  <figure>
+    <img src="images/cinnabar-1.jpg" alt="Photograph of a mineral specimen where only a small part is in focus">
+    <figcaption>In this single shot, only a small part at the top left of this cinnabar specimen is in focus</figcaption>
+  </figure>
+  <figure>
+    <img src="images/cinnabar-stack.jpg" alt="Focus stacked photograph of the same mineral specimen, entirely in focus">
+    <figcaption>After fusing dozens of similar shots together in Hyperfocal, the entire specimen is sharp</figcaption>
+  </figure>
+</div>
+
+<h2>Highlights</h2>
+
+<ul class="features">
+  <li><b>GPU Accelerated</b>
+  Hyperfocal takes maximum advantage of Apple Silicon, using compute shaders
+  to run its algorithms on the GPU wherever possible. Registration, warping,
+  sharpness scoring, and depth regularization are all GPU-accelerated.</li>
+
+  <li><b>Two fusion engines</b>
+  A depth-map engine with halo-aware regularization for clean subjects, and
+  Laplacian-pyramid (PMax) fusion for scenes where structures at different
+  depths overlap. Use Hyperfocal's retouching features to combine the strengths
+  of both algorithms in a single image.</li>
+
+  <li><b>Thoughtful features</b>
+  You shot several stacks in the same folder? No problem, Hyperfocal notices
+  the gap in frame timestamps and offers to import them as separate stacks.
+  Turns out the flash didn't fire on some frames? It notices and offers to
+  exclude the offending images rather than destroy your stack. Hyperfocal was
+  created by an experienced macro photographer familiar with the process and
+  its challenges.</li>
+
+  <li><b>Retouching that understands stacks</b>
+  Paint from any source frame, jump to the sharpest frame under the brush,
+  blend in the PMax rendering where it produced better results, or paint back
+  to the original fusion.</li>
+
+  <li><b>Raw in, raw out</b>
+  Supports camera raw (NEF, DNG, CR3, ARW, …) input, working in Display P3
+  end to end, and produces DNG output. Or you can stick to JPG / TIFF if you
+  prefer.</li>
+
+  <li><b>Projects and batches</b>
+  Multi-stack projects with per-stack results and retouch state, a queue
+  that fuses every stack in a session, export-all, and a full command-line
+  interface for headless batch work.</li>
+</ul>
+
+<h2 id="get">Get Hyperfocal</h2>
+
+<p>Hyperfocal is free and open source. If you'd prefer to skip the build
+process and the hassle of keeping it up to date (and give the author a small
+tip in the process), it is available from the
+<a href="https://apps.apple.com/us/app/hyperfocal-focus-stacker/id6789574802">Mac
+App Store</a> for $4.99.</p>
+
+<p>To build it yourself for free, you'll need Xcode and <a
+href="https://github.com/yonaskolb/XcodeGen">XcodeGen</a>
+(<code>brew install xcodegen</code>):</p>
+
+<pre><code>git clone https://github.com/ethannicholas/hyperfocal.git
+cd hyperfocal/App
+xcodegen generate
+open Hyperfocal.xcodeproj</code></pre>
+
+Then run from Xcode. You will need to change the signing certificate to your
+own or to "Sign to Run Locally".
+
+<p>The command-line tool builds with plain SwiftPM:</p>
+
+<pre><code>swift build -c release
+.build/release/hyperfocal-cli fuse shots/* -o stacked.dng</code></pre>
+
+<p>Then take a look at the <a href="tutorial.html">tutorial</a>, which includes
+a sample image stack for you to try fusing.</p>
+
+</main>
+
+<footer>
+  <div class="inner">
+    Hyperfocal is an MIT-licensed open source project created by Ethan Nicholas ·
+    <a href="https://github.com/ethannicholas/hyperfocal">Source on GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
