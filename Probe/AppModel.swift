@@ -1,6 +1,7 @@
 import SwiftUI
 import HyperfocalKit
 import UniformTypeIdentifiers
+import os
 
 /// Shared zoom/pan state for the synced preview panes. Offsets are in image
 /// pixels (input and output share dimensions), so both panes track exactly.
@@ -378,21 +379,54 @@ final class AppModel: ObservableObject {
 
     // MARK: - Security-scoped access
 
+    private static let bookmarkLog = Logger(subsystem: "org.hyperfocal",
+                                            category: "bookmarks")
+
     /// Bookmarks for every granted root that covers a current frame. Created
     /// fresh on each save, so stale bookmarks self-heal and folder moves are
-    /// re-tracked. Creation fails harmlessly for roots we can't access.
+    /// re-tracked. Creation failures don't block the save (the pixel data
+    /// matters more than the re-link), but they are logged — a project with
+    /// no bookmarks can't reach its frames after relaunch, which is worth
+    /// diagnosing, not swallowing.
     private func currentBookmarks() -> [String: Data]? {
         var bookmarks = [String: Data]()
         let allFrames = Set(stacks.flatMap(\.frames)).union(frames)
+        Self.bookmarkLog.notice("save: \(self.grantedRoots.count) granted root(s)")
+        func bookmark(_ url: URL) -> Bool {
+            if bookmarks[url.path] != nil { return true }
+            do {
+                let data = try url.bookmarkData(options: .withSecurityScope,
+                                                includingResourceValuesForKeys: nil,
+                                                relativeTo: nil)
+                bookmarks[url.path] = data
+                Self.bookmarkLog.notice(
+                    "bookmarked \(url.path, privacy: .public) (\(data.count) bytes)")
+                return true
+            } catch {
+                Self.bookmarkLog.error(
+                    "bookmark FAILED for \(url.path, privacy: .public): \(error as NSError, privacy: .public)")
+                return false
+            }
+        }
         for root in grantedRoots {
-            let covers = allFrames.contains {
+            let covered = allFrames.filter {
                 $0.path == root.path || $0.path.hasPrefix(root.path + "/")
             }
-            guard covers else { continue }
-            if let data = try? root.bookmarkData(options: .withSecurityScope,
-                                                 includingResourceValuesForKeys: nil,
-                                                 relativeTo: nil) {
-                bookmarks[root.path] = data
+            guard !covered.isEmpty else {
+                Self.bookmarkLog.notice(
+                    "root covers no frames, skipped: \(root.path, privacy: .public)")
+                continue
+            }
+            if bookmark(root) { continue }
+            // A volume root (a memory card picked directly in the open
+            // panel) cannot be bookmarked at all — creation fails with
+            // "File descriptor doesn't match the bookmarked path", sandboxed
+            // or not. Descendants of the grant bookmark fine, so fall back
+            // to the covered frames' parent folders, which together still
+            // cover every frame on resolution.
+            for parent in Set(covered.map { $0.deletingLastPathComponent() })
+            where parent.path != root.path {
+                _ = bookmark(parent)
             }
         }
         return bookmarks.isEmpty ? nil : bookmarks

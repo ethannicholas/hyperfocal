@@ -30,6 +30,11 @@ targets:
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.files.user-selected.read-write: true
+        # Required to create/resolve app-scoped security bookmarks (the ones
+        # ProjectStore persists). Without it bookmarkData(.withSecurityScope)
+        # throws and every project saves with no bookmarks — frames then
+        # can't be read after relaunch.
+        com.apple.security.files.bookmarks.app-scope: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ethannicholas.hyperfocal
