@@ -1887,7 +1887,7 @@ final class AppModel: ObservableObject {
     func exportResult() {
         // Retouch edits, once made, are the result.
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
-        guard let image = outputMode == .depth ? depthResult : baseImage else { return }
+        guard (outputMode == .depth ? depthResult : baseImage) != nil else { return }
         let panel = NSSavePanel()
         let ext = exportFormat.fileExtension
         if let type = UTType(filenameExtension: ext) {
@@ -1900,6 +1900,16 @@ final class AppModel: ObservableObject {
         let suffix = outputMode == .depth ? " depth" : ""
         panel.nameFieldStringValue = "\(base)\(suffix).\(ext)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        writeExport(to: url)
+    }
+
+    /// Panel-free export: the write body of exportResult, honoring the
+    /// current format/color-space/tone/output-mode state. Callable directly
+    /// (UITestSupport's command channel).
+    @discardableResult
+    func writeExport(to url: URL) -> Bool {
+        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
+        guard let image = outputMode == .depth ? depthResult : baseImage else { return false }
         do {
             // Tone bakes into display-referred formats only: DNG stays
             // linear for raw development, and the depth map is data.
@@ -1914,6 +1924,7 @@ final class AppModel: ObservableObject {
                 // Raw XMP, which Lightroom/ACR read as develop settings.
                 try XMPSidecar.embed(tone: tone, inDNGAt: url)
             }
+            return true
         } catch {
             // Same rule as saveProjectPanel: a failed write doesn't
             // invalidate the fused result, so don't touch `phase`.
@@ -1922,6 +1933,7 @@ final class AppModel: ObservableObject {
             alert.messageText = "Couldn't export the image"
             alert.informativeText = error.localizedDescription
             alert.runModal()
+            return false
         }
     }
 

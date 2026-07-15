@@ -5,7 +5,9 @@
 # grant), then runs the XCUITest bundle.
 #
 #   Scripts/ui-test.sh                 full suite
-#   Scripts/ui-test.sh --only NAME     one test (e.g. testFuseEndToEnd)
+#   Scripts/ui-test.sh --only NAME     one class or test
+#                                      (e.g. ToneJourneyTests or
+#                                       ToneJourneyTests/testToneJourney)
 #   Scripts/ui-test.sh --keep-fixtures leave fixtures for reruns from Xcode
 #
 # Notes:
@@ -48,24 +50,28 @@ echo "== building CLI (fixture generator)"
 swift build >/dev/null
 CLI=.build/debug/hyperfocal-cli
 
-# Two copies of every fixture: the APP reads from its sandbox container
-# (no panel grant needed there), but macOS container protection hides that
-# path from the TEST RUNNER — so the runner gets an identical mirror in
-# /tmp for its own frame-listing and existence checks. This shell can
-# write both (Full Disk Access covers the container).
+# Fixtures live in the app's sandbox container: the sandboxed app reads
+# its own container without a panel grant, and the test runner can READ
+# it via absolute paths (it just can't write there — which is why the app
+# writes command results/exports into out/ for the runner to inspect).
 FIXTURES="$CONTAINER/tmp/hyperfocal-uitest/fixtures"
-MIRROR="/tmp/hyperfocal-uitest-fixtures"
-echo "== generating fixtures in $MIRROR (mirrored to app container)"
-rm -rf "$FIXTURES" "$MIRROR"
-mkdir -p "$MIRROR"
-"$CLI" synth -o "$MIRROR/stack-a" --frames 6 --width 500 --height 400 --ext jpg >/dev/null
-"$CLI" synth -o "$MIRROR/stack-b" --frames 6 --width 500 --height 400 --ext jpg >/dev/null
+echo "== generating fixtures in $FIXTURES"
+rm -rf "$FIXTURES"
+mkdir -p "$FIXTURES/out"
+"$CLI" synth -o "$FIXTURES/stack-a" --frames 6 --width 500 --height 400 --ext jpg >/dev/null
+"$CLI" synth -o "$FIXTURES/stack-b" --frames 6 --width 500 --height 400 --ext jpg >/dev/null
+# Distinct frame names per stack: same-named frames in two stacks give two
+# UI elements the same accessibility identifier, which breaks test queries.
+for f in "$FIXTURES/stack-b"/frame_*; do
+    mv "$f" "$FIXTURES/stack-b/b_$(basename "$f" | sed s/^frame_//)"
+done
 # Big enough that Cancel lands mid-registration.
-"$CLI" synth -o "$MIRROR/cancel-stack" --frames 20 --width 3200 --height 2400 --ext jpg >/dev/null
+"$CLI" synth -o "$FIXTURES/cancel-stack" --frames 20 --width 3200 --height 2400 --ext jpg >/dev/null
+# A flash-misfire frame (index 2; must not be the reference frame) for the
+# auto-exclusion test.
+"$CLI" synth -o "$FIXTURES/misfire-stack" --frames 8 --width 500 --height 400 --ext jpg --misfire-frame 2 >/dev/null
 # Ground truth would ingest as an extra frame.
-rm -f "$MIRROR"/*/ground_truth.*
-mkdir -p "$FIXTURES"
-cp -R "$MIRROR"/. "$FIXTURES"/
+rm -f "$FIXTURES"/*/ground_truth.*
 
 echo "== regenerating Xcode project"
 (cd App && xcodegen generate >/dev/null)
@@ -77,13 +83,13 @@ xcodebuild test \
     -project App/Hyperfocal.xcodeproj \
     -scheme Hyperfocal \
     -destination 'platform=macOS' \
-    ${ONLY:+-only-testing:"HyperfocalUITests/HyperfocalUITests/$ONLY"} 2>&1 \
+    ${ONLY:+-only-testing:"HyperfocalUITests/$ONLY"} 2>&1 \
     | tee "$LOG" \
     | grep -E "Test [Cc]ase|Test [Ss]uite|error:|\*\* TEST"
 RESULT=${PIPESTATUS[0]}
 set -e
 if [ "$KEEP" -eq 0 ] && [ "$RESULT" -eq 0 ]; then
-    rm -rf "$FIXTURES" "$MIRROR"
+    rm -rf "$FIXTURES"
 fi
 if [ "$RESULT" -eq 0 ]; then
     echo "== UI TESTS PASSED"

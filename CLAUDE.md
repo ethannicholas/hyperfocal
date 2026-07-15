@@ -34,8 +34,17 @@ one up.
   `probe: ALL PASS` before trusting model/engine changes; synth PSNR
   baselines live in ROADMAP's header.
 - `Scripts/ui-test.sh` must print `== UI TESTS PASSED` before trusting
-  UI-layer changes (XCUITest smoke suite in `App/HyperfocalUITests/`;
-  takes over mouse/keyboard while running — announce runs).
+  UI-layer changes (XCUITest suite in `App/HyperfocalUITests/`; takes
+  over mouse/keyboard while running — announce runs). Tests are
+  **journeys**: one launch exercises a whole workflow as named
+  activities (launch-per-assertion doesn't scale; a fresh launch is for
+  a fresh workflow, not a fresh check). Functional claims verify real
+  outputs — tests export through the command channel (distributed
+  notification in, container file out; see UITestSupport) and the
+  runner inspects pixels/profiles/bytes. Known trap: XCUITest cannot
+  reliably move SwiftUI sliders in some window states — journeys use
+  the `set-slider` command (verified via the value label) and the one
+  proven mouse-drag context lives in StackListJourney.
 - **Every interactive control gets an accessibility identifier** —
   dot-namespaced areas with kebab-case leaves (`fusion.fuse-stack`,
   `tone.slider.exposure`, `stack.row.<name>.enabled`, `section.fusion`;
