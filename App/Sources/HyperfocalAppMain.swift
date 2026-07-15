@@ -11,6 +11,26 @@ import HyperfocalKit
 /// its tab items, but disabling tabbing removes them at the source, and the
 /// stripper raced SwiftUI's menu reinstalls — a flickering View menu during
 /// fuses — once zoom commands moved in.)
+/// Window-delegate proxy: SwiftUI installs its own delegate on the scene's
+/// window, so the close veto wraps it — windowShouldClose is ours, every
+/// other delegate callback forwards untouched.
+final class WindowCloseGate: NSObject, NSWindowDelegate {
+    weak var wrapped: (any NSWindowDelegate)?
+    var shouldClose: (NSWindow) -> Bool = { _ in true }
+
+    override func responds(to aSelector: Selector!) -> Bool {
+        super.responds(to: aSelector) || (wrapped?.responds(to: aSelector) ?? false)
+    }
+
+    override func forwardingTarget(for aSelector: Selector!) -> Any? {
+        wrapped
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        shouldClose(sender)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel? {
         didSet { flushPendingOpens() }
@@ -20,8 +40,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// here and flush once the model exists.
     private var pendingOpenURLs = [URL]()
 
+    /// The red close button is a quit for a single-window app, and the
+    /// unsaved-work question must be answered BEFORE the window goes away:
+    /// without the veto, the window closed first and the quit confirmation
+    /// arrived after it — with nothing left to cancel back to. The gate
+    /// asks in windowShouldClose; an approved close then terminates without
+    /// asking again (closeApproved short-circuits applicationShouldTerminate).
+    private let closeGate = WindowCloseGate()  // window.delegate is weak
+    private var closeApproved = false
+
+    /// Called from the main window's onAppear (the window exists by then).
+    func installCloseGate() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let window = NSApp.windows.first(where: { $0.delegate !== self.closeGate
+                      && !($0.delegate is WindowCloseGate) && $0.isVisible }) else { return }
+            self.closeGate.wrapped = window.delegate
+            self.closeGate.shouldClose = { [weak self] _ in
+                guard let self else { return true }
+                return MainActor.assumeIsolated {
+                    guard let model = self.model else { return true }
+                    guard model.confirmTermination() == .terminateNow else { return false }
+                    self.closeApproved = true
+                    // Terminate explicitly: relying on last-window-closed
+                    // would leave a headless app if Settings happens to be
+                    // open.
+                    DispatchQueue.main.async { NSApp.terminate(nil) }
+                    return true
+                }
+            }
+            window.delegate = self.closeGate
+        }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        MainActor.assumeIsolated { model?.confirmTermination() ?? .terminateNow }
+        if closeApproved { return .terminateNow }
+        return MainActor.assumeIsolated { model?.confirmTermination() ?? .terminateNow }
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -60,6 +114,7 @@ struct HyperfocalApp: App {
                 .frame(minWidth: 980, minHeight: 620)
                 .onAppear {
                     appDelegate.model = model
+                    appDelegate.installCloseGate()
                     UITestSupport.activate(model)
                 }
         }

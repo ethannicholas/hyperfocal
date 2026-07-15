@@ -13,6 +13,8 @@ import os
 ///                               UserDefaults suite, see AppModel.settings)
 ///  - HYPERFOCAL_AUTOCONFIRM=1   answer every confirmation/prompt "yes" and
 ///                               swallow summary/failure alerts
+///  - HYPERFOCAL_CONFIRM=deny    …but answer confirmations "Cancel" (for
+///                               testing the cancel paths)
 ///  - HYPERFOCAL_LOAD_STACK      colon-separated folder paths → ingest at
 ///                               launch (replaces, like Open Folder)
 ///  - HYPERFOCAL_OPEN_PROJECT    .hyperfocal path → open at launch
@@ -79,6 +81,12 @@ enum UITestSupport {
                 // findable in the transcript rather than a silent stall.
                 print("uitest: FUSE FAILED: \(message)")
             }
+        }
+        // Deny-mode: confirmations answer "Cancel" (overrides AUTOCONFIRM's
+        // yes) — for tests of the cancel paths themselves, e.g. the
+        // close-button veto.
+        if env["HYPERFOCAL_CONFIRM"] == "deny" {
+            model.confirmAlertOverride = { _ in false }
         }
 
         if let paths = env["HYPERFOCAL_LOAD_STACK"] {

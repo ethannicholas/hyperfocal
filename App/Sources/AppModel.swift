@@ -747,12 +747,10 @@ final class AppModel: ObservableObject {
 
     func confirmTermination() -> NSApplication.TerminateReply {
         guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return .terminateNow }
-        let alert = NSAlert()
-        alert.messageText = "Are you sure you want to quit?"
-        alert.informativeText = "Unsaved data will be lost."
-        alert.addButton(withTitle: "Quit")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+        return runConfirmAlert(message: "Are you sure you want to quit?",
+                               informative: "Unsaved data will be lost.",
+                               confirmTitle: "Quit")
+            ? .terminateNow : .terminateCancel
     }
 
     /// Returns true when a project file was written.
