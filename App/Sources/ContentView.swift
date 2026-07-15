@@ -50,25 +50,40 @@ struct ContentView: View {
     private var stackPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
-                Image(systemName: model.isCollapsed(.stack) ? "chevron.right" : "chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(model.stacks.count > 1 ? "Stacks" : "Stack").font(.headline)
-                Spacer()
+                // Same real-button treatment as sectionHeader (accessibility
+                // and automation); All/None stay siblings outside the button.
+                Button {
+                    model.toggleSection(.stack)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: model.isCollapsed(.stack)
+                              ? "chevron.right" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(model.stacks.count > 1 ? "Stacks" : "Stack").font(.headline)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("section.stack")
+                .accessibilityLabel("Stack section")
+                .accessibilityValue(model.isCollapsed(.stack) ? "collapsed" : "expanded")
                 if !model.frames.isEmpty {
                     Text("\(model.includedFrames.count) of \(model.frames.count)")
                         .foregroundStyle(.secondary)
                         .font(.caption)
+                        .accessibilityIdentifier("stack.count")
                     if !model.isCollapsed(.stack) {
                         Button("All") { model.includeAll(true) }
                             .controlSize(.small)
+                            .accessibilityIdentifier("stack.include-all")
                         Button("None") { model.includeAll(false) }
                             .controlSize(.small)
+                            .accessibilityIdentifier("stack.include-none")
                     }
                 }
             }
-            .contentShape(Rectangle())
-            .onTapGesture { model.toggleSection(.stack) }
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, model.isCollapsed(.stack) ? 10 : 0)
@@ -80,6 +95,7 @@ struct ContentView: View {
                     Text("Drop a folder of frames here, or:")
                         .foregroundStyle(.secondary)
                     Button("Open Folder…") { model.openFrames() }
+                        .accessibilityIdentifier("stack.open-folder")
                 }
                 .frame(maxWidth: .infinity, minHeight: 120)
                 .padding(.bottom, 10)
@@ -91,15 +107,37 @@ struct ContentView: View {
                         if model.stacks.count == 1 {
                             frameRows(of: model.stacks[0])
                         } else {
+                            // Hand-rolled disclosure rather than
+                            // DisclosureGroup: the group merges its label
+                            // into a single accessibility element, fusing
+                            // the row's checkbox and select button into one
+                            // unusable control (identifiers concatenate) —
+                            // opaque to VoiceOver and automation alike.
                             ForEach(model.stacks) { stack in
-                                DisclosureGroup(isExpanded: expansionBinding(stack)) {
-                                    frameRows(of: stack)
-                                } label: {
+                                let expanded = model.expandedStacks.contains(stack.id)
+                                HStack(spacing: 4) {
+                                    Button {
+                                        expansionBinding(stack).wrappedValue = !expanded
+                                    } label: {
+                                        Image(systemName: "chevron.right")
+                                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("stack.row.\(stack.name).disclose")
+                                    .accessibilityLabel(
+                                        "\(expanded ? "Collapse" : "Expand") \(stack.name)")
                                     StackRow(stack: stack,
                                              isSelected: stack.id == model.selectedStackID,
                                              status: model.status(of: stack),
                                              setEnabled: { model.setStackEnabled(stack.id, to: $0) },
                                              select: { model.selectStack(stack.id) })
+                                }
+                                if expanded {
+                                    frameRows(of: stack)
+                                        .padding(.leading, 14)
                                 }
                             }
                         }
@@ -141,23 +179,35 @@ struct ContentView: View {
                 })
     }
 
-    /// Clickable section header: chevron + title toggle the section's
-    /// collapsed state (persisted across runs); `trailing` stays live either
-    /// way (buttons handle their own taps before the header's gesture).
+    /// Clickable section header: chevron + title are a real (plain-styled)
+    /// button toggling the section's collapsed state (persisted across runs)
+    /// — a button rather than a tap gesture so the header is accessible and
+    /// automatable. `trailing` stays a sibling outside the button: nesting
+    /// buttons inside a button label breaks hit-testing.
     private func sectionHeader<T: View>(
         _ title: String, _ section: AppModel.SidebarSection,
         @ViewBuilder trailing: () -> T
     ) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: model.isCollapsed(section) ? "chevron.right" : "chevron.down")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(title)
-            Spacer()
+            Button {
+                model.toggleSection(section)
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: model.isCollapsed(section)
+                          ? "chevron.right" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(title)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("section.\(section.rawValue)")
+            .accessibilityLabel("\(title) section")
+            .accessibilityValue(model.isCollapsed(section) ? "collapsed" : "expanded")
             trailing()
         }
-        .contentShape(Rectangle())
-        .onTapGesture { model.toggleSection(section) }
     }
 
     private func sectionHeader(_ title: String,
@@ -172,11 +222,11 @@ struct ContentView: View {
         Section {
             if !model.isCollapsed(.fusion) {
             LabeledSlider(
-                label: "Sharpness σ", value: $model.sharpnessSigma, range: 1...16,
+                label: "Sharpness σ", id: "fusion.slider.sharpness", value: $model.sharpnessSigma, range: 1...16,
                 format: "%.1f px",
                 help: "Radius of the local-contrast measurement that decides which frame is sharpest at each pixel. Larger values are steadier on smooth, low-texture surfaces; smaller values resolve finer depth detail.")
             LabeledSlider(
-                label: "Noise floor", value: $model.noiseFloor, range: 0.01...1,
+                label: "Noise floor", id: "fusion.slider.noise-floor", value: $model.noiseFloor, range: 0.01...1,
                 format: "%.0f%%", displayScale: 100,
                 help: "Fraction of the image's overall sharpness below which a pixel is treated as featureless and takes its depth from confident neighbors. Drag to preview the depth map this floor would produce: featureless regions inheriting smoothly from their surroundings is normal — raise the floor until glow halos standing off subjects disappear, and stop before real detail starts dissolving into its neighbors.",
                 onEditingChanged: { editing in
@@ -187,11 +237,11 @@ struct ContentView: View {
                     }
                 })
             LabeledSlider(
-                label: "Median radius", value: $model.medianRadius, range: 0...32,
+                label: "Median radius", id: "fusion.slider.median-radius", value: $model.medianRadius, range: 0...32,
                 format: "%.0f px",
                 help: "Size of the majority vote that removes isolated wrong-depth patches at edges where the background shows through a defocused subject. 0 disables it.")
             LabeledSlider(
-                label: "Blend radius", value: $model.blendRadius, range: 0.75...4,
+                label: "Blend radius", id: "fusion.slider.blend-radius", value: $model.blendRadius, range: 0.75...4,
                 format: "%.2f",
                 help: "How many neighboring frames blend together at each pixel when rendering. Wider is smoother across focus transitions, but slightly softer.")
 
@@ -204,6 +254,7 @@ struct ContentView: View {
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
             .disabled(!model.canFuse)
+            .accessibilityIdentifier("fusion.fuse-stack")
 
             if model.stacks.filter(\.enabled).count > 1 {
                 let pending = model.pendingStackCount
@@ -215,6 +266,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(model.phase.isRunning || pending == 0)
+                .accessibilityIdentifier("fusion.fuse-enabled")
                 .help("Fuses every enabled stack whose result is missing or out of date (frames or settings changed), one after another with the current settings; bad frames are excluded automatically.")
             }
             }
@@ -224,6 +276,7 @@ struct ContentView: View {
                     Button("Reset") { model.resetFusionSettings() }
                         .controlSize(.small)
                         .buttonStyle(.borderless)
+                        .accessibilityIdentifier("fusion.reset")
                 }
             }
         }
@@ -233,27 +286,27 @@ struct ContentView: View {
         Section {
             if !model.isCollapsed(.tone) {
             LabeledSlider(
-                label: "Exposure", value: $model.tone.exposure, range: -5...5,
+                label: "Exposure", id: "tone.slider.exposure", value: $model.tone.exposure, range: -5...5,
                 format: "%+.2f EV",
                 help: "Overall brightness, in stops of linear light — the loupe for judging a fuse in deep shadow. Like every Tone control, it applies to the previews (including retouching) and bakes into TIFF/PNG/JPEG exports; Linear DNG is never affected.")
             LabeledSlider(
-                label: "Contrast", value: $model.tone.contrast, range: -100...100,
+                label: "Contrast", id: "tone.slider.contrast", value: $model.tone.contrast, range: -100...100,
                 format: "%+.0f",
                 help: "S-curve around the midtones: positive deepens shadows and brightens highlights, negative flattens.")
             LabeledSlider(
-                label: "Highlights", value: $model.tone.highlights, range: -100...100,
+                label: "Highlights", id: "tone.slider.highlights", value: $model.tone.highlights, range: -100...100,
                 format: "%+.0f",
                 help: "Brightens or recovers the upper midtones and highlights without moving pure white.")
             LabeledSlider(
-                label: "Shadows", value: $model.tone.shadows, range: -100...100,
+                label: "Shadows", id: "tone.slider.shadows", value: $model.tone.shadows, range: -100...100,
                 format: "%+.0f",
                 help: "Lifts or deepens the shadows without moving pure black — usually the fastest way to inspect a dark fuse.")
             LabeledSlider(
-                label: "Whites", value: $model.tone.whites, range: -100...100,
+                label: "Whites", id: "tone.slider.whites", value: $model.tone.whites, range: -100...100,
                 format: "%+.0f",
                 help: "Moves the white point itself: the very top of the range.")
             LabeledSlider(
-                label: "Blacks", value: $model.tone.blacks, range: -100...100,
+                label: "Blacks", id: "tone.slider.blacks", value: $model.tone.blacks, range: -100...100,
                 format: "%+.0f",
                 help: "Moves the black point itself: the very bottom of the range.")
             }
@@ -263,6 +316,7 @@ struct ContentView: View {
                     Button("Reset") { model.tone = ToneSettings() }
                         .controlSize(.small)
                         .buttonStyle(.borderless)
+                        .accessibilityIdentifier("tone.reset")
                 }
             }
         }
@@ -288,6 +342,7 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .disabled(model.result == nil)
+                        .accessibilityIdentifier("retouch.start")
                     }
                 }
             } header: {
@@ -304,12 +359,14 @@ struct ContentView: View {
                     Text(format.rawValue).tag(format)
                 }
             }
+            .accessibilityIdentifier("export.format")
             Picker("Color space", selection: $model.exportColorSpace) {
                 ForEach(AppModel.ExportColorSpace.allCases) { space in
                     Text(space.rawValue).tag(space)
                 }
             }
             .disabled(model.exportFormat == .dng)
+            .accessibilityIdentifier("export.color-space")
             .help("The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw.")
             if model.exportFormat == .dng && !model.tone.isNeutral {
                 Text("DNG exports stay linear — Tone adjustments won't be baked in.")
@@ -324,6 +381,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
             }
             .disabled(!model.canExport)
+            .accessibilityIdentifier("export.result")
 
             if model.fusedStackCount > 1 {
                 Button {
@@ -333,6 +391,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(model.phase.isRunning)
+                .accessibilityIdentifier("export.all")
                 .help("Writes every fused stack (retouch edits included) to one folder, named after the stacks, in the format and color space above.")
             }
             }
@@ -372,6 +431,7 @@ struct ContentView: View {
         HStack(spacing: 1) {
                 PreviewPane(
                     title: inputPaneTitle,
+                    paneID: "input.pane",
                     image: inputPaneImage,
                     nominalSize: inputPaneNominal,
                     loading: model.inputPreviewLoading && !model.phase.isRunning,
@@ -384,6 +444,7 @@ struct ContentView: View {
                 )
                 PreviewPane(
                     title: "Output",
+                    paneID: "output.pane",
                     image: outputImage,
                     nominalSize: model.outputNominalSize,
                     loading: false,
@@ -402,19 +463,23 @@ struct ContentView: View {
                         .controlSize(.small)
                         .frame(width: 130)
                         .disabled(model.depthPreview == nil)
+                        .accessibilityIdentifier("output.mode")
                     }
                 )
                 .overlay(alignment: .bottom) {
                     if model.phase.isRunning {
                         VStack(spacing: 6) {
                             ProgressView(value: model.stageFraction)
+                                .accessibilityIdentifier("progress.bar")
                             HStack {
                                 Text("\(model.batchStatus ?? "")\(model.stageText)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("progress.stage")
                                 Spacer()
                                 Button("Cancel") { model.cancelFusion() }
                                     .controlSize(.small)
+                                    .accessibilityIdentifier("progress.cancel")
                             }
                         }
                         .padding(10)
@@ -512,11 +577,11 @@ struct RetouchControls: View {
 
     var body: some View {
         LabeledSlider(
-            label: "Brush size", value: $session.brushRadius, range: 1...800,
+            label: "Brush size", id: "retouch.slider.brush-size", value: $session.brushRadius, range: 1...800,
             format: "%.0f px",
             help: "Brush radius in image pixels. Painting copies pixels from the aligned source frame into the output.")
         LabeledSlider(
-            label: "Softness", value: $session.brushSoftness, range: 0...1,
+            label: "Softness", id: "retouch.slider.softness", value: $session.brushSoftness, range: 0...1,
             format: "%.0f%%", displayScale: 100,
             help: "Feathered fraction of the brush edge. 0% is hard-edged; 100% fades from the center.")
         Picker("Retouch from", selection: Binding(
@@ -527,11 +592,13 @@ struct RetouchControls: View {
             Text("Original Result (erase)").tag(RetouchSession.SourceKind.result)
         }
         .pickerStyle(.radioGroup)
+        .accessibilityIdentifier("retouch.source-kind")
         .help("What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. Original Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.")
         HStack {
             Spacer()
             Button("Revert All", role: .destructive) { onReset() }
                 .disabled(!session.hasEdits)
+                .accessibilityIdentifier("retouch.revert-all")
         }
         Text("↑/↓ cycle source frames · space picks the sharpest frame for the brush region · p PMax result · r eraser · ⌥-scroll or [ ] resize the brush · scroll/pinch to navigate")
             .font(.caption)
@@ -543,6 +610,7 @@ struct RetouchControls: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
+        .accessibilityIdentifier("retouch.done")
     }
 }
 
@@ -573,17 +641,24 @@ struct ZoomBar: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .accessibilityIdentifier("zoom.menu")
+            .accessibilityLabel("Zoom level")
+            .accessibilityValue(label)
 
             Button {
                 viewport.zoom(by: 1 / 1.5, imageSize: imageSize())
             } label: {
                 Image(systemName: "minus.magnifyingglass")
             }
+            .accessibilityIdentifier("zoom.out")
+            .accessibilityLabel("Zoom out")
             Button {
                 viewport.zoom(by: 1.5, imageSize: imageSize())
             } label: {
                 Image(systemName: "plus.magnifyingglass")
             }
+            .accessibilityIdentifier("zoom.in")
+            .accessibilityLabel("Zoom in")
             Spacer()
         }
         .buttonStyle(.borderless)
@@ -613,28 +688,48 @@ struct StackRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Toggle("", isOn: Binding(get: { stack.enabled }, set: { setEnabled($0) }))
+            // labelsHidden keeps the title out of the layout but in the
+            // accessibility tree — the checkbox is otherwise nameless.
+            Toggle("Include \(stack.name) in Fuse Enabled Stacks",
+                   isOn: Binding(get: { stack.enabled }, set: { setEnabled($0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .help("Include this stack in Fuse Enabled Stacks. Doesn't change its per-frame checkboxes.")
-            Image(systemName: "square.stack.3d.up")
-                .font(.caption)
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-            Text(stack.name)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .foregroundStyle(stack.enabled
-                                 ? (isSelected ? Color.accentColor : Color.primary)
-                                 : Color.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            statusGlyph
-            Text("\(stack.frames.count)")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("stack.row.\(stack.name).enabled")
+            // Selection is a real (plain) button, not a tap gesture, so rows
+            // are accessible and automatable.
+            Button {
+                select()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.caption)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    Text(stack.name)
+                        .fontWeight(isSelected ? .semibold : .regular)
+                        .foregroundStyle(stack.enabled
+                                         ? (isSelected ? Color.accentColor : Color.primary)
+                                         : Color.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    statusGlyph
+                    Text("\(stack.frames.count)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("stack.row.\(stack.name)")
+            .accessibilityLabel("Stack \(stack.name)")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
         }
-        .contentShape(Rectangle())
-        .onTapGesture { select() }
+        // DisclosureGroup merges its label into one accessibility element,
+        // fusing the checkbox and select button into a single mushy control
+        // (identifiers concatenate; neither action is reachable). Contain
+        // keeps them as separate, individually-actionable children.
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -668,13 +763,16 @@ struct FrameRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Toggle("", isOn: Binding(get: { included }, set: { setIncluded($0) }))
+            Toggle("Include \(url.lastPathComponent)",
+                   isOn: Binding(get: { included }, set: { setIncluded($0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
+                .accessibilityIdentifier("frame.row.\(url.lastPathComponent).included")
             Text(url.lastPathComponent)
                 .font(.system(.caption, design: .monospaced))
                 .lineLimit(1)
                 .foregroundStyle(included ? .primary : .secondary)
+                .accessibilityIdentifier("frame.row.\(url.lastPathComponent)")
             if let issue {
                 Spacer(minLength: 2)
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -692,6 +790,9 @@ struct PreviewPane<Header: View>: View {
     static var headerHeight: CGFloat { 30 }
 
     let title: String
+    /// Accessibility namespace for the pane; names the title ("<id>.title")
+    /// and empty-state hint ("<id>.hint") so tests can read pane state.
+    var paneID: String? = nil
     let image: NSImage?
     /// Coordinate-space size in full-resolution pixels. The bitmap may be lower
     /// resolution (progressive previews); it is stretched to this space so both
@@ -721,6 +822,7 @@ struct PreviewPane<Header: View>: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .accessibilityIdentifier(paneID.map { "\($0).title" } ?? "")
                 Spacer()
                 header()
             }
@@ -773,6 +875,7 @@ struct PreviewPane<Header: View>: View {
                     } else {
                         Text(emptyHint)
                             .foregroundStyle(.secondary)
+                            .accessibilityIdentifier(paneID.map { "\($0).hint" } ?? "")
                     }
                     if let brush = brushCursor, let nominal = nominalSize {
                         let scale = viewport.effectiveScale(imageSize: nominal, viewSize: geo.size)
@@ -1177,6 +1280,9 @@ struct RetouchOverlay: NSViewRepresentable {
 
 struct LabeledSlider: View {
     let label: String
+    /// Accessibility identifier for the slider (`<id>.value` names the value
+    /// text). See CLAUDE.md for the `area.control` naming convention.
+    var id: String? = nil
     @Binding var value: Double
     let range: ClosedRange<Double>
     let format: String
@@ -1207,10 +1313,14 @@ struct LabeledSlider: View {
                 Text(displayString)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(id.map { "\($0).value" } ?? "")
             }
             Slider(value: $value, in: range) { editing in
                 onEditingChanged?(editing)
             }
+            .accessibilityIdentifier(id ?? "")
+            .accessibilityLabel(label)
+            .accessibilityValue(displayString)
         }
         .help(help)
     }

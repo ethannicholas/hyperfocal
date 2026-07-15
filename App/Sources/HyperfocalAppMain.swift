@@ -58,7 +58,10 @@ struct HyperfocalApp: App {
             ContentView()
                 .environmentObject(model)
                 .frame(minWidth: 980, minHeight: 620)
-                .onAppear { appDelegate.model = model }
+                .onAppear {
+                    appDelegate.model = model
+                    UITestSupport.activate(model)
+                }
         }
         .commands {
             // Standard about panel (icon/name/version/copyright come from the

@@ -12,14 +12,23 @@ description: Build, launch, and drive the Hyperfocal app end-to-end to verify a 
   `Probe/main.swift` if the current checks don't cover it) and
   `hyperfocal-cli` (`synth` fixtures, `compare` for image diffs). These
   are cheap, repeatable, and don't touch the screen.
-- **Prefer asking the user** for UI changes a human can validate in
-  seconds but that are laborious to drive via AX/CGEvents (hover/cursor
-  behavior, focus/activation, drag feel, anything timing-dependent or
-  "sometimes"). Driving the app is a last resort for UI verification, not
-  the default — a quick "ready for you to check X and Y" beats minutes of
-  screen-fighting automation and burns far less effort. Give the user a
-  short, concrete checklist of what to look for, including any deliberate
-  behavior changes they might read as bugs.
+- **UI-layer changes go through the XCUITest smoke suite**:
+  `Scripts/ui-test.sh` (or `--only testName` for one flow) must print
+  `== UI TESTS PASSED`. It generates its own synth fixtures (app container
+  + /tmp mirror — the runner can't read the container because its HOME is
+  redirected) and seeds the app through the `HYPERFOCAL_*` launch-env
+  hooks (`UITestSupport.swift`) — never by driving open/save panels.
+  Extend `App/HyperfocalUITests/` when a change adds a workflow-gating
+  control; every control needs an accessibility identifier (convention in
+  CLAUDE.md). The suite takes over mouse/keyboard while running — same
+  announce-it etiquette as AX driving — and the first run on a machine
+  needs a one-time Automation approval from the GUI session.
+- **Prefer asking the user** for what the suite can't see: visual
+  fidelity, hover/cursor behavior, focus/activation, drag feel, anything
+  timing-dependent or "sometimes", and retouch-canvas gestures (the probe
+  covers the retouch model; nothing automated covers its painting).
+  Give the user a short, concrete checklist of what to look for,
+  including any deliberate behavior changes they might read as bugs.
 
 ```sh
 swift build                            # engine + CLI + retouch-probe
@@ -57,6 +66,11 @@ the app or it ingests as a frame.
 
 ## Driving the app (System Events / AX)
 
+Mostly superseded by the XCUITest suite for anything it covers — controls
+now carry accessibility identifiers (`value of attribute "AXIdentifier"`),
+so when ad-hoc driving IS needed, find elements by identifier instead of
+frame math. The notes below remain for flows outside the suite.
+
 - **Etiquette first**: the user is often at the machine. Announce app
   launches in chat, quit instances when done, and if clicks start landing
   in other apps' windows, STOP and ask them to test by hand instead of
@@ -72,8 +86,10 @@ the app or it ingests as a frame.
   by name (most Hyperfocal buttons are anonymous; find by frame).
 - Sliders: AXValue writes fail; `perform action "AXIncrement"` steps by
   range/10. Verify the value after, don't assume.
-- SwiftUI `onTapGesture` (section headers) does NOT respond to synthetic
-  clicks — ask for a human hand.
+- Section headers and stack rows are real buttons now (AXPress works;
+  headers report collapsed/expanded via AXValue). The old "onTapGesture
+  headers ignore synthetic clicks" problem is fixed — and the invariant
+  in CLAUDE.md forbids reintroducing gesture-only tappables.
 - The Save panel is a modal window named "Save" (not a sheet) and its AX
   tree is flaky; the Replace confirmation is `sheet 1 of window "Save"`.
   For persistence checks, extend the probe's project round-trip instead.

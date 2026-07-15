@@ -168,7 +168,13 @@ final class AppModel: ObservableObject {
     // Settings persist in an explicit suite: an unbundled executable's standard
     // defaults domain is its *process name*, which changed with each rename —
     // orphaning saved values. The suite survives renames and future bundling.
-    static let settings = UserDefaults(suiteName: "org.hyperfocal.settings") ?? .standard
+    // Deliberately decoupled from the bundle ID (renaming the suite orphans
+    // saved settings). UI-test runs get their own throwaway suite so tests
+    // can toggle sections/settings without polluting the user's real state.
+    static let settings = UserDefaults(
+        suiteName: ProcessInfo.processInfo.environment["HYPERFOCAL_UITEST"] == "1"
+            ? "org.hyperfocal.uitest-settings"
+            : "org.hyperfocal.settings") ?? .standard
 
     // Fusion parameters
     @Published var alignFrames: Bool {
@@ -760,6 +766,13 @@ final class AppModel: ObservableObject {
         let base = stacks.first?.name ?? "Project"
         panel.nameFieldStringValue = "\(base).\(ProjectStore.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return false }
+        return writeProject(to: url)
+    }
+
+    /// Panel-free save: the write body of saveProjectPanel, callable
+    /// directly (UITestSupport, and any future probe checks).
+    @discardableResult
+    func writeProject(to url: URL) -> Bool {
         guard let project = captureProject() else { return false }
         do {
             try ProjectStore.write(project, to: url)

@@ -33,6 +33,22 @@ one up.
 - `swift build && .build/debug/retouch-probe <synth frames…>` must print
   `probe: ALL PASS` before trusting model/engine changes; synth PSNR
   baselines live in ROADMAP's header.
+- `Scripts/ui-test.sh` must print `== UI TESTS PASSED` before trusting
+  UI-layer changes (XCUITest smoke suite in `App/HyperfocalUITests/`;
+  takes over mouse/keyboard while running — announce runs).
+- **Every interactive control gets an accessibility identifier** —
+  dot-namespaced areas with kebab-case leaves (`fusion.fuse-stack`,
+  `tone.slider.exposure`, `stack.row.<name>.enabled`, `section.fusion`;
+  sliders also name their value text `<id>.value`). Controls that gate a
+  workflow also get a smoke test. Never build tappables from bare
+  `onTapGesture` — use a real (plain-styled) Button so the control is
+  accessible and automatable; and never put interactive controls inside a
+  `DisclosureGroup` label (its accessibility merging fuses them into one
+  unusable element — the stack tree hand-rolls its disclosure for this).
+- `UITestSupport.swift` (app target only, never copied to Probe) consumes
+  `HYPERFOCAL_UITEST=1` + `HYPERFOCAL_{AUTOCONFIRM,LOAD_STACK,
+  OPEN_PROJECT,SAVE_PROJECT}` at launch — inert in normal runs; UI-test
+  runs also switch UserDefaults to a throwaway suite.
 - The app is sandboxed in every build. Save-panel grants cover exactly
   the chosen URL — temp/sibling writes near it are denied (see
   `ProjectStore.write` for the `.itemReplacementDirectory` pattern).
