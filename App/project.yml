@@ -18,6 +18,10 @@ targets:
     sources:
       - Sources
       - Assets.xcassets
+      # Document icon for .hyperfocal files (macOS does not auto-generate
+      # one; without it Finder shows a "?" page). Regenerate from the app
+      # icon: white generic-document page + centered app-icon badge.
+      - DocumentIcon.icns
     dependencies:
       - package: HyperfocalKit
         product: HyperfocalKit
@@ -60,3 +64,21 @@ targets:
         NSHumanReadableCopyright: "© 2026 Ethan Nicholas"
         NSPrincipalClass: NSApplication
         NSHighResolutionCapable: true
+        # .hyperfocal projects: owning the exported type gives the files a
+        # Hyperfocal-badged document icon and makes double-click (and Dock
+        # drops) launch the app — AppDelegate.application(_:open:) routes
+        # them to the open-project flow. Projects are store-only zips, so
+        # the type honestly conforms to zip-archive (rename-to-.zip works).
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Hyperfocal Project
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.ethannicholas.hyperfocal.project]
+            CFBundleTypeIconFile: DocumentIcon
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.ethannicholas.hyperfocal.project
+            UTTypeDescription: Hyperfocal Project
+            UTTypeConformsTo: [com.pkware.zip-archive]
+            UTTypeIconFile: DocumentIcon
+            UTTypeTagSpecification:
+              public.filename-extension: [hyperfocal]

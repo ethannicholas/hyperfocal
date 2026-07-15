@@ -322,6 +322,18 @@ Task { @MainActor in
     }
     print("probe: project zip verified externally OK")
 
+    // A project with no fused stack at all must round-trip too (Save is
+    // not gated on having fused anything): manifest-only zip, no blobs.
+    let unfusedOnlyURL = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("probe-unfused.hyperfocal")
+    try! ProjectStore.write(ProjectStore.Project(stacks: [unfusedStack]),
+                            to: unfusedOnlyURL)
+    let unfusedOnly = try! ProjectStore.read(from: unfusedOnlyURL)
+    assert(unfusedOnly.stacks.count == 1 && unfusedOnly.stacks[0].result == nil,
+           "unfused-only project round-trip")
+    try? FileManager.default.removeItem(at: unfusedOnlyURL)
+    print("probe: unfused-only project round-trip OK")
+
     // 3. Model-level fuse + explicit project restore (autosave/autoload is
     // gone — writing the blobs at quit took too long; quit warns instead).
     let model = AppModel()
@@ -610,6 +622,31 @@ Task { @MainActor in
     try? FileManager.default.removeItem(at: sessionDir)
     try? FileManager.default.removeItem(at: exportDir)
     print("probe: multi-stack ingest + queue + export-all OK")
+
+    // 6b. Close Stack / Close Project. Closing the selected (fused, unsaved)
+    // stack asks once, removes it, and selects the neighbor; closing the
+    // project asks once and returns to the fresh-launch state.
+    var confirmations = [String]()
+    model5.confirmAlertOverride = { message in
+        confirmations.append(message)
+        return true
+    }
+    model5.closeSelectedStack()  // selected = second stack, fused, unsaved
+    guard model5.stacks.count == 1, model5.selectedStackID == firstID,
+          model5.result != nil, confirmations.count == 1 else {
+        print("probe: CLOSE STACK WRONG (stacks=\(model5.stacks.count), "
+              + "confirms=\(confirmations))")
+        exit(1)
+    }
+    model5.closeProject()
+    guard model5.stacks.isEmpty, model5.selectedStackID == nil,
+          model5.phase == .empty, model5.result == nil,
+          !model5.hasUnsavedWork, confirmations.count == 2 else {
+        print("probe: CLOSE PROJECT WRONG (phase=\(model5.phase), "
+              + "confirms=\(confirmations))")
+        exit(1)
+    }
+    print("probe: close stack / close project OK")
 
     // 7. Frame ordering: capture time beats filename when the camera's
     // counter rolls over mid-stack; filename wins when the setting is off or

@@ -586,6 +586,59 @@ final class AppModel: ObservableObject {
         stack.enabled = value
     }
 
+    /// File > Close Stack: removes the selected stack from the project. Its
+    /// fused result and retouch edits go with it (they can't be recomputed),
+    /// so a fused stack asks first unless everything is already saved.
+    func closeSelectedStack() {
+        guard !phase.isRunning, let stack = selectedStack else { return }
+        stash(into: stack)
+        if stack.result != nil, hasUnsavedWork,
+           !runConfirmAlert(message: "Close the stack “\(stack.name)”?",
+                            informative: "Any unsaved work in it will be lost.",
+                            confirmTitle: "Close Stack") {
+            return
+        }
+        let index = stacks.firstIndex { $0.id == stack.id } ?? 0
+        stacks.removeAll { $0.id == stack.id }
+        expandedStacks.remove(stack.id)
+        guard let neighbor = stacks.indices.contains(index)
+            ? stacks[index] : stacks.last else {
+            clearProject()  // last stack closed = fresh state
+            return
+        }
+        hasUnsavedWork = true  // the project's stack list changed
+        selectedStackID = neighbor.id
+        install(from: neighbor)
+    }
+
+    /// File > Close Project: back to the freshly launched empty state.
+    func closeProject() {
+        guard !phase.isRunning else { return }
+        guard confirmDiscardingUnsavedWork(message: "Close this project?",
+                                           confirmTitle: "Close Project") else { return }
+        clearProject()
+    }
+
+    private func clearProject() {
+        resetForNewProject()
+        stopScopedAccess()
+        grantedRoots = []
+        phase = .empty
+    }
+
+    /// Finder double-clicks and Dock drops of .hyperfocal files land here
+    /// (application(_:open:) via the app delegate); window drops route here
+    /// too. Same replace-the-project confirmation as File > Open Project.
+    func openExternal(urls: [URL]) {
+        guard !phase.isRunning,
+              let project = urls.first(where: {
+                  $0.pathExtension.lowercased() == ProjectStore.fileExtension
+              }) else { return }
+        guard confirmDiscardingUnsavedWork(message: "Open a different project?",
+                                           confirmTitle: "Open Project") else { return }
+        openProject(from: project)
+    }
+
     var fusedStackCount: Int {
         stacks.filter { $0.id == selectedStackID ? result != nil : $0.result != nil }.count
     }
@@ -629,7 +682,9 @@ final class AppModel: ObservableObject {
 
     private func captureProject() -> ProjectStore.Project? {
         if let current = selectedStack { stash(into: current) }
-        guard stacks.contains(where: { $0.result != nil }) else { return nil }
+        // Unfused stacks save fine (frame lists, inclusion, transforms) —
+        // there's no reason to demand a fused result before allowing Save.
+        guard !stacks.isEmpty else { return nil }
         let payloads = stacks.map { stack in
             ProjectStore.StackPayload(
                 name: stack.name,
@@ -663,9 +718,22 @@ final class AppModel: ObservableObject {
     /// anything that discards them asks first. True means proceed.
     func confirmDiscardingUnsavedWork(message: String, confirmTitle: String) -> Bool {
         guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return true }
+        return runConfirmAlert(message: message,
+                               informative: "Any unsaved work will be lost.",
+                               confirmTitle: confirmTitle)
+    }
+
+    /// Testability hook: when set, confirmation alerts are answered by the
+    /// closure (keyed on the message) instead of blocking on NSAlert — the
+    /// probe exercises close/replace flows headlessly through this.
+    var confirmAlertOverride: ((String) -> Bool)?
+
+    private func runConfirmAlert(message: String, informative: String,
+                                 confirmTitle: String) -> Bool {
+        if let confirmAlertOverride { return confirmAlertOverride(message) }
         let alert = NSAlert()
         alert.messageText = message
-        alert.informativeText = "Any unsaved work will be lost."
+        alert.informativeText = informative
         alert.addButton(withTitle: confirmTitle)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
@@ -922,9 +990,16 @@ final class AppModel: ObservableObject {
 
     /// Drag-and-drop lands here: drops *add* stacks (like Add Stack Folder…)
     /// rather than replacing the project, so they never discard work and
-    /// never need to warn.
+    /// never need to warn. A dropped project file is the exception — that
+    /// means "open this project", which replaces and therefore confirms.
     func addStacks(urls: [URL]) {
         guard !phase.isRunning else { return }
+        if urls.contains(where: {
+            $0.pathExtension.lowercased() == ProjectStore.fileExtension
+        }) {
+            openExternal(urls: urls)
+            return
+        }
         loadStacks(from: urls, replacing: false)
     }
 
@@ -1466,6 +1541,11 @@ final class AppModel: ObservableObject {
                         : nil
                     Task { @MainActor [weak self] in
                         guard let self else { return }
+                        // After Cancel, in-flight work (decodes already
+                        // running when the token flipped) still reports —
+                        // those updates must not overwrite "Cancelling…"
+                        // or the cancel looks ignored.
+                        guard !cancellation.isCancelled else { return }
                         self.stageText = update.stage.rawValue
                         // One monotonic bar across the whole fuse: each stage
                         // owns a window of the overall span, and the max()

@@ -12,7 +12,13 @@ import HyperfocalKit
 /// stripper raced SwiftUI's menu reinstalls — a flickering View menu during
 /// fuses — once zoom commands moved in.)
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    weak var model: AppModel?
+    weak var model: AppModel? {
+        didSet { flushPendingOpens() }
+    }
+    /// Finder can deliver open-file events before SwiftUI's onAppear wires
+    /// the model (double-clicking a project launches the app); they queue
+    /// here and flush once the model exists.
+    private var pendingOpenURLs = [URL]()
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated { model?.confirmTermination() ?? .terminateNow }
@@ -20,6 +26,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        pendingOpenURLs += urls
+        flushPendingOpens()
+    }
+
+    private func flushPendingOpens() {
+        guard model != nil, !pendingOpenURLs.isEmpty else { return }
+        let urls = pendingOpenURLs
+        pendingOpenURLs = []
+        MainActor.assumeIsolated { model?.openExternal(urls: urls) }
     }
 }
 
@@ -29,7 +47,14 @@ struct HyperfocalApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        WindowGroup("Hyperfocal") {
+        // A Window scene, not a WindowGroup: there is exactly one project and
+        // one model, so there must be exactly one window. With a WindowGroup,
+        // double-clicking a .hyperfocal while the app runs made SwiftUI spawn
+        // a second window for the open event (the delegate handles the file;
+        // the extra window was pure scene plumbing) — and declining external
+        // events at the scene level instead broke double-click-to-LAUNCH,
+        // which parked the app windowless. Window sidesteps both.
+        Window("Hyperfocal", id: "main") {
             ContentView()
                 .environmentObject(model)
                 .frame(minWidth: 980, minHeight: 620)
@@ -75,10 +100,18 @@ struct HyperfocalApp: App {
                 Button("Add Stack Folder…") { model.addStackFolderPanel() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(model.phase.isRunning)
+                Button("Close Stack") { model.closeSelectedStack() }
+                    .disabled(model.phase.isRunning || model.selectedStackID == nil)
+                Button("Close Project") { model.closeProject() }
+                    .disabled(model.phase.isRunning || model.stacks.isEmpty)
                 Divider()
+                // Enabled whenever there's anything at all to save: unfused
+                // stacks persist fine, and `phase` only mirrors the selected
+                // stack — keying on it wrongly disabled Save in multi-stack
+                // projects whenever an unfused stack happened to be selected.
                 Button("Save Project…") { model.saveProjectPanel() }
                     .keyboardShortcut("s", modifiers: .command)
-                    .disabled(model.phase != .done)
+                    .disabled(model.stacks.isEmpty || model.phase.isRunning)
                 Button("Export Result…") { model.exportResult() }
                     .keyboardShortcut("e", modifiers: .command)
                     .disabled(!model.canExport)
