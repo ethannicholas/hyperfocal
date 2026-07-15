@@ -402,21 +402,10 @@ struct ContentView: View {
 
     // MARK: - Preview side
 
-    /// The tone curve as a colorEffect shader (nil = neutral, no effect).
-    /// Both the panes' SwiftUI Images and the retouch source pane use this;
-    /// the self-drawing retouch canvas applies the same curve as a Core
-    /// Image layer filter instead (shaders don't reach AppKit content).
-    private var toneShader: Shader? {
-        guard let lut = model.toneLUT else { return nil }
-        return ShaderLibrary.toneCurve(.image(Image(decorative: lut, scale: 1)),
-                                       .float(0))
-    }
-
     private var previewSide: some View {
         VStack(spacing: 0) {
             if model.retouchMode, let session = model.retouch {
-                RetouchPreviewArea(session: session, toneShader: toneShader,
-                                   tone: model.tone)
+                RetouchPreviewArea(session: session, tone: model.tone)
             } else {
                 fusionPreviewPanes
             }
@@ -439,7 +428,7 @@ struct ContentView: View {
                         ?? (model.frames.isEmpty
                             ? "Start a new project to begin"
                             : "Select a frame in the Stack list"),
-                    toneShader: toneShader,
+                    tone: model.tone,
                     header: { EmptyView() }
                 )
                 PreviewPane(
@@ -451,8 +440,8 @@ struct ContentView: View {
                     emptyHint: model.canFuse ? "Press Fuse Stack" : "No output yet",
                     // Depth maps and the noise-floor preview are data
                     // visualizations, not image content — leave them alone.
-                    toneShader: (model.outputMode == .depth
-                                 || model.noiseFloorPreview != nil) ? nil : toneShader,
+                    tone: (model.outputMode == .depth
+                           || model.noiseFloorPreview != nil) ? ToneSettings() : model.tone,
                     header: {
                         Picker("", selection: $model.outputMode) {
                             ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
@@ -523,7 +512,6 @@ struct ContentView: View {
 /// strokes, source cycling, and the hover cursor).
 struct RetouchPreviewArea: View {
     @ObservedObject var session: RetouchSession
-    var toneShader: Shader? = nil
     var tone = ToneSettings()
 
     var body: some View {
@@ -536,7 +524,7 @@ struct RetouchPreviewArea: View {
                 emptyHint: session.sourceError ?? "Loading source…",
                 loadingStatus: session.sourceStatus,
                 brushCursor: brushCursor,
-                toneShader: toneShader,
+                tone: tone,
                 header: { EmptyView() }
             )
             PreviewPane(
@@ -804,9 +792,10 @@ struct PreviewPane<Header: View>: View {
     var loadingStatus: String? = nil
     /// Brush circle to draw at an image-space point (retouch mode).
     var brushCursor: (point: CGPoint, radius: CGFloat)? = nil
-    /// Tone-curve shader applied to the displayed image (not to a canvas —
-    /// canvases tone themselves via layer filters). nil = no adjustment.
-    var toneShader: Shader? = nil
+    /// Tone adjustments applied to the displayed image via a Core Image
+    /// layer filter (neutral = untouched). Self-drawing canvases tone
+    /// themselves.
+    var tone = ToneSettings()
     /// Custom event layer; defaults to plain pan/zoom.
     var eventOverlay: AnyView? = nil
     /// Self-drawing content (retouch canvas); replaces the Image when set.
@@ -838,32 +827,41 @@ struct PreviewPane<Header: View>: View {
                     } else if let image, let nominal = nominalSize {
                         let scale = viewport.effectiveScale(imageSize: nominal, viewSize: geo.size)
                         let bitmapScale = nominal.width * scale / CGFloat(max(bitmapWidth(of: image), 1))
-                        // The tone effect wraps a pane-sized, clipped container
-                        // rather than the image view itself: colorEffect
-                        // rasterizes its content in view-local coordinates, and
-                        // a 45 MP image zoomed far in spans >65k points — past
-                        // the half-float ceiling in the rasterizer, which made
-                        // the image vanish when panned toward its far edge.
-                        // Pane-local coordinates stay tiny at any zoom (and the
-                        // shader cost is bounded by pane pixels, not image
-                        // pixels).
-                        ZStack {
-                            Image(nsImage: image)
-                                .resizable()
-                                .interpolation(bitmapScale >= 2 ? .none : .high)
-                                .frame(width: nominal.width * scale,
-                                       height: nominal.height * scale)
-                                .position(x: geo.size.width / 2 - viewport.offset.width * scale,
-                                          y: geo.size.height / 2 - viewport.offset.height * scale)
+                        if !tone.isNeutral {
+                            // Toned: an AppKit view drawing the visible
+                            // region at native backing resolution, toned by
+                            // a Core Image color cube on its layer — the
+                            // identical machinery to RetouchCanvas. SwiftUI's
+                            // shader pipeline cannot render this pane: at
+                            // image extent its rasterization is texture-
+                            // capped (45 MP panes went ~5× soft, and >65k
+                            // points overflows its half-float coordinates —
+                            // images vanished panned to the far edge); at
+                            // pane extent (Canvas/drawingGroup) it rasterizes
+                            // at 1× points — 2× soft on Retina — and
+                            // drawingGroup ignores Image.interpolation.
+                            TonedImagePane(image: image, nominalSize: nominal,
+                                           viewport: viewport, tone: tone)
+                                .allowsHitTesting(false)
+                        } else {
+                            ZStack {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .interpolation(bitmapScale >= 2 ? .none : .high)
+                                    .frame(width: nominal.width * scale,
+                                           height: nominal.height * scale)
+                                    .position(x: geo.size.width / 2 - viewport.offset.width * scale,
+                                              y: geo.size.height / 2 - viewport.offset.height * scale)
+                            }
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                            // .clipped() clips drawing but NOT hit testing —
+                            // when zoomed, the image's frame extends far past
+                            // the pane and would swallow clicks meant for the
+                            // zoom bar. All interaction happens on
+                            // PanZoomOverlay anyway.
+                            .allowsHitTesting(false)
                         }
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                        .modifier(ToneEffect(shader: toneShader))
-                        // .clipped() clips drawing but NOT hit testing — when
-                        // zoomed, the image's frame extends far past the pane
-                        // and would swallow clicks meant for the zoom bar.
-                        // All interaction happens on PanZoomOverlay anyway.
-                        .allowsHitTesting(false)
                     } else if loading {
                         VStack(spacing: 8) {
                             ProgressView()
@@ -929,17 +927,139 @@ struct PreviewPane<Header: View>: View {
     }
 }
 
-/// Conditionally applies the tone-curve color effect (colorEffect itself
-/// takes a non-optional shader).
-struct ToneEffect: ViewModifier {
-    let shader: Shader?
+/// Shared tone application for pane NSViews: the curve as a Core Image
+/// color cube on the backing layer. ToneCurve.colorCubeData is the single
+/// source, so every toned pane renders exactly what the export CPU path
+/// bakes.
+class ToneFilteredPaneView: NSView {
+    private var appliedTone = ToneSettings()
 
-    func body(content: Content) -> some View {
-        if let shader {
-            content.colorEffect(shader)
-        } else {
-            content
+    func applyTone(_ tone: ToneSettings) {
+        guard tone != appliedTone else { return }
+        appliedTone = tone
+        wantsLayer = true
+        if tone.isNeutral {
+            layer?.filters = nil
+        } else if let filter = CIFilter(name: "CIColorCubeWithColorSpace") {
+            let dimension = 64
+            filter.setValue(dimension, forKey: "inputCubeDimension")
+            filter.setValue(ToneCurve.colorCubeData(settings: tone,
+                                                    dimension: dimension),
+                            forKey: "inputCubeData")
+            filter.setValue(CGColorSpace(name: CGColorSpace.displayP3),
+                            forKey: "inputColorSpace")
+            layer?.filters = [filter]
         }
+    }
+
+    override var isFlipped: Bool { true }
+}
+
+/// The toned pane's image layer: the visible region CG-drawn at native
+/// backing resolution, toned by the layer filter — the identical machinery
+/// to RetouchCanvas, so toned panes stay pixel- and color-comparable with
+/// it. Mirrors the plain Image branch's position math exactly: a toned pane
+/// must not shift by a pixel relative to a neutral one.
+final class TonedImagePaneNSView: ToneFilteredPaneView {
+    /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
+    /// re-invoked when only the viewport changes (same as RetouchCanvas).
+    var viewport: ViewportState? {
+        didSet {
+            guard viewport !== oldValue else { return }
+            viewportSubscription = viewport?.objectWillChange.sink { [weak self] _ in
+                // objectWillChange fires before the value lands; read it after.
+                DispatchQueue.main.async { self?.viewportDidUpdate() }
+            }
+        }
+    }
+    var image: NSImage? {
+        didSet {
+            guard image !== oldValue else { return }
+            cgCache = nil
+            needsDisplay = true
+        }
+    }
+    var nominalSize: CGSize = .zero {
+        didSet {
+            guard nominalSize != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+    private var cgCache: CGImage?
+    private var viewportSubscription: AnyCancellable?
+    private var lastScale: CGFloat = -1
+    private var lastOffset: CGSize = .zero
+
+    override func layout() {
+        super.layout()
+        needsDisplay = true  // pane resized; recompute fit and redraw
+    }
+
+    /// All interaction happens on the pane's event overlay.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func viewportDidUpdate() {
+        guard let viewport, nominalSize != .zero else { return }
+        let scale = viewport.effectiveScale(imageSize: nominalSize, viewSize: bounds.size)
+        if scale != lastScale || viewport.offset != lastOffset {
+            lastScale = scale
+            lastOffset = viewport.offset
+            needsDisplay = true
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+        ctx.fill(dirtyRect)
+        guard let image, let viewport, nominalSize != .zero else { return }
+        if cgCache == nil {
+            cgCache = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        }
+        guard let cg = cgCache else { return }
+        let scale = viewport.effectiveScale(imageSize: nominalSize, viewSize: bounds.size)
+        let originX = bounds.width / 2 - (viewport.offset.width + nominalSize.width / 2) * scale
+        let originY = bounds.height / 2 - (viewport.offset.height + nominalSize.height / 2) * scale
+        // Same rule as RetouchCanvas, in bitmap pixels per point because
+        // progressive previews arrive at reduced resolution stretched to
+        // nominal space (RetouchCanvas's bitmap is always full-res).
+        let bitmapScale = nominalSize.width * scale / CGFloat(max(cg.width, 1))
+        ctx.interpolationQuality = bitmapScale >= 2 ? .none : .low
+        ctx.saveGState()
+        // draw(_:in:) is bottom-up; re-flip within our flipped coordinates.
+        ctx.translateBy(x: 0, y: bounds.height)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.draw(cg, in: CGRect(x: originX,
+                                y: bounds.height - originY - nominalSize.height * scale,
+                                width: nominalSize.width * scale,
+                                height: nominalSize.height * scale))
+        ctx.restoreGState()
+    }
+}
+
+struct TonedImagePane: NSViewRepresentable {
+    let image: NSImage
+    let nominalSize: CGSize
+    let viewport: ViewportState
+    let tone: ToneSettings
+
+    func makeNSView(context: Context) -> TonedImagePaneNSView {
+        let view = TonedImagePaneNSView()
+        // Without this, macOS silently ignores Core Image layer filters.
+        view.layerUsesCoreImageFilters = true
+        view.viewport = viewport
+        view.image = image
+        view.nominalSize = nominalSize
+        view.applyTone(tone)
+        return view
+    }
+
+    func updateNSView(_ view: TonedImagePaneNSView, context: Context) {
+        view.viewport = viewport
+        view.image = image
+        view.nominalSize = nominalSize
+        view.applyTone(tone)
+        view.viewportDidUpdate()
     }
 }
 
@@ -1115,7 +1235,7 @@ final class RetouchEventView: PanZoomEventView {
 /// only the view rect they touched, and drawing samples the live byte buffer
 /// through a zero-copy CGImage. No per-frame NSImage rebuilds, no full-texture
 /// re-uploads — this is what makes 45 MP painting smooth.
-final class RetouchCanvasNSView: NSView {
+final class RetouchCanvasNSView: ToneFilteredPaneView {
     weak var session: RetouchSession?
     /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
     /// re-invoked through the AnyView wrapping when only the viewport changes.
@@ -1131,30 +1251,6 @@ final class RetouchCanvasNSView: NSView {
     private var viewportSubscription: AnyCancellable?
     private var lastScale: CGFloat = -1
     private var lastOffset: CGSize = .zero
-    private var appliedTone = ToneSettings()
-
-    /// Tones the whole canvas via a Core Image color cube on the backing
-    /// layer — the same curve the pane shader and export use — so painting
-    /// happens under the adjusted view without touching the working pixels.
-    func applyTone(_ tone: ToneSettings) {
-        guard tone != appliedTone else { return }
-        appliedTone = tone
-        wantsLayer = true
-        if tone.isNeutral {
-            layer?.filters = nil
-        } else if let filter = CIFilter(name: "CIColorCubeWithColorSpace") {
-            let dimension = 64
-            filter.setValue(dimension, forKey: "inputCubeDimension")
-            filter.setValue(ToneCurve.colorCubeData(settings: tone,
-                                                    dimension: dimension),
-                            forKey: "inputCubeData")
-            filter.setValue(CGColorSpace(name: CGColorSpace.displayP3),
-                            forKey: "inputColorSpace")
-            layer?.filters = [filter]
-        }
-    }
-
-    override var isFlipped: Bool { true }
 
     override func layout() {
         super.layout()

@@ -61,13 +61,18 @@ one up.
 - The app is sandboxed in every build. Save-panel grants cover exactly
   the chosen URL — temp/sibling writes near it are denied (see
   `ProjectStore.write` for the `.itemReplacementDirectory` pattern).
-- SwiftUI `colorEffect` rasterizes in view-local coordinates: never
-  attach shaders to views whose size scales with image dimensions
-  (16,384 device-px texture limit, 65,504 half-float ceiling) — wrap a
-  pane-sized clipped container instead (see PreviewPane).
+- SwiftUI's shader pipeline (`colorEffect`/`drawingGroup`/`Canvas`)
+  cannot render the image panes and must not come back: at image extent
+  its rasterization is texture-capped (45 MP panes went ~5× soft; >65k
+  points overflows its half-float coordinates and the image vanishes),
+  and at pane extent it rasterizes at 1× points (2× soft on Retina;
+  `drawingGroup` also ignores `Image.interpolation`). Toned panes are
+  AppKit views with a Core Image color-cube layer filter
+  (`ToneFilteredPaneView` — requires `layerUsesCoreImageFilters`).
 - Working color space is Display P3 end to end; the tone curve
-  (`ToneCurve`) must stay identical across its three consumers (preview
-  shader, retouch canvas color cube, export CPU path).
+  (`ToneCurve`) must stay identical across its two consumers (the
+  panes'/retouch canvas's color cube via `ToneCurve.colorCubeData`, and
+  the export CPU path).
 - A failed save/export must never touch `AppModel.phase` — the fused
   result is still valid.
 - Bundle ID `com.ethannicholas.hyperfocal` (lowercase — the capitalized

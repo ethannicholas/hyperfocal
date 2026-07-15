@@ -77,6 +77,20 @@ final class ViewportState: ObservableObject {
     }
 }
 
+/// Engine log lines (`log show --predicate 'subsystem == "org.hyperfocal"'`).
+/// Per-frame progress is debug-level chatter; everything else — disk-cache
+/// skips and failures, exclusions, stage summaries — persists at notice.
+/// File-scope (not on AppModel) so it's nonisolated: the pipeline calls it
+/// from the fusion thread, and Logger is thread-safe.
+private let fusionLog = Logger(subsystem: "org.hyperfocal", category: "fusion")
+private func logFusion(_ line: String) {
+    if line.contains(" pass ") {
+        fusionLog.debug("\(line, privacy: .public)")
+    } else {
+        fusionLog.notice("\(line, privacy: .public)")
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
 
@@ -269,13 +283,9 @@ final class AppModel: ObservableObject {
     @Published var tone = ToneSettings() {
         didSet {
             guard oldValue != tone else { return }
-            toneLUT = tone.isNeutral ? nil : Self.lutImage(tone)
             if !installingStack { hasUnsavedWork = true }
         }
     }
-    /// The curve as a 1-D float texture for the preview shader; nil when
-    /// neutral (no effect applied at all).
-    @Published private(set) var toneLUT: CGImage?
     /// Guards `tone.didSet` against marking stack switches as unsaved edits.
     private var installingStack = false
     @Published var exportFormat: ExportFormat {
@@ -388,18 +398,6 @@ final class AppModel: ObservableObject {
     private static let bookmarkLog = Logger(subsystem: "org.hyperfocal",
                                             category: "bookmarks")
 
-    /// Engine log lines (`log show --predicate 'subsystem == "org.hyperfocal"'`).
-    /// Per-frame progress is debug-level chatter; everything else — disk-cache
-    /// skips and failures, exclusions, stage summaries — persists at notice.
-    private static let fusionLog = Logger(subsystem: "org.hyperfocal",
-                                          category: "fusion")
-    private static func logFusion(_ line: String) {
-        if line.contains(" pass ") {
-            fusionLog.debug("\(line, privacy: .public)")
-        } else {
-            fusionLog.notice("\(line, privacy: .public)")
-        }
-    }
 
     /// Bookmarks for every granted root that covers a current frame. Created
     /// fresh on each save, so stale bookmarks self-heal and folder moves are
@@ -1557,7 +1555,7 @@ final class AppModel: ObservableObject {
             do {
                 let result = try StackPipeline.fuseResult(urls: urls, configuration: config,
                                                           alignmentCache: cache,
-                                                          log: Self.logFusion,
+                                                          log: logFusion,
                                                           progress: { update in
                     func nsImage(_ buffer: ImageBuffer?) -> NSImage? {
                         guard let buffer, let cg = try? ImageFile.cgImage8(from: buffer) else {
@@ -1920,21 +1918,4 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 1024×1 float texture of the tone curve for the preview shader, tagged
-    /// linear gray so color management passes the values through untouched.
-    private static func lutImage(_ settings: ToneSettings) -> CGImage? {
-        let size = 1024
-        let table = ToneCurve.lut(settings: settings, size: size)
-        let data = table.withUnsafeBufferPointer { Data(buffer: $0) }
-        guard let provider = CGDataProvider(data: data as CFData),
-              let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2) else { return nil }
-        return CGImage(
-            width: size, height: 1, bitsPerComponent: 32, bitsPerPixel: 32,
-            bytesPerRow: size * 4, space: space,
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue
-                | CGBitmapInfo.floatComponents.rawValue
-                | CGBitmapInfo.byteOrder32Little.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: true,
-            intent: .defaultIntent)
-    }
 }
