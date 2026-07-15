@@ -49,8 +49,6 @@ enum ProjectStore {
         var hasWorking: Bool             // retouch edits present
         var sourceIndex: Int?
         var gains: [Float]?              // exposure gains the fusion applied
-        var slabPaths: [String]?         // slab images (slabbed fusions)
-        var slabFrameGains: [Float]?     // gains baked into the slabs
         var fusedSettings: FuseSettings? // staleness tracking for Fuse buttons
         var tone: ToneSettings? = nil    // nil = neutral (and pre-tone files)
         var sharpnessFactor: Int?
@@ -77,8 +75,6 @@ enum ProjectStore {
         var working: ImageBuffer?        // retouched pixels, if any edits
         var sourceIndex: Int?
         var gains: [Float]? = nil
-        var slabPaths: [String]? = nil
-        var slabFrameGains: [Float]? = nil
         var fusedSettings: FuseSettings? = nil
         var tone: ToneSettings? = nil
     }
@@ -135,8 +131,6 @@ enum ProjectStore {
                 hasWorking: stack.working != nil,
                 sourceIndex: stack.sourceIndex,
                 gains: stack.gains,
-                slabPaths: stack.slabPaths,
-                slabFrameGains: stack.slabFrameGains,
                 fusedSettings: stack.fusedSettings,
                 tone: stack.tone)
             if let result = stack.result {
@@ -234,8 +228,6 @@ enum ProjectStore {
             result: nil,
             sourceIndex: manifest.sourceIndex,
             gains: manifest.gains,
-            slabPaths: manifest.slabPaths,
-            slabFrameGains: manifest.slabFrameGains,
             fusedSettings: manifest.fusedSettings,
             tone: manifest.tone)
         guard manifest.hasResult else { return payload }

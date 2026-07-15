@@ -216,9 +216,9 @@ struct ContentView: View {
     }
 
     private var fusionSection: some View {
-        // Set-and-forget switches (alignment, GPU, exposure normalization,
-        // slabbing) live in Settings (⌘,); the sidebar keeps the per-stack
-        // creative controls.
+        // Set-and-forget switches (alignment, GPU, exposure normalization)
+        // live in Settings (⌘,); the sidebar keeps the per-stack creative
+        // controls.
         Section {
             if !model.isCollapsed(.fusion) {
             LabeledSlider(

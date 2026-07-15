@@ -50,12 +50,6 @@ struct FusionOptions: ParsableArguments {
     @Option(help: "DMap: guided-filter edge-stop epsilon (guide is normalized, so unit-free; smaller keeps weaker edges).")
     var guidedEps: Float = 1e-3
 
-    @Option(help: "DMap: slab size in frames for deep stacks (0 disables). Slabs are pyramid-fused, then depth-map fused across.")
-    var slabSize: Int = 0
-
-    @Option(help: "Frames shared between adjacent slabs (default slab-size/3).")
-    var slabOverlap: Int = 0
-
     @Option(help: "Compute engine: auto (GPU when available), gpu, or cpu.")
     var engine: Engine = .auto
 
@@ -127,9 +121,6 @@ struct Fuse: ParsableCommand {
 
     @OptionGroup var fusion: FusionOptions
 
-    @Option(help: "Directory for slab images (default: a temp directory).")
-    var slabDir: String? = nil
-
     @Option(help: "DMap: also write the regularized depth map to this path.")
     var depthMap: String? = nil
 
@@ -178,7 +169,7 @@ struct Fuse: ParsableCommand {
                 }
             }
         }
-        var source = StackPipeline.makeSource(urls: fuseURLs, transforms: transforms, log: log)
+        let source = StackPipeline.makeSource(urls: fuseURLs, transforms: transforms, log: log)
         if let w = source.outputWidth, let h = source.outputHeight {
             print("common-coverage canvas: \(w)x\(h)")
         }
@@ -189,15 +180,6 @@ struct Fuse: ParsableCommand {
             switch fusion.method {
             case .dmap:
                 let opts = fusion.dmapOptions
-                if fusion.slabSize >= 2, fuseURLs.count > fusion.slabSize {
-                    let config = StackPipeline.Configuration(
-                        fusion: opts, slabSize: fusion.slabSize, slabOverlap: fusion.slabOverlap,
-                        slabDirectory: slabDir.map { URL(fileURLWithPath: $0) })
-                    let slabs = try StackPipeline.fuseSlabs(source: source,
-                                                            configuration: config, log: log)
-                    print("fused \(slabs.urls.count) slabs (pmax) → \(slabs.urls[0].deletingLastPathComponent().path)")
-                    source = StackSource(urls: slabs.urls)
-                }
                 let useGPU = try fusion.resolveUseGPU()
                 let out: DMapFusion.Output
                 if useGPU {
@@ -304,8 +286,7 @@ struct Batch: ParsableCommand {
                     case .dmap:
                         var config = StackPipeline.Configuration(
                             fusion: fusion.dmapOptions, align: fusion.align,
-                            preferGPU: useGPU, slabSize: fusion.slabSize,
-                            slabOverlap: fusion.slabOverlap)
+                            preferGPU: useGPU)
                         config.autoExcludeBadFrames = fusion.autoExclude
                         let result = try StackPipeline.fuseResult(urls: group,
                                                                   configuration: config, log: log)

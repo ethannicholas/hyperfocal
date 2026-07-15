@@ -9,16 +9,6 @@ public enum StackPipeline {
         public var fusion: DMapFusion.Options
         public var align: Bool
         public var preferGPU: Bool
-        /// Slabbing (deep stacks): frames per slab; 0 disables. Each slab is
-        /// pyramid-fused (PMax handles overlapping structures within its shallow
-        /// depth range, where its weaknesses barely show), then the slab images
-        /// are depth-map fused (halo control at scene scale).
-        public var slabSize: Int
-        /// Frames shared between adjacent slabs (continuity across seams).
-        /// Defaults to slabSize / 3 when left at 0.
-        public var slabOverlap: Int
-        /// Where slab images are written. nil → a unique temp directory.
-        public var slabDirectory: URL?
         /// When registration flags bad frames (misfires, failed alignment),
         /// exclude them all and fuse the rest. Overridden by `badFrameHandler`.
         public var autoExcludeBadFrames: Bool
@@ -29,30 +19,18 @@ public enum StackPipeline {
 
         public init(fusion: DMapFusion.Options = DMapFusion.Options(),
                     align: Bool = true, preferGPU: Bool = true,
-                    slabSize: Int = 0, slabOverlap: Int = 0, slabDirectory: URL? = nil,
                     autoExcludeBadFrames: Bool = false,
                     badFrameHandler: (([FrameQualityIssue]) -> Set<Int>)? = nil) {
             self.fusion = fusion
             self.align = align
             self.preferGPU = preferGPU
-            self.slabSize = slabSize
-            self.slabOverlap = slabOverlap
-            self.slabDirectory = slabDirectory
             self.autoExcludeBadFrames = autoExcludeBadFrames
             self.badFrameHandler = badFrameHandler
         }
     }
 
-    /// A fusion result plus, when slabbing was used, the intermediate slab
-    /// images — those become the primary retouch sources (each slab is
-    /// all-in-focus within its depth range, and the output's depth indexes
-    /// slabs). Original frames remain available as secondary retouch sources;
-    /// `slabFrameGains` carries the per-frame exposure gains that were baked
-    /// into the slabs, so frame stamps match.
     public struct FuseResult {
         public let output: DMapFusion.Output
-        public let slabURLs: [URL]?
-        public let slabFrameGains: [Float]?
         /// Frames the registration pass flagged (empty when alignment was
         /// cached or off — detection runs only during fresh registration).
         public let issues: [FrameQualityIssue]
@@ -151,18 +129,7 @@ public enum StackPipeline {
                 }
             }
         }
-        var source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
-        var slabURLs: [URL]? = nil
-        var slabFrameGains: [Float]? = nil
-        if configuration.slabSize >= 2, fuseURLs.count > configuration.slabSize {
-            let slabs = try fuseSlabs(source: source, configuration: configuration,
-                                      log: log, progress: progress,
-                                      cancellation: cancellation)
-            slabURLs = slabs.urls
-            slabFrameGains = slabs.frameGains
-            // Slab images are already aligned and cropped; fuse them as-is.
-            source = StackSource(urls: slabs.urls)
-        }
+        let source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
         let output: DMapFusion.Output
         if configuration.preferGPU, MetalEngine.shared != nil {
             output = try GPUDMap.fuseWithDepth(source: source, options: configuration.fusion,
@@ -177,118 +144,7 @@ public enum StackPipeline {
             }
         }
         progress?(FusionProgress(stage: .finishing, fraction: 1))
-        return FuseResult(output: output, slabURLs: slabURLs,
-                          slabFrameGains: slabFrameGains,
-                          issues: issues, fusedURLs: fuseURLs)
-    }
-
-    /// Overlapping slab windows distributed evenly so the first starts at 0 and
-    /// the last ends exactly at `count`.
-    static func slabRanges(count: Int, size: Int, overlap: Int) -> [Range<Int>] {
-        guard count > size else { return [0..<count] }
-        let stride = max(1, size - overlap)
-        let slabCount = max(2, Int(ceil(Double(count - overlap) / Double(stride))))
-        return (0..<slabCount).map { i in
-            let start = Int((Double(i) * Double(count - size) / Double(slabCount - 1)).rounded())
-            return start..<(start + size)
-        }
-    }
-
-    /// Pyramid-fuses each slab of aligned frames to a 16-bit TIFF. Exposure
-    /// gains (when enabled) are measured per frame against the first frame of
-    /// the stack and baked into the slab pixels, so slabs are mutually
-    /// comparable; the depth-map pass re-anchors to the geometric mean. The
-    /// measured per-frame gains come back too — retouching from an original
-    /// frame must apply the same gain its slab absorbed.
-    public static func fuseSlabs(source: StackSource, configuration: Configuration,
-                                 log: ((String) -> Void)? = nil,
-                                 progress: FusionProgressHandler? = nil,
-                                 cancellation: CancellationToken? = nil)
-        throws -> (urls: [URL], frameGains: [Float]?) {
-        let overlap = configuration.slabOverlap > 0
-            ? configuration.slabOverlap
-            : max(1, configuration.slabSize / 3)
-        let ranges = slabRanges(count: source.count, size: configuration.slabSize,
-                                overlap: min(overlap, configuration.slabSize - 1))
-        let dir = configuration.slabDirectory
-            ?? FileManager.default.temporaryDirectory
-                .appendingPathComponent("hyperfocal-slabs-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        log?("slabbing: \(ranges.count) slabs of \(configuration.slabSize) frames (overlap \(overlap)) → \(dir.path)")
-
-        // Gain anchor measured up front (one extra decode of frame 0): the
-        // frame closure below may be called concurrently by the GPU path's
-        // decode prefetcher, so it must not carry cross-call state. Measured
-        // on the *unwarped* frame, matching the per-frame measurement below —
-        // only the ratio matters, and warping must not enter the CPU path.
-        var meanLum0: Float = 1
-        if configuration.fusion.normalizeExposure {
-            meanLum0 = DMapFusion.meanLuminance(
-                pixels: try ImageFile.load(url: source.urls[0]).pixels)
-        }
-        // Per-frame gains, recorded as slabs consume frames (idempotent for
-        // frames shared by overlapping slabs; locked — the closure runs
-        // concurrently under the GPU path's prefetcher).
-        let gainLock = NSLock()
-        var frameGains = [Float](repeating: 1, count: source.count)
-        // Output-pane nominal size for slab previews (the slab canvas).
-        var fullW = source.outputWidth ?? 0
-        var fullH = source.outputHeight ?? 0
-        if fullW == 0, let dims = ImageFile.pixelSize(url: source.urls[0]) {
-            fullW = dims.width
-            fullH = dims.height
-        }
-        var urls = [URL]()
-        for (si, range) in ranges.enumerated() {
-            try cancellation?.checkCancelled()
-            // Frames decode unwarped in the closure; alignment rides the warp
-            // plan (GPU-side when available) instead of Warp.apply per frame.
-            let slabWarp = source.transforms.map {
-                PyramidWarp(transforms: Array($0[range]),
-                            outputWidth: source.outputWidth,
-                            outputHeight: source.outputHeight)
-            }
-            let slab = try PyramidFusion.fuse(frameCount: range.count,
-                                              preferGPU: configuration.preferGPU,
-                                              warp: slabWarp,
-                                              log: log,
-                                              progress: { fraction, preview in
-                // The forming slab, collapsed at low res (GPU path only) —
-                // without this the output pane is empty for the entire slab
-                // stage, which can run for minutes on deep stacks.
-                guard let progress, let preview else { return }
-                progress(FusionProgress(
-                    stage: .slabs,
-                    fraction: (Double(si) + fraction) / Double(ranges.count),
-                    preview: preview,
-                    previewFullWidth: fullW, previewFullHeight: fullH))
-            },
-                                              cancellation: cancellation) { k in
-                let fi = range.lowerBound + k
-                var frame = try ImageFile.load(url: source.urls[fi])
-                if configuration.fusion.normalizeExposure {
-                    let mean = DMapFusion.meanLuminance(pixels: frame.pixels)
-                    let gain = min(max(meanLum0 / max(mean, 1e-6), 0.5), 2)
-                    gainLock.lock()
-                    frameGains[fi] = gain
-                    gainLock.unlock()
-                    if gain != 1 { frame.scaleRGB(by: gain) }
-                }
-                progress?(FusionProgress(
-                    stage: .slabs,
-                    fraction: (Double(si) + Double(k + 1) / Double(range.count))
-                        / Double(ranges.count),
-                    sourceFrameIndex: fi,
-                    sourcePreview: frame.downsampledNearest(maxSide: 1200),
-                    sourceFullWidth: frame.width, sourceFullHeight: frame.height))
-                return frame
-            }
-            let url = dir.appendingPathComponent(String(format: "slab_%03d.tif", si))
-            try ImageFile.save(slab, to: url)
-            log?("slab \(si + 1)/\(ranges.count) → \(url.lastPathComponent)")
-            urls.append(url)
-        }
-        return (urls, configuration.fusion.normalizeExposure ? frameGains : nil)
+        return FuseResult(output: output, issues: issues, fusedURLs: fuseURLs)
     }
 
     /// Builds the fusion's frame source, cropping the output canvas to the

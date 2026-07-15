@@ -8,7 +8,6 @@ public struct FusionProgress {
     public enum Stage: String {
         case registering = "Reading frames"
         case aligning = "Matching gradients"
-        case slabs = "Fusing slabs"
         case depth = "Analyzing depth"
         case regularizing = "Regularizing depth map"
         case render = "Rendering"

@@ -7,7 +7,6 @@ import HyperfocalKit
 /// re-fusing would actually change anything. The GPU/CPU choice counts too:
 /// in theory the engines match (90+ dB), but the toggle exists precisely for
 /// when the GPU path misbehaves — flipping it must offer a re-fuse.
-/// `slabbed` records the actual outcome, not the toggle.
 struct FuseSettings: Equatable, Codable {
     var align: Bool
     var useGPU: Bool
@@ -16,11 +15,9 @@ struct FuseSettings: Equatable, Codable {
     var medianRadius: Double
     var blendRadius: Double
     var normalizeExposure: Bool
-    var slabbed: Bool
 
     init(align: Bool, useGPU: Bool, sharpnessSigma: Double, noiseFloor: Double,
-         medianRadius: Double, blendRadius: Double, normalizeExposure: Bool,
-         slabbed: Bool) {
+         medianRadius: Double, blendRadius: Double, normalizeExposure: Bool) {
         self.align = align
         self.useGPU = useGPU
         self.sharpnessSigma = sharpnessSigma
@@ -28,7 +25,6 @@ struct FuseSettings: Equatable, Codable {
         self.medianRadius = medianRadius
         self.blendRadius = blendRadius
         self.normalizeExposure = normalizeExposure
-        self.slabbed = slabbed
     }
 
     init(from decoder: Decoder) throws {
@@ -42,7 +38,6 @@ struct FuseSettings: Equatable, Codable {
         medianRadius = try c.decode(Double.self, forKey: .medianRadius)
         blendRadius = try c.decode(Double.self, forKey: .blendRadius)
         normalizeExposure = try c.decode(Bool.self, forKey: .normalizeExposure)
-        slabbed = try c.decode(Bool.self, forKey: .slabbed)
     }
 }
 
@@ -70,8 +65,6 @@ final class Stack: Identifiable {
     var resultDepth: [Float] = []
     var resultSharpness: FrameSharpness?
     var resultGains: [Float]?
-    var slabURLs: [URL]?
-    var slabFrameGains: [Float]?
     var fuseURLs: [URL] = []
     var fusedSettings: FuseSettings?
     /// Tone adjustments (preview + display-referred exports); per stack.

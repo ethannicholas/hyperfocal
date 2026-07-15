@@ -121,8 +121,7 @@ New to focus stacking? Take a look at the
    is what prevents halos), then renders by blending each pixel from the
    frames nearest its depth. The `pmax` engine is Laplacian-pyramid
    max-coefficient fusion, better where structures at different depths
-   overlap. Deep stacks can be *slabbed*: overlapping groups pyramid-fused
-   first, then depth-map fused across the slabs.
+   overlap.
 
 3. **Export.** 16-bit TIFF/PNG or JPEG in sRGB, Display P3, or ProPhoto; or
    Linear DNG (written through the vendored Adobe DNG SDK) that Lightroom and

@@ -15,8 +15,8 @@ with converting exports, Lanczos-3 warp resampling, and GPU pyramid (PMax)
 fusion. Regression gates:
 `swift build && .build/debug/retouch-probe <synth frames…>` must print
 `probe: ALL PASS`, and `hyperfocal-cli synth` baselines (default params) are
-**plane ≈ 38.7 dB dmap / 38.3 pmax** vs truth, **object ≈ 41.3 unslabbed /
-40.3 slabbed** (as of the quality campaign through median-consensus
+**plane ≈ 38.7 dB dmap / 38.3 pmax** vs truth, **object ≈ 41.3** (as of
+the quality campaign through median-consensus
 blending; defaults sharpness σ = 10 / guided radius 128 / median radius
 20, 2026-07-13). CPU↔GPU parity: ≥ 90 dB both methods (measured ~114
 dmap / 106 pmax on the synth plane — the guided regularizer's shared
@@ -116,14 +116,6 @@ Gates: synth baselines in the header, probe ALL PASS, CPU/GPU parity,
 and the sample stack's three regions (shadow under the rim, substrate
 above the specimen, silhouette band) eyeballed against Helicon's result.
 
-### 4. Session-scoped slab cache
-
-Each fuse deletes the previous slab directory (`AppModel.installSlabs`), so
-a *saved* project's retouch sources die when the user later fuses anything
-else. Options: refcount directories by the projects that reference them,
-copy slabs into the `.hyperfocal` bundle on explicit save (~0.5 GB), or
-lazily re-fuse slabs on demand from `framePaths` + `transforms`
-(deterministic; probably best).
 
 ---
 
@@ -150,10 +142,6 @@ UI: an "Animate…" button next to Export once a result exists.
   signal that capture ordering wasn't available.
 - **ETA in the progress card:** stages already report fractions
   (`FusionProgress`); time the current stage and extrapolate.
-- **Slab highlight:** during slabbed retouch the Stack list (which lists
-  original frames) highlights frame sources fine — original frames are in
-  the source list since 2026-07-06 — but can't highlight an active *slab*
-  source; show a "Slab 3/6 (frames 23–36)" chip for those.
 - **Per-channel exposure gains:** current flicker normalization is a single
   luminance gain per frame (`DMapFusion.renderGains`); LED-lit stacks can
   flicker per-channel (WB wobble). Same machinery, 3 gains instead of 1;

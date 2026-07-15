@@ -197,9 +197,6 @@ final class AppModel: ObservableObject {
     @Published var normalizeExposure: Bool {
         didSet { Self.settings.set(normalizeExposure, forKey: "normalizeExposure") }
     }
-    @Published var slabDeepStacks: Bool {
-        didSet { Self.settings.set(slabDeepStacks, forKey: "slabDeepStacks") }
-    }
     /// Order each stack's frames by EXIF capture time at load (filename
     /// order breaks when the camera's file counter rolls over mid-stack).
     /// Off = filename always wins. Read at load time, not fuse time.
@@ -229,11 +226,6 @@ final class AppModel: ObservableObject {
             collapsedSections.insert(section)
         }
     }
-    /// With the toggle on, slabbing engages at this depth (shallow stacks
-    /// don't need it and the pyramid pass would only cost time). Off by
-    /// default: slabs change what retouching sources from, which surprised
-    /// even the owner — users who know they want it can opt in.
-    static let slabThreshold = 40
 
     // Progress
     @Published var stageText = ""
@@ -296,13 +288,6 @@ final class AppModel: ObservableObject {
     private(set) var resultSharpness: FrameSharpness?
     // Exposure gains the fusion applied; retouch sources must match them.
     private(set) var resultGains: [Float]?
-    // Slab images from a slabbed fusion — they are the primary retouch
-    // sources (the result's depth indexes slabs, and each slab is
-    // all-in-focus in its range). Original frames stay available as
-    // secondary sources; these are the exposure gains baked into the slabs,
-    // which frame stamps must reapply.
-    private(set) var slabURLs: [URL]?
-    private(set) var slabFrameGains: [Float]?
     private var fuseURLs: [URL] = []
     // What the current result was fused with (selected-stack mirror).
     private var fusedSettings: FuseSettings?
@@ -367,11 +352,11 @@ final class AppModel: ObservableObject {
             .flatMap { ExportColorSpace(rawValue: $0) } ?? .srgb
         alignFrames = d.object(forKey: "alignFrames") as? Bool ?? true
         useGPU = (d.object(forKey: "useGPU") as? Bool ?? true) && MetalEngine.shared != nil
-        for legacy in ["sharpnessSigma", "noiseFloor", "medianRadius", "blendRadius"] {
-            d.removeObject(forKey: legacy)  // fusion sliders no longer persist
+        for legacy in ["sharpnessSigma", "noiseFloor", "medianRadius",
+                       "blendRadius", "slabDeepStacks"] {
+            d.removeObject(forKey: legacy)  // sliders no longer persist; slabbing removed
         }
         normalizeExposure = d.object(forKey: "normalizeExposure") as? Bool ?? true
-        slabDeepStacks = d.object(forKey: "slabDeepStacks") as? Bool ?? false
         orderByCaptureTime = d.object(forKey: "orderByCaptureTime") as? Bool ?? true
         collapsedSections = Set((d.stringArray(forKey: "collapsedSections") ?? [])
             .compactMap(SidebarSection.init))
@@ -381,6 +366,13 @@ final class AppModel: ObservableObject {
         // why quit now warns about unsaved work instead). The old file lingers
         // for anyone upgrading past that.
         try? FileManager.default.removeItem(at: ProjectStore.autosaveURL)
+        // Slabbing (removed 2026-07-15) left per-fuse image directories
+        // behind in Application Support; clear the whole tree once.
+        if let support = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                  in: .userDomainMask).first {
+            try? FileManager.default.removeItem(
+                at: support.appendingPathComponent("Hyperfocal/Slabs"))
+        }
     }
 
     // MARK: - Security-scoped access
@@ -491,8 +483,6 @@ final class AppModel: ObservableObject {
         stack.resultDepth = resultDepth
         stack.resultSharpness = resultSharpness
         stack.resultGains = resultGains
-        stack.slabURLs = slabURLs
-        stack.slabFrameGains = slabFrameGains
         stack.fuseURLs = fuseURLs
         stack.fusedSettings = fusedSettings
         stack.tone = tone
@@ -523,8 +513,6 @@ final class AppModel: ObservableObject {
         resultDepth = stack.resultDepth
         resultSharpness = stack.resultSharpness
         resultGains = stack.resultGains
-        slabURLs = stack.slabURLs
-        slabFrameGains = stack.slabFrameGains
         fuseURLs = stack.fuseURLs
         fusedSettings = stack.fusedSettings
         installingStack = true
@@ -662,8 +650,8 @@ final class AppModel: ObservableObject {
         let stackFuseURLs = isSelected ? fuseURLs : stack.fuseURLs
         if stackFrames.filter({ stackIncluded.contains($0) }) != stackFuseURLs { return true }
         if let snapshot = isSelected ? fusedSettings : stack.fusedSettings,
-           snapshot != currentFuseSettings(frameCount: stackIncluded.count) {
-            return true  // a new fuse would decide differently (incl. slabbing)
+           snapshot != currentFuseSettings() {
+            return true  // a new fuse would produce a different result
         }
         return false
     }
@@ -673,15 +661,14 @@ final class AppModel: ObservableObject {
         stacks.filter { $0.enabled && needsRefuse($0) }.count
     }
 
-    private func currentFuseSettings(frameCount: Int) -> FuseSettings {
+    private func currentFuseSettings() -> FuseSettings {
         FuseSettings(align: alignFrames,
                      useGPU: useGPU,
                      sharpnessSigma: sharpnessSigma,
                      noiseFloor: noiseFloor,
                      medianRadius: medianRadius,
                      blendRadius: blendRadius,
-                     normalizeExposure: normalizeExposure,
-                     slabbed: slabDeepStacks && frameCount >= Self.slabThreshold)
+                     normalizeExposure: normalizeExposure)
     }
 
     // MARK: - Session persistence
@@ -704,8 +691,6 @@ final class AppModel: ObservableObject {
                 working: stack.savedWorking,
                 sourceIndex: stack.savedSourceIndex,
                 gains: stack.resultGains,
-                slabPaths: stack.slabURLs?.map(\.path),
-                slabFrameGains: stack.slabFrameGains,
                 fusedSettings: stack.fusedSettings,
                 tone: stack.tone.isNeutral ? nil : stack.tone)
         }
@@ -873,8 +858,6 @@ final class AppModel: ObservableObject {
             stack.resultDepth = item.payload.depth
             stack.resultSharpness = item.payload.sharpness
             stack.resultGains = item.payload.gains
-            stack.slabURLs = item.payload.slabPaths.map { $0.map { URL(fileURLWithPath: $0) } }
-            stack.slabFrameGains = item.payload.slabFrameGains
             stack.fusedSettings = item.payload.fusedSettings
             stack.tone = item.payload.tone ?? ToneSettings()
             stack.depthResult = item.depthImage
@@ -1180,8 +1163,6 @@ final class AppModel: ObservableObject {
         resultDepth = []
         resultSharpness = nil
         resultGains = nil
-        slabURLs = nil
-        slabFrameGains = nil
         fuseURLs = []
         fusedSettings = nil
         installingStack = true
@@ -1499,10 +1480,6 @@ final class AppModel: ObservableObject {
                                            noiseFloor: Float(noiseFloor),
                                            medianRadius: Int(medianRadius),
                                            normalizeExposure: normalizeExposure)
-        if slabDeepStacks, urls.count >= Self.slabThreshold {
-            config.slabSize = min(32, max(8, Int((Double(urls.count).squareRoot() * 1.6).rounded())))
-            config.slabDirectory = Self.newSlabDirectory()
-        }
         frameIssues = [:]
         // Bad frames (misfires, failed alignment): ask before excluding. The
         // handler runs on the fusion thread; the alert blocks it while the
@@ -1560,8 +1537,8 @@ final class AppModel: ObservableObject {
                         self.stageText = update.stage.rawValue
                         // One monotonic bar across the whole fuse: each stage
                         // owns a window of the overall span, and the max()
-                        // keeps skipped stages (cache hits, no slabs) from
-                        // ever stepping the bar backward.
+                        // keeps skipped stages (cache hits) from ever
+                        // stepping the bar backward.
                         self.stageFraction = max(self.stageFraction,
                                                  Self.overallProgress(update.stage,
                                                                       update.fraction))
@@ -1593,13 +1570,9 @@ final class AppModel: ObservableObject {
                     self.resultDepth = output.depth
                     self.resultSharpness = output.sharpness
                     self.resultGains = output.gains
-                    self.slabFrameGains = result.slabFrameGains
-                    self.installSlabs(result.slabURLs)
                     // Snapshot what this result was fused with (staleness
-                    // tracking for the Fuse buttons); slabbed = actual outcome.
-                    var snapshot = self.currentFuseSettings(frameCount: 0)
-                    snapshot.slabbed = result.slabURLs != nil
-                    self.fusedSettings = snapshot
+                    // tracking for the Fuse buttons).
+                    self.fusedSettings = self.currentFuseSettings()
                     self.depthResult = output.depthMap
                     self.outputPreview = NSImage(cgImage: resultCG, size: .zero)
                     self.depthPreview = NSImage(cgImage: depthCG, size: .zero)
@@ -1616,10 +1589,6 @@ final class AppModel: ObservableObject {
                     }
                 }
             } catch {
-                // Don't leave partial slab images behind.
-                if let dir = config.slabDirectory {
-                    try? FileManager.default.removeItem(at: dir)
-                }
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.processingSource = nil
@@ -1666,7 +1635,6 @@ final class AppModel: ObservableObject {
         let window: (Double, Double)
         switch stage {
         case .registering, .aligning: window = (0.00, 0.45)
-        case .slabs: window = (0.45, 0.60)
         case .depth: window = (0.45, 0.80)
         case .regularizing: window = (0.80, 0.85)
         case .render: window = (0.85, 0.99)
@@ -1675,22 +1643,6 @@ final class AppModel: ObservableObject {
         return window.0 + (window.1 - window.0) * min(max(fraction, 0), 1)
     }
 
-    private static func newSlabDirectory() -> URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory,
-                                               in: .userDomainMask)[0]
-        return support.appendingPathComponent("Hyperfocal/Slabs/\(UUID().uuidString)")
-    }
-
-    /// Installs a fusion's slab images, deleting the previous fusion's slab
-    /// directory (each fuse replaces the retouch sources; a saved project that
-    /// referenced the old slabs can regenerate them by re-fusing).
-    private func installSlabs(_ urls: [URL]?) {
-        let oldDir = slabURLs?.first?.deletingLastPathComponent()
-        slabURLs = urls
-        if let oldDir, oldDir != urls?.first?.deletingLastPathComponent() {
-            try? FileManager.default.removeItem(at: oldDir)
-        }
-    }
 
     // MARK: - Noise floor preview
 
@@ -1818,25 +1770,10 @@ final class AppModel: ObservableObject {
     func enterRetouch() {
         guard let result, phase == .done, !resultDepth.isEmpty else { return }
         if retouch == nil {
-            var source: StackSource
-            var frameSource: StackSource? = nil
-            if let slabURLs, !slabURLs.isEmpty {
-                // Slabbed fusion: the slabs are the primary retouch sources —
-                // already aligned and cropped, and the depth plane indexes
-                // them — but the aligned original frames follow them in the
-                // source list (with the gains their slabs absorbed), so
-                // frame-level focus choice isn't lost.
-                source = StackSource(urls: slabURLs)
-                var frames = StackPipeline.makeSource(
-                    urls: fuseURLs, transforms: alignmentCache.transforms(for: fuseURLs))
-                frames.gains = slabFrameGains
-                frameSource = frames
-            } else {
-                // Rebuild the exact source configuration the fusion used (same
-                // common-coverage crop) so aligned slices match the result.
-                source = StackPipeline.makeSource(
-                    urls: fuseURLs, transforms: alignmentCache.transforms(for: fuseURLs))
-            }
+            // Rebuild the exact source configuration the fusion used (same
+            // common-coverage crop) so aligned slices match the result.
+            var source = StackPipeline.makeSource(
+                urls: fuseURLs, transforms: alignmentCache.transforms(for: fuseURLs))
             // Same exposure gains too, so stamps don't reintroduce flicker.
             source.gains = resultGains
             if let w = source.outputWidth, let h = source.outputHeight,
@@ -1848,7 +1785,6 @@ final class AppModel: ObservableObject {
             }
             retouch = RetouchSession(result: result, depth: resultDepth,
                                      sharpness: resultSharpness, source: source,
-                                     frameSource: frameSource,
                                      restoredWorking: savedWorking,
                                      initialSourceIndex: savedSourceIndex)
             retouch?.onEdited = { [weak self] in self?.hasUnsavedWork = true }

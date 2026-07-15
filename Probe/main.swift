@@ -168,63 +168,6 @@ Task { @MainActor in
     }
     print("probe: eraser layer OK")
 
-    // 1a2. Slabbed fusion: pmax slabs + dmap across; slabs become retouch sources.
-    let slabDir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("probe-slabs-\(ProcessInfo.processInfo.processIdentifier)")
-    let slabConfig = StackPipeline.Configuration(slabSize: 6, slabDirectory: slabDir)
-    var sawSlabPreview = false
-    let slabbed = try! StackPipeline.fuseResult(urls: Array(urls), configuration: slabConfig,
-                                                alignmentCache: cache,
-                                                progress: { update in
-        if update.stage == .slabs, update.preview != nil { sawSlabPreview = true }
-    })
-    // The GPU pyramid path must show the forming slab in the output pane
-    // (the CPU fallback sends no previews — collapsing per frame would
-    // double its work).
-    if MetalEngine.shared != nil, !sawSlabPreview {
-        print("probe: NO SLAB-STAGE PREVIEW"); exit(1)
-    }
-    guard let slabs = slabbed.slabURLs, slabs.count >= 2,
-          slabbed.output.image.width == output.image.width,
-          slabbed.output.depth.allSatisfy({ $0 <= Float(slabs.count - 1) }) else {
-        print("probe: SLABBED FUSE BROKEN"); exit(1)
-    }
-    guard slabbed.slabFrameGains?.count == urls.count else {
-        print("probe: SLAB FRAME GAINS MISSING (\(slabbed.slabFrameGains?.count ?? -1))")
-        exit(1)
-    }
-    var slabFrames = StackPipeline.makeSource(urls: Array(urls),
-                                              transforms: cache.transforms(for: Array(urls)))
-    slabFrames.gains = slabbed.slabFrameGains
-    let slabSession = RetouchSession(result: slabbed.output.image, depth: slabbed.output.depth,
-                                     sharpness: slabbed.output.sharpness,
-                                     source: StackSource(urls: slabs),
-                                     frameSource: slabFrames)
-    ticks = 0
-    while slabSession.sourceLoading && ticks < 100 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        ticks += 1
-    }
-    guard slabSession.sourceDisplay != nil, slabSession.sourceError == nil else {
-        print("probe: SLAB RETOUCH SOURCE FAILED"); exit(1)
-    }
-    // Original frames are reachable as sources after the slabs.
-    guard slabSession.urls.count == slabs.count + urls.count else {
-        print("probe: SLAB SESSION MISSING FRAME SOURCES"); exit(1)
-    }
-    slabSession.selectSource(slabs.count + urls.count / 2)
-    ticks = 0
-    while slabSession.sourceLoading && ticks < 100 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        ticks += 1
-    }
-    guard slabSession.sourceDisplay != nil, slabSession.sourceError == nil,
-          slabSession.sourceName.contains("frame_") else {
-        print("probe: SLAB SESSION FRAME SOURCE FAILED (\(slabSession.sourceError ?? slabSession.sourceName))")
-        exit(1)
-    }
-    try? FileManager.default.removeItem(at: slabDir)
-    print("probe: slabbed fuse OK (\(slabs.count) slabs + \(urls.count) frames)")
 
     // 1b. Missing source file (e.g. memory card unplugged) must surface a
     // diagnostic, not strand the spinner or show a generic hint.

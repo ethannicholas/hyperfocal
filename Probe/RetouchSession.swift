@@ -41,14 +41,6 @@ final class RetouchSession: ObservableObject {
     private let depth: [Float]
     private let sharpness: FrameSharpness?
     private let stackSource: StackSource
-    /// Slabbed fusions: the slabs are the *primary* sources (the depth plane
-    /// indexes them), but the aligned original frames stay reachable as
-    /// sources after them in the list — a slab can't offer the frame-level
-    /// focus choice retouching sometimes needs.
-    private let frameSource: StackSource?
-    /// Entries below this index belong to `stackSource`; from here to
-    /// `urls.count` they belong to `frameSource`.
-    private let primaryCount: Int
 
     private var displayPixels: [UInt8]
     /// The canvas view registers here; strokes report the image-space rect they
@@ -123,14 +115,13 @@ final class RetouchSession: ObservableObject {
     private var strokeActive = false
 
     /// `source` must be the same StackSource configuration the fusion used
-    /// (including any common-coverage crop) so aligned slices match the result.
-    /// `frameSource` (slabbed fusions) exposes the aligned original frames as
-    /// additional sources after the primaries. `restoredWorking` re-installs
-    /// retouch edits from a saved session.
+    /// (including any common-coverage crop) so aligned slices match the
+    /// result. `restoredWorking` re-installs retouch edits from a saved
+    /// session.
     init(result: ImageBuffer, depth: [Float], sharpness: FrameSharpness?,
-         source: StackSource, frameSource: StackSource? = nil,
+         source: StackSource,
          restoredWorking: ImageBuffer? = nil, initialSourceIndex: Int? = nil) {
-        self.urls = source.urls + (frameSource?.urls ?? [])
+        self.urls = source.urls
         self.width = result.width
         self.height = result.height
         self.originalResult = result
@@ -144,10 +135,7 @@ final class RetouchSession: ObservableObject {
         self.depth = depth
         self.sharpness = sharpness
         self.stackSource = source
-        self.frameSource = frameSource
-        self.primaryCount = source.count
-        let combined = source.count + (frameSource?.count ?? 0)
-        self.sourceIndex = initialSourceIndex.map { min(max($0, 0), combined - 1) }
+        self.sourceIndex = initialSourceIndex.map { min(max($0, 0), source.count - 1) }
             ?? source.count / 2
 
         var pixels = [UInt8](repeating: 0, count: result.width * result.height * 4)
@@ -225,7 +213,7 @@ final class RetouchSession: ObservableObject {
         sourceStatus = nil
         sourceLoadGeneration += 1
         let generation = sourceLoadGeneration
-        let (source, localIndex) = resolved(clamped)
+        let (source, localIndex) = (stackSource, clamped)
         let url = urls[clamped]
         Task.detached(priority: .userInitiated) { [weak self] in
             let loaded: (buffer: ImageBuffer, image: NSImage)?
@@ -259,12 +247,6 @@ final class RetouchSession: ObservableObject {
         }
     }
 
-    /// Routes a combined-list index to its backing source and local index.
-    private func resolved(_ index: Int) -> (source: StackSource, index: Int) {
-        index < primaryCount
-            ? (stackSource, index)
-            : (frameSource!, index - primaryCount)
-    }
 
     func cycleSource(by delta: Int) {
         if sourceIndex >= urls.count {
@@ -302,9 +284,7 @@ final class RetouchSession: ObservableObject {
         sourceStatus = "Building PMax layer…"
         sourceLoadGeneration += 1
         let generation = sourceLoadGeneration
-        // From the true frames when they're available (slabbed fusions): a
-        // pyramid over slabs would re-fuse already-fused images.
-        let source = frameSource ?? stackSource
+        let source = stackSource
         let cancel = CancellationToken()
         pmaxBuildCancel = cancel
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -432,7 +412,7 @@ final class RetouchSession: ObservableObject {
     private func prefetchNeighbors(of index: Int) {
         for neighbor in [index + 1, index - 1]
         where urls.indices.contains(neighbor) && sourceCache[neighbor] == nil {
-            let (source, localIndex) = resolved(neighbor)
+            let (source, localIndex) = (stackSource, neighbor)
             Task.detached(priority: .utility) { [weak self] in
                 guard let loaded = try? Self.loadAligned(index: localIndex, from: source) else {
                     return  // prefetch is opportunistic; selection reports errors

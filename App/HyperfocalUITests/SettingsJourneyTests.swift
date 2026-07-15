@@ -31,7 +31,6 @@ final class SettingsJourneyTests: XCTestCase {
             XCTAssertTrue(align.waitForExistence(timeout: 5))
             XCTAssertTrue(toggle("settings.order-by-capture").exists)
             XCTAssertTrue(toggle("settings.normalize-exposure").exists)
-            XCTAssertTrue(toggle("settings.slab").exists)
             XCTAssertTrue(toggle("settings.gpu").exists)
             XCTAssertEqual(align.value as? Int, 1, "alignment should default on")
             align.click()

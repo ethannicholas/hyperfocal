@@ -54,7 +54,7 @@ ship (no `default.metallib` → SwiftUI shaders silently no-op).
 ```
 
 Synth PSNR baselines (default params): plane ≈ 38.6 dB dmap / 37.5 pmax;
-object ≈ 39.2 unslabbed / 38.4 slabbed; CPU↔GPU parity ≥ 90 dB.
+object ≈ 39.2; CPU↔GPU parity ≥ 90 dB.
 
 ## Test fixtures
 
