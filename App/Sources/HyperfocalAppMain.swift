@@ -111,6 +111,12 @@ struct HyperfocalApp: App {
         Window("Hyperfocal", id: "main") {
             ContentView()
                 .environmentObject(model)
+                // Titlebar shows the open project like a document window
+                // (Save writes back to it, so the user should see which
+                // file that is).
+                .navigationTitle(model.projectURL.map {
+                    $0.deletingPathExtension().lastPathComponent
+                } ?? "Hyperfocal")
                 .frame(minWidth: 980, minHeight: 620)
                 .onAppear {
                     appDelegate.model = model
@@ -167,8 +173,14 @@ struct HyperfocalApp: App {
                 // stacks persist fine, and `phase` only mirrors the selected
                 // stack — keying on it wrongly disabled Save in multi-stack
                 // projects whenever an unfused stack happened to be selected.
-                Button("Save Project…") { model.saveProjectPanel() }
+                // Save writes back to the project's file; a never-saved
+                // project falls through to the Save As panel (no ellipsis:
+                // the common case shows no dialog).
+                Button("Save Project") { model.saveProject() }
                     .keyboardShortcut("s", modifiers: .command)
+                    .disabled(model.stacks.isEmpty || model.phase.isRunning)
+                Button("Save Project As…") { model.saveProjectAs() }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(model.stacks.isEmpty || model.phase.isRunning)
                 Button("Export Result…") { model.exportResult() }
                     .keyboardShortcut("e", modifiers: .command)

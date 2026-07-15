@@ -150,6 +150,20 @@ struct ContentView: View {
                             proxy.scrollTo(url)
                         }
                     }
+                    .onAppear {
+                        // A restored project arrives with its selection
+                        // already set, so onChange never fires — without
+                        // this, the list opens showing stack #1's frames
+                        // while the selected stack sits offscreen (clicking
+                        // a lookalike frame there switches stacks and reads
+                        // as a broken project). Deferred a tick: the rows
+                        // are laid out in this same update.
+                        DispatchQueue.main.async {
+                            if let url = model.selection.first {
+                                proxy.scrollTo(url)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -437,7 +451,7 @@ struct ContentView: View {
                     image: outputImage,
                     nominalSize: model.outputNominalSize,
                     loading: false,
-                    emptyHint: model.canFuse ? "Press Fuse Stack" : "No output yet",
+                    emptyHint: model.canFuse ? "Press “Fuse Stack”" : "No output yet",
                     // Depth maps and the noise-floor preview are data
                     // visualizations, not image content — leave them alone.
                     tone: (model.outputMode == .depth

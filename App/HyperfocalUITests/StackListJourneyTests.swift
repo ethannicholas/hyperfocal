@@ -21,11 +21,12 @@ final class StackListJourneyTests: XCTestCase {
             XCTAssertTrue(app.buttons["stack.row.stack-a"].exists)
             XCTAssertTrue(app.buttons["stack.row.stack-b"].exists)
             XCTAssertTrue(app.buttons["fusion.fuse-stack"].isEnabled)
-            XCTAssertEqual(text(of: app.staticTexts["output.pane.hint"]), "Press Fuse Stack")
+            XCTAssertEqual(text(of: app.staticTexts["output.pane.hint"]), "Press “Fuse Stack”")
         }
 
         XCTContext.runActivity(named: "unfused project: Save enabled (regression)") { _ in
-            XCTAssertTrue(menuItemEnabled(app, menu: "File", item: "Save Project…"))
+            XCTAssertTrue(menuItemEnabled(app, menu: "File", item: "Save Project"))
+            XCTAssertTrue(menuItemEnabled(app, menu: "File", item: "Save Project As…"))
         }
 
         XCTContext.runActivity(named: "disclosure collapse hides frame rows") { _ in

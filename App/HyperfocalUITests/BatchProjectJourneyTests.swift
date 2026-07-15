@@ -22,7 +22,7 @@ final class BatchProjectJourneyTests: XCTestCase {
             let rowB = app.buttons["stack.row.stack-b"]
             rowB.click()
             XCTAssertTrue(waitFor { rowB.isSelected })
-            XCTAssertTrue(menuItemEnabled(app, menu: "File", item: "Save Project…"),
+            XCTAssertTrue(menuItemEnabled(app, menu: "File", item: "Save Project"),
                           "Save must stay enabled with an unfused stack selected")
         }
 
@@ -80,6 +80,18 @@ final class BatchProjectJourneyTests: XCTestCase {
             XCTAssertTrue(waitFor { rowB.isSelected })
             XCTAssertTrue(waitFor { second.buttons["export.result"].isEnabled },
                           "stack-b lost its result across the round trip")
+
+            // Save on an opened project writes back in place — no panel.
+            let before = (try? FileManager.default
+                .attributesOfItem(atPath: project.path)[.modificationDate]) as? Date
+            clickMenuItem(second, menu: "File", item: "Save Project")
+            XCTAssertFalse(second.windows["Save"].waitForExistence(timeout: 2),
+                           "Save on an opened project must not ask where")
+            XCTAssertTrue(waitFor(timeout: 10) {
+                let after = (try? FileManager.default
+                    .attributesOfItem(atPath: project.path)[.modificationDate]) as? Date
+                return after != nil && before != nil && after! > before!
+            }, "Save should have rewritten the project file in place")
         }
     }
 }

@@ -351,6 +351,12 @@ final class AppModel: ObservableObject {
     /// holds. Set by fuse completion and retouch strokes, cleared by saving
     /// or opening a project; quitting with it set asks for confirmation.
     private(set) var hasUnsavedWork = false
+    /// The file the current project was opened from or last saved to —
+    /// File > Save writes straight back to it; nil (never saved, or project
+    /// closed) makes Save fall through to Save As. The open/save panels'
+    /// sandbox grants cover the URL for the app's lifetime, so in-place
+    /// re-saves need no new grant. Published: the window title shows it.
+    @Published private(set) var projectURL: URL?
 
     // Security-scoped file access (the app is sandboxed; frames live outside
     // the container). `grantedRoots` are the URLs the user granted this
@@ -780,28 +786,45 @@ final class AppModel: ObservableObject {
             ? .terminateNow : .terminateCancel
     }
 
-    /// Returns true when a project file was written.
+    /// File > Save: writes straight back to the project's file; a
+    /// never-saved project falls through to Save As. Returns true when a
+    /// project file was written.
     @discardableResult
-    func saveProjectPanel() -> Bool {
+    func saveProject() -> Bool {
+        guard let projectURL else { return saveProjectAs() }
+        return writeProject(to: projectURL)
+    }
+
+    /// File > Save As (and Save's first-save fallback). Returns true when
+    /// a project file was written.
+    @discardableResult
+    func saveProjectAs() -> Bool {
         guard captureProject() != nil else { return false }
         let panel = NSSavePanel()
         if let type = UTType(filenameExtension: ProjectStore.fileExtension) {
             panel.allowedContentTypes = [type]
         }
-        let base = stacks.first?.name ?? "Project"
-        panel.nameFieldStringValue = "\(base).\(ProjectStore.fileExtension)"
+        if let projectURL {
+            // Saving-as from a saved project starts where the project lives.
+            panel.directoryURL = projectURL.deletingLastPathComponent()
+            panel.nameFieldStringValue = projectURL.lastPathComponent
+        } else {
+            let base = stacks.first?.name ?? "Project"
+            panel.nameFieldStringValue = "\(base).\(ProjectStore.fileExtension)"
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         return writeProject(to: url)
     }
 
-    /// Panel-free save: the write body of saveProjectPanel, callable
-    /// directly (UITestSupport, and any future probe checks).
+    /// Panel-free save: the write body of saveProject/saveProjectAs,
+    /// callable directly (UITestSupport, and any future probe checks).
     @discardableResult
     func writeProject(to url: URL) -> Bool {
         guard let project = captureProject() else { return false }
         do {
             try ProjectStore.write(project, to: url)
             hasUnsavedWork = false
+            projectURL = url  // a successful write makes this THE document
             return true
         } catch {
             // A failed save must not touch `phase`: the fused result is
@@ -870,6 +893,9 @@ final class AppModel: ObservableObject {
                     guard let self else { return }
                     self.installRestored(items, selectedIndex: project.selectedIndex,
                                          access: access)
+                    self.projectURL = url  // only on success: a failed open
+                                           // leaves the prior project (and
+                                           // its URL) in place
                 }
             } catch {
                 await MainActor.run { [weak self] in
@@ -1196,6 +1222,7 @@ final class AppModel: ObservableObject {
         selectedStackID = nil
         expandedStacks = []
         hasUnsavedWork = false
+        projectURL = nil  // the next Save must ask where to put it
         frames = []
         included = []
         selection = []
