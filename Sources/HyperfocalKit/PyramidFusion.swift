@@ -108,7 +108,8 @@ public enum PyramidFusion {
         }
         return try fuse(frameCount: source.count, preferGPU: preferGPU,
                         warp: warp, log: log, progress: progress,
-                        cancellation: cancellation) { i in
+                        cancellation: cancellation,
+                        decodeWorkers: FramePrefetcher.workers(for: source.urls)) { i in
             var img = try ImageFile.load(url: source.urls[i])
             if let gain = source.gains?[i], gain != 1 {
                 img.scaleRGB(by: gain)
@@ -134,13 +135,15 @@ public enum PyramidFusion {
                             log: ((String) -> Void)? = nil,
                             progress: ((Double, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
+                            decodeWorkers: Int? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
         if preferGPU, MetalEngine.shared != nil {
             do {
                 return try GPUPyramid.fuse(frameCount: frameCount, warp: warp,
                                            log: log, progress: progress,
-                                           cancellation: cancellation, frame: frame)
+                                           cancellation: cancellation,
+                                           decodeWorkers: decodeWorkers, frame: frame)
             } catch let error as StackError {
                 log?("GPU pyramid failed (\(error)); falling back to CPU")
             }

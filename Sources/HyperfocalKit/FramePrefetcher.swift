@@ -27,11 +27,34 @@ final class FramePrefetcher {
         return min(cores, memoryFrames, 8)
     }
 
+    /// Decode-worker count for a stack, for callers whose decode closure is
+    /// pure RAW/ImageIO (the GPU paths — they warp on device). RAW decode
+    /// runs through Apple's internally-parallel (GPU) RAW engine, where
+    /// extra concurrency only contends — measured on 45 MP NEFs, 4
+    /// concurrent decodes run ~65% SLOWER per frame than serial (0.84 vs
+    /// 0.48 s/frame) and 2-way ties serial. TIFF/JPEG decode is CPU-bound
+    /// and scales, so non-RAW stacks keep the full window's worth of
+    /// workers — as do the CPU fusion paths, whose closures include the
+    /// core-scaling CPU Lanczos warp.
+    static func workers(for urls: [URL]) -> Int? {
+        guard let first = urls.first else { return nil }
+        return ImageFile.isRAW(first) ? 2 : nil
+    }
+
+    /// `lookahead` bounds the in-flight window (memory); `workers` bounds
+    /// decode concurrency (nil = one per window slot). Distinct knobs — see
+    /// `workers(for:)` for why RAW stacks want fewer workers than slots.
     init(indices: [Int], lookahead: Int = FramePrefetcher.defaultLookahead,
+         workers: Int? = nil,
          decode: @escaping (Int) throws -> ImageBuffer) {
         self.order = indices
         self.decode = decode
-        opQueue.maxConcurrentOperationCount = lookahead
+        // HYPERFOCAL_PREFETCH_WORKERS overrides for benchmarking/ablation
+        // (same pattern as the HYPERFOCAL_GUIDED_* switches).
+        let envWorkers = ProcessInfo.processInfo
+            .environment["HYPERFOCAL_PREFETCH_WORKERS"].flatMap(Int.init)
+        opQueue.maxConcurrentOperationCount = min(envWorkers ?? workers ?? lookahead,
+                                                  lookahead)
         opQueue.qualityOfService = .userInitiated
         // Prime the window; next() tops it up as frames are consumed.
         for _ in 0..<min(lookahead, indices.count) { enqueueNext() }

@@ -132,7 +132,8 @@ public enum GPUDMap {
         }
 
         // Pass 1: per-pixel argmax of smoothed |Laplacian| across the stack.
-        var prefetcher = FramePrefetcher(indices: Array(0..<frameCount)) {
+        var prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
+                                         workers: FramePrefetcher.workers(for: source.urls)) {
             try ImageFile.load(url: source.urls[$0])
         }
         for _ in 0..<frameCount {
@@ -352,7 +353,8 @@ public enum GPUDMap {
         memset(accumBuf.contents(), 0, pixelCount * 16)
         memset(wsumBuf.contents(), 0, pixelCount * 4)
 
-        prefetcher = FramePrefetcher(indices: renderIndices) {
+        prefetcher = FramePrefetcher(indices: renderIndices,
+                                     workers: FramePrefetcher.workers(for: source.urls)) {
             try ImageFile.load(url: source.urls[$0])
         }
         var renderedCount = 0

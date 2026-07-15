@@ -35,25 +35,37 @@ grid stage removed the old threshold-flip caveat that had dmap at
 
 ## Engine performance
 
-### 3. PMax at 45 MP — remaining levers are GPU-side, not decode
+### 3. Fusion at 45 MP is decode-bound — remaining levers
 
-Clean-machine numbers (2026-07-12, real 50-frame 45 MP NEF stack, local
-SSD, idle 8-core/16 GB M-series; earlier same-day measurements were
-inflated 2–3× by background load — benchmark only on an idle machine):
-registration ≈ 25–30 s (app caches it after first fuse), aligned PMax
-fusion 36 s (was 66 s before the GPU warp), unaligned decode+pyramid
-24 s. Decode is *not* the bottleneck on this hardware: prefetch width 3
-vs 4 measures identical (±0.5%), and 6 is reliably ~40% worse (memory
-pressure on 16 GB) — `FramePrefetcher.defaultLookahead` now scales with
-cores/RAM and caps there. Toward the original < 15 s aspiration the
-remaining levers are GPU-side: the ~12 s aligned-vs-unaligned delta
-(per-frame full-res upload + warp dispatch) and the pyramid pass itself
-(~24 s) — profile before believing either. Reading straight off the
-camera card costs only ~10% extra when idle (26 vs 24 s unaligned,
-cold cache; prefetch width irrelevant there too) — the earlier "card
-doubles everything" observation was background-load contention, so a
-tutorial note is only worth it as "don't fuse while the machine is
-busy".
+Measured 2026-07-15 (50-frame 45 MP NEF stack, `pyramid phases:` line in
+-v output; interleaved A/B under moderate background load — capture
+idle-machine numbers when convenient): the aligned GPU PMax fuse spends
+**~80% of its wall clock waiting on RAW decode** (decode-wait 44 s vs
+GPU 7.4 s incl. warps, upload 3 s on a loaded machine; ~19–27 s decode
+in quieter windows). The earlier "levers are GPU-side" framing was
+wrong: the pyramid pass and the upload+warp delta together are ~10 s,
+not 24+12.
+
+The self-inflicted part is fixed: Apple's RAW engine is internally
+parallel (GPU), so the prefetcher's 4–8 concurrent CIRAWFilter decodes
+only contended — 4-way ran ~65% slower per frame than serial; 2-way
+ties serial. `FramePrefetcher` now separates window depth (memory)
+from decode workers, and GPU paths use `FramePrefetcher.workers(for:)`
+(2 for RAW, full for CPU-bound TIFF/JPEG). Interleaved A/B: workers=2
+beat workers=4 in both rounds (32.1 vs 34.9 s, 23.7 vs 28.5 s,
+unaligned PMax). `HYPERFOCAL_PREFETCH_WORKERS` overrides for ablation.
+
+Remaining levers, in value order:
+- **DMap decodes the stack twice** (argmax pass + render pass) — ~50 s
+  of pure decode at 50 frames. Spilling warped fp16 frames to a temp
+  file during pass 1 and streaming them back for the render pass
+  (~360 MB/frame, sequential SSD I/O at multi-GB/s) could halve DMap
+  decode cost. Worth prototyping with the phase instrumentation.
+- **Upload/GPU overlap**: the per-frame memcpy + waitUntilCompleted
+  serializes ~3 s of upload behind the GPU; double-buffering hides it.
+  Small, do alongside other GPUPyramid work.
+- Half-float pyramid buffers would halve GPU bandwidth, but the GPU is
+  ~7 s of a ~35 s fuse — low value until decode is fixed.
 
 ### 3a. Research-informed fusion follow-ons
 

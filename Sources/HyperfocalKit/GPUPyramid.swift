@@ -21,6 +21,7 @@ enum GPUPyramid {
                      log: ((String) -> Void)? = nil,
                      progress: ((Double, ImageBuffer?) -> Void)? = nil,
                      cancellation: CancellationToken? = nil,
+                     decodeWorkers: Int? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = MetalEngine.shared else {
             throw StackError.metal("no Metal device available")
@@ -58,12 +59,24 @@ enum GPUPyramid {
         // Decode (and warp) on background threads while the GPU chews on the
         // previous frame — decode dominates wall-clock otherwise. Callers'
         // frame closures must tolerate concurrent invocation.
-        let prefetcher = FramePrefetcher(indices: Array(0..<frameCount), decode: frame)
+        let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
+                                         workers: decodeWorkers, decode: frame)
         defer { prefetcher.cancel() }
+
+        // Wall-clock phase buckets, reported through `log` at the end —
+        // optimization here must start from measurements, not vibes.
+        var tDecodeWait = 0.0, tUpload = 0.0, tGPU = 0.0, tPreview = 0.0
+        func bucket(_ total: inout Double, _ body: () throws -> Void) rethrows {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            try body()
+            total += CFAbsoluteTimeGetCurrent() - t0
+        }
 
         for fi in 0..<frameCount {
             try cancellation?.checkCancelled()
-            let img = try prefetcher.next().image
+            var imgOpt: ImageBuffer! = nil
+            try bucket(&tDecodeWait) { imgOpt = try prefetcher.next().image }
+            let img: ImageBuffer = imgOpt
             if fi == 0 {
                 srcWidth = img.width
                 srcHeight = img.height
@@ -101,9 +114,11 @@ enum GPUPyramid {
                 !($0.transforms[fi] == matrix_identity_float3x3
                     && width == srcWidth && height == srcHeight)
             } ?? false
-            img.pixels.withUnsafeBufferPointer {
-                memcpy(needsWarp ? rawBuf.contents() : gauss[0].contents(),
-                       $0.baseAddress!, srcWidth * srcHeight * 16)
+            bucket(&tUpload) {
+                img.pixels.withUnsafeBufferPointer {
+                    _ = memcpy(needsWarp ? rawBuf.contents() : gauss[0].contents(),
+                               $0.baseAddress!, srcWidth * srcHeight * 16)
+                }
             }
 
             guard let cmd = engine.queue.makeCommandBuffer(),
@@ -211,22 +226,29 @@ enum GPUPyramid {
             enc.setBytes(&baseCount, length: 4, index: 2)
             engine.dispatch1D(enc, add4, count: Int(baseCount))
             enc.endEncoding()
-            cmd.commit()
-            cmd.waitUntilCompleted()
+            bucket(&tGPU) {
+                cmd.commit()
+                cmd.waitUntilCompleted()
+            }
             log?("pyramid \(fi + 1)/\(frameCount) (GPU)")
             if let progress {
                 // Live preview: collapse the running pyramid down to a
                 // low-res level (a few ms) so there's something to watch.
-                let preview = try collapse(engine: engine, fused: fused,
+                var preview: ImageBuffer! = nil
+                try bucket(&tPreview) {
+                    preview = try collapse(engine: engine, fused: fused,
                                            sizes: sizes, levels: levels,
                                            toLevel: previewLevel,
                                            baseScale: 1 / Float(fi + 1),
                                            baseTmp: baseTmp,
                                            scratchA: scratchA, scratchB: scratchB,
                                            scale4: scale4, upsampleAdd: upsampleAdd)
+                }
                 progress(Double(fi + 1) / Double(frameCount), preview)
             }
         }
+        log?(String(format: "pyramid phases: decode-wait %.2fs, upload %.2fs, "
+                    + "gpu %.2fs, preview %.2fs", tDecodeWait, tUpload, tGPU, tPreview))
 
         // Average the base and collapse all the way down. Works on a copy of
         // the base (like previews do), so the running sum stays intact.
