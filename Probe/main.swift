@@ -111,6 +111,45 @@ Task { @MainActor in
     }
     print("probe: pmax blend layer OK")
 
+    // 1a2. Leaving a *building* PMax layer for a cached frame must fully
+    // supersede the build: its progress previews (low-res forming-pyramid
+    // collapses) and its cancelled completion must not touch the pane state.
+    // Shipped bug: the cache-hit selection path didn't bump the load
+    // generation, so build stragglers passed the staleness guard — blurry
+    // 1200px source pane (or a "Couldn't build" error) over a correct
+    // full-res paint buffer.
+    let session2 = RetouchSession(result: output.image, depth: output.depth,
+                                  sharpness: output.sharpness, source: source)
+    session2.selectSource(0)
+    ticks = 0
+    while session2.sourceLoading && ticks < 300 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard let cachedDisplay = session2.sourceDisplay, session2.sourceError == nil else {
+        print("probe: PMAX-STOMP SETUP FRAME LOAD FAILED"); exit(1)
+    }
+    session2.togglePMaxLayer()   // build starts (fresh session: no pmax cache)
+    session2.togglePMaxLayer()   // straight back to frame 0 — a cache hit
+    guard session2.sourceIndex == 0, session2.sourceDisplay === cachedDisplay else {
+        print("probe: PMAX-STOMP TOGGLE-BACK LOST THE FRAME"); exit(1)
+    }
+    // Let the superseded build run its course (progress events + cancelled
+    // or completed finish) — none of it may leak into the pane.
+    for _ in 0..<50 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        guard session2.sourceDisplay === cachedDisplay, session2.sourceError == nil,
+              session2.sourceStatus == nil, session2.sourceFloat != nil else {
+            print("probe: PMAX BUILD STOMPED A SUPERSEDING SELECTION "
+                  + "(display \(session2.sourceDisplay === cachedDisplay ? "kept" : "STOMPED"), "
+                  + "error \(session2.sourceError ?? "nil"), "
+                  + "status \(session2.sourceStatus ?? "nil"), "
+                  + "float \(session2.sourceFloat == nil ? "NIL" : "kept"))")
+            exit(1)
+        }
+    }
+    print("probe: superseded pmax build leaks nothing OK")
+
     // 1a3. Result (eraser) layer: a stamp from a frame changes the working
     // pixels; an eraser stamp over the same spot restores the pristine fusion
     // exactly (inner-brush alpha is exactly 1), and toggling off returns to

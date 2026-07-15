@@ -1,6 +1,7 @@
 import SwiftUI
 import HyperfocalKit
 import simd
+import os
 
 /// A retouching session over a fused result: a mutable working copy of the
 /// output that brush strokes paint into, sourcing pixels from *aligned* input
@@ -15,8 +16,29 @@ final class RetouchSession: ObservableObject {
     let height: Int
     var nominalSize: CGSize { CGSize(width: width, height: height) }
 
+    private static let log = Logger(subsystem: "org.hyperfocal", category: "retouch")
+
     @Published private(set) var sourceIndex: Int
-    @Published private(set) var sourceDisplay: NSImage?
+    @Published private(set) var sourceDisplay: NSImage? {
+        didSet {
+            // Tripwire for the low-res-pane bug family: with a *frame*
+            // selected, the pane must never show fewer pixels than the
+            // canvas (every legitimate writer is a full-res render; only
+            // the PMax layer legitimately shows low-res build previews).
+            // The 2026-07 stomp (stale-generation PMax previews over a
+            // cache-hit frame) is fixed; if blur ever recurs, this names
+            // the moment in `log show --predicate 'subsystem ==
+            // "org.hyperfocal"'` instead of leaving another unreproducible
+            // report.
+            guard let image = sourceDisplay, sourceIndex < urls.count,
+                  let rep = image.representations.first,
+                  rep.pixelsWide > 0, rep.pixelsWide < width / 2 else { return }
+            Self.log.fault("""
+                retouch source pane got a \(rep.pixelsWide)x\(rep.pixelsHigh) image \
+                for a \(self.width)x\(self.height) frame (index \(self.sourceIndex))
+                """)
+        }
+    }
     @Published private(set) var sourceLoading = false
     @Published private(set) var sourceError: String?
     /// Long-build status for the loading overlay ("Building PMax layer… 40%").
@@ -199,11 +221,19 @@ final class RetouchSession: ObservableObject {
         let changed = clamped != sourceIndex
         sourceIndex = clamped
         if changed { onSourceChanged?(clamped) }
+        // Supersede in-flight async work BEFORE the cache check — a cache
+        // hit must bump the generation too, or stragglers from an abandoned
+        // load/build still pass the staleness guards below (a building PMax
+        // layer kept stomping a cache-hit frame's pane with its low-res
+        // progress previews, then nulled the paint source on cancellation:
+        // blurry source pane over a sharp brush).
+        sourceLoadGeneration += 1
         if let cached = sourceCache[clamped] {
             sourceFloat = cached.buffer
             sourceDisplay = cached.image
             sourceLoading = false
             sourceStatus = nil
+            sourceError = nil
             prefetchNeighbors(of: clamped)
             return
         }
@@ -211,7 +241,6 @@ final class RetouchSession: ObservableObject {
         sourceDisplay = nil
         sourceLoading = true
         sourceStatus = nil
-        sourceLoadGeneration += 1
         let generation = sourceLoadGeneration
         let (source, localIndex) = (stackSource, clamped)
         let url = urls[clamped]
@@ -267,14 +296,19 @@ final class RetouchSession: ObservableObject {
     /// The PMax layer is fused on demand (a full pyramid pass over the stack —
     /// minutes at 45 MP) and cached for the session's lifetime.
     private func selectPMaxLayer() {
+        // Same rules as selectSource: supersede stragglers even on a cache
+        // hit, and never leave a previous build running unobserved.
+        pmaxBuildCancel?.cancel()
         let changed = sourceIndex != pmaxIndex
         sourceIndex = pmaxIndex
         if changed { onSourceChanged?(pmaxIndex) }
+        sourceLoadGeneration += 1
         if let cached = pmaxCache {
             sourceFloat = cached.buffer
             sourceDisplay = cached.image
             sourceLoading = false
             sourceStatus = nil
+            sourceError = nil
             return
         }
         sourceFloat = nil
@@ -282,7 +316,6 @@ final class RetouchSession: ObservableObject {
         sourceLoading = true
         sourceError = nil
         sourceStatus = "Building PMax layer…"
-        sourceLoadGeneration += 1
         let generation = sourceLoadGeneration
         let source = stackSource
         let cancel = CancellationToken()
