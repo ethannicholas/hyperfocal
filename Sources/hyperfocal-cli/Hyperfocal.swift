@@ -50,6 +50,10 @@ struct FusionOptions: ParsableArguments {
     @Option(help: "DMap: guided-filter edge-stop epsilon (guide is normalized, so unit-free; smaller keeps weaker edges).")
     var guidedEps: Float = 1e-3
 
+    @Flag(inversion: .prefixedNo,
+          help: "DMap: cache aligned frames in a temp file between fusion passes instead of decoding the stack twice (needs width×height×16 bytes per frame of free disk; output is identical, fusing is just faster). Skipped automatically when the disk is short on space.")
+    var diskCache: Bool = true
+
     @Option(help: "Compute engine: auto (GPU when available), gpu, or cpu.")
     var engine: Engine = .auto
 
@@ -61,7 +65,8 @@ struct FusionOptions: ParsableArguments {
                            noiseFloor: noiseFloor, medianRadius: medianRadius,
                            normalizeExposure: normalizeExposure,
                            peakConcentration: peakConcentration,
-                           guidedRadius: guidedRadius, guidedEps: guidedEps)
+                           guidedRadius: guidedRadius, guidedEps: guidedEps,
+                           spillEnabled: diskCache)
     }
 
     func resolveUseGPU() throws -> Bool {

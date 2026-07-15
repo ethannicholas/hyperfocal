@@ -55,17 +55,36 @@ from decode workers, and GPU paths use `FramePrefetcher.workers(for:)`
 beat workers=4 in both rounds (32.1 vs 34.9 s, 23.7 vs 28.5 s,
 unaligned PMax). `HYPERFOCAL_PREFETCH_WORKERS` overrides for ablation.
 
+DMap's double decode is also fixed (2026-07-15): pass 1 spills its
+warped frames to an unlinked temp file (`FrameSpill` — fp32, NOT the
+fp16 the original note suggested: fp16 would quantize render inputs to
+~75–80 dB and break the ≥ 90 dB CPU↔GPU parity gate, while fp32 is
+bit-identical to a re-warp) and the render pass streams them back at
+SSD speed instead of decoding + warping again. Measured on 30×45 MP
+stacks under Time Machine load (interleaved A/B, 8-core/16 GB):
+NEF 38–44 s vs 54–60 s, uncompressed TIFF 44–62 s vs 61–71 s, JPEG
+20–21 s vs 22–23 s — every format wins because pass 2 also skips the
+upload + GPU re-warp, so it's on for all formats. 19.8 GB written in
+~6 s (overlapped with the argmax GPU work), read back in ~3 s; output
+byte-identical either way; peak memory unchanged. Disk cost is
+width×height×16 bytes per frame (~0.7 GB per 45 MP frame — a 60-frame
+45 MP stack spills ~44 GB, transient and crash-safe via
+open-then-unlink). Controls: Settings → "Cache frames on disk while
+fusing" (app; interactive fuses pre-flight free space and warn via
+`AppModel.preflightDiskCache`; batches skip silently and log),
+`--no-disk-cache` (CLI), `HYPERFOCAL_DMAP_SPILL=1/0` env override
+(ablation). The spill also declines on its own — falling back to
+re-decode — when the temp volume lacks capacity + 2 GB margin, and a
+mid-fuse write failure degrades the same way (surfaced via the
+`org.hyperfocal`/`fusion` os_log category, as is the whole engine log
+in-app now).
+
 Remaining levers, in value order:
-- **DMap decodes the stack twice** (argmax pass + render pass) — ~50 s
-  of pure decode at 50 frames. Spilling warped fp16 frames to a temp
-  file during pass 1 and streaming them back for the render pass
-  (~360 MB/frame, sequential SSD I/O at multi-GB/s) could halve DMap
-  decode cost. Worth prototyping with the phase instrumentation.
 - **Upload/GPU overlap**: the per-frame memcpy + waitUntilCompleted
   serializes ~3 s of upload behind the GPU; double-buffering hides it.
   Small, do alongside other GPUPyramid work.
 - Half-float pyramid buffers would halve GPU bandwidth, but the GPU is
-  ~7 s of a ~35 s fuse — low value until decode is fixed.
+  ~7 s of a ~35 s fuse — low value until decode is faster still.
 
 ### 3a. Research-informed fusion follow-ons
 

@@ -662,10 +662,12 @@ public final class MetalEngine {
 
 public enum StackError: Error, CustomStringConvertible {
     case metal(String)
+    case io(String)
 
     public var description: String {
         switch self {
         case .metal(let s): return "metal: \(s)"
+        case .io(let s): return "i/o: \(s)"
         }
     }
 }

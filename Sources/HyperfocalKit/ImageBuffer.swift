@@ -55,24 +55,35 @@ public struct ImageBuffer {
 
     /// Fast nearest-neighbor thumbnail, for progress previews.
     public func downsampledNearest(maxSide: Int) -> ImageBuffer {
+        guard max(width, height) > maxSide else { return self }
+        return pixels.withUnsafeBufferPointer {
+            ImageBuffer.downsampledNearest(fromRGBA: $0.baseAddress!,
+                                           width: width, height: height,
+                                           maxSide: maxSide)
+        }
+    }
+
+    /// Same thumbnail sampled straight from interleaved RGBA floats — for
+    /// GPU-shared or spill memory that isn't worth wrapping in an ImageBuffer
+    /// just to throw away.
+    public static func downsampledNearest(fromRGBA src: UnsafePointer<Float>,
+                                          width: Int, height: Int,
+                                          maxSide: Int) -> ImageBuffer {
         let scale = min(1.0, Double(maxSide) / Double(max(width, height)))
-        guard scale < 1 else { return self }
         let pw = max(1, Int(Double(width) * scale))
         let ph = max(1, Int(Double(height) * scale))
         var out = ImageBuffer(width: pw, height: ph)
-        pixels.withUnsafeBufferPointer { src in
-            out.pixels.withUnsafeMutableBufferPointer { dst in
-                DispatchQueue.concurrentPerform(iterations: ph) { y in
-                    let sy = min(y * height / ph, height - 1)
-                    for x in 0..<pw {
-                        let sx = min(x * width / pw, width - 1)
-                        let si = (sy * width + sx) * 4
-                        let di = (y * pw + x) * 4
-                        dst[di] = src[si]
-                        dst[di + 1] = src[si + 1]
-                        dst[di + 2] = src[si + 2]
-                        dst[di + 3] = src[si + 3]
-                    }
+        out.pixels.withUnsafeMutableBufferPointer { dst in
+            DispatchQueue.concurrentPerform(iterations: ph) { y in
+                let sy = min(y * height / ph, height - 1)
+                for x in 0..<pw {
+                    let sx = min(x * width / pw, width - 1)
+                    let si = (sy * width + sx) * 4
+                    let di = (y * pw + x) * 4
+                    dst[di] = src[si]
+                    dst[di + 1] = src[si + 1]
+                    dst[di + 2] = src[si + 2]
+                    dst[di + 3] = src[si + 3]
                 }
             }
         }

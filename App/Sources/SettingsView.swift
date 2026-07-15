@@ -30,6 +30,9 @@ struct SettingsView: View {
                 caption(MetalEngine.shared == nil
                         ? "No Metal device available — fusing runs on the CPU."
                         : "Fuse on the GPU (identical results, several times faster). Turn off to reduce memory pressure on low-RAM machines, free the GPU for other work, or rule out a driver issue.")
+                Toggle("Cache frames on disk while fusing", isOn: $model.fusionDiskCache)
+                    .accessibilityIdentifier("settings.disk-cache")
+                caption("Keeps aligned frames in a temporary file during depth fusion so the stack isn't decoded twice (identical results, faster — the file needs about 0.7 GB of free disk per 45-megapixel frame and is removed when fusing finishes). Hyperfocal warns before fusing if it won't fit; turn off to never use the disk.")
             }
         }
         .formStyle(.grouped)

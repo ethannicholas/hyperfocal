@@ -183,6 +183,13 @@ final class AppModel: ObservableObject {
     @Published var useGPU: Bool {
         didSet { Self.settings.set(useGPU, forKey: "useGPU") }
     }
+    /// Fusion's temporary disk cache (FrameSpill): caches aligned frames
+    /// between the two depth-fusion passes so the stack isn't decoded twice.
+    /// Output is bit-identical either way — the toggle exists for machines
+    /// short on disk (the cache is width×height×16 bytes per frame).
+    @Published var fusionDiskCache: Bool {
+        didSet { Self.settings.set(fusionDiskCache, forKey: "fusionDiskCache") }
+    }
     // The fusion sliders are per-project creative controls, deliberately
     // not persisted: with the defaults dialed in, every new project starts
     // from them (the set-and-forget switches below stay persisted).
@@ -352,6 +359,7 @@ final class AppModel: ObservableObject {
             .flatMap { ExportColorSpace(rawValue: $0) } ?? .srgb
         alignFrames = d.object(forKey: "alignFrames") as? Bool ?? true
         useGPU = (d.object(forKey: "useGPU") as? Bool ?? true) && MetalEngine.shared != nil
+        fusionDiskCache = d.object(forKey: "fusionDiskCache") as? Bool ?? true
         for legacy in ["sharpnessSigma", "noiseFloor", "medianRadius",
                        "blendRadius", "slabDeepStacks"] {
             d.removeObject(forKey: legacy)  // sliders no longer persist; slabbing removed
@@ -379,6 +387,19 @@ final class AppModel: ObservableObject {
 
     private static let bookmarkLog = Logger(subsystem: "org.hyperfocal",
                                             category: "bookmarks")
+
+    /// Engine log lines (`log show --predicate 'subsystem == "org.hyperfocal"'`).
+    /// Per-frame progress is debug-level chatter; everything else — disk-cache
+    /// skips and failures, exclusions, stage summaries — persists at notice.
+    private static let fusionLog = Logger(subsystem: "org.hyperfocal",
+                                          category: "fusion")
+    private static func logFusion(_ line: String) {
+        if line.contains(" pass ") {
+            fusionLog.debug("\(line, privacy: .public)")
+        } else {
+            fusionLog.notice("\(line, privacy: .public)")
+        }
+    }
 
     /// Bookmarks for every granted root that covers a current frame. Created
     /// fresh on each save, so stale bookmarks self-heal and folder moves are
@@ -728,6 +749,29 @@ final class AppModel: ObservableObject {
         alert.addButton(withTitle: confirmTitle)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Warns before fusing when the fusion disk cache is enabled but the
+    /// temp volume can't hold it — the fuse still works without the cache,
+    /// just slower, so the user picks between fusing anyway, making room,
+    /// and turning the cache off in Settings. Batches never prompt (an
+    /// unattended queue must keep moving; the engine skips the cache
+    /// silently and the skip is logged). Returns false to cancel the fuse.
+    private func preflightDiskCache(urls: [URL]) -> Bool {
+        guard !batchMode, useGPU, FrameSpill.wanted(fusionDiskCache),
+              let first = urls.first,
+              let size = ImageFile.pixelSize(url: first),
+              let short = FrameSpill.shortfall(frameBytes: size.width * size.height * 16,
+                                               frameCount: urls.count) else { return true }
+        let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+        return runConfirmAlert(
+            message: "Not enough disk space for the fusion cache",
+            informative: "Fusing normally caches aligned frames in a temporary file "
+                + "so the stack isn't decoded twice — this stack needs about "
+                + "\(fmt(short.needed)) and the disk has \(fmt(short.available)) free. "
+                + "Fusing works without the cache, just slower. You can also free up "
+                + "space, or turn the cache off in Settings.",
+            confirmTitle: "Fuse Anyway")
     }
 
     func confirmTermination() -> NSApplication.TerminateReply {
@@ -1438,6 +1482,9 @@ final class AppModel: ObservableObject {
 
     func fuse() {
         guard canFuse else { return }
+        // Before any state changes: a cancelled preflight must leave the
+        // current result and phase untouched.
+        guard preflightDiskCache(urls: includedFrames) else { return }
         phase = .running
         stageText = "Starting…"
         stageFraction = 0
@@ -1479,7 +1526,8 @@ final class AppModel: ObservableObject {
                                            blendRadius: Float(blendRadius),
                                            noiseFloor: Float(noiseFloor),
                                            medianRadius: Int(medianRadius),
-                                           normalizeExposure: normalizeExposure)
+                                           normalizeExposure: normalizeExposure,
+                                           spillEnabled: fusionDiskCache)
         frameIssues = [:]
         // Bad frames (misfires, failed alignment): ask before excluding. The
         // handler runs on the fusion thread; the alert blocks it while the
@@ -1509,6 +1557,7 @@ final class AppModel: ObservableObject {
             do {
                 let result = try StackPipeline.fuseResult(urls: urls, configuration: config,
                                                           alignmentCache: cache,
+                                                          log: Self.logFusion,
                                                           progress: { update in
                     func nsImage(_ buffer: ImageBuffer?) -> NSImage? {
                         guard let buffer, let cg = try? ImageFile.cgImage8(from: buffer) else {

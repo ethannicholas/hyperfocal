@@ -100,6 +100,16 @@ public enum GPUDMap {
         var gains0 = [Float]()  // exposure gain per frame, relative to frame 0
         var meanLum0: Float = 1
 
+        // Pass 1 spills its warped frames so pass 2 can stream them back
+        // instead of decoding + warping the stack a second time (see
+        // FrameSpill — fp32, bit-identical to a re-warp). Measured faster
+        // for every input format (RAW ~30%, TIFF ~20%, JPEG ~8% on 30×45 MP
+        // stacks), so the only gates are the user's setting and the temp
+        // volume's capacity. HYPERFOCAL_DMAP_SPILL=1/0 overrides (ablation).
+        let wantSpill = FrameSpill.wanted(options.spillEnabled)
+        var spill: FrameSpill?
+        var tSpillWrite = 0.0, tSpillRead = 0.0
+
         func downloadPreview() -> ImageBuffer {
             var preview = ImageBuffer(width: pw, height: ph)
             preview.pixels.withUnsafeMutableBufferPointer { p in
@@ -132,7 +142,7 @@ public enum GPUDMap {
         }
 
         // Pass 1: per-pixel argmax of smoothed |Laplacian| across the stack.
-        var prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
+        let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
                                          workers: FramePrefetcher.workers(for: source.urls)) {
             try ImageFile.load(url: source.urls[$0])
         }
@@ -164,6 +174,10 @@ public enum GPUDMap {
                 sharpBuf = try engine.makeBuffer(floats: sw * sh)
                 guideBuf = try engine.makeBuffer(floats: pixelCount)
                 memset(guideBuf.contents(), 0, pixelCount * 4)
+                if wantSpill {
+                    spill = FrameSpill(frameBytes: pixelCount * 16,
+                                       frameCount: frameCount, log: log)
+                }
             }
             guard img.width == srcWidth && img.height == srcHeight else {
                 throw StackError.metal("frame \(fi) size mismatch: \(img.width)x\(img.height) vs \(srcWidth)x\(srcHeight)")
@@ -256,6 +270,19 @@ public enum GPUDMap {
 
             encoder.endEncoding()
             cmd.commit()
+            // Spill the warped frame while the GPU chews on it (both sides
+            // only read `input`). A failed write just degrades pass 2 back
+            // to re-decoding — never fails the fuse.
+            if let s = spill {
+                let t0 = CFAbsoluteTimeGetCurrent()
+                do {
+                    try s.write(frame: fi, from: input.contents())
+                } catch {
+                    log?("frame spill write failed (\(error)) — render pass will re-decode")
+                    spill = nil
+                }
+                tSpillWrite += CFAbsoluteTimeGetCurrent() - t0
+            }
             cmd.waitUntilCompleted()
             if let error = cmd.error { throw StackError.metal("depth pass: \(error)") }
             var plane = [Float](UnsafeBufferPointer(
@@ -353,19 +380,51 @@ public enum GPUDMap {
         memset(accumBuf.contents(), 0, pixelCount * 16)
         memset(wsumBuf.contents(), 0, pixelCount * 4)
 
-        prefetcher = FramePrefetcher(indices: renderIndices,
-                                     workers: FramePrefetcher.workers(for: source.urls)) {
-            try ImageFile.load(url: source.urls[$0])
+        // Frames come back from the spill file when pass 1 captured one
+        // (bit-identical to a re-warp); otherwise decode + warp again.
+        var renderPrefetcher: FramePrefetcher?
+        if spill == nil {
+            renderPrefetcher = FramePrefetcher(indices: renderIndices,
+                                               workers: FramePrefetcher.workers(for: source.urls)) {
+                try ImageFile.load(url: source.urls[$0])
+            }
         }
         var renderedCount = 0
-        for _ in renderIndices {
+        for step in renderIndices.indices {
             try cancellation?.checkCancelled()
-            let (fi, img) = try prefetcher.next()
             guard let cmd = engine.queue.makeCommandBuffer(),
                   let encoder = cmd.makeComputeCommandEncoder() else {
                 throw StackError.metal("cannot create command buffer")
             }
-            let input = uploadAndWarp(img, frameIndex: fi, encoder: encoder)
+            let fi: Int
+            let input: MTLBuffer
+            var sourcePreview: ImageBuffer?
+            var sourceW = 0, sourceH = 0
+            if let spill {
+                fi = renderIndices[step]
+                let t0 = CFAbsoluteTimeGetCurrent()
+                try spill.read(frame: fi, into: warpedBuf.contents())
+                tSpillRead += CFAbsoluteTimeGetCurrent() - t0
+                input = warpedBuf
+                if progress != nil {
+                    // The spill holds the *warped* frame — show that (the
+                    // aligned frame on the output canvas) as the source.
+                    sourcePreview = ImageBuffer.downsampledNearest(
+                        fromRGBA: warpedBuf.contents().assumingMemoryBound(to: Float.self),
+                        width: width, height: height, maxSide: 1200)
+                    sourceW = width
+                    sourceH = height
+                }
+            } else {
+                let (idx, img) = try renderPrefetcher!.next()
+                fi = idx
+                input = uploadAndWarp(img, frameIndex: fi, encoder: encoder)
+                if progress != nil {
+                    sourcePreview = img.downsampledNearest(maxSide: 1200)
+                    sourceW = img.width
+                    sourceH = img.height
+                }
+            }
 
             var params = TentParams(index: Float(fi), radius: radius, count: UInt32(pixelCount),
                                     gain: gains?[fi] ?? 1)
@@ -398,9 +457,15 @@ public enum GPUDMap {
                                         preview: downloadPreview(),
                                         previewFullWidth: width, previewFullHeight: height,
                                         sourceFrameIndex: fi,
-                                        sourcePreview: img.downsampledNearest(maxSide: 1200),
-                                        sourceFullWidth: img.width, sourceFullHeight: img.height))
+                                        sourcePreview: sourcePreview,
+                                        sourceFullWidth: sourceW, sourceFullHeight: sourceH))
             }
+        }
+        if spill != nil {
+            let frameGB = Double(pixelCount) * 16 / Double(1 << 30)
+            log?(String(format: "spill: wrote %.1f GB in %.2fs, read %.1f GB in %.2fs",
+                        frameGB * Double(frameCount), tSpillWrite,
+                        frameGB * Double(renderIndices.count), tSpillRead))
         }
 
         // Normalize into rawBuf (no longer needed as input) and download.

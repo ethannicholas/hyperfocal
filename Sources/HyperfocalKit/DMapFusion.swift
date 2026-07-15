@@ -52,11 +52,18 @@ public enum DMapFusion {
         /// its 95th percentile, so this is unit-free: smaller keeps weaker
         /// guide edges, larger smooths across them.
         public var guidedEps: Float
+        /// Let the GPU path cache warped frames on disk between its two
+        /// passes instead of decoding the stack twice (see FrameSpill —
+        /// output is bit-identical either way, this is purely a time/disk
+        /// trade). The temp file is width×height×16 bytes per frame, so
+        /// users short on disk can turn it off and accept the slower fuse.
+        public var spillEnabled: Bool
 
         public init(sharpnessSigma: Float = 10, blendRadius: Float = 1, noiseFloor: Float = 0.05,
                     medianRadius: Int = 20, normalizeExposure: Bool = true,
                     peakConcentration: Float = 0.5,
-                    guidedRadius: Float = 128, guidedEps: Float = 1e-3) {
+                    guidedRadius: Float = 128, guidedEps: Float = 1e-3,
+                    spillEnabled: Bool = true) {
             self.sharpnessSigma = sharpnessSigma
             self.blendRadius = blendRadius
             self.noiseFloor = noiseFloor
@@ -65,6 +72,7 @@ public enum DMapFusion {
             self.peakConcentration = peakConcentration
             self.guidedRadius = guidedRadius
             self.guidedEps = guidedEps
+            self.spillEnabled = spillEnabled
         }
     }
 
