@@ -32,6 +32,7 @@ import os
 ///
 ///   {"action": "export",     "path": p, "result": r}   current format/space/tone
 ///   {"action": "export-all", "dir": d,  "result": r}
+///   {"action": "export-aligned", "dir": d, "result": r}   selected frames, warped
 ///   {"action": "save-project", "path": p, "result": r}
 ///   {"action": "set-slider", "id": <accessibility id>, "value": v, "result": r}
 ///       — sets the slider's bound model value directly. XCUITest cannot
@@ -149,6 +150,14 @@ enum UITestSupport {
                                                      withIntermediateDirectories: true)
             Task { @MainActor in
                 finish(true, await model.exportAllFused(to: url))
+            }
+        case "export-aligned":
+            guard let dir = command["dir"] else { return finish(false, "no dir") }
+            let url = URL(fileURLWithPath: dir, isDirectory: true)
+            try? FileManager.default.createDirectory(at: url,
+                                                     withIntermediateDirectories: true)
+            Task { @MainActor in
+                finish(true, await model.exportAlignedFrames(to: url))
             }
         case "save-project":
             guard let path = command["path"] else { return finish(false, "no path") }

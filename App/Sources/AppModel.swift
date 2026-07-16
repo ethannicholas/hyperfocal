@@ -1373,6 +1373,84 @@ final class AppModel: ObservableObject {
             + lines.joined(separator: "\n")
     }
 
+    /// Export Aligned Frames is offered when the selected stack has
+    /// alignment transforms (fusing with alignment computes them) and at
+    /// least one selected frame is part of the fused list. Without
+    /// transforms the "aligned" frames would just be copies of the
+    /// originals — pointless.
+    var canExportAligned: Bool {
+        !phase.isRunning && alignmentCache.transforms(for: fuseURLs) != nil
+            && selection.contains { fuseURLs.contains($0) }
+    }
+
+    func exportAlignedFramesPanel() {
+        guard canExportAligned else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.message = "The selected frames are written to this folder, aligned to the fused canvas."
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let summary = await self.exportAlignedFrames(to: dir)
+            if let presenter = self.queueSummaryPresenter {
+                presenter(summary)
+            } else {
+                let alert = NSAlert()
+                alert.messageText = "Export finished"
+                alert.informativeText = summary
+                alert.runModal()
+            }
+        }
+    }
+
+    /// Writes every selected frame of the fused list to `directory` as the
+    /// fusion saw it — decoded and warped into the fused canvas (same
+    /// common-coverage crop as the result), so the exports layer-stack
+    /// pixel-perfectly under the exported result in an external editor.
+    /// Format, color space, and tone follow the result-export rules (tone
+    /// bakes into display-referred formats; DNG stays linear and carries
+    /// tone as XMP). Returns a summary line per frame.
+    func exportAlignedFrames(to directory: URL) async -> String {
+        let alignedURLs = fuseURLs
+        guard let transforms = alignmentCache.transforms(for: alignedURLs) else {
+            return "No alignment yet — fuse the stack (with alignment on) first."
+        }
+        let targets = frames.filter { selection.contains($0) && alignedURLs.contains($0) }
+        let ext = exportFormat.fileExtension
+        let space = exportColorSpace.cgColorSpace
+        let bakedTone = exportFormat == .dng ? ToneSettings() : tone
+        let wantsSidecar = exportFormat == .dng && !tone.isNeutral
+        let sidecarTone = tone
+        let source = StackPipeline.makeSource(urls: alignedURLs, transforms: transforms)
+        var lines = [String]()
+        var count = 0
+        for url in targets {
+            guard let index = alignedURLs.firstIndex(of: url) else { continue }
+            let dest = directory.appendingPathComponent(
+                "\(url.deletingPathExtension().lastPathComponent) aligned.\(ext)")
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    var image = try source.frame(at: index)
+                    ToneCurve.apply(settings: bakedTone, to: &image)
+                    try ImageFile.save(image, to: dest, sourceFrame: url,
+                                       colorSpace: space)
+                    if wantsSidecar {
+                        try XMPSidecar.embed(tone: sidecarTone, inDNGAt: dest)
+                    }
+                }.value
+                count += 1
+                lines.append("\(dest.lastPathComponent) ✓")
+            } catch {
+                lines.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        return "\(count) aligned frame\(count == 1 ? "" : "s") exported to “\(directory.lastPathComponent)”.\n\n"
+            + lines.joined(separator: "\n")
+    }
+
     /// Output pane coordinate space: full-resolution dimensions regardless of
     /// preview bitmap resolution, so zoom/pan stays in sync with the input pane.
     var outputNominalSize: CGSize? {

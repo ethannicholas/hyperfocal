@@ -13,6 +13,7 @@ final class FuseExportJourneyTests: XCTestCase {
     func testFuseAndExports() throws {
         let app = try launchApp(stacks: ["stack-a"])
         XCTAssertTrue(app.buttons["fusion.fuse-stack"].waitForExistence(timeout: 15))
+        app.activate()  // another app can steal focus between launch and click
         app.buttons["fusion.fuse-stack"].click()
         waitForFuseDone(app)
 
@@ -110,6 +111,32 @@ final class FuseExportJourneyTests: XCTestCase {
                 try pixelDiff(Fixtures.out.appendingPathComponent("baseline.tif"),
                               Fixtures.out.appendingPathComponent("restored.tif")),
                 1.0, "default re-fuse should reproduce the baseline render")
+        }
+
+        try XCTContext.runActivity(named: "aligned source frames export") { _ in
+            // Select a range of frames (click + ⇧-click spans three rows),
+            // export their aligned versions through the command channel, and
+            // verify each lands on the fused canvas's dimensions — the
+            // warped-into-result-space property that makes them layerable
+            // under the exported result.
+            let names = try Fixtures.frames(in: "stack-a")
+            let first = app.staticTexts["frame.row.\(names[0])"]
+            let third = app.staticTexts["frame.row.\(names[2])"]
+            XCTAssertTrue(first.waitForExistence(timeout: 5))
+            first.click()
+            XCUIElement.perform(withKeyModifiers: .shift) { third.click() }
+            let dir = Fixtures.out.appendingPathComponent("aligned", isDirectory: true)
+            try sendCommand(["action": "export-aligned", "dir": dir.path])
+            let exported = (try? FileManager.default
+                .contentsOfDirectory(atPath: dir.path)) ?? []
+            XCTAssertEqual(exported.count, 3,
+                           "three selected frames → three files, got \(exported)")
+            for file in exported {
+                let image = try inspectImage(at: dir.appendingPathComponent(file))
+                XCTAssertEqual(image.width, baseline.width,
+                               "aligned frame must match the fused canvas: \(file)")
+                XCTAssertEqual(image.height, baseline.height)
+            }
         }
     }
 }
