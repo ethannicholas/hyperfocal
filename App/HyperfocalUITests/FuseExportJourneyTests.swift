@@ -138,5 +138,27 @@ final class FuseExportJourneyTests: XCTestCase {
                 XCTAssertEqual(image.height, baseline.height)
             }
         }
+
+        try XCTContext.runActivity(named: "rocking animation export") { _ in
+            let movie = Fixtures.out.appendingPathComponent("rocking.mp4")
+            try sendCommand(["action": "export-animation", "path": movie.path],
+                            timeout: 60)
+            let data = try Data(contentsOf: movie)
+            XCTAssertGreaterThan(data.count, 50_000, "video suspiciously small")
+            XCTAssertNotNil(data.range(of: Data("ftyp".utf8), in: 0..<16),
+                            "not an MP4 container")
+            XCTAssertNotNil(data.range(of: Data("avc1".utf8)), "no H.264 track")
+
+            // GIF variant must carry the loop-forever extension — the whole
+            // reason the format exists here.
+            let gif = Fixtures.out.appendingPathComponent("rocking.gif")
+            try sendCommand(["action": "export-animation", "path": gif.path],
+                            timeout: 60)
+            let gifData = try Data(contentsOf: gif)
+            XCTAssertNotNil(gifData.range(of: Data("NETSCAPE2.0".utf8)),
+                            "GIF loop extension missing")
+            XCTAssertNotNil(gifData.range(of: Data("GIF8".utf8), in: 0..<6),
+                            "not a GIF")
+        }
     }
 }

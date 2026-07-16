@@ -9,7 +9,8 @@ struct Hyperfocal: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hyperfocal",
         abstract: "Focus stacking engine.",
-        subcommands: [Fuse.self, Batch.self, Synth.self, Compare.self, DebugAlign.self, DebugChain.self,
+        subcommands: [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
+                      DebugAlign.self, DebugChain.self,
                       DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self]
     )
 }
@@ -81,6 +82,8 @@ struct FusionOptions: ParsableArguments {
         }
     }
 }
+
+extension RockingAnimation.Path: ExpressibleByArgument {}
 
 enum FusionMethod: String, ExpressibleByArgument {
     case dmap
@@ -338,6 +341,59 @@ struct Batch: ParsableCommand {
             for failure in failures { print("  \(failure)") }
             throw ExitCode(1)
         }
+    }
+}
+
+struct Animate: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Fuse a stack (DMap) and write a Zerene-style rocking animation from its depth plane.")
+
+    @Argument(help: "Input images, in focus order.")
+    var inputs: [String]
+
+    @Option(name: .shortAndLong,
+            help: "Output path: .mp4 (H.264), or .gif for an animation that loops automatically in every viewer (MP4 has no loop flag players honor).")
+    var output: String
+
+    @OptionGroup var fusion: FusionOptions
+
+    @Option(help: "Animation length in seconds.")
+    var duration: Double = 3
+
+    @Option(help: "Frames per second.")
+    var fps: Double = 30
+
+    @Option(help: "Peak disparity at the depth extremes, as a fraction of the video width.")
+    var amplitude: Double = 0.01
+
+    @Option(help: "Motion path: horizontal, vertical, or circular.")
+    var path: RockingAnimation.Path = .horizontal
+
+    @Option(help: "Video long side in pixels.")
+    var maxSide: Int = 1920
+
+    @Flag(name: .shortAndLong, help: "Print progress.")
+    var verbose: Bool = false
+
+    func run() throws {
+        guard inputs.count >= 2 else {
+            throw ValidationError("need at least 2 input images")
+        }
+        let log = vlog(verbose)
+        let urls = inputs.map { URL(fileURLWithPath: $0) }
+        var config = StackPipeline.Configuration(fusion: fusion.dmapOptions,
+                                                 align: fusion.align,
+                                                 preferGPU: try fusion.resolveUseGPU())
+        config.autoExcludeBadFrames = fusion.autoExclude
+        let result = try StackPipeline.fuseResult(urls: urls, configuration: config, log: log)
+        let options = RockingAnimation.Options(maxSide: maxSide, duration: duration,
+                                               fps: fps, amplitude: amplitude,
+                                               path: path)
+        try RockingAnimation.write(to: URL(fileURLWithPath: output),
+                                   image: result.output.image,
+                                   depth: result.output.depth,
+                                   options: options, log: log)
+        print("wrote \(output)")
     }
 }
 

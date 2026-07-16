@@ -33,6 +33,7 @@ import os
 ///   {"action": "export",     "path": p, "result": r}   current format/space/tone
 ///   {"action": "export-all", "dir": d,  "result": r}
 ///   {"action": "export-aligned", "dir": d, "result": r}   selected frames, warped
+///   {"action": "export-animation", "path": p, "result": r}   rocking mp4
 ///   {"action": "save-project", "path": p, "result": r}
 ///   {"action": "set-export", "format": f?, "space": s?, "result": r}
 ///       — the pickers live in the export dialogs (panel accessories),
@@ -161,6 +162,11 @@ enum UITestSupport {
                                                      withIntermediateDirectories: true)
             Task { @MainActor in
                 finish(true, await model.exportAlignedFrames(to: url))
+            }
+        case "export-animation":
+            guard let path = command["path"] else { return finish(false, "no path") }
+            Task { @MainActor in
+                finish(await model.writeAnimation(to: URL(fileURLWithPath: path)))
             }
         case "save-project":
             guard let path = command["path"] else { return finish(false, "no path") }

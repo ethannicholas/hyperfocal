@@ -188,6 +188,8 @@ struct HyperfocalApp: App {
                 Button("Export Aligned Frames…") { model.exportAlignedFramesPanel() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(!model.canExportAligned)
+                Button("Export Rocking Animation…") { model.exportAnimation() }
+                    .disabled(!model.canAnimate)
             }
             // Route Edit > Undo/Redo to the retouch session (we don't use
             // NSUndoManager). Enabled whenever a session exists; empty-stack

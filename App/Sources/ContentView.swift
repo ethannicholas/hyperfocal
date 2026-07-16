@@ -394,6 +394,16 @@ struct ContentView: View {
             .disabled(!model.canExport)
             .accessibilityIdentifier("export.result")
 
+            Button {
+                model.exportAnimation()
+            } label: {
+                Label("Export Rocking Animation…", systemImage: "video")
+                    .frame(maxWidth: .infinity)
+            }
+            .disabled(!model.canAnimate)
+            .accessibilityIdentifier("export.animate")
+            .help("Writes a short video that rocks the result left and right using the depth map for parallax — depth becomes visible motion. Strength is chosen in the save dialog.")
+
             if model.fusedStackCount > 1 {
                 Button {
                     model.exportAllFusedPanel()

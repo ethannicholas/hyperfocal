@@ -293,6 +293,87 @@ final class AppModel: ObservableObject {
     }
     /// Guards `tone.didSet` against marking stack switches as unsaved edits.
     private var installingStack = false
+    /// Rocking-animation parallax strength, chosen in the export dialog.
+    enum AnimationStrength: String, CaseIterable {
+        case subtle = "Subtle"
+        case medium = "Medium"
+        case strong = "Strong"
+        /// Peak disparity as a fraction of the video width.
+        var amplitude: Double {
+            switch self {
+            case .subtle: return 0.005
+            case .medium: return 0.01
+            case .strong: return 0.02
+            }
+        }
+    }
+    @Published var animationStrength: AnimationStrength {
+        didSet { Self.settings.set(animationStrength.rawValue, forKey: "animationStrength") }
+    }
+
+    /// Animation container. GIF exists because it's the only format whose
+    /// loop-forever flag every viewer honors; MP4 plays once unless the
+    /// player is told to loop.
+    enum AnimationFormat: String, CaseIterable {
+        case mp4 = "MP4 (H.264)"
+        case gif = "GIF (loops automatically)"
+        var fileExtension: String { self == .gif ? "gif" : "mp4" }
+    }
+    @Published var animationFormat: AnimationFormat {
+        didSet { Self.settings.set(animationFormat.rawValue, forKey: "animationFormat") }
+    }
+
+    /// The viewpoint's motion (Zerene's path options).
+    enum AnimationPath: String, CaseIterable {
+        case horizontal = "Rock left–right"
+        case vertical = "Rock up–down"
+        case circular = "Circle"
+        var enginePath: RockingAnimation.Path {
+            switch self {
+            case .horizontal: return .horizontal
+            case .vertical: return .vertical
+            case .circular: return .circular
+            }
+        }
+    }
+    @Published var animationPath: AnimationPath {
+        didSet { Self.settings.set(animationPath.rawValue, forKey: "animationPath") }
+    }
+
+    enum AnimationDuration: String, CaseIterable {
+        case two = "2 seconds"
+        case three = "3 seconds"
+        case four = "4 seconds"
+        case six = "6 seconds"
+        var seconds: Double {
+            switch self {
+            case .two: return 2
+            case .three: return 3
+            case .four: return 4
+            case .six: return 6
+            }
+        }
+    }
+    @Published var animationDuration: AnimationDuration {
+        didSet { Self.settings.set(animationDuration.rawValue, forKey: "animationDuration") }
+    }
+
+    enum AnimationFPS: String, CaseIterable {
+        case cinema = "24 fps"
+        case standard = "30 fps"
+        case smooth = "60 fps"
+        var value: Double {
+            switch self {
+            case .cinema: return 24
+            case .standard: return 30
+            case .smooth: return 60
+            }
+        }
+    }
+    @Published var animationFPS: AnimationFPS {
+        didSet { Self.settings.set(animationFPS.rawValue, forKey: "animationFPS") }
+    }
+
     @Published var exportFormat: ExportFormat {
         didSet { Self.settings.set(exportFormat.rawValue, forKey: "exportFormat") }
     }
@@ -374,6 +455,16 @@ final class AppModel: ObservableObject {
 
     init() {
         let d = Self.settings
+        animationStrength = d.string(forKey: "animationStrength")
+            .flatMap { AnimationStrength(rawValue: $0) } ?? .medium
+        animationFormat = d.string(forKey: "animationFormat")
+            .flatMap { AnimationFormat(rawValue: $0) } ?? .mp4
+        animationPath = d.string(forKey: "animationPath")
+            .flatMap { AnimationPath(rawValue: $0) } ?? .horizontal
+        animationDuration = d.string(forKey: "animationDuration")
+            .flatMap { AnimationDuration(rawValue: $0) } ?? .three
+        animationFPS = d.string(forKey: "animationFPS")
+            .flatMap { AnimationFPS(rawValue: $0) } ?? .standard
         exportFormat = d.string(forKey: "exportFormat")
             .flatMap { ExportFormat(rawValue: $0) } ?? .tiff
         exportColorSpace = d.string(forKey: "exportColorSpace")
@@ -1487,6 +1578,173 @@ final class AppModel: ObservableObject {
         }
         return "\(count) aligned frame\(count == 1 ? "" : "s") exported to “\(directory.lastPathComponent)”.\n\n"
             + lines.joined(separator: "\n")
+    }
+
+    /// Rocking animation needs a fused result AND its depth plane (DMap
+    /// fills it; a project restored without depth can't animate).
+    var canAnimate: Bool {
+        !phase.isRunning && result != nil && !resultDepth.isEmpty
+    }
+
+    func exportAnimation() {
+        afterUpdate { $0.runAnimatePanel() }
+    }
+
+    private func runAnimatePanel() {
+        guard canAnimate else { return }
+        let panel = NSSavePanel()
+        if let type = UTType(filenameExtension: animationFormat.fileExtension) {
+            panel.allowedContentTypes = [type]
+        }
+        let base = (fuseURLs.first ?? frames.first)?
+            .deletingLastPathComponent().lastPathComponent ?? "stacked"
+        panel.nameFieldStringValue = "\(base) rocking.\(animationFormat.fileExtension)"
+        panel.accessoryView = AnimationOptionsView(model: self, panel: panel)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { [weak self] in
+            _ = await self?.writeAnimation(to: url)
+        }
+    }
+
+    /// Panel-free animation export (also the UI-test command seam): tone
+    /// bakes in like every display-referred export, retouch edits included.
+    /// Renders off-main; returns whether the file was written.
+    func writeAnimation(to url: URL) async -> Bool {
+        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
+        guard let image = baseImage, !resultDepth.isEmpty else { return false }
+        let depth = resultDepth
+        let toneSettings = tone
+        let options = RockingAnimation.Options(duration: animationDuration.seconds,
+                                               fps: animationFPS.value,
+                                               amplitude: animationStrength.amplitude,
+                                               path: animationPath.enginePath)
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                var toned = image
+                ToneCurve.apply(settings: toneSettings, to: &toned)
+                try RockingAnimation.write(to: url, image: toned, depth: depth,
+                                           options: options, log: logFusion)
+            }.value
+            return true
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Couldn't export the animation"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            return false
+        }
+    }
+
+    /// Pickers for the rocking-animation save panel (format, path,
+    /// strength, duration, frame rate) — same no-Auto-Layout recipe as
+    /// ExportOptionsView (the remote panel polls constraint-based fitting
+    /// sizes every frame; fixed frames don't). Switching format retargets
+    /// the panel so the filename extension follows.
+    final class AnimationOptionsView: NSView {
+        private weak var model: AppModel?
+        private weak var panel: NSSavePanel?
+        private let formatPopup = NSPopUpButton()
+        private let pathPopup = NSPopUpButton()
+        private let strengthPopup = NSPopUpButton()
+        private let durationPopup = NSPopUpButton()
+        private let fpsPopup = NSPopUpButton()
+
+        init(model: AppModel, panel: NSSavePanel?) {
+            self.model = model
+            self.panel = panel
+            super.init(frame: .zero)
+
+            func configure<Choice: RawRepresentable & CaseIterable>(
+                _ popup: NSPopUpButton, _ kind: Choice.Type, selected: Choice,
+                id: String, tip: String
+            ) where Choice.RawValue == String {
+                for choice in Choice.allCases {
+                    popup.addItem(withTitle: choice.rawValue)
+                }
+                popup.selectItem(withTitle: selected.rawValue)
+                popup.target = self
+                popup.action = #selector(changed(_:))
+                popup.setAccessibilityIdentifier(id)
+                popup.toolTip = tip
+            }
+            configure(formatPopup, AnimationFormat.self, selected: model.animationFormat,
+                      id: "export.animation-format",
+                      tip: "MP4 plays once unless the player is told to loop (no video format carries a loop flag players honor). GIF loops forever everywhere, at the cost of larger files and reduced colors.")
+            configure(pathPopup, AnimationPath.self, selected: model.animationPath,
+                      id: "export.animation-path",
+                      tip: "How the viewpoint moves. Rocking sweeps side to side (or up and down); Circle orbits, which reads most strongly 3D — no structure can hide parallel to the motion.")
+            configure(strengthPopup, AnimationStrength.self, selected: model.animationStrength,
+                      id: "export.animation-strength",
+                      tip: "How far the view moves: peak parallax at the depth extremes, as a fraction of the video width (Subtle 0.5%, Medium 1%, Strong 2%).")
+            configure(durationPopup, AnimationDuration.self, selected: model.animationDuration,
+                      id: "export.animation-duration",
+                      tip: "One full cycle of the motion; the file loops seamlessly.")
+            configure(fpsPopup, AnimationFPS.self, selected: model.animationFPS,
+                      id: "export.animation-fps",
+                      tip: "Frames per second. 30 suits sharing; 60 is silkier and larger; 24 is filmic.")
+
+            let rows: [(String, NSPopUpButton)] = [
+                ("Format:", formatPopup),
+                ("Path:", pathPopup),
+                ("Strength:", strengthPopup),
+                ("Duration:", durationPopup),
+                ("Frame rate:", fpsPopup),
+            ]
+            let labels = rows.map { NSTextField(labelWithString: $0.0) }
+            for label in labels { label.sizeToFit() }
+            for (_, popup) in rows { popup.sizeToFit() }
+            let pad: CGFloat = 20, vpad: CGFloat = 12
+            let gap: CGFloat = 8, rowGap: CGFloat = 6
+            let labelW = labels.map(\.frame.width).max() ?? 0
+            let popupW = rows.map(\.1.frame.width).max() ?? 0
+            let rowH = rows.map(\.1.frame.height).max() ?? 25
+            let count = CGFloat(rows.count)
+            let size = NSSize(width: pad + labelW + gap + popupW + pad,
+                              height: vpad + rowH * count + rowGap * (count - 1) + vpad)
+            for (index, (label, row)) in zip(labels, rows).enumerated() {
+                let popup = row.1
+                let y = size.height - vpad - rowH - CGFloat(index) * (rowH + rowGap)
+                popup.frame = NSRect(x: pad + labelW + gap, y: y,
+                                     width: popupW, height: rowH)
+                label.frame.origin = NSPoint(
+                    x: pad + labelW - label.frame.width,
+                    y: y + (rowH - label.frame.height) / 2)
+                addSubview(label)
+                addSubview(popup)
+            }
+            frame = NSRect(origin: .zero, size: size)
+            for view in subviews {
+                view.autoresizingMask = [.maxXMargin, .minYMargin]
+            }
+            autoresizingMask = .width
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("unused") }
+
+        @objc private func changed(_ sender: NSPopUpButton) {
+            guard let model else { return }
+            let title = sender.titleOfSelectedItem ?? ""
+            switch sender {
+            case formatPopup:
+                guard let format = AnimationFormat(rawValue: title) else { return }
+                model.animationFormat = format
+                if let type = UTType(filenameExtension: format.fileExtension) {
+                    panel?.allowedContentTypes = [type]
+                }
+            case pathPopup:
+                model.animationPath = AnimationPath(rawValue: title) ?? model.animationPath
+            case strengthPopup:
+                model.animationStrength = AnimationStrength(rawValue: title) ?? model.animationStrength
+            case durationPopup:
+                model.animationDuration = AnimationDuration(rawValue: title) ?? model.animationDuration
+            case fpsPopup:
+                model.animationFPS = AnimationFPS(rawValue: title) ?? model.animationFPS
+            default:
+                break
+            }
+        }
     }
 
     /// Format + color-space pickers hosted inside the export dialogs

@@ -82,7 +82,15 @@ like to follow along with the example macro stack, you can download it here:</p>
 <p>Frames load in capture order and appear in the Stack list with a checkbox
 each. The checkboxes control whether or not the frames are considered part of the
 stack. If your stack contains extra frames at the beginning or end that don't
-have any sharp details, you can uncheck them to speed up the fusion process.<p>
+have any sharp details, you can uncheck them to speed up the fusion process.</p>
+
+<p>Besides just increasing fusion speed, unchecking out-of-focus images may also
+help with quality: for instance, if you are shooting against a solid color
+background, then there is no actual detail there for the algorithm to pick up on.
+This means that bokeh blur from very out-of-focus elements can look like the only
+detail there is to key off of, which tricks the algorithm into creating halos
+around objects. Excluding useless, extremely out-of-focus images helps to
+mitigate that issue.<p>
 </div>
 
 <div class="step">

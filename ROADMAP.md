@@ -152,16 +152,17 @@ above the specimen, silhouette band) eyeballed against Helicon's result.
 
 ## Community candy (post-1.0 or launch-adjacent)
 
-### 5. Synthetic stereo pairs + rocking animations
+### 5. Synthetic stereo pairs
 
-All the hard input exists already:
-`DMapFusion.Output.depth` is a full-resolution regularized depth plane.
-Reproject the fused image with per-pixel horizontal disparity ∝ depth
-(± for left/right eye), jump-flood or inpaint the disocclusion slivers
-(the old `nearestSeedFill` jump-flood, removed 2026-07-12, is in git
-history), and export: side-by-side stereo PNG,
-crossed-eye pair, and a 2–4 s rocking MP4/GIF (AVFoundation writer).
-UI: an "Animate…" button next to Export once a result exists.
+Rocking animations shipped 2026-07-16 (`RockingAnimation` — gather-warp
+with destination-depth disparity, seamless cycles, H.264 MP4 or
+loop-forever GIF; `hyperfocal animate` on the CLI, "Export Rocking
+Animation…" in the app with format / path (rock either axis, circle) /
+strength / duration / frame-rate choices in the save dialog). Stereo remains: the same reprojection at a fixed ±
+disparity gives left/right eyes — export side-by-side and crossed-eye
+PNG pairs. At stereo-scale disparities the gather approximation may
+need revisiting (the old `nearestSeedFill` jump-flood, removed
+2026-07-12, is in git history if splat + inpaint wins).
 
 ### 6. Smaller parity items (grab-bag, roughly ordered)
 

@@ -58,6 +58,10 @@ result every time.
   working in Display P3 end to end, and produces DNG output. Or you can stick
   to JPG / TIFF if you prefer.
 
+- **Rocking animations.** Export a short looping video that rocks the result
+  left and right, using the computed depth map for parallax — the depth your
+  stack captured becomes visible motion.
+
 - **Projects and batches.** Multi-stack projects with per-stack results and
   retouch state, a queue that fuses every stack in a session, export-all, and
   a full command-line interface for headless batch work.
