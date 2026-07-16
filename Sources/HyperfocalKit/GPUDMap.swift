@@ -358,7 +358,7 @@ public enum GPUDMap {
         let gains = DMapFusion.renderGains(from: gains0, options: options, log: log)
 
         // Pass 2: render by blending frames near each pixel's depth (tent kernel).
-        let radius = max(options.blendRadius, 0.75)
+        let radius = max(options.blendRadius, DMapFusion.minBlendRadius)
         var depthLo: Float = .infinity, depthHi: Float = -.infinity
         for d in depth {
             if d < depthLo { depthLo = d }

@@ -135,6 +135,10 @@ struct ContentView: View {
                                              setEnabled: { model.setStackEnabled(stack.id, to: $0) },
                                              select: { model.selectStack(stack.id) })
                                 }
+                                // Explicit scroll target: each ForEach element
+                                // is two sibling views (header + frame rows) —
+                                // scrollTo must land on the header.
+                                .id(stack.id)
                                 if expanded {
                                     frameRows(of: stack)
                                         .padding(.leading, 14)
@@ -156,12 +160,20 @@ struct ContentView: View {
                         // this, the list opens showing stack #1's frames
                         // while the selected stack sits offscreen (clicking
                         // a lookalike frame there switches stacks and reads
-                        // as a broken project). Deferred a tick: the rows
-                        // are laid out in this same update.
+                        // as a broken project). The list appears at the
+                        // top, so scroll ONLY when a later stack is
+                        // selected (scrollTo has no scroll-until-visible
+                        // mode — its nil anchor aligns to the top edge,
+                        // which on a fresh load buried the selected
+                        // stack's header above its first frame), and
+                        // target the header so the stack arrives with its
+                        // title and frames together. Deferred a tick: the
+                        // rows are laid out in this same update.
                         DispatchQueue.main.async {
-                            if let url = model.selection.first {
-                                proxy.scrollTo(url)
-                            }
+                            guard let stackID = model.selectedStackID,
+                                  model.stacks.count > 1,
+                                  stackID != model.stacks.first?.id else { return }
+                            proxy.scrollTo(stackID, anchor: .top)
                         }
                     }
                 }
@@ -255,7 +267,8 @@ struct ContentView: View {
                 format: "%.0f px",
                 help: "Size of the majority vote that removes isolated wrong-depth patches at edges where the background shows through a defocused subject. 0 disables it.")
             LabeledSlider(
-                label: "Blend radius", id: "fusion.slider.blend-radius", value: $model.blendRadius, range: 0.75...4,
+                label: "Blend radius", id: "fusion.slider.blend-radius", value: $model.blendRadius,
+                range: Double(DMapFusion.minBlendRadius)...4,
                 format: "%.2f",
                 help: "How many neighboring frames blend together at each pixel when rendering. Wider is smoother across focus transitions, but slightly softer.")
 
@@ -579,7 +592,8 @@ struct RetouchControls: View {
 
     var body: some View {
         LabeledSlider(
-            label: "Brush size", id: "retouch.slider.brush-size", value: $session.brushRadius, range: 1...800,
+            label: "Brush size", id: "retouch.slider.brush-size", value: $session.brushRadius,
+            range: RetouchSession.brushRadiusRange,
             format: "%.0f px",
             help: "Brush radius in image pixels. Painting copies pixels from the aligned source frame into the output.")
         LabeledSlider(

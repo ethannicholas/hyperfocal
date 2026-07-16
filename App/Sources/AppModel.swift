@@ -39,16 +39,21 @@ final class ViewportState: ObservableObject {
         }
     }
 
+    /// One zoom range for every zoom path (buttons, pinch, cursor-anchored).
+    static let scaleRange: ClosedRange<CGFloat> = 0.01...16
+
     func zoom(by factor: CGFloat, imageSize: CGSize) {
         let current = effectiveScale(imageSize: imageSize, viewSize: lastPaneSize)
-        mode = .scale(min(max(current * factor, 0.01), 16))
+        mode = .scale(min(max(current * factor, Self.scaleRange.lowerBound),
+                          Self.scaleRange.upperBound))
     }
 
     /// Zoom anchored at a cursor location (pane coordinates, top-left origin):
     /// the image point under the cursor stays put.
     func zoom(at location: CGPoint, in paneSize: CGSize, by factor: CGFloat, imageSize: CGSize) {
         let oldScale = effectiveScale(imageSize: imageSize, viewSize: paneSize)
-        let newScale = min(max(oldScale * factor, 0.01), 16)
+        let newScale = min(max(oldScale * factor, Self.scaleRange.lowerBound),
+                           Self.scaleRange.upperBound)
         guard newScale != oldScale else { return }
         let dx = location.x - paneSize.width / 2
         let dy = location.y - paneSize.height / 2

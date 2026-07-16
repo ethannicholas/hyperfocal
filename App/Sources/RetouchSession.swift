@@ -48,6 +48,10 @@ final class RetouchSession: ObservableObject {
     @Published private(set) var hasEdits = false
     @Published var cursor: CGPoint?          // hover location, image coords
     @Published var brushRadius: Double = 32  // image px
+    /// The one range every brush-size control shares (the slider, ⌥-scroll,
+    /// and the [ ] keys all move `brushRadius`) — a single constant so they
+    /// can't drift apart again.
+    static let brushRadiusRange: ClosedRange<Double> = 1...800
     @Published var brushSoftness: Double = 0.2
     /// True from a mouse-down that found no source pixels (still loading)
     /// until its mouse-up: that drag never paints, so the brush circle stays
@@ -197,7 +201,8 @@ final class RetouchSession: ObservableObject {
     }
 
     func adjustBrushRadius(by factor: Double) {
-        brushRadius = min(max(brushRadius * factor, 5), 1500)
+        brushRadius = min(max(brushRadius * factor, Self.brushRadiusRange.lowerBound),
+                          Self.brushRadiusRange.upperBound)
     }
 
     // MARK: - Source slice management

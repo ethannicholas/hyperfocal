@@ -103,6 +103,11 @@ public enum DMapFusion {
         try fuseWithDepth(frameCount: frameCount, options: options, log: log, frame: frame).image
     }
 
+    /// Below this blend radius the tent kernel can leave pixels covered by
+    /// no frame at all — every consumer (both engines' render passes, the
+    /// app's Blend radius slider) bottoms out here, via this one constant.
+    public static let minBlendRadius: Float = 0.75
+
     /// Downsample factor for retained per-frame sharpness planes.
     public static let sharpnessDownsample = 8
 
@@ -236,8 +241,7 @@ public enum DMapFusion {
         let gains = renderGains(from: gains0, options: options, log: log)
 
         // Pass 2: render by blending frames near each pixel's depth (tent kernel).
-        // Radius ≥ 0.75 guarantees every pixel is covered by its nearest frame.
-        let radius = max(options.blendRadius, 0.75)
+        let radius = max(options.blendRadius, Self.minBlendRadius)
         var depthLo: Float = .infinity, depthHi: Float = -.infinity
         for d in depth {
             if d < depthLo { depthLo = d }
