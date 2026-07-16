@@ -1684,12 +1684,13 @@ final class AppModel: ObservableObject {
                       id: "export.animation-fps",
                       tip: "Frames per second. 30 suits sharing; 60 is silkier and larger; 24 is filmic.")
 
+            // Container-ish options first, motion options last.
             let rows: [(String, NSPopUpButton)] = [
                 ("Format:", formatPopup),
+                ("Frame rate:", fpsPopup),
+                ("Duration:", durationPopup),
                 ("Path:", pathPopup),
                 ("Strength:", strengthPopup),
-                ("Duration:", durationPopup),
-                ("Frame rate:", fpsPopup),
             ]
             let labels = rows.map { NSTextField(labelWithString: $0.0) }
             for label in labels { label.sizeToFit() }
