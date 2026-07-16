@@ -34,6 +34,9 @@ import os
 ///   {"action": "export-all", "dir": d,  "result": r}
 ///   {"action": "export-aligned", "dir": d, "result": r}   selected frames, warped
 ///   {"action": "save-project", "path": p, "result": r}
+///   {"action": "set-export", "format": f?, "space": s?, "result": r}
+///       — the pickers live in the export dialogs (panel accessories),
+///       which XCUITest can't drive; raw enum titles, e.g. "TIFF (16-bit)"
 ///   {"action": "set-slider", "id": <accessibility id>, "value": v, "result": r}
 ///       — sets the slider's bound model value directly. XCUITest cannot
 ///       reliably move SwiftUI sliders in some window states (adjust and
@@ -162,6 +165,23 @@ enum UITestSupport {
         case "save-project":
             guard let path = command["path"] else { return finish(false, "no path") }
             finish(model.writeProject(to: URL(fileURLWithPath: path)))
+        case "set-export":
+            // The format/color-space pickers live in the export dialogs
+            // (NSSavePanel accessories), which XCUITest can't drive — tests
+            // set the same persisted values here and verify exported bytes.
+            if let raw = command["format"] {
+                guard let format = AppModel.ExportFormat(rawValue: raw) else {
+                    return finish(false, "unknown format \(raw)")
+                }
+                model.exportFormat = format
+            }
+            if let raw = command["space"] {
+                guard let space = AppModel.ExportColorSpace(rawValue: raw) else {
+                    return finish(false, "unknown color space \(raw)")
+                }
+                model.exportColorSpace = space
+            }
+            finish(true)
         case "set-slider":
             guard let id = command["id"], let raw = command["value"],
                   let value = Double(raw) else { return finish(false, "bad args") }

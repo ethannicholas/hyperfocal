@@ -14,7 +14,7 @@ final class ToneJourneyTests: XCTestCase {
         XCTAssertTrue(app.buttons["fusion.fuse-stack"].waitForExistence(timeout: 15))
         app.buttons["fusion.fuse-stack"].click()
         waitForFuseDone(app)
-        pick(app, popUp: "export.format", option: "TIFF (16-bit)")
+        try sendCommand(["action": "set-export", "format": "TIFF (16-bit)"])
 
         let baseline = try exportAndInspect("tone-baseline.tif")
 
@@ -54,7 +54,7 @@ final class ToneJourneyTests: XCTestCase {
         }
 
         try XCTContext.runActivity(named: "DNG stays linear, tone rides as XMP") { _ in
-            pick(app, popUp: "export.format", option: "DNG (linear raw)")
+            try sendCommand(["action": "set-export", "format": "DNG (raw)"])
             let neutralURL = Fixtures.out.appendingPathComponent("tone-neutral.dng")
             try sendCommand(["action": "export", "path": neutralURL.path])
             let neutralData = try Data(contentsOf: neutralURL)

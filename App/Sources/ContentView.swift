@@ -381,25 +381,9 @@ struct ContentView: View {
     private var exportSection: some View {
         Section {
             if !model.isCollapsed(.export) {
-            Picker("Format", selection: $model.exportFormat) {
-                ForEach(AppModel.ExportFormat.allCases) { format in
-                    Text(format.rawValue).tag(format)
-                }
-            }
-            .accessibilityIdentifier("export.format")
-            Picker("Color space", selection: $model.exportColorSpace) {
-                ForEach(AppModel.ExportColorSpace.allCases) { space in
-                    Text(space.rawValue).tag(space)
-                }
-            }
-            .disabled(model.exportFormat == .dng)
-            .accessibilityIdentifier("export.color-space")
-            .help("The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw.")
-            if model.exportFormat == .dng && !model.tone.isNeutral {
-                Text("DNG exports stay linear — Tone adjustments won't be baked in.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            // Format and color space live in the export dialogs themselves
+            // (AppModel.ExportOptionsView) — the options sit next to the
+            // decision they affect, Photoshop-style.
             Button {
                 model.exportResult()
             } label: {
@@ -419,7 +403,7 @@ struct ContentView: View {
                 }
                 .disabled(model.phase.isRunning)
                 .accessibilityIdentifier("export.all")
-                .help("Writes every fused stack (retouch edits included) to one folder, named after the stacks, in the format and color space above.")
+                .help("Writes every fused stack (retouch edits included) to one folder, named after the stacks, in the format and color space chosen in the dialog.")
             }
             }
         } header: {

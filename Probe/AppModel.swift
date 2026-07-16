@@ -116,7 +116,7 @@ final class AppModel: ObservableObject {
 
     enum ExportFormat: String, CaseIterable, Identifiable {
         case tiff = "TIFF (16-bit)"
-        case dng = "DNG (linear raw)"
+        case dng = "DNG (raw)"
         case png = "PNG (16-bit)"
         case jpeg = "JPEG"
 
@@ -792,19 +792,21 @@ final class AppModel: ObservableObject {
     }
 
     /// File > Save: writes straight back to the project's file; a
-    /// never-saved project falls through to Save As. Returns true when a
-    /// project file was written.
-    @discardableResult
-    func saveProject() -> Bool {
-        guard let projectURL else { return saveProjectAs() }
-        return writeProject(to: projectURL)
+    /// never-saved project falls through to Save As.
+    func saveProject() {
+        afterUpdate {
+            guard let projectURL = $0.projectURL else { return $0.runSaveProjectPanel() }
+            $0.writeProject(to: projectURL)
+        }
     }
 
-    /// File > Save As (and Save's first-save fallback). Returns true when
-    /// a project file was written.
-    @discardableResult
-    func saveProjectAs() -> Bool {
-        guard captureProject() != nil else { return false }
+    /// File > Save As (and Save's first-save fallback).
+    func saveProjectAs() {
+        afterUpdate { $0.runSaveProjectPanel() }
+    }
+
+    private func runSaveProjectPanel() {
+        guard captureProject() != nil else { return }
         let panel = NSSavePanel()
         if let type = UTType(filenameExtension: ProjectStore.fileExtension) {
             panel.allowedContentTypes = [type]
@@ -817,8 +819,8 @@ final class AppModel: ObservableObject {
             let base = stacks.first?.name ?? "Project"
             panel.nameFieldStringValue = "\(base).\(ProjectStore.fileExtension)"
         }
-        guard panel.runModal() == .OK, let url = panel.url else { return false }
-        return writeProject(to: url)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        writeProject(to: url)
     }
 
     /// Panel-free save: the write body of saveProject/saveProjectAs,
@@ -846,6 +848,10 @@ final class AppModel: ObservableObject {
     }
 
     func openProjectPanel() {
+        afterUpdate { $0.runOpenProjectPanel() }
+    }
+
+    private func runOpenProjectPanel() {
         guard confirmDiscardingUnsavedWork(message: "Open a different project?",
                                            confirmTitle: "Open Project") else { return }
         let panel = NSOpenPanel()
@@ -1028,7 +1034,23 @@ final class AppModel: ObservableObject {
 
     // MARK: - Frame intake
 
+    /// Presents modal UI on the next main-queue turn — OUTSIDE the SwiftUI
+    /// update that dispatched the calling button/menu action. A modal loop
+    /// (panel/alert runModal) entered mid-update leaves that update's
+    /// transaction open, and the window re-commits every frame for as long
+    /// as the modal sits there — an idle Save dialog burned ~30% CPU.
+    private func afterUpdate(_ body: @escaping @MainActor (AppModel) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            body(self)
+        }
+    }
+
     func openFrames() {
+        afterUpdate { $0.runOpenFramesPanel() }
+    }
+
+    private func runOpenFramesPanel() {
         guard confirmDiscardingUnsavedWork(message: "Start a new project?",
                                            confirmTitle: "New Project") else { return }
         let panel = NSOpenPanel()
@@ -1041,6 +1063,10 @@ final class AppModel: ObservableObject {
     }
 
     func addStackFolderPanel() {
+        afterUpdate { $0.runAddStackFolderPanel() }
+    }
+
+    private func runAddStackFolderPanel() {
         guard !phase.isRunning else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -1316,6 +1342,10 @@ final class AppModel: ObservableObject {
     // MARK: - Export all
 
     func exportAllFusedPanel() {
+        afterUpdate { $0.runExportAllPanel() }
+    }
+
+    private func runExportAllPanel() {
         guard fusedStackCount > 0, !phase.isRunning else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -1323,6 +1353,8 @@ final class AppModel: ObservableObject {
         panel.canCreateDirectories = true
         panel.prompt = "Export Here"
         panel.message = "Every fused stack is written to this folder."
+        panel.accessoryView = ExportOptionsView(model: self, panel: nil)
+        panel.isAccessoryViewDisclosed = true
         guard panel.runModal() == .OK, let dir = panel.url else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1384,6 +1416,10 @@ final class AppModel: ObservableObject {
     }
 
     func exportAlignedFramesPanel() {
+        afterUpdate { $0.runExportAlignedPanel() }
+    }
+
+    private func runExportAlignedPanel() {
         guard canExportAligned else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -1391,6 +1427,8 @@ final class AppModel: ObservableObject {
         panel.canCreateDirectories = true
         panel.prompt = "Export Here"
         panel.message = "The selected frames are written to this folder, aligned to the fused canvas."
+        panel.accessoryView = ExportOptionsView(model: self, panel: nil)
+        panel.isAccessoryViewDisclosed = true
         guard panel.runModal() == .OK, let dir = panel.url else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1449,6 +1487,130 @@ final class AppModel: ObservableObject {
         }
         return "\(count) aligned frame\(count == 1 ? "" : "s") exported to “\(directory.lastPathComponent)”.\n\n"
             + lines.joined(separator: "\n")
+    }
+
+    /// Format + color-space pickers hosted inside the export dialogs
+    /// (Photoshop-style: the options live next to the decision they affect,
+    /// not in the main window). Bound to the same persisted settings the
+    /// engine reads, so dialogs remember the last choice; on a save panel,
+    /// switching format retargets the allowed content type so the filename
+    /// extension follows.
+    final class ExportOptionsView: NSView {
+        private weak var model: AppModel?
+        private weak var panel: NSSavePanel?
+        private let formatPopup = NSPopUpButton()
+        private let spacePopup = NSPopUpButton()
+
+        /// What the color-space popup reads while DNG is selected: DNG
+        /// always carries linear P3, and a disabled popup frozen on the
+        /// previous choice would read as "DNG uses sRGB and you can't
+        /// change it".
+        private static let dngSpaceTitle = "Linear Display P3"
+
+        init(model: AppModel, panel: NSSavePanel?) {
+            self.model = model
+            self.panel = panel
+            super.init(frame: .zero)
+            for format in ExportFormat.allCases {
+                formatPopup.addItem(withTitle: format.rawValue)
+            }
+            formatPopup.selectItem(withTitle: model.exportFormat.rawValue)
+            formatPopup.target = self
+            formatPopup.action = #selector(formatChanged)
+            formatPopup.setAccessibilityIdentifier("export.format")
+            for space in ExportColorSpace.allCases {
+                spacePopup.addItem(withTitle: space.rawValue)
+            }
+            spacePopup.target = self
+            spacePopup.action = #selector(spaceChanged)
+            spacePopup.setAccessibilityIdentifier("export.color-space")
+            spacePopup.toolTip = "The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw."
+
+            // Fixed frames, NO Auto Layout: sandboxed save panels are remote,
+            // and the bridge polls the accessory's constraint-based fitting
+            // size every frame — a baseline-aligned NSGridView never
+            // converges, so an idle panel re-solved constraints forever
+            // (~30% CPU). Plain frames give the bridge a constant answer.
+            // Width is computed with the widest spacePopup contents (the DNG
+            // placeholder) present so refresh() never changes any frame.
+            let labelFormat = NSTextField(labelWithString: "Format:")
+            let labelSpace = NSTextField(labelWithString: "Color space:")
+            spacePopup.addItem(withTitle: Self.dngSpaceTitle)
+            for control in [labelFormat, labelSpace, formatPopup, spacePopup] {
+                control.sizeToFit()
+            }
+            spacePopup.removeItem(at: spacePopup.numberOfItems - 1)
+            let pad: CGFloat = 20, vpad: CGFloat = 12
+            let gap: CGFloat = 8, rowGap: CGFloat = 6
+            let labelW = max(labelFormat.frame.width, labelSpace.frame.width)
+            let popupW = max(formatPopup.frame.width, spacePopup.frame.width)
+            let rowH = max(formatPopup.frame.height, spacePopup.frame.height)
+            let size = NSSize(width: pad + labelW + gap + popupW + pad,
+                              height: vpad + rowH * 2 + rowGap + vpad)
+            func place(_ label: NSTextField, _ popup: NSPopUpButton, rowFromTop: Int) {
+                let y = size.height - vpad - rowH - CGFloat(rowFromTop) * (rowH + rowGap)
+                popup.frame = NSRect(x: pad + labelW + gap, y: y,
+                                     width: popupW, height: rowH)
+                label.frame.origin = NSPoint(
+                    x: pad + labelW - label.frame.width,
+                    y: y + (rowH - label.frame.height) / 2)
+                addSubview(label)
+                addSubview(popup)
+            }
+            place(labelFormat, formatPopup, rowFromTop: 0)
+            place(labelSpace, spacePopup, rowFromTop: 1)
+            // Frame FIRST, masks after: autoresizing redistributes margins on
+            // every resize, so growing the view from its .zero init frame
+            // with flexible masks already set scrambles the placement (all
+            // controls piled up at one spot). Rigid placement + final frame,
+            // THEN the masks that pin the block top-left while the panel
+            // stretches the accessory to its own width and height.
+            frame = NSRect(origin: .zero, size: size)
+            for view in subviews {
+                view.autoresizingMask = [.maxXMargin, .minYMargin]
+            }
+            // Flexible width on the accessory ITSELF: a rigid view can't be
+            // stretched by the panel, which centers it instead — the whole
+            // block floated to the middle regardless of the internal layout.
+            autoresizingMask = .width
+            refresh()
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("unused") }
+
+        @objc private func formatChanged() {
+            guard let model, let format = ExportFormat(
+                rawValue: formatPopup.titleOfSelectedItem ?? "") else { return }
+            model.exportFormat = format
+            if let type = UTType(filenameExtension: format.fileExtension) {
+                panel?.allowedContentTypes = [type]
+            }
+            refresh()
+        }
+
+        @objc private func spaceChanged() {
+            guard let model, let space = ExportColorSpace(
+                rawValue: spacePopup.titleOfSelectedItem ?? "") else { return }
+            model.exportColorSpace = space
+        }
+
+        private func refresh() {
+            guard let model else { return }
+            let dng = model.exportFormat == .dng
+            spacePopup.isEnabled = !dng
+            if dng {
+                if spacePopup.item(withTitle: Self.dngSpaceTitle) == nil {
+                    spacePopup.addItem(withTitle: Self.dngSpaceTitle)
+                }
+                spacePopup.selectItem(withTitle: Self.dngSpaceTitle)
+            } else {
+                if let placeholder = spacePopup.item(withTitle: Self.dngSpaceTitle) {
+                    spacePopup.removeItem(at: spacePopup.index(of: placeholder))
+                }
+                spacePopup.selectItem(withTitle: model.exportColorSpace.rawValue)
+            }
+        }
     }
 
     /// Output pane coordinate space: full-resolution dimensions regardless of
@@ -1976,6 +2138,10 @@ final class AppModel: ObservableObject {
     // MARK: - Export
 
     func exportResult() {
+        afterUpdate { $0.runExportPanel() }
+    }
+
+    private func runExportPanel() {
         // Retouch edits, once made, are the result.
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
         guard (outputMode == .depth ? depthResult : baseImage) != nil else { return }
@@ -1990,6 +2156,7 @@ final class AppModel: ObservableObject {
             .deletingLastPathComponent().lastPathComponent ?? "stacked"
         let suffix = outputMode == .depth ? " depth" : ""
         panel.nameFieldStringValue = "\(base)\(suffix).\(ext)"
+        panel.accessoryView = ExportOptionsView(model: self, panel: panel)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         writeExport(to: url)
     }

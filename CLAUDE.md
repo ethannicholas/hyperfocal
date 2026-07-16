@@ -35,7 +35,8 @@ one up.
   baselines live in ROADMAP's header.
 - `Scripts/ui-test.sh` must print `== UI TESTS PASSED` before trusting
   UI-layer changes (XCUITest suite in `App/HyperfocalUITests/`; takes
-  over mouse/keyboard while running — announce runs). Tests are
+  over mouse/keyboard while running — ASK and wait for a yes before
+  running; the user is often actively at the machine). Tests are
   **journeys**: one launch exercises a whole workflow as named
   activities (launch-per-assertion doesn't scale; a fresh launch is for
   a fresh workflow, not a fresh check). Functional claims verify real

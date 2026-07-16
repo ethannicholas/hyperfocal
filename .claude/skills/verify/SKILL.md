@@ -20,9 +20,11 @@ description: Build, launch, and drive the Hyperfocal app end-to-end to verify a 
   hooks (`UITestSupport.swift`) — never by driving open/save panels.
   Extend `App/HyperfocalUITests/` when a change adds a workflow-gating
   control; every control needs an accessibility identifier (convention in
-  CLAUDE.md). The suite takes over mouse/keyboard while running — same
-  announce-it etiquette as AX driving — and the first run on a machine
-  needs a one-time Automation approval from the GUI session.
+  CLAUDE.md). The suite takes over mouse/keyboard while running — like
+  AX driving, ASK the user and wait for a yes before starting (they are
+  often actively at the machine; an announcement alone is not consent) —
+  and the first run on a machine needs a one-time Automation approval
+  from the GUI session.
 - **Prefer asking the user** for what the suite can't see: visual
   fidelity, hover/cursor behavior, focus/activation, drag feel, anything
   timing-dependent or "sometimes", and retouch-canvas gestures (the probe
@@ -71,8 +73,9 @@ now carry accessibility identifiers (`value of attribute "AXIdentifier"`),
 so when ad-hoc driving IS needed, find elements by identifier instead of
 frame math. The notes below remain for flows outside the suite.
 
-- **Etiquette first**: the user is often at the machine. Announce app
-  launches in chat, quit instances when done, and if clicks start landing
+- **Etiquette first**: the user is often at the machine. ASK and wait
+  for a yes before driving the screen (an announcement alone is not
+  consent), quit instances when done, and if clicks start landing
   in other apps' windows, STOP and ask them to test by hand instead of
   fighting for the screen. They may also quit app instances they notice —
   a vanished process is not necessarily a crash (check

@@ -19,8 +19,8 @@ final class FuseExportJourneyTests: XCTestCase {
 
         var baseline: ExportedImage!
         try XCTContext.runActivity(named: "TIFF sRGB baseline") { _ in
-            pick(app, popUp: "export.format", option: "TIFF (16-bit)")
-            pick(app, popUp: "export.color-space", option: "sRGB")
+            try sendCommand(["action": "set-export", "format": "TIFF (16-bit)"])
+            try sendCommand(["action": "set-export", "space": "sRGB"])
             baseline = try exportAndInspect("baseline.tif")
             XCTAssertEqual(baseline.typeIdentifier, "public.tiff")
             XCTAssertGreaterThan(baseline.width, 400, "canvas suspiciously small")
@@ -30,32 +30,32 @@ final class FuseExportJourneyTests: XCTestCase {
         }
 
         try XCTContext.runActivity(named: "color spaces reach the file") { _ in
-            pick(app, popUp: "export.color-space", option: "Display P3")
+            try sendCommand(["action": "set-export", "space": "Display P3"])
             let p3 = try exportAndInspect("p3.tif")
             XCTAssertTrue(p3.profileName.contains("P3"), "profile: \(p3.profileName)")
-            pick(app, popUp: "export.color-space", option: "ProPhoto RGB")
+            try sendCommand(["action": "set-export", "space": "ProPhoto RGB"])
             let prophoto = try exportAndInspect("prophoto.tif")
             // ProPhoto's canonical profile name is "ROMM RGB".
             XCTAssertTrue(prophoto.profileName.contains("ProPhoto")
                           || prophoto.profileName.contains("ROMM"),
                           "profile: \(prophoto.profileName)")
-            pick(app, popUp: "export.color-space", option: "sRGB")
+            try sendCommand(["action": "set-export", "space": "sRGB"])
         }
 
         try XCTContext.runActivity(named: "PNG, JPEG, DNG formats") { _ in
-            pick(app, popUp: "export.format", option: "PNG (16-bit)")
+            try sendCommand(["action": "set-export", "format": "PNG (16-bit)"])
             let png = try exportAndInspect("out.png")
             XCTAssertEqual(png.typeIdentifier, "public.png")
             XCTAssertEqual(png.width, baseline.width)
 
-            pick(app, popUp: "export.format", option: "JPEG")
+            try sendCommand(["action": "set-export", "format": "JPEG"])
             let jpeg = try exportAndInspect("out.jpg")
             XCTAssertEqual(jpeg.typeIdentifier, "public.jpeg")
             XCTAssertEqual(jpeg.width, baseline.width)
             // Same render, different container: levels should agree closely.
             XCTAssertEqual(jpeg.meanLevel, baseline.meanLevel, accuracy: 3.0)
 
-            pick(app, popUp: "export.format", option: "DNG (linear raw)")
+            try sendCommand(["action": "set-export", "format": "DNG (raw)"])
             let dngURL = Fixtures.out.appendingPathComponent("out.dng")
             try sendCommand(["action": "export", "path": dngURL.path])
             let dngData = try Data(contentsOf: dngURL)
@@ -68,7 +68,7 @@ final class FuseExportJourneyTests: XCTestCase {
             // profile name that carries it.
             XCTAssertNotNil(dngData.range(of: Data("Hyperfocal Linear P3".utf8)),
                             "embedded camera profile missing")
-            pick(app, popUp: "export.format", option: "TIFF (16-bit)")
+            try sendCommand(["action": "set-export", "format": "TIFF (16-bit)"])
         }
 
         try XCTContext.runActivity(named: "depth map export differs from result") { _ in

@@ -297,17 +297,6 @@ extension XCTestCase {
                       "value label for \(id) never updated (still \(before))")
     }
 
-    /// Picks an option in one of the export pop-up pickers by title.
-    func pick(_ app: XCUIApplication, popUp identifier: String, option: String) {
-        let popUp = app.popUpButtons[identifier]
-        XCTAssertTrue(popUp.waitForExistence(timeout: 5), "no picker \(identifier)")
-        popUp.click()
-        let item = app.menuItems[option]
-        XCTAssertTrue(item.waitForExistence(timeout: 5),
-                      "no option \(option) in \(identifier)")
-        item.click()
-    }
-
     /// Polls a condition on the main run loop.
     func waitFor(timeout: TimeInterval = 10, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)

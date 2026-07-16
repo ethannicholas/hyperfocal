@@ -14,7 +14,7 @@ final class RetouchJourneyTests: XCTestCase {
         XCTAssertTrue(app.buttons["fusion.fuse-stack"].waitForExistence(timeout: 15))
         app.buttons["fusion.fuse-stack"].click()
         waitForFuseDone(app)
-        pick(app, popUp: "export.format", option: "TIFF (16-bit)")
+        try sendCommand(["action": "set-export", "format": "TIFF (16-bit)"])
         let baseline = try exportAndInspect("retouch-baseline.tif")
 
         XCTContext.runActivity(named: "enter retouch: controls appear") { _ in
