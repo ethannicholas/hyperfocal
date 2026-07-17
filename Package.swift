@@ -66,12 +66,16 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
+        // Compiles the shared model layer (AppCore/) headless — the same
+        // files the app target compiles (App/project.yml references them by
+        // path). One source of truth; do not copy them anywhere.
         .executableTarget(
             name: "retouch-probe",
             dependencies: ["HyperfocalKit"],
-            path: "Probe",
-            sources: ["main.swift", "RetouchSession.swift", "ProjectStore.swift",
-                      "AppModel.swift", "Stack.swift"]
+            path: ".",
+            sources: ["Probe/main.swift", "AppCore/AppModel.swift",
+                      "AppCore/Stack.swift", "AppCore/ProjectStore.swift",
+                      "AppCore/RetouchSession.swift"]
         ),
     ],
     cxxLanguageStandard: .cxx17

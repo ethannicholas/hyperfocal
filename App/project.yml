@@ -37,6 +37,10 @@ targets:
     platform: macOS
     sources:
       - Sources
+      # Shared model layer (AppModel, Stack, ProjectStore, RetouchSession):
+      # single source of truth, also compiled headless by the retouch-probe
+      # SwiftPM target (see Package.swift). Never copy these files.
+      - path: ../AppCore
       - Assets.xcassets
       # Document icon for .hyperfocal files (macOS does not auto-generate
       # one; without it Finder shows a "?" page). Regenerate from the app

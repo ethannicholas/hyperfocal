@@ -30,11 +30,19 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Probe copies drifting silently is a recurring hazard — fail loudly here.
+# The model layer lives ONLY in AppCore/ (shared by the app target and
+# retouch-probe). A copy reappearing in App/Sources or Probe would silently
+# shadow it — fail loudly here.
 for f in AppModel Stack ProjectStore RetouchSession; do
-    if ! diff -q "App/Sources/$f.swift" "Probe/$f.swift" >/dev/null 2>&1; then
-        echo "error: Probe/$f.swift is out of sync with App/Sources/$f.swift" >&2
-        echo "       cp App/Sources/$f.swift Probe/$f.swift  (and re-run retouch-probe)" >&2
+    for d in App/Sources Probe; do
+        if [ -e "$d/$f.swift" ]; then
+            echo "error: $d/$f.swift exists — the model layer lives in AppCore/ only" >&2
+            echo "       merge any changes into AppCore/$f.swift and delete the copy" >&2
+            exit 1
+        fi
+    done
+    if [ ! -e "AppCore/$f.swift" ]; then
+        echo "error: AppCore/$f.swift missing" >&2
         exit 1
     fi
 done
