@@ -119,6 +119,7 @@ struct HyperfocalApp: App {
                 } ?? "Hyperfocal")
                 .frame(minWidth: 980, minHeight: 620)
                 .onAppear {
+                    model.dialogs = MacDialogService(model: model)
                     appDelegate.model = model
                     appDelegate.installCloseGate()
                     UITestSupport.activate(model)

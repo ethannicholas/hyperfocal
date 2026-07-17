@@ -75,7 +75,8 @@ let package = Package(
             path: ".",
             sources: ["Probe/main.swift", "AppCore/AppModel.swift",
                       "AppCore/Stack.swift", "AppCore/ProjectStore.swift",
-                      "AppCore/RetouchSession.swift"]
+                      "AppCore/RetouchSession.swift",
+                      "AppCore/DialogService.swift"]
         ),
     ],
     cxxLanguageStandard: .cxx17

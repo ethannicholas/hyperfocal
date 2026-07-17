@@ -873,20 +873,23 @@ final class AppModel: ObservableObject {
                                confirmTitle: confirmTitle)
     }
 
+    /// Frontend-provided modal interactions (panels, alerts) — the Mac app
+    /// wires MacDialogService at launch. Nil (probe, unwired tests) resolves
+    /// every interaction as "cancelled"; the per-prompt test overrides below
+    /// short-circuit before it either way.
+    var dialogs: DialogService?
+
     /// Testability hook: when set, confirmation alerts are answered by the
-    /// closure (keyed on the message) instead of blocking on NSAlert — the
+    /// closure (keyed on the message) instead of blocking on a modal — the
     /// probe exercises close/replace flows headlessly through this.
     var confirmAlertOverride: ((String) -> Bool)?
 
     private func runConfirmAlert(message: String, informative: String,
                                  confirmTitle: String) -> Bool {
         if let confirmAlertOverride { return confirmAlertOverride(message) }
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = informative
-        alert.addButton(withTitle: confirmTitle)
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        return dialogs?.confirm(message: message, informative: informative,
+                                confirmTitle: confirmTitle,
+                                cancelTitle: "Cancel", warning: false) ?? false
     }
 
     /// Warns before fusing when the fusion disk cache is enabled but the
@@ -936,19 +939,12 @@ final class AppModel: ObservableObject {
 
     private func runSaveProjectPanel() {
         guard captureProject() != nil else { return }
-        let panel = NSSavePanel()
-        if let type = UTType(filenameExtension: ProjectStore.fileExtension) {
-            panel.allowedContentTypes = [type]
-        }
-        if let projectURL {
-            // Saving-as from a saved project starts where the project lives.
-            panel.directoryURL = projectURL.deletingLastPathComponent()
-            panel.nameFieldStringValue = projectURL.lastPathComponent
-        } else {
-            let base = stacks.first?.name ?? "Project"
-            panel.nameFieldStringValue = "\(base).\(ProjectStore.fileExtension)"
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Saving-as from a saved project starts where the project lives.
+        let directory = projectURL?.deletingLastPathComponent()
+        let name = projectURL?.lastPathComponent
+            ?? "\(stacks.first?.name ?? "Project").\(ProjectStore.fileExtension)"
+        guard let url = dialogs?.chooseSaveProject(directory: directory,
+                                                   suggestedName: name) else { return }
         writeProject(to: url)
     }
 
@@ -967,11 +963,8 @@ final class AppModel: ObservableObject {
             // still valid, and .failed would disable Save itself (plus
             // export and retouch) until a pointless re-fuse. Report and
             // leave the session exactly as it was.
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Couldn't save the project"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
+            dialogs?.notify(message: "Couldn't save the project",
+                            informative: error.localizedDescription, warning: true)
             return false
         }
     }
@@ -983,14 +976,7 @@ final class AppModel: ObservableObject {
     private func runOpenProjectPanel() {
         guard confirmDiscardingUnsavedWork(message: "Open a different project?",
                                            confirmTitle: "Open Project") else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        if let type = UTType(filenameExtension: ProjectStore.fileExtension) {
-            panel.allowedContentTypes = [type]
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = dialogs?.chooseProjectToOpen() else { return }
         openProject(from: url)
     }
 
@@ -1153,16 +1139,14 @@ final class AppModel: ObservableObject {
         if let accessPromptOverride {
             proceed = accessPromptOverride(roots.count)
         } else {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Hyperfocal doesn’t have permission to read this project’s images"
-            alert.informativeText = "macOS grants access folder by folder, and the permission "
-                + "this project saved couldn’t be restored. Grant access to \(folders) to load "
-                + "the images — saving the project afterward keeps the access for next time. "
-                + "Fused results are intact either way."
-            alert.addButton(withTitle: "Grant Access…")
-            alert.addButton(withTitle: "Not Now")
-            proceed = alert.runModal() == .alertFirstButtonReturn
+            proceed = dialogs?.confirm(
+                message: "Hyperfocal doesn’t have permission to read this project’s images",
+                informative: "macOS grants access folder by folder, and the permission "
+                    + "this project saved couldn’t be restored. Grant access to \(folders) to load "
+                    + "the images — saving the project afterward keeps the access for next time. "
+                    + "Fused results are intact either way.",
+                confirmTitle: "Grant Access…", cancelTitle: "Not Now",
+                warning: true) ?? false
         }
         guard proceed else { return }
         regrantAccess(to: roots)
@@ -1181,14 +1165,7 @@ final class AppModel: ObservableObject {
                 if let accessGrantPicker {
                     picked = accessGrantPicker(root)
                 } else {
-                    let panel = NSOpenPanel()
-                    panel.canChooseFiles = false
-                    panel.canChooseDirectories = true
-                    panel.allowsMultipleSelection = false
-                    panel.directoryURL = root
-                    panel.message = "Grant access to “\(root.lastPathComponent)” — \(root.path)"
-                    panel.prompt = "Grant Access"
-                    picked = panel.runModal() == .OK ? panel.url : nil
+                    picked = dialogs?.chooseAccessGrant(for: root)
                 }
                 guard let picked else { break }  // cancelled: skip this folder
                 // The pick helps only if it covers the folder the frames
@@ -1203,14 +1180,12 @@ final class AppModel: ObservableObject {
                 // A real panel gets a correction + retry; a test hook would
                 // just return the same answer forever.
                 guard accessGrantPicker == nil else { break }
-                let oops = NSAlert()
-                oops.alertStyle = .warning
-                oops.messageText = "That folder doesn’t contain the project’s images"
-                oops.informativeText = "The images are in “\(root.path)”. Choose that folder, "
-                    + "or any folder that contains it."
-                oops.addButton(withTitle: "Try Again")
-                oops.addButton(withTitle: "Skip")
-                guard oops.runModal() == .alertFirstButtonReturn else { break }
+                guard dialogs?.confirm(
+                    message: "That folder doesn’t contain the project’s images",
+                    informative: "The images are in “\(root.path)”. Choose that folder, "
+                        + "or any folder that contains it.",
+                    confirmTitle: "Try Again", cancelTitle: "Skip",
+                    warning: true) == true else { break }
             }
         }
         guard !newGrants.isEmpty else { return }
@@ -1553,13 +1528,9 @@ final class AppModel: ObservableObject {
     private func runOpenFramesPanel() {
         guard confirmDiscardingUnsavedWork(message: "Start a new project?",
                                            confirmTitle: "New Project") else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.message = "Choose a stack: a folder of frames, or the frames themselves (focus order = name order)."
-        guard panel.runModal() == .OK else { return }
-        ingest(urls: panel.urls)
+        let urls = dialogs?.chooseFrames(message: "Choose a stack: a folder of frames, or the frames themselves (focus order = name order).") ?? []
+        guard !urls.isEmpty else { return }
+        ingest(urls: urls)
     }
 
     func addStackFolderPanel() {
@@ -1568,13 +1539,9 @@ final class AppModel: ObservableObject {
 
     private func runAddStackFolderPanel() {
         guard !phase.isRunning else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.message = "Add stack folders to the project — each folder of frames becomes its own stack."
-        guard panel.runModal() == .OK else { return }
-        loadStacks(from: panel.urls, replacing: false)
+        let urls = dialogs?.chooseStackFolders(message: "Add stack folders to the project — each folder of frames becomes its own stack.") ?? []
+        guard !urls.isEmpty else { return }
+        loadStacks(from: urls, replacing: false)
     }
 
     func ingest(urls: [URL]) {
@@ -1760,12 +1727,11 @@ final class AppModel: ObservableObject {
 
     private func askSplitChoice(name: String, burstCount: Int) -> Bool {
         if let splitChoicePrompt { return splitChoicePrompt(name, burstCount) }
-        let alert = NSAlert()
-        alert.messageText = "“\(name)” looks like \(burstCount) separate stacks"
-        alert.informativeText = "Capture times show \(burstCount) bursts separated by more than \(Int(StackSplitter.defaultGap)) seconds. Load them as separate stacks, or keep each folder as one stack?\n\nThis choice applies to every folder in this load."
-        alert.addButton(withTitle: "Separate Stacks")
-        alert.addButton(withTitle: "One Stack per Folder")
-        return alert.runModal() == .alertFirstButtonReturn
+        return dialogs?.confirm(
+            message: "“\(name)” looks like \(burstCount) separate stacks",
+            informative: "Capture times show \(burstCount) bursts separated by more than \(Int(StackSplitter.defaultGap)) seconds. Load them as separate stacks, or keep each folder as one stack?\n\nThis choice applies to every folder in this load.",
+            confirmTitle: "Separate Stacks", cancelTitle: "One Stack per Folder",
+            warning: false) ?? false
     }
 
     /// Two folders named "stack" in different parents would collide in the
@@ -1872,10 +1838,8 @@ final class AppModel: ObservableObject {
                 if let presenter = self.queueSummaryPresenter {
                     presenter(summary)
                 } else {
-                    let alert = NSAlert()
-                    alert.messageText = "Some stacks didn't fuse"
-                    alert.informativeText = summary
-                    alert.runModal()
+                    self.dialogs?.notify(message: "Some stacks didn't fuse",
+                                         informative: summary, warning: false)
                 }
             }
         }
@@ -1889,25 +1853,16 @@ final class AppModel: ObservableObject {
 
     private func runExportAllPanel() {
         guard fusedStackCount > 0, !phase.isRunning else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.prompt = "Export Here"
-        panel.message = "Every fused stack is written to this folder."
-        panel.accessoryView = ExportOptionsView(model: self, panel: nil)
-        panel.isAccessoryViewDisclosed = true
-        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        guard let dir = dialogs?.chooseExportDirectory(
+            message: "Every fused stack is written to this folder.") else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let summary = await self.exportAllFused(to: dir)
             if let presenter = self.queueSummaryPresenter {
                 presenter(summary)
             } else {
-                let alert = NSAlert()
-                alert.messageText = "Export finished"
-                alert.informativeText = summary
-                alert.runModal()
+                self.dialogs?.notify(message: "Export finished",
+                                     informative: summary, warning: false)
             }
         }
     }
@@ -1965,25 +1920,16 @@ final class AppModel: ObservableObject {
 
     private func runExportAlignedPanel() {
         guard canExportAligned else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.prompt = "Export Here"
-        panel.message = "The selected frames are written to this folder, aligned to the fused canvas."
-        panel.accessoryView = ExportOptionsView(model: self, panel: nil)
-        panel.isAccessoryViewDisclosed = true
-        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        guard let dir = dialogs?.chooseExportDirectory(
+            message: "The selected frames are written to this folder, aligned to the fused canvas.") else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let summary = await self.exportAlignedFrames(to: dir)
             if let presenter = self.queueSummaryPresenter {
                 presenter(summary)
             } else {
-                let alert = NSAlert()
-                alert.messageText = "Export finished"
-                alert.informativeText = summary
-                alert.runModal()
+                self.dialogs?.notify(message: "Export finished",
+                                     informative: summary, warning: false)
             }
         }
     }
@@ -2048,15 +1994,10 @@ final class AppModel: ObservableObject {
 
     private func runAnimatePanel() {
         guard canAnimate else { return }
-        let panel = NSSavePanel()
-        if let type = UTType(filenameExtension: animationFormat.fileExtension) {
-            panel.allowedContentTypes = [type]
-        }
         let base = (fuseURLs.first ?? frames.first)?
             .deletingLastPathComponent().lastPathComponent ?? "stacked"
-        panel.nameFieldStringValue = "\(base) rocking.\(animationFormat.fileExtension)"
-        panel.accessoryView = AnimationOptionsView(model: self, panel: panel)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = dialogs?.chooseSaveAnimation(
+            suggestedName: "\(base) rocking.\(animationFormat.fileExtension)") else { return }
         Task { [weak self] in
             _ = await self?.writeAnimation(to: url)
         }
@@ -2087,251 +2028,9 @@ final class AppModel: ObservableObject {
             }.value
             return true
         } catch {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Couldn't export the animation"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
+            dialogs?.notify(message: "Couldn't export the animation",
+                            informative: error.localizedDescription, warning: true)
             return false
-        }
-    }
-
-    /// Pickers for the rocking-animation save panel (format, path,
-    /// strength, duration, frame rate) — same no-Auto-Layout recipe as
-    /// ExportOptionsView (the remote panel polls constraint-based fitting
-    /// sizes every frame; fixed frames don't). Switching format retargets
-    /// the panel so the filename extension follows.
-    final class AnimationOptionsView: NSView {
-        private weak var model: AppModel?
-        private weak var panel: NSSavePanel?
-        private let formatPopup = NSPopUpButton()
-        private let pathPopup = NSPopUpButton()
-        private let strengthPopup = NSPopUpButton()
-        private let durationPopup = NSPopUpButton()
-        private let fpsPopup = NSPopUpButton()
-
-        init(model: AppModel, panel: NSSavePanel?) {
-            self.model = model
-            self.panel = panel
-            super.init(frame: .zero)
-
-            func configure<Choice: RawRepresentable & CaseIterable>(
-                _ popup: NSPopUpButton, _ kind: Choice.Type, selected: Choice,
-                id: String, tip: String
-            ) where Choice.RawValue == String {
-                for choice in Choice.allCases {
-                    popup.addItem(withTitle: choice.rawValue)
-                }
-                popup.selectItem(withTitle: selected.rawValue)
-                popup.target = self
-                popup.action = #selector(changed(_:))
-                popup.setAccessibilityIdentifier(id)
-                popup.toolTip = tip
-            }
-            configure(formatPopup, AnimationFormat.self, selected: model.animationFormat,
-                      id: "export.animation-format",
-                      tip: "MP4 plays once unless the player is told to loop (no video format carries a loop flag players honor). GIF loops forever everywhere, at the cost of larger files and reduced colors.")
-            configure(pathPopup, AnimationPath.self, selected: model.animationPath,
-                      id: "export.animation-path",
-                      tip: "How the viewpoint moves. Rocking sweeps side to side (or up and down); Circle orbits, which reads most strongly 3D — no structure can hide parallel to the motion.")
-            configure(strengthPopup, AnimationStrength.self, selected: model.animationStrength,
-                      id: "export.animation-strength",
-                      tip: "How far the view moves: peak parallax at the depth extremes, as a fraction of the video width (Subtle 0.5%, Medium 1%, Strong 2%).")
-            configure(durationPopup, AnimationDuration.self, selected: model.animationDuration,
-                      id: "export.animation-duration",
-                      tip: "One full cycle of the motion; the file loops seamlessly.")
-            configure(fpsPopup, AnimationFPS.self, selected: model.animationFPS,
-                      id: "export.animation-fps",
-                      tip: "Frames per second. 30 suits sharing; 60 is silkier and larger; 24 is filmic.")
-
-            // Container-ish options first, motion options last. (No depth
-            // direction option on purpose: negated disparity is exactly a
-            // half-cycle phase shift of these symmetric loops — provably
-            // invisible; see RockingAnimation.Options.)
-            let rows: [(String, NSControl)] = [
-                ("Format:", formatPopup),
-                ("Frame rate:", fpsPopup),
-                ("Duration:", durationPopup),
-                ("Path:", pathPopup),
-                ("Strength:", strengthPopup),
-            ]
-            let labels = rows.map { NSTextField(labelWithString: $0.0) }
-            for label in labels { label.sizeToFit() }
-            for (_, popup) in rows { popup.sizeToFit() }
-            let pad: CGFloat = 20, vpad: CGFloat = 12
-            let gap: CGFloat = 8, rowGap: CGFloat = 6
-            let labelW = labels.map(\.frame.width).max() ?? 0
-            let popupW = rows.map(\.1.frame.width).max() ?? 0
-            let rowH = rows.map(\.1.frame.height).max() ?? 25
-            let count = CGFloat(rows.count)
-            let size = NSSize(width: pad + labelW + gap + popupW + pad,
-                              height: vpad + rowH * count + rowGap * (count - 1) + vpad)
-            for (index, (label, row)) in zip(labels, rows).enumerated() {
-                let popup = row.1
-                let y = size.height - vpad - rowH - CGFloat(index) * (rowH + rowGap)
-                popup.frame = NSRect(x: pad + labelW + gap, y: y,
-                                     width: popupW, height: rowH)
-                label.frame.origin = NSPoint(
-                    x: pad + labelW - label.frame.width,
-                    y: y + (rowH - label.frame.height) / 2)
-                addSubview(label)
-                addSubview(popup)
-            }
-            frame = NSRect(origin: .zero, size: size)
-            for view in subviews {
-                view.autoresizingMask = [.maxXMargin, .minYMargin]
-            }
-            autoresizingMask = .width
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError("unused") }
-
-        @objc private func changed(_ sender: NSPopUpButton) {
-            guard let model else { return }
-            let title = sender.titleOfSelectedItem ?? ""
-            switch sender {
-            case formatPopup:
-                guard let format = AnimationFormat(rawValue: title) else { return }
-                model.animationFormat = format
-                if let type = UTType(filenameExtension: format.fileExtension) {
-                    panel?.allowedContentTypes = [type]
-                }
-            case pathPopup:
-                model.animationPath = AnimationPath(rawValue: title) ?? model.animationPath
-            case strengthPopup:
-                model.animationStrength = AnimationStrength(rawValue: title) ?? model.animationStrength
-            case durationPopup:
-                model.animationDuration = AnimationDuration(rawValue: title) ?? model.animationDuration
-            case fpsPopup:
-                model.animationFPS = AnimationFPS(rawValue: title) ?? model.animationFPS
-            default:
-                break
-            }
-        }
-    }
-
-    /// Format + color-space pickers hosted inside the export dialogs
-    /// (Photoshop-style: the options live next to the decision they affect,
-    /// not in the main window). Bound to the same persisted settings the
-    /// engine reads, so dialogs remember the last choice; on a save panel,
-    /// switching format retargets the allowed content type so the filename
-    /// extension follows.
-    final class ExportOptionsView: NSView {
-        private weak var model: AppModel?
-        private weak var panel: NSSavePanel?
-        private let formatPopup = NSPopUpButton()
-        private let spacePopup = NSPopUpButton()
-
-        /// What the color-space popup reads while DNG is selected: DNG
-        /// always carries linear P3, and a disabled popup frozen on the
-        /// previous choice would read as "DNG uses sRGB and you can't
-        /// change it".
-        private static let dngSpaceTitle = "Linear Display P3"
-
-        init(model: AppModel, panel: NSSavePanel?) {
-            self.model = model
-            self.panel = panel
-            super.init(frame: .zero)
-            for format in ExportFormat.allCases {
-                formatPopup.addItem(withTitle: format.rawValue)
-            }
-            formatPopup.selectItem(withTitle: model.exportFormat.rawValue)
-            formatPopup.target = self
-            formatPopup.action = #selector(formatChanged)
-            formatPopup.setAccessibilityIdentifier("export.format")
-            for space in ExportColorSpace.allCases {
-                spacePopup.addItem(withTitle: space.rawValue)
-            }
-            spacePopup.target = self
-            spacePopup.action = #selector(spaceChanged)
-            spacePopup.setAccessibilityIdentifier("export.color-space")
-            spacePopup.toolTip = "The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw."
-
-            // Fixed frames, NO Auto Layout: sandboxed save panels are remote,
-            // and the bridge polls the accessory's constraint-based fitting
-            // size every frame — a baseline-aligned NSGridView never
-            // converges, so an idle panel re-solved constraints forever
-            // (~30% CPU). Plain frames give the bridge a constant answer.
-            // Width is computed with the widest spacePopup contents (the DNG
-            // placeholder) present so refresh() never changes any frame.
-            let labelFormat = NSTextField(labelWithString: "Format:")
-            let labelSpace = NSTextField(labelWithString: "Color space:")
-            spacePopup.addItem(withTitle: Self.dngSpaceTitle)
-            for control in [labelFormat, labelSpace, formatPopup, spacePopup] {
-                control.sizeToFit()
-            }
-            spacePopup.removeItem(at: spacePopup.numberOfItems - 1)
-            let pad: CGFloat = 20, vpad: CGFloat = 12
-            let gap: CGFloat = 8, rowGap: CGFloat = 6
-            let labelW = max(labelFormat.frame.width, labelSpace.frame.width)
-            let popupW = max(formatPopup.frame.width, spacePopup.frame.width)
-            let rowH = max(formatPopup.frame.height, spacePopup.frame.height)
-            let size = NSSize(width: pad + labelW + gap + popupW + pad,
-                              height: vpad + rowH * 2 + rowGap + vpad)
-            func place(_ label: NSTextField, _ popup: NSPopUpButton, rowFromTop: Int) {
-                let y = size.height - vpad - rowH - CGFloat(rowFromTop) * (rowH + rowGap)
-                popup.frame = NSRect(x: pad + labelW + gap, y: y,
-                                     width: popupW, height: rowH)
-                label.frame.origin = NSPoint(
-                    x: pad + labelW - label.frame.width,
-                    y: y + (rowH - label.frame.height) / 2)
-                addSubview(label)
-                addSubview(popup)
-            }
-            place(labelFormat, formatPopup, rowFromTop: 0)
-            place(labelSpace, spacePopup, rowFromTop: 1)
-            // Frame FIRST, masks after: autoresizing redistributes margins on
-            // every resize, so growing the view from its .zero init frame
-            // with flexible masks already set scrambles the placement (all
-            // controls piled up at one spot). Rigid placement + final frame,
-            // THEN the masks that pin the block top-left while the panel
-            // stretches the accessory to its own width and height.
-            frame = NSRect(origin: .zero, size: size)
-            for view in subviews {
-                view.autoresizingMask = [.maxXMargin, .minYMargin]
-            }
-            // Flexible width on the accessory ITSELF: a rigid view can't be
-            // stretched by the panel, which centers it instead — the whole
-            // block floated to the middle regardless of the internal layout.
-            autoresizingMask = .width
-            refresh()
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError("unused") }
-
-        @objc private func formatChanged() {
-            guard let model, let format = ExportFormat(
-                rawValue: formatPopup.titleOfSelectedItem ?? "") else { return }
-            model.exportFormat = format
-            if let type = UTType(filenameExtension: format.fileExtension) {
-                panel?.allowedContentTypes = [type]
-            }
-            refresh()
-        }
-
-        @objc private func spaceChanged() {
-            guard let model, let space = ExportColorSpace(
-                rawValue: spacePopup.titleOfSelectedItem ?? "") else { return }
-            model.exportColorSpace = space
-        }
-
-        private func refresh() {
-            guard let model else { return }
-            let dng = model.exportFormat == .dng
-            spacePopup.isEnabled = !dng
-            if dng {
-                if spacePopup.item(withTitle: Self.dngSpaceTitle) == nil {
-                    spacePopup.addItem(withTitle: Self.dngSpaceTitle)
-                }
-                spacePopup.selectItem(withTitle: Self.dngSpaceTitle)
-            } else {
-                if let placeholder = spacePopup.item(withTitle: Self.dngSpaceTitle) {
-                    spacePopup.removeItem(at: spacePopup.index(of: placeholder))
-                }
-                spacePopup.selectItem(withTitle: model.exportColorSpace.rawValue)
-            }
         }
     }
 
@@ -2546,16 +2245,19 @@ final class AppModel: ObservableObject {
         // main thread is free, so there's no deadlock. Batches never prompt —
         // an unattended queue must keep moving, so they exclude silently (the
         // summary reports it).
+        let dialogs = self.dialogs
         let prompt = badFramePrompt ?? (batchMode ? { _ in true } : { lines in
             DispatchQueue.main.sync {
-                let alert = NSAlert()
-                alert.messageText = lines.count == 1
-                    ? "1 frame looks bad" : "\(lines.count) frames look bad"
-                alert.informativeText = lines.joined(separator: "\n")
-                    + "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse."
-                alert.addButton(withTitle: "Exclude and Continue")
-                alert.addButton(withTitle: "Keep All Frames")
-                return alert.runModal() == .alertFirstButtonReturn
+                MainActor.assumeIsolated {
+                    dialogs?.confirm(
+                        message: lines.count == 1
+                            ? "1 frame looks bad" : "\(lines.count) frames look bad",
+                        informative: lines.joined(separator: "\n")
+                            + "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.",
+                        confirmTitle: "Exclude and Continue",
+                        cancelTitle: "Keep All Frames",
+                        warning: false) ?? true
+                }
             }
         })
         config.badFrameHandler = { issues in
@@ -2683,11 +2385,7 @@ final class AppModel: ObservableObject {
             fuseFailureAlertOverride(message)
             return
         }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Fuse failed"
-        alert.informativeText = message
-        alert.runModal()
+        dialogs?.notify(message: "Fuse failed", informative: message, warning: true)
     }
 
     /// Maps a per-stage fraction into the fuse's single progress span.
@@ -2940,19 +2638,13 @@ final class AppModel: ObservableObject {
         // Retouch edits, once made, are the result.
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
         guard (outputMode == .depth ? depthResult : baseImage) != nil else { return }
-        let panel = NSSavePanel()
-        let ext = exportFormat.fileExtension
-        if let type = UTType(filenameExtension: ext) {
-            panel.allowedContentTypes = [type]
-        }
         // Name after the stack's folder — stable and meaningful, unlike
         // whichever frame happens to be first or selected.
         let base = (fuseURLs.first ?? frames.first)?
             .deletingLastPathComponent().lastPathComponent ?? "stacked"
         let suffix = outputMode == .depth ? " depth" : ""
-        panel.nameFieldStringValue = "\(base)\(suffix).\(ext)"
-        panel.accessoryView = ExportOptionsView(model: self, panel: panel)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = dialogs?.chooseSaveExport(
+            suggestedName: "\(base)\(suffix).\(exportFormat.fileExtension)") else { return }
         writeExport(to: url)
     }
 
@@ -3074,11 +2766,8 @@ final class AppModel: ObservableObject {
         } catch {
             // Same rule as saveProjectPanel: a failed write doesn't
             // invalidate the fused result, so don't touch `phase`.
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Couldn't export the image"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
+            dialogs?.notify(message: "Couldn't export the image",
+                            informative: error.localizedDescription, warning: true)
             return false
         }
     }

@@ -410,8 +410,8 @@ struct ContentView: View {
         Section {
             if !model.isCollapsed(.export) {
             // Format and color space live in the export dialogs themselves
-            // (AppModel.ExportOptionsView) — the options sit next to the
-            // decision they affect, Photoshop-style.
+            // (ExportOptionsView in MacDialogService.swift) — the options sit
+            // next to the decision they affect, Photoshop-style.
             Button {
                 model.exportResult()
             } label: {
