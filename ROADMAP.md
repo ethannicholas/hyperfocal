@@ -28,15 +28,6 @@ Mac with LibRaw elsewhere; OpenCV replaces Vision registration on all
 platforms if it validates. Work the phases in order; each item below is
 independently landable and keeps all existing gates green.
 
-### Phase 0c: neutral image currency in the model
-
-Replace `NSImage` in model-published state (`AppModel` previews,
-`Stack.outputPreview`/`depthPreview`, `RetouchSession` source caches)
-with the CGImage/ImageBuffer layer already beneath it; views wrap to
-`NSImage` (or draw CGImage directly) at the edge. Done = AppCore free of
-`NSImage`, retouch 45 MP paint still smooth (no per-frame conversions on
-the paint path), UI tests pass.
-
 ### Phase 1: engine backend seams + Linux CI + portable CLI
 
 Decode/encode, EXIF, simd-3×3, and spill backends behind build-time

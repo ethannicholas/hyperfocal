@@ -263,16 +263,16 @@ final class AppModel: ObservableObject {
     @Published var stageETA: String?
     private var stageTimerStage: FusionProgress.Stage?
     private var stageTimerStart = Date()
-    @Published var progressive: NSImage?
+    @Published var progressive: CGImage?
     @Published var progressiveNominalSize: CGSize?
-    @Published var processingSource: NSImage?
+    @Published var processingSource: CGImage?
     @Published var processingSourceLabel: String?
     @Published var processingSourceNominalSize: CGSize?
 
     // Results & previews
-    @Published var outputPreview: NSImage?
-    @Published var depthPreview: NSImage?
-    @Published var inputPreview: NSImage?
+    @Published var outputPreview: CGImage?
+    @Published var depthPreview: CGImage?
+    @Published var inputPreview: CGImage?
     @Published var inputPreviewURL: URL?
     /// The preview is warped into the fused canvas (alignment transforms
     /// existed when it was decoded) rather than the raw file.
@@ -282,9 +282,8 @@ final class AppModel: ObservableObject {
     /// Without this the pane falls back to the "select a frame" hint, which is
     /// misleading when a frame IS selected but its volume is unmounted.
     @Published var inputPreviewError: String?
-    /// True pixel dimensions of the input preview. Do NOT derive this from the
-    /// NSImage: NSCGImageSnapshotRep reports pixelsWide at the display's backing
-    /// scale (2x on Retina), which broke pane synchronization.
+    /// True pixel dimensions of the input preview (the preview CGImage may be
+    /// a reduced-resolution bitmap stretched to this size).
     @Published var inputPixelSize: CGSize?
     @Published var outputMode: OutputMode = .result
     /// Lightroom-style tone adjustments (per stack, saved in projects):
@@ -428,7 +427,7 @@ final class AppModel: ObservableObject {
     // harmless; blotchy fill basins or halos standing off edges are what the
     // slider is there to fix. (The old preview blacked out sub-floor pixels,
     // which read as "problem here" even when the fill would be fine.)
-    @Published var noiseFloorPreview: NSImage?
+    @Published var noiseFloorPreview: CGImage?
     private var noiseFloorPreviewData:
         (energyMax: [Float], argmax: [Float], concentration: [Float],
          planes: [[Float]], guide: [Float], width: Int, height: Int,
@@ -1062,8 +1061,8 @@ final class AppModel: ObservableObject {
             stack.depthResult = item.depthImage
             stack.savedWorking = item.payload.working
             stack.savedSourceIndex = item.payload.sourceIndex
-            stack.outputPreview = item.outputCG.map { NSImage(cgImage: $0, size: .zero) }
-            stack.depthPreview = item.depthCG.map { NSImage(cgImage: $0, size: .zero) }
+            stack.outputPreview = item.outputCG
+            stack.depthPreview = item.depthCG
             newStacks.append(stack)
         }
         // Bookmark-resolved roots become this session's grants, so re-saving
@@ -1220,7 +1219,7 @@ final class AppModel: ObservableObject {
 
     private(set) var result: ImageBuffer?
     private(set) var depthResult: ImageBuffer?
-    private var inputCache: [URL: (image: NSImage, pixelSize: CGSize, aligned: Bool)] = [:]
+    private var inputCache: [URL: (image: CGImage, pixelSize: CGSize, aligned: Bool)] = [:]
     private var inputCacheOrder: [URL] = []
     private var inputDecodeTask: Task<Void, Never>?
 
@@ -2148,7 +2147,7 @@ final class AppModel: ObservableObject {
         inputDecodeTask?.cancel()
         inputPreviewLoading = true
         inputDecodeTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let decoded: (image: NSImage, pixelSize: CGSize)? = {
+            let decoded: (image: CGImage, pixelSize: CGSize)? = {
                 let buffer: ImageBuffer?
                 if let alignedIndex {
                     let source = StackPipeline.makeSource(urls: alignedURLs,
@@ -2159,8 +2158,7 @@ final class AppModel: ObservableObject {
                 }
                 guard let buffer,
                       let cg = try? ImageFile.cgImage8(from: buffer) else { return nil }
-                return (NSImage(cgImage: cg, size: .zero),
-                        CGSize(width: buffer.width, height: buffer.height))
+                return (cg, CGSize(width: buffer.width, height: buffer.height))
             }()
             let error: String? = decoded != nil ? nil
                 : FileManager.default.fileExists(atPath: url.path)
@@ -2273,17 +2271,15 @@ final class AppModel: ObservableObject {
                                                           alignmentCache: cache,
                                                           log: logFusion,
                                                           progress: { update in
-                    func nsImage(_ buffer: ImageBuffer?) -> NSImage? {
-                        guard let buffer, let cg = try? ImageFile.cgImage8(from: buffer) else {
-                            return nil
-                        }
-                        return NSImage(cgImage: cg, size: .zero)
+                    func cgImage(_ buffer: ImageBuffer?) -> CGImage? {
+                        guard let buffer else { return nil }
+                        return try? ImageFile.cgImage8(from: buffer)
                     }
-                    let preview = nsImage(update.preview)
+                    let preview = cgImage(update.preview)
                     let nominal = update.previewFullWidth > 0
                         ? CGSize(width: update.previewFullWidth, height: update.previewFullHeight)
                         : nil
-                    let source = nsImage(update.sourcePreview)
+                    let source = cgImage(update.sourcePreview)
                     let sourceNominal = update.sourceFullWidth > 0
                         ? CGSize(width: update.sourceFullWidth, height: update.sourceFullHeight)
                         : nil
@@ -2339,8 +2335,8 @@ final class AppModel: ObservableObject {
                     // tracking for the Fuse buttons).
                     self.fusedSettings = self.currentFuseSettings()
                     self.depthResult = output.depthMap
-                    self.outputPreview = NSImage(cgImage: resultCG, size: .zero)
-                    self.depthPreview = NSImage(cgImage: depthCG, size: .zero)
+                    self.outputPreview = resultCG
+                    self.depthPreview = depthCG
                     self.progressive = nil
                     self.processingSource = nil
                     self.processingSourceLabel = nil
@@ -2546,7 +2542,7 @@ final class AppModel: ObservableObject {
                     }
                 }
                 guard let cg, generation == counter.current() else { return }
-                self.noiseFloorPreview = NSImage(cgImage: cg, size: .zero)
+                self.noiseFloorPreview = cg
             }
         }
     }
@@ -2619,7 +2615,7 @@ final class AppModel: ObservableObject {
                                           frameCount: max(session.urls.count, 2))
         depthResult = image
         if let cg = try? ImageFile.cgImage8(from: image) {
-            depthPreview = NSImage(cgImage: cg, size: .zero)
+            depthPreview = cg
         }
     }
 

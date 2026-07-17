@@ -19,7 +19,7 @@ final class RetouchSession: ObservableObject {
     private static let log = Logger(subsystem: "org.hyperfocal", category: "retouch")
 
     @Published private(set) var sourceIndex: Int
-    @Published private(set) var sourceDisplay: NSImage? {
+    @Published private(set) var sourceDisplay: CGImage? {
         didSet {
             // Tripwire for the low-res-pane bug family: with a *frame*
             // selected, the pane must never show fewer pixels than the
@@ -31,10 +31,9 @@ final class RetouchSession: ObservableObject {
             // "org.hyperfocal"'` instead of leaving another unreproducible
             // report.
             guard let image = sourceDisplay, sourceIndex < urls.count,
-                  let rep = image.representations.first,
-                  rep.pixelsWide > 0, rep.pixelsWide < width / 2 else { return }
+                  image.width > 0, image.width < width / 2 else { return }
             Self.log.fault("""
-                retouch source pane got a \(rep.pixelsWide)x\(rep.pixelsHigh) image \
+                retouch source pane got a \(image.width)x\(image.height) image \
                 for a \(self.width)x\(self.height) frame (index \(self.sourceIndex))
                 """)
         }
@@ -97,12 +96,12 @@ final class RetouchSession: ObservableObject {
     /// the app tracks unsaved work with it.
     var onEdited: (() -> Void)?
 
-    // Aligned source frames: float pixels for painting, NSImage for the pane.
+    // Aligned source frames: float pixels for painting, CGImage for the pane.
     // Published because `canPaint` derives from it (the result layer is
     // paintable while its pane preview still renders, so `sourceLoading`
     // alone can't drive the brush circle).
     @Published private(set) var sourceFloat: ImageBuffer?
-    private var sourceCache: [Int: (buffer: ImageBuffer, image: NSImage)] = [:]
+    private var sourceCache: [Int: (buffer: ImageBuffer, image: CGImage)] = [:]
     private var sourceCacheOrder: [Int] = []
     private var sourceLoadGeneration = 0
 
@@ -111,7 +110,7 @@ final class RetouchSession: ObservableObject {
     // (crossing bristles, crystals) and a single depth per pixel is wrong.
     var pmaxIndex: Int { urls.count }
     var isPMaxSource: Bool { sourceIndex == pmaxIndex }
-    private var pmaxCache: (buffer: ImageBuffer, image: NSImage)?
+    private var pmaxCache: (buffer: ImageBuffer, image: CGImage)?
     private var pmaxBuildCancel: CancellationToken?
     private var lastFrameSourceIndex = 0
 
@@ -122,7 +121,7 @@ final class RetouchSession: ObservableObject {
     var resultIndex: Int { urls.count + 1 }
     var isResultSource: Bool { sourceIndex == resultIndex }
     private let originalResult: ImageBuffer
-    private var resultImageCache: NSImage?
+    private var resultImageCache: CGImage?
 
     var sourceName: String {
         isPMaxSource ? "PMax blend layer"
@@ -258,7 +257,7 @@ final class RetouchSession: ObservableObject {
     }
 
     /// One-off full snapshot (used when leaving retouch mode).
-    func makeSnapshotImage() -> NSImage? {
+    func makeSnapshotImage() -> CGImage? {
         Self.makeImage(from: displayPixels, width: width, height: height)
     }
 
@@ -312,7 +311,7 @@ final class RetouchSession: ObservableObject {
         let (source, localIndex) = (stackSource, clamped)
         let url = urls[clamped]
         Task.detached(priority: .userInitiated) { [weak self] in
-            let loaded: (buffer: ImageBuffer, image: NSImage)?
+            let loaded: (buffer: ImageBuffer, image: CGImage)?
             do {
                 loaded = try Self.loadAligned(index: localIndex, from: source)
             } catch {
@@ -388,7 +387,7 @@ final class RetouchSession: ObservableObject {
         let cancel = CancellationToken()
         pmaxBuildCancel = cancel
         Task.detached(priority: .userInitiated) { [weak self] in
-            let loaded: (buffer: ImageBuffer, image: NSImage)?
+            let loaded: (buffer: ImageBuffer, image: CGImage)?
             do {
                 let fusedImage = try PyramidFusion.fuse(source: source,
                                                         progress: { fraction, preview in
@@ -397,15 +396,13 @@ final class RetouchSession: ObservableObject {
                     // off-main — these arrive from the fusion thread.
                     let image = preview
                         .flatMap { try? ImageFile.cgImage8(from: $0) }
-                        .map { NSImage(cgImage: $0, size: .zero) }
                     Task { @MainActor [weak self] in
                         guard let self, generation == self.sourceLoadGeneration else { return }
                         self.sourceStatus = "Building PMax layer… \(Int(fraction * 100))%"
                         if let image { self.sourceDisplay = image }
                     }
                 }, cancellation: cancel)
-                let cg = try ImageFile.cgImage8(from: fusedImage)
-                loaded = (fusedImage, NSImage(cgImage: cg, size: .zero))
+                loaded = (fusedImage, try ImageFile.cgImage8(from: fusedImage))
             } catch {
                 loaded = nil
                 if !(error is CancellationError) {
@@ -447,8 +444,7 @@ final class RetouchSession: ObservableObject {
         let generation = sourceLoadGeneration
         let buffer = originalResult
         Task.detached(priority: .userInitiated) { [weak self] in
-            let image = (try? ImageFile.cgImage8(from: buffer))
-                .map { NSImage(cgImage: $0, size: .zero) }
+            let image = try? ImageFile.cgImage8(from: buffer)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 if let image { self.resultImageCache = image }
@@ -499,7 +495,7 @@ final class RetouchSession: ObservableObject {
         }
     }
 
-    private func cacheSource(_ loaded: (buffer: ImageBuffer, image: NSImage), at index: Int) {
+    private func cacheSource(_ loaded: (buffer: ImageBuffer, image: CGImage), at index: Int) {
         guard sourceCache[index] == nil else { return }
         sourceCache[index] = loaded
         sourceCacheOrder.append(index)
@@ -526,10 +522,9 @@ final class RetouchSession: ObservableObject {
     }
 
     nonisolated private static func loadAligned(index: Int, from source: StackSource)
-        throws -> (buffer: ImageBuffer, image: NSImage) {
+        throws -> (buffer: ImageBuffer, image: CGImage) {
         let buffer = try source.frame(at: index)
-        let cg = try ImageFile.cgImage8(from: buffer)
-        return (buffer, NSImage(cgImage: cg, size: .zero))
+        return (buffer, try ImageFile.cgImage8(from: buffer))
     }
 
     // MARK: - Painting
@@ -833,16 +828,15 @@ final class RetouchSession: ObservableObject {
     }
 
     nonisolated private static func makeImage(from bytes: [UInt8],
-                                              width: Int, height: Int) -> NSImage? {
+                                              width: Int, height: Int) -> CGImage? {
         let space = ImageFile.workingSpace
         let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
-        return bytes.withUnsafeBytes { ptr -> NSImage? in
+        return bytes.withUnsafeBytes { ptr -> CGImage? in
             guard let ctx = CGContext(data: UnsafeMutableRawPointer(mutating: ptr.baseAddress),
                                       width: width, height: height,
                                       bitsPerComponent: 8, bytesPerRow: width * 4,
-                                      space: space, bitmapInfo: info.rawValue),
-                  let cg = ctx.makeImage() else { return nil }
-            return NSImage(cgImage: cg, size: .zero)
+                                      space: space, bitmapInfo: info.rawValue) else { return nil }
+            return ctx.makeImage()
         }
     }
 }

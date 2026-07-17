@@ -79,8 +79,8 @@ final class Stack: Identifiable {
     /// Crop rotation in degrees, applied about the rect's center.
     var cropAngle: Double = 0
     var frameIssues: [URL: String] = [:]
-    var outputPreview: NSImage?
-    var depthPreview: NSImage?
+    var outputPreview: CGImage?
+    var depthPreview: CGImage?
     /// The last fuse of this stack failed with this message.
     var failureMessage: String?
 

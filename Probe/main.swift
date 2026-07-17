@@ -551,7 +551,8 @@ Task { @MainActor in
     guard let previewImage = model.noiseFloorPreview else {
         print("probe: NOISE FLOOR PREVIEW MISSING"); exit(1)
     }
-    if let tiff = previewImage.tiffRepresentation {
+    if let tiff = NSBitmapImageRep(cgImage: previewImage)
+        .representation(using: .tiff, properties: [:]) {
         try? tiff.write(to: URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("nf_preview.tiff"))
     }

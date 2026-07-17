@@ -547,7 +547,7 @@ struct ContentView: View {
             }
     }
 
-    private var outputImage: NSImage? {
+    private var outputImage: CGImage? {
         if let preview = model.noiseFloorPreview { return preview }
         if model.phase.isRunning { return model.progressive }
         return model.outputMode == .depth ? model.depthPreview : model.outputPreview
@@ -564,7 +564,7 @@ struct ContentView: View {
         return url.lastPathComponent + (model.inputPreviewAligned ? " (aligned)" : "")
     }
 
-    private var inputPaneImage: NSImage? {
+    private var inputPaneImage: CGImage? {
         showProcessingSource ? model.processingSource : model.inputPreview
     }
 
@@ -893,7 +893,7 @@ struct PreviewPane<Header: View>: View {
     /// Accessibility namespace for the pane; names the title ("<id>.title")
     /// and empty-state hint ("<id>.hint") so tests can read pane state.
     var paneID: String? = nil
-    let image: NSImage?
+    let image: CGImage?
     /// Coordinate-space size in full-resolution pixels. The bitmap may be lower
     /// resolution (progressive previews); it is stretched to this space so both
     /// panes always share one coordinate system.
@@ -947,7 +947,7 @@ struct PreviewPane<Header: View>: View {
                     } else if let image, let nominal = nominalSize {
                         let scale = viewport.effectiveScale(imageSize: nominal, viewSize: geo.size)
                         let canvas = sourceCanvas ?? nominal
-                        let bitmapScale = canvas.width * scale / CGFloat(max(bitmapWidth(of: image), 1))
+                        let bitmapScale = canvas.width * scale / CGFloat(max(image.width, 1))
                         if !tone.isNeutral {
                             // Toned: an AppKit view drawing the visible
                             // region at native backing resolution, toned by
@@ -972,7 +972,7 @@ struct PreviewPane<Header: View>: View {
                             // the (possibly rotated) bitmap is clipped to it,
                             // so nothing outside the crop ever renders.
                             ZStack {
-                                Image(nsImage: image)
+                                Image(decorative: image, scale: 1)
                                     .resizable()
                                     .interpolation(bitmapScale >= 2 ? .none : .high)
                                     .frame(width: canvas.width * scale,
@@ -1055,11 +1055,6 @@ struct PreviewPane<Header: View>: View {
         }
     }
 
-    private func bitmapWidth(of image: NSImage) -> Int {
-        // NSImage(cgImage:size:.zero) sets size (points) equal to the CGImage's
-        // pixels; representations report Retina-scaled pixelsWide, so avoid them.
-        Int(image.size.width)
-    }
 }
 
 /// Shared tone application for pane NSViews: the curve as a Core Image
@@ -1107,10 +1102,9 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
             }
         }
     }
-    var image: NSImage? {
+    var image: CGImage? {
         didSet {
             guard image !== oldValue else { return }
-            cgCache = nil
             needsDisplay = true
         }
     }
@@ -1131,7 +1125,6 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
     var sourceAngle: Double = 0 {
         didSet { if sourceAngle != oldValue { needsDisplay = true } }
     }
-    private var cgCache: CGImage?
     private var viewportSubscription: AnyCancellable?
     private var lastScale: CGFloat = -1
     private var lastOffset: CGSize = .zero
@@ -1158,11 +1151,7 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         ctx.setFillColor(CGColor(gray: 0, alpha: 1))
         ctx.fill(dirtyRect)
-        guard let image, let viewport, nominalSize != .zero else { return }
-        if cgCache == nil {
-            cgCache = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        }
-        guard let cg = cgCache else { return }
+        guard let cg = image, let viewport, nominalSize != .zero else { return }
         let scale = viewport.effectiveScale(imageSize: nominalSize, viewSize: bounds.size)
         let canvas = sourceCanvas == .zero ? nominalSize : sourceCanvas
         // originX/Y = view position of the bitmap canvas's pixel (0, 0) in
@@ -1205,7 +1194,7 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
 }
 
 struct TonedImagePane: NSViewRepresentable {
-    let image: NSImage
+    let image: CGImage
     let nominalSize: CGSize
     var sourceOrigin: CGPoint = .zero
     var sourceCanvas: CGSize = .zero
