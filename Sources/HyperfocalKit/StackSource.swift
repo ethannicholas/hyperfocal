@@ -11,10 +11,11 @@ public struct StackSource {
     /// instead of the frame's own dimensions.
     public let outputWidth: Int?
     public let outputHeight: Int?
-    /// Per-frame exposure gains from a fusion (`Output.gains`), applied to
-    /// decoded frames so retouch stamps match the normalized result. Leave nil
-    /// for fusion itself — it measures and applies gains internally.
-    public var gains: [Float]?
+    /// Per-frame, per-channel exposure gains from a fusion (`Output.gains`),
+    /// applied to decoded frames so retouch stamps match the normalized
+    /// result. Leave nil for fusion itself — it measures and applies gains
+    /// internally.
+    public var gains: [SIMD3<Float>]?
 
     public init(urls: [URL], transforms: [simd_float3x3]? = nil,
                 outputWidth: Int? = nil, outputHeight: Int? = nil) {
@@ -29,7 +30,7 @@ public struct StackSource {
 
     public func frame(at i: Int) throws -> ImageBuffer {
         var img = try ImageFile.load(url: urls[i])
-        if let gain = gains?[i], gain != 1 {
+        if let gain = gains?[i], gain != SIMD3(repeating: 1) {
             img.scaleRGB(by: gain)
         }
         guard let t = transforms?[i] else { return img }

@@ -111,7 +111,7 @@ public enum PyramidFusion {
                         cancellation: cancellation,
                         decodeWorkers: FramePrefetcher.workers(for: source.urls)) { i in
             var img = try ImageFile.load(url: source.urls[i])
-            if let gain = source.gains?[i], gain != 1 {
+            if let gain = source.gains?[i], gain != SIMD3(repeating: 1) {
                 img.scaleRGB(by: gain)
             }
             return img

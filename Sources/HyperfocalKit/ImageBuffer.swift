@@ -22,14 +22,20 @@ public struct ImageBuffer {
 
     /// Multiplies RGB by a gain, leaving alpha (coverage) untouched.
     public mutating func scaleRGB(by gain: Float) {
+        scaleRGB(by: SIMD3(repeating: gain))
+    }
+
+    /// Per-channel variant (exposure gains are per-channel: LED flicker
+    /// wobbles white balance, not just brightness).
+    public mutating func scaleRGB(by gain: SIMD3<Float>) {
         let w = width
         pixels.withUnsafeMutableBufferPointer { px in
             DispatchQueue.concurrentPerform(iterations: height) { y in
                 var pi = y * w * 4
                 for _ in 0..<w {
-                    px[pi] *= gain
-                    px[pi + 1] *= gain
-                    px[pi + 2] *= gain
+                    px[pi] *= gain.x
+                    px[pi + 1] *= gain.y
+                    px[pi + 2] *= gain.z
                     pi += 4
                 }
             }

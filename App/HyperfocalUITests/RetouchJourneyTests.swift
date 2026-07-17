@@ -83,6 +83,23 @@ final class RetouchJourneyTests: XCTestCase {
             mode.radioButtons["Result"].click()
         }
 
+        XCTContext.runActivity(named: "PMax build offers Cancel; cancel falls back") { _ in
+            app.radioGroups["retouch.source-kind"].radioButtons["PMax Result"].click()
+            let cancel = app.buttons["retouch.pmax-cancel"]
+            if cancel.waitForExistence(timeout: 2) {
+                cancel.click()
+                let frameRadio = app.radioGroups["retouch.source-kind"]
+                    .radioButtons["Source Image"]
+                XCTAssertTrue(waitFor { (frameRadio.value as? Int) == 1 },
+                              "cancel should fall back to the frame source")
+            }
+            // A tiny fixture stack can finish the build before the button is
+            // clickable — the deterministic cancel semantics are the probe's
+            // territory ("pmax build cancel OK"); this smokes the control.
+            // Land on the frame source either way for the steps below.
+            app.radioGroups["retouch.source-kind"].radioButtons["Source Image"].click()
+        }
+
         XCTContext.runActivity(named: "eraser mode selectable") { _ in
             app.radioGroups["retouch.source-kind"]
                 .radioButtons["Original Result (erase)"].click()

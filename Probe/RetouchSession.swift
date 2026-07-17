@@ -149,6 +149,16 @@ final class RetouchSession: ObservableObject {
         }
     }
 
+    /// User-facing cancel for the on-demand PMax build (a full pyramid fuse —
+    /// minutes at 45 MP): abandon it and fall back to the last frame source.
+    /// The layer never arrives, so keeping the PMax selection would strand an
+    /// empty pane. selectSource does the actual teardown (cancels the token,
+    /// supersedes the load generation).
+    func cancelPMaxBuild() {
+        guard isPMaxSource, sourceLoading else { return }
+        selectSource(lastFrameSourceIndex)
+    }
+
     // Tile-based per-stroke undo. Snapshots carry the depth plane alongside
     // the pixels — strokes co-paint depth, so undo must restore both.
     private struct TileSnapshot {

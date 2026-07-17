@@ -17,15 +17,9 @@ trusting any algorithm change.
 
 ---
 
-## Release blockers
-
-None outstanding (as of 2026-07-17).
-
----
-
 ## Engine performance
 
-### 3. GPUDMap pass 1: overlap upload with GPU work — measure first
+### GPUDMap pass 1: overlap upload with GPU work — measure first
 
 GPUPyramid overlaps frame N+1's decode wait and upload memcpy with frame
 N's GPU work (ping-pong upload buffers, deferred wait — and note its
@@ -42,7 +36,7 @@ Done = buckets in -v output, and either the overlap ported (output
 byte-identical, blocked-on-GPU ≈ 0) or this item deleted because the
 measurement showed nothing worth hiding.
 
-### 3a. Research-informed fusion follow-ons
+### Research-informed fusion follow-ons
 
 From the 2026-07-12 deep-research pass — **full findings, evidence
 quotes, source list, refuted claims, and open questions are in
@@ -90,42 +84,3 @@ if wanted; PSNR-vs-synthetic-truth remains our gate meanwhile.
 Gates: synth baselines in the header, probe ALL PASS, CPU/GPU parity,
 and the mineral stack's three regions (shadow under the rim, substrate
 above the specimen, silhouette band) eyeballed against Helicon's result.
-
-
----
-
-## Community candy (post-1.0 or launch-adjacent)
-
-### 5. Synthetic stereo pairs
-
-The rocking-animation reprojection (`RockingAnimation`, gather-warp with
-destination-depth disparity) at a fixed ± disparity gives left/right
-eyes — export side-by-side and crossed-eye PNG pairs. At stereo-scale
-disparities the gather approximation may need revisiting (the old
-`nearestSeedFill` jump-flood, removed 2026-07-12, is in git history if
-splat + inpaint wins).
-
-Depth *direction* matters here, unlike the rocking loops (negated
-disparity there is just a half-cycle phase shift of the symmetric
-cycle): a fixed per-eye offset with inverted depth swaps the eyes and
-reads inside-out. Stereo needs a direction control or auto-detection —
-and note the app re-sorts frames by capture time at load
-(`StackSplitter.ordered`), so a "backwards" stack can only arise from
-shooting far-to-near, not from shuffled files.
-
-### 6. Smaller parity items (grab-bag, roughly ordered)
-
-- **Frame-order sanity:** frames now sort by EXIF capture time by default
-  (`StackSplitter.ordered`, Loading setting toggles back to filename), but
-  when the two orderings *disagree* nothing tells the user — warn on
-  mismatch so a shuffled or interleaved load (which fuses to garbage
-  silently) gets caught. Undated stacks fall back to name order with no
-  signal that capture ordering wasn't available.
-- **ETA in the progress card:** stages already report fractions
-  (`FusionProgress`); time the current stage and extrapolate.
-- **Per-channel exposure gains:** current flicker normalization is a single
-  luminance gain per frame (`DMapFusion.renderGains`); LED-lit stacks can
-  flicker per-channel (WB wobble). Same machinery, 3 gains instead of 1;
-  keep the geometric-mean anchor per channel.
-- **Cancel PMax generation:** currently there's no way to stop a PMax
-  generation once you've started it.

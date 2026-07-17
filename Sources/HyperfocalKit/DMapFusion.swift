@@ -1,5 +1,6 @@
 import Foundation
 import Dispatch
+import simd
 
 /// Depth-map fusion: estimate which frame is sharpest at every pixel, regularize
 /// that index map, then render the output by sampling frames along it.
@@ -91,10 +92,10 @@ public enum DMapFusion {
         /// sharpness in every frame independently of what the fusion decided
         /// (which is exactly what's in question wherever the user is painting).
         public let sharpness: FrameSharpness?
-        /// Per-frame exposure gains that were applied while rendering (1.0 for
-        /// the alignment reference). Retouch sources must apply the same gains
-        /// or stamps carry the original flicker into the normalized result.
-        public let gains: [Float]?
+        /// Per-frame, per-channel exposure gains that were applied while
+        /// rendering. Retouch sources must apply the same gains or stamps
+        /// carry the original flicker into the normalized result.
+        public let gains: [SIMD3<Float>]?
     }
 
     public static func fuse(frameCount: Int, options: Options = Options(),
@@ -129,8 +130,8 @@ public enum DMapFusion {
         var bestIndex: [Float] = []
         var sharpnessPlanes: [[Float]] = []
         var guidePlane: [Float] = []  // winner-frame luminance (regularizer guide)
-        var gains0 = [Float]()  // exposure gain per frame, relative to frame 0
-        var meanLum0: Float = 1
+        var gains0 = [SIMD3<Float>]()  // per-channel gain per frame, vs frame 0
+        var meanRGB0 = SIMD3<Float>(repeating: 1)
 
         // Pass 1: per-pixel argmax of smoothed |Laplacian| across the stack.
         for fi in 0..<frameCount {
@@ -147,14 +148,21 @@ public enum DMapFusion {
                          "frame \(fi) size mismatch: \(img.width)x\(img.height) vs \(width)x\(height)")
             let lum = img.luminancePlane()
             // Gain chained against frame 0 (known once the first frame is seen),
-            // so energies can be corrected as they stream. Laplacian is linear in
-            // gain, so scaling the energy equals measuring the normalized frame.
-            let mean = meanLuminance(lum: lum, pixels: img.pixels)
-            if fi == 0 { meanLum0 = mean }
+            // so energies can be corrected as they stream. Measured per channel
+            // (LED flicker wobbles white balance, not just brightness); the
+            // scoring side uses the luminance combination — Laplacian energy is
+            // computed on the luminance plane, and it is linear in gain, so
+            // scaling the energy equals measuring the normalized frame.
+            let mean = meanChannels(pixels: img.pixels)
+            if fi == 0 { meanRGB0 = mean }
             let gain = options.normalizeExposure
-                ? min(max(meanLum0 / max(mean, 1e-6), 0.5), 2)
+                ? min(max(luma(meanRGB0) / max(luma(mean), 1e-6), 0.5), 2)
                 : 1
-            gains0.append(gain)
+            gains0.append(options.normalizeExposure
+                ? (meanRGB0 / pointwiseMax(mean, .init(repeating: 1e-6)))
+                    .clamped(lowerBound: .init(repeating: 0.5),
+                             upperBound: .init(repeating: 2))
+                : .one)
             let lap = Filters.laplacianAbs(lum, width: width, height: height)
             var energy = Filters.blurPlane(lap, width: width, height: height,
                                            sigma: options.sharpnessSigma)
@@ -263,7 +271,7 @@ public enum DMapFusion {
                 continue
             }
             let img = try frame(fi)
-            let gain = gains?[fi] ?? 1
+            let gain = gains?[fi] ?? .one
             img.pixels.withUnsafeBufferPointer { fp in
                 depth.withUnsafeBufferPointer { dp in
                     accum.withUnsafeMutableBufferPointer { ap in
@@ -278,9 +286,9 @@ public enum DMapFusion {
                                     // coverage average the frames that do cover.
                                     let w = (tent + 1e-6) * a
                                     wp[i] += w
-                                    ap[pi] += fp[pi] * w * gain
-                                    ap[pi + 1] += fp[pi + 1] * w * gain
-                                    ap[pi + 2] += fp[pi + 2] * w * gain
+                                    ap[pi] += fp[pi] * w * gain.x
+                                    ap[pi + 1] += fp[pi + 1] * w * gain.y
+                                    ap[pi + 2] += fp[pi + 2] * w * gain.z
                                     ap[pi + 3] += fp[pi + 3] * w
                                 }
                             }
@@ -348,51 +356,56 @@ public enum DMapFusion {
         }
     }
 
-    /// Alpha-weighted mean luminance, stride-subsampled (a global gain estimate
-    /// doesn't need every pixel).
-    static func meanLuminance(lum: [Float], pixels: [Float]) -> Float {
-        var sum: Float = 0, wsum: Float = 0
-        var i = 0
-        while i < lum.count {
-            let a = pixels[i * 4 + 3]
-            sum += lum[i] * a
-            wsum += a
-            i += 7
-        }
-        return wsum > 0 ? sum / wsum : 0
-    }
-
-    /// Same measurement straight off RGBA pixels (no luminance plane needed).
-    static func meanLuminance(pixels: [Float]) -> Float {
-        var sum: Float = 0, wsum: Float = 0
+    /// Alpha-weighted per-channel mean, stride-subsampled (a global gain
+    /// estimate doesn't need every pixel).
+    static func meanChannels(pixels: [Float]) -> SIMD3<Float> {
+        var sum = SIMD3<Float>()
+        var wsum: Float = 0
         let count = pixels.count / 4
         var i = 0
         while i < count {
             let pi = i * 4
             let a = pixels[pi + 3]
-            sum += (0.2126 * pixels[pi] + 0.7152 * pixels[pi + 1]
-                    + 0.0722 * pixels[pi + 2]) * a
+            sum += SIMD3(pixels[pi], pixels[pi + 1], pixels[pi + 2]) * a
             wsum += a
             i += 7
         }
-        return wsum > 0 ? sum / wsum : 0
+        return wsum > 0 ? sum / wsum : SIMD3()
+    }
+
+    /// Rec. 709 luma of an RGB triple. Public so per-channel gains can be
+    /// collapsed to the scalar the legacy project field carries.
+    public static func luma(_ c: SIMD3<Float>) -> Float {
+        0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z
     }
 
     /// Converts frame-0-relative gains to render gains: unity at the stack's
-    /// geometric-mean exposure. Flicker is zero-mean, so the mean is the best
-    /// estimate of the true exposure — anchoring to any single frame would let
-    /// that frame's own flicker set the whole output's brightness. Returns nil
-    /// when normalization is off or the correction is negligible.
-    static func renderGains(from gains0: [Float], options: Options,
-                            log: ((String) -> Void)?) -> [Float]? {
+    /// geometric-mean exposure, held per channel. Flicker is zero-mean, so the
+    /// mean is the best estimate of the true exposure — anchoring to any single
+    /// frame would let that frame's own flicker set the whole output's
+    /// brightness (and, per-channel, its white balance). Returns nil when
+    /// normalization is off or the correction is negligible.
+    static func renderGains(from gains0: [SIMD3<Float>], options: Options,
+                            log: ((String) -> Void)?) -> [SIMD3<Float>]? {
         guard options.normalizeExposure, !gains0.isEmpty else { return nil }
-        let ref = exp(gains0.reduce(Float(0)) { $0 + Foundation.log(max($1, 1e-6)) }
-                      / Float(gains0.count))
-        guard ref > 0 else { return nil }
+        var logSum = SIMD3<Float>()
+        for g in gains0 {
+            logSum += SIMD3(Foundation.log(max(g.x, 1e-6)),
+                            Foundation.log(max(g.y, 1e-6)),
+                            Foundation.log(max(g.z, 1e-6)))
+        }
+        let s = logSum / Float(gains0.count)
+        let ref = SIMD3(exp(s.x), exp(s.y), exp(s.z))
+        guard ref.min() > 0 else { return nil }
         let gains = gains0.map { $0 / ref }
-        guard let lo = gains.min(), let hi = gains.max() else { return nil }
-        if hi - lo < 0.001 { return nil }  // no measurable flicker
-        log?(String(format: "exposure gains %.4f…%.4f", lo, hi))
+        var lo = gains[0], hi = gains[0]
+        for g in gains {
+            lo = pointwiseMin(lo, g)
+            hi = pointwiseMax(hi, g)
+        }
+        if (hi - lo).max() < 0.001 { return nil }  // no measurable flicker
+        log?(String(format: "exposure gains r %.4f…%.4f g %.4f…%.4f b %.4f…%.4f",
+                    lo.x, hi.x, lo.y, hi.y, lo.z, hi.z))
         return gains
     }
 

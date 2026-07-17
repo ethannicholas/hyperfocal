@@ -238,7 +238,7 @@ public final class MetalEngine {
         }
     }
 
-    struct TentParams { float index; float radius; uint count; float gain; };
+    struct TentParams { float4 gain; float index; float radius; uint count; };
 
     kernel void tent_accumulate(device const float4* frame [[buffer(0)]],
                                 device const float* depth [[buffer(1)]],
@@ -253,8 +253,9 @@ public final class MetalEngine {
         // Tiny floor: pixels whose selected frames lack coverage still average
         // the frames that do cover them, instead of dividing by zero.
         float w = (tent + 1e-6f) * s.w;
-        // Exposure gain corrects color only; coverage (alpha) is exposure-free.
-        accum[gid] += float4(s.xyz * (w * p.gain), s.w * w);
+        // Exposure gain corrects color only (per channel — LED flicker wobbles
+        // white balance); coverage (alpha) is exposure-free.
+        accum[gid] += float4(s.xyz * (w * p.gain.xyz), s.w * w);
         wsum[gid] += w;
     }
 

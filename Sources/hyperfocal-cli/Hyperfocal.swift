@@ -143,6 +143,20 @@ struct Fuse: ParsableCommand {
         let clock = ContinuousClock()
         let urls = inputs.map { URL(fileURLWithPath: $0) }
 
+        // Frame-order sanity: inputs are taken as given ("in focus order"),
+        // which is usually a shell glob in filename order. If EXIF capture
+        // times disagree with that order, say so — a shuffled or interleaved
+        // list fuses to garbage silently. Header reads only; cheap next to
+        // the fuse itself.
+        let captureDates = urls.map(StackSplitter.captureDate(of:))
+        if !captureDates.contains(nil),
+           StackSplitter.ordered(urls: urls, dates: captureDates,
+                                 byCaptureTime: true) != urls {
+            print("warning: input order differs from EXIF capture order — "
+                  + "if these frames are one stack shot in sequence, reorder "
+                  + "them (or check for frames from another stack mixed in)")
+        }
+
         // Frames stream through both passes one at a time; nothing scales with depth.
         var fuseURLs = urls
         var transforms: [simd_float3x3]? = nil

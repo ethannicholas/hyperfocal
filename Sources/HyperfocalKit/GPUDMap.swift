@@ -31,10 +31,20 @@ public enum GPUDMap {
     }
 
     struct TentParams {
+        // gain first: float4/SIMD4 16-byte alignment keeps the Swift and
+        // Metal layouts identical without padding games (w unused).
+        var gain: SIMD4<Float>
         var index: Float
         var radius: Float
         var count: UInt32
-        var gain: Float
+        private var _pad: UInt32 = 0
+
+        init(index: Float, radius: Float, count: UInt32, gain: SIMD3<Float>) {
+            self.gain = SIMD4(gain, 0)
+            self.index = index
+            self.radius = radius
+            self.count = count
+        }
     }
 
     struct PreviewParams {
@@ -97,8 +107,8 @@ public enum GPUDMap {
         var guideBuf: MTLBuffer!  // guided path only
         var sw = 0, sh = 0
         var sharpnessPlanes: [[Float]] = []
-        var gains0 = [Float]()  // exposure gain per frame, relative to frame 0
-        var meanLum0: Float = 1
+        var gains0 = [SIMD3<Float>]()  // per-channel gain per frame, vs frame 0
+        var meanRGB0 = SIMD3<Float>(repeating: 1)
 
         // Pass 1 spills its warped frames so pass 2 can stream them back
         // instead of decoding + warping the stack a second time (see
@@ -196,12 +206,18 @@ public enum GPUDMap {
             warpCmd.waitUntilCompleted()
             if let error = warpCmd.error { throw StackError.metal("warp: \(error)") }
 
-            let mean = meanLuminance(buffer: input, pixelCount: pixelCount)
-            if fi == 0 { meanLum0 = mean }
+            let mean = meanChannels(buffer: input, pixelCount: pixelCount)
+            if fi == 0 { meanRGB0 = mean }
+            // Scalar luminance gain for the scoring side (energy plane, guide);
+            // the per-channel gains are for the render (see DMapFusion).
             var gain: Float = options.normalizeExposure
-                ? min(max(meanLum0 / max(mean, 1e-6), 0.5), 2)
+                ? min(max(DMapFusion.luma(meanRGB0) / max(DMapFusion.luma(mean), 1e-6), 0.5), 2)
                 : 1
-            gains0.append(gain)
+            gains0.append(options.normalizeExposure
+                ? (meanRGB0 / pointwiseMax(mean, .init(repeating: 1e-6)))
+                    .clamped(lowerBound: .init(repeating: 0.5),
+                             upperBound: .init(repeating: 2))
+                : .one)
 
             guard let cmd = engine.queue.makeCommandBuffer(),
                   let encoder = cmd.makeComputeCommandEncoder() else {
@@ -427,7 +443,7 @@ public enum GPUDMap {
             }
 
             var params = TentParams(index: Float(fi), radius: radius, count: UInt32(pixelCount),
-                                    gain: gains?[fi] ?? 1)
+                                    gain: gains?[fi] ?? .one)
             encoder.setBuffer(input, offset: 0, index: 0)
             encoder.setBuffer(depthBuf, offset: 0, index: 1)
             encoder.setBuffer(accumBuf, offset: 0, index: 2)
@@ -500,20 +516,22 @@ public enum GPUDMap {
                                  gains: gains)
     }
 
-    /// Alpha-weighted mean luminance of an RGBA float buffer, stride-subsampled —
-    /// the exposure-gain measurement, matching `DMapFusion.meanLuminance`.
-    static func meanLuminance(buffer: MTLBuffer, pixelCount: Int) -> Float {
+    /// Alpha-weighted per-channel mean of an RGBA float buffer, stride-
+    /// subsampled — the exposure-gain measurement, matching
+    /// `DMapFusion.meanChannels`.
+    static func meanChannels(buffer: MTLBuffer, pixelCount: Int) -> SIMD3<Float> {
         let p = buffer.contents().assumingMemoryBound(to: Float.self)
-        var sum: Float = 0, wsum: Float = 0
+        var sum = SIMD3<Float>()
+        var wsum: Float = 0
         var i = 0
         while i < pixelCount {
             let pi = i * 4
             let a = p[pi + 3]
-            sum += (0.2126 * p[pi] + 0.7152 * p[pi + 1] + 0.0722 * p[pi + 2]) * a
+            sum += SIMD3(p[pi], p[pi + 1], p[pi + 2]) * a
             wsum += a
             i += 7
         }
-        return wsum > 0 ? sum / wsum : 0
+        return wsum > 0 ? sum / wsum : SIMD3()
     }
 
     struct MedianParams {

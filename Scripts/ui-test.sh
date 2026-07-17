@@ -65,11 +65,21 @@ mkdir -p "$FIXTURES/out"
 for f in "$FIXTURES/stack-b"/frame_*; do
     mv "$f" "$FIXTURES/stack-b/b_$(basename "$f" | sed s/^frame_//)"
 done
-# Big enough that Cancel lands mid-registration.
-"$CLI" synth -o "$FIXTURES/cancel-stack" --frames 20 --width 3200 --height 2400 --ext jpg >/dev/null
+# Big enough that Cancel lands mid-registration and the stage runs long
+# enough (> a few seconds) for an ETA to form — the GPU pipeline chews the
+# old 20×8 MP version in seconds, which starved both timing tests into
+# permanent skips.
+"$CLI" synth -o "$FIXTURES/cancel-stack" --frames 24 --width 6000 --height 4500 --ext jpg >/dev/null
 # A flash-misfire frame (index 2; must not be the reference frame) for the
 # auto-exclusion test.
 "$CLI" synth -o "$FIXTURES/misfire-stack" --frames 8 --width 500 --height 400 --ext jpg --misfire-frame 2 >/dev/null
+# Capture-stamped frames with two filenames swapped: name order disagrees
+# with capture order (the frame-order warning badge's mismatch case; the
+# undated stacks above cover the fallback case).
+"$CLI" synth -o "$FIXTURES/shuffled-stack" --frames 6 --width 500 --height 400 --ext jpg --capture-start 1000000000 >/dev/null
+mv "$FIXTURES/shuffled-stack/frame_001.jpg" "$FIXTURES/shuffled-stack/frame_tmp.jpg"
+mv "$FIXTURES/shuffled-stack/frame_004.jpg" "$FIXTURES/shuffled-stack/frame_001.jpg"
+mv "$FIXTURES/shuffled-stack/frame_tmp.jpg" "$FIXTURES/shuffled-stack/frame_004.jpg"
 # Ground truth would ingest as an extra frame.
 rm -f "$FIXTURES"/*/ground_truth.*
 

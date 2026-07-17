@@ -9,6 +9,22 @@ final class StackListJourneyTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testOrderWarningBadges() throws {
+        // shuffled-stack: capture-stamped frames with two filenames swapped —
+        // the mismatch badge. stack-a: no EXIF at all — the filename-order
+        // fallback badge. Both surface as per-row warning triangles.
+        let app = try launchApp(stacks: ["shuffled-stack", "stack-a"])
+        let mismatch = app.images["stack.row.shuffled-stack.order-warning"]
+        let undated = app.images["stack.row.stack-a.order-warning"]
+        XCTAssertTrue(mismatch.waitForExistence(timeout: 15),
+                      "mismatch badge missing on the shuffled stack")
+        XCTAssertTrue(undated.exists, "undated badge missing on the EXIF-less stack")
+        XCTAssertTrue(mismatch.label.contains("Capture order"),
+                      "mismatch badge label: \(mismatch.label)")
+        XCTAssertTrue(undated.label.contains("no capture times"),
+                      "undated badge label: \(undated.label)")
+    }
+
     func testStackListJourney() throws {
         let framesA = try Fixtures.frames(in: "stack-a")
         let app = try launchApp(stacks: ["stack-a", "stack-b"])

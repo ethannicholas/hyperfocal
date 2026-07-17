@@ -223,7 +223,14 @@ struct ContentView: View {
                           ? "chevron.right" : "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
+                    // Font pinned (matching the Stack panel's header): a
+                    // collapsed section leaves its Section empty, and the
+                    // grouped Form then restyles the *next* section's header
+                    // as mid-group text — ambient styling can't be trusted
+                    // here.
                     Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                     Spacer()
                 }
                 .contentShape(Rectangle())
@@ -520,6 +527,12 @@ struct ContentView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .accessibilityIdentifier("progress.stage")
+                                if let eta = model.stageETA {
+                                    Text(eta)
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                        .accessibilityIdentifier("progress.eta")
+                                }
                                 Spacer()
                                 Button("Cancel") { model.cancelFusion() }
                                     .controlSize(.small)
@@ -663,6 +676,12 @@ struct RetouchControls: View {
         .pickerStyle(.radioGroup)
         .accessibilityIdentifier("retouch.source-kind")
         .help("What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. Original Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.")
+        if session.sourceKind == .pmax && session.sourceLoading {
+            Button("Cancel PMax Build") { session.cancelPMaxBuild() }
+                .controlSize(.small)
+                .accessibilityIdentifier("retouch.pmax-cancel")
+                .help("Stop building the PMax layer and go back to the previous brush source. Selecting PMax Result again restarts the build.")
+        }
         HStack {
             Spacer()
             Button("Revert All", role: .destructive) { onReset() }
@@ -765,6 +784,18 @@ struct StackRow: View {
                 .labelsHidden()
                 .help("Include this stack in Fuse Enabled Stacks. Doesn't change its per-frame checkboxes.")
                 .accessibilityIdentifier("stack.row.\(stack.name).enabled")
+            if let warning = stack.orderWarning {
+                // Frame-order sanity: a shuffled or interleaved load fuses to
+                // garbage silently, and an undated stack quietly falls back
+                // to filename order. Outside the row button so it stays its
+                // own accessibility element (hover shows the full text).
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                    .font(.caption)
+                    .help(warning)
+                    .accessibilityIdentifier("stack.row.\(stack.name).order-warning")
+                    .accessibilityLabel(warning)
+            }
             // Selection is a real (plain) button, not a tap gesture, so rows
             // are accessible and automatable.
             Button {

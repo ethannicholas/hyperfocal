@@ -59,6 +59,33 @@ public enum StackSplitter {
         }.map(\.url)
     }
 
+    /// Why a stack's fusion order deserves a warning, if it does.
+    public enum OrderIssue: Equatable {
+        /// Capture-time order and filename order disagree. The fused order
+        /// (capture time) is still correct for a rolled-over file counter —
+        /// but disagreement is also the signature of a shuffled or
+        /// interleaved load (two stacks' frames in one folder), which fuses
+        /// to garbage silently.
+        case mismatch
+        /// No complete set of capture times: filename order was the
+        /// fallback, with nothing else saying capture ordering wasn't
+        /// available.
+        case undated
+    }
+
+    /// Sanity check for the order a stack will fuse in. Nil in name-order
+    /// mode — that's an explicit setting, not a silent fallback.
+    public static func orderIssue(urls: [URL], dates: [Date?],
+                                  byCaptureTime: Bool) -> OrderIssue? {
+        guard byCaptureTime, urls.count > 1 else { return nil }
+        guard urls.count == dates.count, !dates.contains(nil) else {
+            return .undated
+        }
+        let byName = urls.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return ordered(urls: urls, dates: dates, byCaptureTime: true) == byName
+            ? nil : .mismatch
+    }
+
     /// Reads capture times and groups the frames at gaps larger than `gap`.
     /// If *any* frame lacks a timestamp the whole list stays one group — a
     /// wrong split is worse than no split.

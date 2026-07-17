@@ -64,7 +64,11 @@ final class Stack: Identifiable {
     var depthResult: ImageBuffer?
     var resultDepth: [Float] = []
     var resultSharpness: FrameSharpness?
-    var resultGains: [Float]?
+    var resultGains: [SIMD3<Float>]?
+    // Load-time frame-order sanity warning (capture/name order disagreement
+    // or missing capture times) — see AppModel.orderWarning. Persisted with
+    // the project so the badge survives reopen.
+    var orderWarning: String?
     var fuseURLs: [URL] = []
     var fusedSettings: FuseSettings?
     /// Tone adjustments (preview + display-referred exports); per stack.

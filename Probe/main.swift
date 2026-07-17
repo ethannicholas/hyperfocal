@@ -150,6 +150,46 @@ Task { @MainActor in
     }
     print("probe: superseded pmax build leaks nothing OK")
 
+    // 1a2b. User-facing PMax-build cancel (cancelPMaxBuild): falls back to
+    // the last frame source, and the cancelled build leaks nothing. The
+    // pre-cancel state is deterministic: no await between selectKind(.pmax)
+    // and the cancel, so the build's main-actor completion cannot have
+    // landed yet even if the fuse itself finished.
+    let session3 = RetouchSession(result: output.image, depth: output.depth,
+                                  sharpness: output.sharpness, source: source)
+    session3.selectSource(2)
+    ticks = 0
+    while session3.sourceLoading && ticks < 300 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard let frameDisplay = session3.sourceDisplay, session3.sourceError == nil else {
+        print("probe: PMAX-CANCEL SETUP FRAME LOAD FAILED"); exit(1)
+    }
+    session3.selectKind(.pmax)
+    guard session3.sourceKind == .pmax, session3.sourceLoading else {
+        print("probe: PMAX-CANCEL BUILD NEVER STARTED"); exit(1)
+    }
+    session3.cancelPMaxBuild()
+    guard session3.sourceKind == .frame, session3.sourceIndex == 2,
+          session3.sourceDisplay === frameDisplay else {
+        print("probe: PMAX-CANCEL DID NOT RESTORE THE FRAME SOURCE "
+              + "(kind \(session3.sourceKind), index \(session3.sourceIndex))")
+        exit(1)
+    }
+    // Drain the cancelled build — none of it may leak into the pane.
+    for _ in 0..<50 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        guard session3.sourceDisplay === frameDisplay, session3.sourceError == nil,
+              session3.sourceStatus == nil, session3.sourceKind == .frame else {
+            print("probe: CANCELLED PMAX BUILD LEAKED "
+                  + "(error \(session3.sourceError ?? "nil"), "
+                  + "status \(session3.sourceStatus ?? "nil"))")
+            exit(1)
+        }
+    }
+    print("probe: pmax build cancel OK")
+
     // 1a3. Result (eraser) layer: a stamp from a frame changes the working
     // pixels; an eraser stamp over the same spot restores the pristine fusion
     // exactly (inner-brush alpha is exactly 1), and toggling off returns to
@@ -297,7 +337,9 @@ Task { @MainActor in
         transforms: cache.transforms(for: Array(urls)),
         result: output.image, depth: output.depth, sharpness: output.sharpness,
         working: output.image, sourceIndex: 3,
-        gains: (0..<urls.count).map { 1 + Float($0) * 0.01 })
+        gains: (0..<urls.count).map {
+            SIMD3(1 + Float($0) * 0.01, 1 - Float($0) * 0.005, 1 + Float($0) * 0.002)
+        })
     var unfusedStack = ProjectStore.StackPayload(
         name: "later", frameURLs: Array(urls.prefix(3)),
         includedURLs: Set(urls.prefix(2)), transforms: nil, result: nil)
@@ -333,6 +375,63 @@ Task { @MainActor in
     }
     assert(restored.sourceIndex == 3)
     assert(restored.gains == savedStack.gains, "exposure gains differ")
+    // Gains manifest mapping: legacy scalar files expand to equal channels;
+    // gainsRGB wins when both fields are present (new writers emit both).
+    var legacyManifest = ProjectStore.StackManifest(
+        name: "legacy", enabled: true, framePaths: [], includedPaths: [],
+        transforms: nil, hasResult: false, resultWidth: 0, resultHeight: 0,
+        hasWorking: false, sourceIndex: nil, gains: [1.25, 0.8],
+        fusedSettings: nil, sharpnessFactor: nil, sharpnessFullWidth: nil,
+        sharpnessFullHeight: nil, sharpnessFrameCount: nil, sharpnessScale: nil)
+    assert(ProjectStore.gains(from: legacyManifest)
+           == [SIMD3(repeating: 1.25), SIMD3(repeating: 0.8)],
+           "legacy scalar gains must expand to equal channels")
+    legacyManifest.gainsRGB = [[1.1, 1.0, 0.9], [1.0, 1.0, 1.0]]
+    assert(ProjectStore.gains(from: legacyManifest)
+           == [SIMD3(1.1, 1.0, 0.9), SIMD3(repeating: 1.0)],
+           "gainsRGB must win over the legacy field")
+    print("probe: gains manifest mapping OK")
+    // Frame-order sanity check: mismatch when capture order and filename
+    // order disagree, undated when any stamp is missing, quiet otherwise
+    // (and always quiet in explicit name-order mode).
+    let orderURLs = ["a.tif", "b.tif", "c.tif"].map { URL(fileURLWithPath: "/x/\($0)") }
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    let inOrder: [Date?] = [t0, t0.addingTimeInterval(1), t0.addingTimeInterval(2)]
+    let shuffled: [Date?] = [t0.addingTimeInterval(2), t0, t0.addingTimeInterval(1)]
+    let undated: [Date?] = [t0, nil, t0.addingTimeInterval(2)]
+    assert(StackSplitter.orderIssue(urls: orderURLs, dates: inOrder,
+                                    byCaptureTime: true) == nil,
+           "clean stack must not warn")
+    assert(StackSplitter.orderIssue(urls: orderURLs, dates: shuffled,
+                                    byCaptureTime: true) == .mismatch,
+           "shuffled stack must warn mismatch")
+    assert(StackSplitter.orderIssue(urls: orderURLs, dates: undated,
+                                    byCaptureTime: true) == .undated,
+           "undated stack must warn undated")
+    assert(StackSplitter.orderIssue(urls: orderURLs, dates: shuffled,
+                                    byCaptureTime: false) == nil,
+           "explicit name-order mode never warns")
+    print("probe: frame-order sanity OK")
+    // Stage ETA: extrapolates only after 2 s of a stage with a real
+    // fraction, resets on stage changes, and formats coarsely.
+    let etaModel = AppModel()
+    let e0 = Date(timeIntervalSince1970: 2_000_000)
+    etaModel.updateStageETA(stage: .depth, fraction: 0.0, now: e0)
+    assert(etaModel.stageETA == nil, "eta before any elapsed time")
+    etaModel.updateStageETA(stage: .depth, fraction: 0.2,
+                            now: e0.addingTimeInterval(4))
+    assert(etaModel.stageETA == "~15 s left",
+           "eta at 20% after 4s: \(etaModel.stageETA ?? "nil")")
+    etaModel.updateStageETA(stage: .render, fraction: 0.5,
+                            now: e0.addingTimeInterval(5))
+    assert(etaModel.stageETA == nil, "stage change must reset the eta")
+    etaModel.updateStageETA(stage: .render, fraction: 0.02,
+                            now: e0.addingTimeInterval(60))
+    assert(etaModel.stageETA == nil, "tiny fractions extrapolate to nonsense")
+    assert(AppModel.etaLabel(47) == "~45 s left", "5 s rounding")
+    assert(AppModel.etaLabel(200) == "~3 min left", "minute rounding")
+    assert(AppModel.etaLabel(1.5) == nil, "sub-3s eta drops the label")
+    print("probe: stage eta OK")
     assert(restored.transforms?.count == urls.count, "transforms count")
     if let sa = restored.sharpness, let sb = output.sharpness {
         let ga = sa.regionScores(centerX: 100, centerY: 100, radius: 60)

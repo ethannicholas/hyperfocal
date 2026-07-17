@@ -48,7 +48,10 @@ enum ProjectStore {
         var resultHeight: Int
         var hasWorking: Bool             // retouch edits present
         var sourceIndex: Int?
-        var gains: [Float]?              // exposure gains the fusion applied
+        var gains: [Float]?              // legacy luminance gains (pre-per-channel
+                                         // files, and written for old readers)
+        var gainsRGB: [[Float]]? = nil   // per-channel gains, 3 floats per frame
+        var orderWarning: String? = nil  // load-time frame-order sanity warning
         var fusedSettings: FuseSettings? // staleness tracking for Fuse buttons
         var tone: ToneSettings? = nil    // nil = neutral (and pre-tone files)
         var crop: [Int]? = nil           // x, y, w, h in result pixels; nil = uncropped
@@ -76,7 +79,8 @@ enum ProjectStore {
         var sharpness: FrameSharpness?
         var working: ImageBuffer?        // retouched pixels, if any edits
         var sourceIndex: Int?
-        var gains: [Float]? = nil
+        var gains: [SIMD3<Float>]? = nil
+        var orderWarning: String? = nil
         var fusedSettings: FuseSettings? = nil
         var tone: ToneSettings? = nil
         var crop: [Int]? = nil           // x, y, w, h in result pixels
@@ -134,7 +138,11 @@ enum ProjectStore {
                 resultHeight: stack.result?.height ?? 0,
                 hasWorking: stack.working != nil,
                 sourceIndex: stack.sourceIndex,
-                gains: stack.gains,
+                // Legacy field carries the luminance combination so pre-
+                // per-channel readers still normalize brightness.
+                gains: stack.gains.map { $0.map(DMapFusion.luma) },
+                gainsRGB: stack.gains.map { $0.map { [$0.x, $0.y, $0.z] } },
+                orderWarning: stack.orderWarning,
                 fusedSettings: stack.fusedSettings,
                 tone: stack.tone,
                 crop: stack.crop,
@@ -186,6 +194,17 @@ enum ProjectStore {
         }
     }
 
+    /// Per-channel gains from a manifest: `gainsRGB` when present, else the
+    /// legacy scalar `gains` expanded to equal channels (pre-per-channel
+    /// files). Separated so the probe can exercise the legacy path without
+    /// hand-building an old archive.
+    static func gains(from manifest: StackManifest) -> [SIMD3<Float>]? {
+        manifest.gainsRGB.map {
+            $0.map { $0.count == 3 ? SIMD3($0[0], $0[1], $0[2])
+                                   : SIMD3(repeating: 1) }
+        } ?? manifest.gains.map { $0.map { SIMD3(repeating: $0) } }
+    }
+
     private static func stackDirectoryName(_ index: Int) -> String {
         String(format: "stack_%03d", index)
     }
@@ -233,7 +252,8 @@ enum ProjectStore {
             },
             result: nil,
             sourceIndex: manifest.sourceIndex,
-            gains: manifest.gains,
+            gains: gains(from: manifest),
+            orderWarning: manifest.orderWarning,
             fusedSettings: manifest.fusedSettings,
             tone: manifest.tone,
             crop: manifest.crop,

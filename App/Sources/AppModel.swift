@@ -256,6 +256,13 @@ final class AppModel: ObservableObject {
     // Progress
     @Published var stageText = ""
     @Published var stageFraction = 0.0
+    // Remaining-time estimate for the current stage, extrapolated from its
+    // fraction. Stage-scoped on purpose: stages have wildly different
+    // per-unit costs, so a whole-fuse extrapolation would swing hardest
+    // exactly when it's most visible (the long depth/render stages).
+    @Published var stageETA: String?
+    private var stageTimerStage: FusionProgress.Stage?
+    private var stageTimerStart = Date()
     @Published var progressive: NSImage?
     @Published var progressiveNominalSize: CGSize?
     @Published var processingSource: NSImage?
@@ -406,7 +413,7 @@ final class AppModel: ObservableObject {
     private(set) var resultDepth: [Float] = []
     private(set) var resultSharpness: FrameSharpness?
     // Exposure gains the fusion applied; retouch sources must match them.
-    private(set) var resultGains: [Float]?
+    private(set) var resultGains: [SIMD3<Float>]?
     private var fuseURLs: [URL] = []
     // What the current result was fused with (selected-stack mirror).
     private var fusedSettings: FuseSettings?
@@ -838,6 +845,7 @@ final class AppModel: ObservableObject {
                 working: stack.savedWorking,
                 sourceIndex: stack.savedSourceIndex,
                 gains: stack.resultGains,
+                orderWarning: stack.orderWarning,
                 fusedSettings: stack.fusedSettings,
                 tone: stack.tone.isNeutral ? nil : stack.tone,
                 crop: stack.cropRect.map {
@@ -1058,6 +1066,7 @@ final class AppModel: ObservableObject {
             stack.resultDepth = item.payload.depth
             stack.resultSharpness = item.payload.sharpness
             stack.resultGains = item.payload.gains
+            stack.orderWarning = item.payload.orderWarning
             stack.fusedSettings = item.payload.fusedSettings
             stack.tone = item.payload.tone ?? ToneSettings()
             stack.cropRect = item.payload.crop.flatMap {
@@ -1620,7 +1629,7 @@ final class AppModel: ObservableObject {
     /// (capture time survives filename-counter rollover; name order when off
     /// or when any frame is undated).
     nonisolated private static func scanGroups(urls: [URL], orderByCaptureTime: Bool)
-        -> [(name: String, frames: [URL], bursts: [[URL]])] {
+        -> [(name: String, frames: [URL], bursts: [[URL]], dates: [URL: Date])] {
         let fm = FileManager.default
         var groups = [(name: String, frames: [URL])]()
         var loose = [URL]()
@@ -1654,23 +1663,58 @@ final class AppModel: ObservableObject {
             groups.insert((name, loose.sorted { $0.lastPathComponent < $1.lastPathComponent }),
                           at: 0)
         }
-        // One EXIF pass per group feeds both the frame order and the burst
-        // split (hundreds of header reads on a card load — don't do it twice).
+        // One EXIF pass per group feeds the frame order, the burst split,
+        // and the order sanity check (hundreds of header reads on a card
+        // load — don't do it twice).
         return groups.map { group in
             let dates = group.frames.map(StackSplitter.captureDate(of:))
+            var dated = [URL: Date]()
+            for (url, date) in zip(group.frames, dates) {
+                if let date { dated[url] = date }
+            }
             return (group.name,
                     StackSplitter.ordered(urls: group.frames, dates: dates,
                                           byCaptureTime: orderByCaptureTime),
                     StackSplitter.split(urls: group.frames, dates: dates,
                                         gap: StackSplitter.defaultGap,
-                                        orderByCaptureTime: orderByCaptureTime))
+                                        orderByCaptureTime: orderByCaptureTime),
+                    dated)
         }
     }
 
-    private func installScanned(_ groups: [(name: String, frames: [URL], bursts: [[URL]])],
+    /// Warning text for a stack whose fusion order deserves a second look —
+    /// nil when the order is trustworthy. Shown as a badge on the stack row:
+    /// a shuffled or interleaved load fuses to garbage silently, and an
+    /// undated stack quietly falls back to filename order.
+    nonisolated private static func orderWarning(frames: [URL], dates: [URL: Date],
+                                                 byCaptureTime: Bool) -> String? {
+        switch StackSplitter.orderIssue(urls: frames,
+                                        dates: frames.map { dates[$0] },
+                                        byCaptureTime: byCaptureTime) {
+        case .mismatch:
+            return "Capture order and filename order disagree. Frames fuse in"
+                + " capture order — right for a rolled-over file counter, but if"
+                + " this folder mixes frames from different stacks, split them"
+                + " before fusing."
+        case .undated:
+            return "These frames carry no capture times, so they fuse in"
+                + " filename order. Make sure filenames follow focus order."
+        case nil:
+            return nil
+        }
+    }
+
+    private func installScanned(_ groups: [(name: String, frames: [URL],
+                                            bursts: [[URL]], dates: [URL: Date])],
                                 replacing: Bool) {
         var splitChoice: Bool? = nil  // asked at most once per load
         var newStacks = [Stack]()
+        func makeStack(name: String, frames: [URL], dates: [URL: Date]) -> Stack {
+            let stack = Stack(name: name, frames: frames)
+            stack.orderWarning = Self.orderWarning(frames: frames, dates: dates,
+                                                   byCaptureTime: orderByCaptureTime)
+            return stack
+        }
         for group in groups {
             if group.bursts.filter({ $0.count >= 2 }).count >= 2 {
                 if splitChoice == nil {
@@ -1679,12 +1723,14 @@ final class AppModel: ObservableObject {
                 }
                 if splitChoice == true {
                     for (i, burst) in group.bursts.enumerated() {
-                        newStacks.append(Stack(name: "\(group.name) \(i + 1)", frames: burst))
+                        newStacks.append(makeStack(name: "\(group.name) \(i + 1)",
+                                                   frames: burst, dates: group.dates))
                     }
                     continue
                 }
             }
-            newStacks.append(Stack(name: group.name, frames: group.frames))
+            newStacks.append(makeStack(name: group.name, frames: group.frames,
+                                       dates: group.dates))
         }
         if replacing {
             resetForNewProject()
@@ -2452,6 +2498,8 @@ final class AppModel: ObservableObject {
         phase = .running
         stageText = "Starting…"
         stageFraction = 0
+        stageETA = nil
+        stageTimerStage = nil
         progressive = nil
         progressiveNominalSize = nil
         processingSource = nil
@@ -2548,6 +2596,8 @@ final class AppModel: ObservableObject {
                         // or the cancel looks ignored.
                         guard !cancellation.isCancelled else { return }
                         self.stageText = update.stage.rawValue
+                        self.updateStageETA(stage: update.stage,
+                                            fraction: update.fraction)
                         // One monotonic bar across the whole fuse: each stage
                         // owns a window of the overall span, and the max()
                         // keeps skipped stages (cache hits) from ever
@@ -2643,6 +2693,36 @@ final class AppModel: ObservableObject {
     /// Maps a per-stage fraction into the fuse's single progress span.
     /// Windows are rough stage-duration weights; registering and aligning
     /// share one span because the engine reports them on one 0…1 fraction.
+    /// ETA: time the current stage, extrapolate from its fraction once
+    /// there's enough signal to be honest (≥ 2 s elapsed and a real
+    /// fraction). Stage changes reset the clock. `now` is injectable so the
+    /// probe can drive the timeline deterministically.
+    func updateStageETA(stage: FusionProgress.Stage, fraction: Double,
+                        now: Date = Date()) {
+        if stageTimerStage != stage {
+            stageTimerStage = stage
+            stageTimerStart = now
+            stageETA = nil
+        } else if fraction >= 0.04 {
+            let elapsed = now.timeIntervalSince(stageTimerStart)
+            if elapsed >= 2 {
+                stageETA = Self.etaLabel(elapsed / fraction * (1 - fraction))
+            }
+        }
+    }
+
+    /// "~40 s left" / "~3 min left" — deliberately coarse (5 s / 1 min
+    /// steps): the extrapolation is only as steady as the stage's per-frame
+    /// cost, and a twitchy countdown reads as broken. Nil under 3 s so the
+    /// label disappears instead of counting down to a lie.
+    static func etaLabel(_ seconds: Double) -> String? {
+        guard seconds.isFinite, seconds >= 3 else { return nil }
+        if seconds < 90 {
+            return "~\(max(5, Int((seconds / 5).rounded()) * 5)) s left"
+        }
+        return "~\(Int((seconds / 60).rounded())) min left"
+    }
+
     static func overallProgress(_ stage: FusionProgress.Stage,
                                 _ fraction: Double) -> Double {
         let window: (Double, Double)
@@ -2776,6 +2856,7 @@ final class AppModel: ObservableObject {
     func cancelFusion() {
         fusionCancellation?.cancel()
         stageText = "Cancelling…"
+        stageETA = nil
     }
 
     // MARK: - Retouching
