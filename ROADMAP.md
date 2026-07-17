@@ -17,6 +17,45 @@ trusting any algorithm change.
 
 ---
 
+## Cross-platform port (Windows/Linux)
+
+Strategy and phases: `Docs/cross-platform-plan.md` (decided 2026-07-17;
+evidence in `Docs/research/2026-07-17-windows-linux-port-evaluation.md`).
+Summary: Mac keeps the native app untouched; Windows/Linux share one Qt
+shell that also builds on macOS as a dev/validation target; shared Swift
+core (`HyperfocalKit` + extracted `AppCore`) everywhere; CIRAW stays on
+Mac with LibRaw elsewhere; OpenCV replaces Vision registration on all
+platforms if it validates. Work the phases in order; each item below is
+independently landable and keeps all existing gates green.
+
+### Phase 0c: neutral image currency in the model
+
+Replace `NSImage` in model-published state (`AppModel` previews,
+`Stack.outputPreview`/`depthPreview`, `RetouchSession` source caches)
+with the CGImage/ImageBuffer layer already beneath it; views wrap to
+`NSImage` (or draw CGImage directly) at the edge. Done = AppCore free of
+`NSImage`, retouch 45 MP paint still smooth (no per-frame conversions on
+the paint path), UI tests pass.
+
+### Phase 1: engine backend seams + Linux CI + portable CLI
+
+Decode/encode, EXIF, simd-3×3, and spill backends behind build-time
+selection (ImageIO/CIRAW on Mac; LibRaw + libjpeg-turbo/libtiff/libpng +
+lcms2 + exiv2 elsewhere; DNG SDK flips `qMacOS` → `qLinux`/`qWinOS` —
+the vendored SDK already supports both). Linux container CI running
+synth → fuse → PSNR (synth fixtures are TIFF, so baselines port
+unchanged). Done = `hyperfocal-cli fuse/batch/synth/compare` passes the
+synth gates on Linux.
+
+### Phase 1.5: OpenCV vs Vision registration gate
+
+OpenCV `findHomography` behind `Aligner.register(moving:fixed:)`'s
+existing `(gray CGImage, gray CGImage) → simd_float3x3` seam (mind the
+bottom-left→top-left convention flip in `Aligner.convention`). A/B via
+the residual scores `Aligner` already computes, synth PSNR, and the
+fluorite mineral stack. Outcome recorded in the plan doc: adopt
+everywhere, or keep Vision on Mac and document the divergence.
+
 ## Engine performance
 
 ### GPUDMap pass 1: overlap upload with GPU work — measure first
@@ -84,3 +123,25 @@ if wanted; PSNR-vs-synthetic-truth remains our gate meanwhile.
 Gates: synth baselines in the header, probe ALL PASS, CPU/GPU parity,
 and the mineral stack's three regions (shadow under the rim, substrate
 above the specimen, silhouette band) eyeballed against Helicon's result.
+
+## UI fixes
+
+### Retouch canvas ignores the crop
+
+Entering retouch on a cropped stack shows the entire uncropped image
+(reported by Ethan 2026-07-17; pre-existing, not a regression). The
+preview panes clip to the crop at draw time — inner container = the
+crop region's view rect (`ContentView.swift` `PreviewPane`, "nothing
+outside the crop ever renders") plus the rotated-crop clip path in
+`TonedImagePaneNSView.draw` — but `RetouchCanvasNSView.draw` has no
+crop handling at all and draws the full working buffer. Fix: give the
+retouch canvas the same cropped-canvas presentation the panes use
+(the shared pan/zoom coordinate space is the *cropped* canvas — see
+the nominalSize comments in ContentView). Mind that strokes and the
+session's tile invalidation work in full-image coordinates, so the
+display clip/offset must not shift where paint lands; rotated crops
+need the same clip-path treatment as the toned pane. Done = entering
+retouch with a crop (including a rotated one) shows only the cropped
+region, aligned with the panes at every zoom, strokes land exactly
+under the brush, and RetouchJourney gains a crop-then-retouch step
+verifying pixels via the export command channel.
