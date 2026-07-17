@@ -69,6 +69,11 @@ final class Stack: Identifiable {
     var fusedSettings: FuseSettings?
     /// Tone adjustments (preview + display-referred exports); per stack.
     var tone = ToneSettings()
+    /// Non-destructive output crop in result-canvas pixels (nil = full
+    /// canvas); applies to every export, the animation, and the panes.
+    var cropRect: CGRect?
+    /// Crop rotation in degrees, applied about the rect's center.
+    var cropAngle: Double = 0
     var frameIssues: [URL: String] = [:]
     var outputPreview: NSImage?
     var depthPreview: NSImage?

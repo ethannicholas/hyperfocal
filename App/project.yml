@@ -42,6 +42,14 @@ targets:
       # one; without it Finder shows a "?" page). Regenerate from the app
       # icon: white generic-document page + centered app-icon badge.
       - DocumentIcon.icns
+      # Crop-rotation cursor art (sectors 0 = top-left corner and 1 = top
+      # edge; the other six orientations are derived by flip/transpose at
+      # load — see CropOverlayNSView.rotateCursors). Listed as files so
+      # they land at the bundle root where NSImage(named:) pairs the @2x.
+      - Resources/crop-rotate-0.png
+      - Resources/crop-rotate-0@2x.png
+      - Resources/crop-rotate-1.png
+      - Resources/crop-rotate-1@2x.png
     dependencies:
       - package: HyperfocalKit
         product: HyperfocalKit

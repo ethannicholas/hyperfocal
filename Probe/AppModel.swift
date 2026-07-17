@@ -291,6 +291,22 @@ final class AppModel: ObservableObject {
             if !installingStack { hasUnsavedWork = true }
         }
     }
+    /// Non-destructive output crop for the selected stack, in result-canvas
+    /// pixels (nil = full canvas). Applies to every export, the animation,
+    /// and the panes; saved per stack in the project.
+    @Published var cropRect: CGRect? {
+        didSet {
+            guard oldValue != cropRect else { return }
+            if !installingStack { hasUnsavedWork = true }
+        }
+    }
+    /// Crop rotation in degrees about the rect's center (0 = axis-aligned).
+    @Published var cropAngle: Double = 0 {
+        didSet {
+            guard oldValue != cropAngle else { return }
+            if !installingStack { hasUnsavedWork = true }
+        }
+    }
     /// Guards `tone.didSet` against marking stack switches as unsaved edits.
     private var installingStack = false
     /// Rocking-animation parallax strength, chosen in the export dialog.
@@ -607,6 +623,8 @@ final class AppModel: ObservableObject {
         stack.fuseURLs = fuseURLs
         stack.fusedSettings = fusedSettings
         stack.tone = tone
+        stack.cropRect = cropRect
+        stack.cropAngle = cropAngle
         stack.outputPreview = outputPreview
         stack.depthPreview = depthPreview
         if case .failed(let message) = phase {
@@ -638,6 +656,8 @@ final class AppModel: ObservableObject {
         fusedSettings = stack.fusedSettings
         installingStack = true
         tone = stack.tone
+        cropRect = stack.cropRect
+        cropAngle = stack.cropAngle
         installingStack = false
         outputPreview = stack.outputPreview
         depthPreview = stack.depthPreview
@@ -813,7 +833,11 @@ final class AppModel: ObservableObject {
                 sourceIndex: stack.savedSourceIndex,
                 gains: stack.resultGains,
                 fusedSettings: stack.fusedSettings,
-                tone: stack.tone.isNeutral ? nil : stack.tone)
+                tone: stack.tone.isNeutral ? nil : stack.tone,
+                crop: stack.cropRect.map {
+                    [Int($0.minX), Int($0.minY), Int($0.width), Int($0.height)]
+                },
+                cropAngle: stack.cropAngle == 0 ? nil : stack.cropAngle)
         }
         return ProjectStore.Project(
             stacks: payloads,
@@ -1030,6 +1054,10 @@ final class AppModel: ObservableObject {
             stack.resultGains = item.payload.gains
             stack.fusedSettings = item.payload.fusedSettings
             stack.tone = item.payload.tone ?? ToneSettings()
+            stack.cropRect = item.payload.crop.flatMap {
+                $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil
+            }
+            stack.cropAngle = item.payload.cropAngle ?? 0
             stack.depthResult = item.depthImage
             stack.savedWorking = item.payload.working
             stack.savedSourceIndex = item.payload.sourceIndex
@@ -1113,10 +1141,158 @@ final class AppModel: ObservableObject {
     }
     var canExport: Bool { result != nil && !phase.isRunning }
 
+    /// Crop-rectangle editing mode: the panes show the full canvas with the
+    /// CropOverlay on the output pane; everywhere else they show only the
+    /// crop.
+    @Published var cropMode = false
+
+    var canCrop: Bool { result != nil && phase == .done && !retouchMode }
+
+    /// Fixed aspect-ratio constraint while editing the crop.
+    enum CropAspect: String, CaseIterable {
+        case original = "Original"
+        case custom = "Custom"
+        case square = "1:1"
+        case threeTwo = "3:2"
+        case fiveFour = "5:4"
+        case fourThree = "4:3"
+        case sixteenNine = "16:9"
+        /// width/height in landscape orientation; nil = unconstrained.
+        func baseRatio(canvas: CGSize) -> CGFloat? {
+            switch self {
+            case .original:
+                return canvas.height > 0 ? max(canvas.width / canvas.height,
+                                               canvas.height / canvas.width) : nil
+            case .custom: return nil
+            case .square: return 1
+            case .threeTwo: return 3 / 2
+            case .fiveFour: return 5 / 4
+            case .fourThree: return 4 / 3
+            case .sixteenNine: return 16 / 9
+            }
+        }
+    }
+    @Published var cropAspect: CropAspect = .custom {
+        didSet { reshapeCropToAspect() }
+    }
+    /// Portrait orientation for the locked aspect (the X key toggles).
+    @Published var cropPortrait = false {
+        didSet { reshapeCropToAspect() }
+    }
+    /// The active width/height constraint, orientation applied.
+    var cropAspectRatio: CGFloat? {
+        guard let result else { return nil }
+        guard let base = cropAspect.baseRatio(
+                canvas: CGSize(width: result.width, height: result.height)),
+              base != 1 || !cropPortrait else { return cropAspect == .square ? 1 : nil }
+        return cropPortrait ? 1 / base : base
+    }
+
+    /// The rotation the panes should apply alongside displayCrop.
+    var displayCropAngle: Double { displayCrop != nil ? cropAngle : 0 }
+
+    /// X key / the orientation button: swap the crop between landscape and
+    /// portrait. Locked aspects flip via cropPortrait (whose didSet
+    /// reshapes); Custom transposes the rect's own dimensions about its
+    /// center. Either way the result is shrunk/recentered to fit.
+    func toggleCropOrientation() {
+        guard cropMode else { return }
+        cropPortrait.toggle()
+        if cropAspectRatio == nil, let r = cropRect {
+            let c = CGPoint(x: r.midX, y: r.midY)
+            cropRect = fittedToCanvas(CGRect(x: c.x - r.height / 2,
+                                             y: c.y - r.width / 2,
+                                             width: r.height, height: r.width))
+        }
+    }
+
+    /// Shrinks (about center) and recenters a candidate crop until its
+    /// four corners — rotated by cropAngle — fit inside the canvas.
+    private func fittedToCanvas(_ r: CGRect) -> CGRect {
+        guard let result else { return r }
+        let canvasW = CGFloat(result.width), canvasH = CGFloat(result.height)
+        let rad = CGFloat(cropAngle) * .pi / 180
+        let cosA = abs(cos(rad)), sinA = abs(sin(rad))
+        var w = r.width, h = r.height
+        // Rotated bounding half-extents must fit in half the canvas.
+        let scale = min(1, canvasW / (w * cosA + h * sinA),
+                        canvasH / (w * sinA + h * cosA))
+        w *= scale
+        h *= scale
+        let hw = (w * cosA + h * sinA) / 2
+        let hh = (w * sinA + h * cosA) / 2
+        let cx = min(max(r.midX, hw), canvasW - hw)
+        let cy = min(max(r.midY, hh), canvasH - hh)
+        return CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h).integral
+    }
+
+    /// Re-shapes the current rect to the locked ratio about its center,
+    /// preserving area, clamped to the canvas.
+    private func reshapeCropToAspect() {
+        guard cropMode, result != nil, let r = cropRect,
+              let ratio = cropAspectRatio else { return }
+        // Preserve area at the new ratio, then shrink/recenter to fit
+        // (including under the current rotation).
+        let area = r.width * r.height
+        let w = sqrt(area * ratio)
+        cropRect = fittedToCanvas(CGRect(x: r.midX - w / 2,
+                                         y: r.midY - w / ratio / 2,
+                                         width: w, height: w / ratio))
+    }
+
+    /// The crop the panes should render right now: nil while editing (the
+    /// whole canvas must be visible to drag handles on) or when no valid
+    /// crop is set. Bounds-checked against the current result so a stale
+    /// rect from a re-fused canvas can't shear the display.
+    var displayCrop: CGRect? {
+        guard !cropMode, !phase.isRunning, !retouchMode, let result else { return nil }
+        return Self.validCrop(cropRect, width: result.width, height: result.height)
+    }
+
+    /// Pre-edit state, restored by Cancel — crop editing is transactional.
+    private var cropBackup: CGRect?
+    private var cropAngleBackup: Double = 0
+
+    func beginCrop() {
+        guard canCrop, !cropMode else { return }
+        cropBackup = cropRect
+        cropAngleBackup = cropAngle
+        if cropRect == nil, let result {
+            // Fresh crops start at the full canvas (accepting it untouched
+            // still means "no crop").
+            cropRect = CGRect(x: 0, y: 0, width: result.width, height: result.height)
+        }
+        cropMode = true
+        reshapeCropToAspect()
+        viewport.reset()  // fit the full canvas the handles live on
+    }
+
+    func acceptCrop() {
+        guard cropMode else { return }
+        // Dragging the rect out to the whole canvas means "no crop".
+        if cropAngle == 0, let result,
+           let r = Self.validCrop(cropRect, width: result.width,
+                                  height: result.height),
+           r == CGRect(x: 0, y: 0, width: result.width, height: result.height) {
+            cropRect = nil
+        }
+        cropMode = false
+        viewport.reset()
+    }
+
+    func cancelCrop() {
+        guard cropMode else { return }
+        cropRect = cropBackup
+        cropAngle = cropAngleBackup
+        cropMode = false
+        viewport.reset()
+    }
+
     /// The image size the synced preview panes are currently showing —
     /// what menu-driven zoom should anchor to.
     var displayedImageSize: CGSize {
-        retouch?.nominalSize ?? outputNominalSize ?? inputNominalSize
+        if let crop = displayCrop { return crop.size }
+        return retouch?.nominalSize ?? outputNominalSize ?? inputNominalSize
             ?? CGSize(width: 1, height: 1)
     }
 
@@ -1343,6 +1519,8 @@ final class AppModel: ObservableObject {
         stacks = []
         selectedStackID = nil
         expandedStacks = []
+        cropRect = nil  // BEFORE the unsaved flag clears: its didSet marks unsaved
+        cropAngle = 0
         hasUnsavedWork = false
         projectURL = nil  // the next Save must ask where to put it
         frames = []
@@ -1470,7 +1648,9 @@ final class AppModel: ObservableObject {
         var lines = [String]()
         var count = 0
         for stack in stacks {
-            guard let image = stack.savedWorking ?? stack.result else { continue }
+            guard let uncropped = stack.savedWorking ?? stack.result else { continue }
+            let image = Self.cropped(uncropped, to: stack.cropRect,
+                                     angle: stack.cropAngle)
             let dest = directory.appendingPathComponent("\(stack.name).\(ext)")
             let sourceFrame = stack.fuseURLs.first
             let tone = exportFormat == .dng ? ToneSettings() : stack.tone
@@ -1561,8 +1741,11 @@ final class AppModel: ObservableObject {
             let dest = directory.appendingPathComponent(
                 "\(url.deletingPathExtension().lastPathComponent) aligned.\(ext)")
             do {
+                let crop = cropRect
+                let angle = cropAngle
                 try await Task.detached(priority: .userInitiated) {
-                    var image = try source.frame(at: index)
+                    var image = Self.cropped(try source.frame(at: index), to: crop,
+                                             angle: angle)
                     ToneCurve.apply(settings: bakedTone, to: &image)
                     try ImageFile.save(image, to: dest, sourceFrame: url,
                                        colorSpace: space)
@@ -1611,8 +1794,11 @@ final class AppModel: ObservableObject {
     /// Renders off-main; returns whether the file was written.
     func writeAnimation(to url: URL) async -> Bool {
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
-        guard let image = baseImage, !resultDepth.isEmpty else { return false }
-        let depth = resultDepth
+        guard let uncropped = baseImage, !resultDepth.isEmpty else { return false }
+        let image = Self.cropped(uncropped, to: cropRect, angle: cropAngle)
+        let depth = Self.croppedDepth(resultDepth, width: uncropped.width,
+                                      height: uncropped.height, to: cropRect,
+                                      angle: cropAngle)
         let toneSettings = tone
         let options = RockingAnimation.Options(duration: animationDuration.seconds,
                                                fps: animationFPS.value,
@@ -2420,13 +2606,105 @@ final class AppModel: ObservableObject {
         writeExport(to: url)
     }
 
+    /// The crop clamped to an image's bounds — nil when it doesn't
+    /// meaningfully intersect (e.g. a stale crop after re-fusing produced a
+    /// different canvas). Every output path and the panes go through this,
+    /// so they can't disagree about what the crop means.
+    nonisolated static func validCrop(_ crop: CGRect?, width: Int, height: Int) -> CGRect? {
+        guard let crop else { return nil }
+        let bounded = crop.integral.intersection(
+            CGRect(x: 0, y: 0, width: width, height: height))
+        guard bounded.width >= 16, bounded.height >= 16 else { return nil }
+        return bounded
+    }
+
+    nonisolated static func cropped(_ image: ImageBuffer, to crop: CGRect?,
+                                    angle: Double = 0) -> ImageBuffer {
+        guard let r = validCrop(crop, width: image.width, height: image.height) else {
+            return image
+        }
+        guard angle != 0 else {
+            return image.cropped(x: Int(r.minX), y: Int(r.minY),
+                                 width: Int(r.width), height: Int(r.height))
+        }
+        // Rotated crop: the output is the axis-aligned rect sampled from the
+        // image rotated by the angle about the rect's center — bilinear,
+        // edge-clamped (matching the panes' presentation).
+        let w = Int(r.width), h = Int(r.height)
+        let srcW = image.width, srcH = image.height
+        let cx = Float(r.midX), cy = Float(r.midY)
+        let rad = Float(angle) * .pi / 180
+        let cosA = cos(rad), sinA = sin(rad)
+        let x0f = Float(r.minX), y0f = Float(r.minY)
+        var out = ImageBuffer(width: w, height: h)
+        image.pixels.withUnsafeBufferPointer { src in
+            out.pixels.withUnsafeMutableBufferPointer { dst in
+                DispatchQueue.concurrentPerform(iterations: h) { v in
+                    let dy = y0f + Float(v) + 0.5 - cy
+                    for u in 0..<w {
+                        let dx = x0f + Float(u) + 0.5 - cx
+                        let sx = min(max(cx + dx * cosA - dy * sinA - 0.5, 0), Float(srcW - 1))
+                        let sy = min(max(cy + dx * sinA + dy * cosA - 0.5, 0), Float(srcH - 1))
+                        let ix = Int(sx), iy = Int(sy)
+                        let ix1 = min(ix + 1, srcW - 1), iy1 = min(iy + 1, srcH - 1)
+                        let fx = sx - Float(ix), fy = sy - Float(iy)
+                        let a = (iy * srcW + ix) * 4, b = (iy * srcW + ix1) * 4
+                        let c = (iy1 * srcW + ix) * 4, e = (iy1 * srcW + ix1) * 4
+                        let di = (v * w + u) * 4
+                        for ch in 0..<3 {
+                            let top = src[a + ch] + (src[b + ch] - src[a + ch]) * fx
+                            let bot = src[c + ch] + (src[e + ch] - src[c + ch]) * fx
+                            dst[di + ch] = top + (bot - top) * fy
+                        }
+                        dst[di + 3] = 1
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    /// The depth plane cropped (and rotated) in step with its image.
+    nonisolated static func croppedDepth(_ depth: [Float], width: Int, height: Int,
+                             to crop: CGRect?, angle: Double = 0) -> [Float] {
+        guard let r = validCrop(crop, width: width, height: height) else { return depth }
+        let x0 = Int(r.minX), y0 = Int(r.minY), w = Int(r.width), h = Int(r.height)
+        guard angle != 0 else {
+            var out = [Float]()
+            out.reserveCapacity(w * h)
+            for y in y0..<(y0 + h) {
+                out.append(contentsOf: depth[(y * width + x0)..<(y * width + x0 + w)])
+            }
+            return out
+        }
+        let cx = Float(r.midX), cy = Float(r.midY)
+        let rad = Float(angle) * .pi / 180
+        let cosA = cos(rad), sinA = sin(rad)
+        var out = [Float](repeating: 0, count: w * h)
+        depth.withUnsafeBufferPointer { src in
+            out.withUnsafeMutableBufferPointer { dst in
+                DispatchQueue.concurrentPerform(iterations: h) { v in
+                    let dy = Float(y0 + v) + 0.5 - cy
+                    for u in 0..<w {
+                        let dx = Float(x0 + u) + 0.5 - cx
+                        let sx = Int(min(max(cx + dx * cosA - dy * sinA, 0), Float(width - 1)))
+                        let sy = Int(min(max(cy + dx * sinA + dy * cosA, 0), Float(height - 1)))
+                        dst[v * w + u] = src[sy * width + sx]
+                    }
+                }
+            }
+        }
+        return out
+    }
+
     /// Panel-free export: the write body of exportResult, honoring the
     /// current format/color-space/tone/output-mode state. Callable directly
     /// (UITestSupport's command channel).
     @discardableResult
     func writeExport(to url: URL) -> Bool {
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
-        guard let image = outputMode == .depth ? depthResult : baseImage else { return false }
+        guard let raw = outputMode == .depth ? depthResult : baseImage else { return false }
+        let image = Self.cropped(raw, to: cropRect, angle: cropAngle)
         do {
             // Tone bakes into display-referred formats only: DNG stays
             // linear for raw development, and the depth map is data.

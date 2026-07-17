@@ -51,6 +51,8 @@ enum ProjectStore {
         var gains: [Float]?              // exposure gains the fusion applied
         var fusedSettings: FuseSettings? // staleness tracking for Fuse buttons
         var tone: ToneSettings? = nil    // nil = neutral (and pre-tone files)
+        var crop: [Int]? = nil           // x, y, w, h in result pixels; nil = uncropped
+        var cropAngle: Double? = nil     // degrees about the rect center
         var sharpnessFactor: Int?
         var sharpnessFullWidth: Int?
         var sharpnessFullHeight: Int?
@@ -77,6 +79,8 @@ enum ProjectStore {
         var gains: [Float]? = nil
         var fusedSettings: FuseSettings? = nil
         var tone: ToneSettings? = nil
+        var crop: [Int]? = nil           // x, y, w, h in result pixels
+        var cropAngle: Double? = nil
     }
 
     struct Project {
@@ -132,7 +136,9 @@ enum ProjectStore {
                 sourceIndex: stack.sourceIndex,
                 gains: stack.gains,
                 fusedSettings: stack.fusedSettings,
-                tone: stack.tone)
+                tone: stack.tone,
+                crop: stack.crop,
+                cropAngle: stack.cropAngle)
             if let result = stack.result {
                 let dir = stackDirectoryName(index)
                 // All blobs are 16-bit: the pixels came from 16-bit sensors and
@@ -229,7 +235,9 @@ enum ProjectStore {
             sourceIndex: manifest.sourceIndex,
             gains: manifest.gains,
             fusedSettings: manifest.fusedSettings,
-            tone: manifest.tone)
+            tone: manifest.tone,
+            crop: manifest.crop,
+            cropAngle: manifest.cropAngle)
         guard manifest.hasResult else { return payload }
 
         let w = manifest.resultWidth, h = manifest.resultHeight

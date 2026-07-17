@@ -351,30 +351,45 @@ struct ContentView: View {
 
     @ViewBuilder
     private var retouchSection: some View {
-        if model.phase == .done {
-            Section {
-                if !model.isCollapsed(.retouch) {
-                    if model.retouchMode, let session = model.retouch {
-                        RetouchControls(session: session,
-                                        onDone: { model.exitRetouch() },
-                                        onReset: { model.resetRetouch() })
-                    } else {
-                        Button {
-                            model.enterRetouch()
-                        } label: {
-                            Label(model.retouch?.hasEdits == true
-                                    ? "Continue Retouching"
-                                    : "Start Retouching",
-                                  systemImage: "paintbrush.pointed")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .disabled(model.result == nil)
-                        .accessibilityIdentifier("retouch.start")
+        // Always visible, like Export: a section that appears and vanishes
+        // with the fuse state reads as broken; a disabled button explains
+        // itself. Crop and Retouch are mutually exclusive modes; whichever
+        // is active swaps its controls in.
+        Section {
+            if !model.isCollapsed(.retouch) {
+                if model.cropMode {
+                    CropControls(model: model)
+                } else if model.retouchMode, let session = model.retouch {
+                    RetouchControls(session: session,
+                                    onDone: { model.exitRetouch() },
+                                    onReset: { model.resetRetouch() })
+                } else {
+                    Button {
+                        model.beginCrop()
+                    } label: {
+                        Label("Crop…", systemImage: "crop")
+                            .frame(maxWidth: .infinity)
                     }
+                    .keyboardShortcut("c", modifiers: [])
+                    .disabled(!model.canCrop)
+                    .accessibilityIdentifier("edit.crop")
+                    .help("Non-destructive crop: applies to every export and the rocking animation, and is saved with the project.")
+                    Button {
+                        model.enterRetouch()
+                    } label: {
+                        Label(model.retouch?.hasEdits == true
+                                ? "Continue Retouching"
+                                : "Start Retouching",
+                              systemImage: "paintbrush.pointed")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .keyboardShortcut("r", modifiers: [])
+                    .disabled(model.phase != .done || model.result == nil || model.cropMode)
+                    .accessibilityIdentifier("retouch.start")
                 }
-            } header: {
-                sectionHeader("Retouch", .retouch)
             }
+        } header: {
+            sectionHeader("Edit", .retouch)
         }
     }
 
@@ -443,7 +458,10 @@ struct ContentView: View {
                     title: inputPaneTitle,
                     paneID: "input.pane",
                     image: inputPaneImage,
-                    nominalSize: inputPaneNominal,
+                    nominalSize: (inputCrop?.size) ?? inputPaneNominal,
+                    sourceOrigin: inputCrop?.origin ?? .zero,
+                    sourceCanvas: inputPaneNominal,
+                    sourceAngle: inputCrop != nil ? model.displayCropAngle : 0,
                     loading: model.inputPreviewLoading && !model.phase.isRunning,
                     emptyHint: model.inputPreviewError
                         ?? (model.frames.isEmpty
@@ -456,13 +474,22 @@ struct ContentView: View {
                     title: "Output",
                     paneID: "output.pane",
                     image: outputImage,
-                    nominalSize: model.outputNominalSize,
+                    nominalSize: model.displayCrop?.size ?? model.outputNominalSize,
+                    sourceOrigin: model.displayCrop?.origin ?? .zero,
+                    sourceCanvas: model.outputNominalSize,
+                    sourceAngle: model.displayCropAngle,
                     loading: false,
                     emptyHint: model.canFuse ? "Press “Fuse Stack”" : "No output yet",
                     // Depth maps and the noise-floor preview are data
                     // visualizations, not image content — leave them alone.
                     tone: (model.outputMode == .depth
                            || model.noiseFloorPreview != nil) ? ToneSettings() : model.tone,
+                    eventOverlay: model.cropMode ? AnyView(CropOverlay(
+                        viewport: model.viewport,
+                        canvas: model.outputNominalSize ?? .zero,
+                        aspect: model.cropAspectRatio,
+                        rect: $model.cropRect,
+                        angle: $model.cropAngle)) : nil,
                     header: {
                         Picker("", selection: $model.outputMode) {
                             ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
@@ -523,6 +550,14 @@ struct ContentView: View {
 
     private var inputPaneNominal: CGSize? {
         showProcessingSource ? model.processingSourceNominalSize : model.inputNominalSize
+    }
+
+    /// The crop applies to the input pane only when it shows an *aligned*
+    /// preview (same canvas as the result); raw-file previews have their
+    /// own dimensions.
+    private var inputCrop: CGRect? {
+        guard !showProcessingSource, model.inputPreviewAligned else { return nil }
+        return model.displayCrop
     }
 
 }
@@ -808,6 +843,14 @@ struct PreviewPane<Header: View>: View {
     /// resolution (progressive previews); it is stretched to this space so both
     /// panes always share one coordinate system.
     let nominalSize: CGSize?
+    /// Crop display: the displayed region's origin within the bitmap's full
+    /// canvas, and that canvas's size (nil = nominalSize). nominalSize is
+    /// then the crop's size — the panes' shared coordinate space is the
+    /// cropped canvas.
+    var sourceOrigin: CGPoint = .zero
+    var sourceCanvas: CGSize? = nil
+    /// Crop rotation in degrees (drawn as -angle about the crop's center).
+    var sourceAngle: Double = 0
     let loading: Bool
     let emptyHint: String
     /// Shown under the spinner during long loads (e.g. PMax layer build).
@@ -848,7 +891,8 @@ struct PreviewPane<Header: View>: View {
                         canvas
                     } else if let image, let nominal = nominalSize {
                         let scale = viewport.effectiveScale(imageSize: nominal, viewSize: geo.size)
-                        let bitmapScale = nominal.width * scale / CGFloat(max(bitmapWidth(of: image), 1))
+                        let canvas = sourceCanvas ?? nominal
+                        let bitmapScale = canvas.width * scale / CGFloat(max(bitmapWidth(of: image), 1))
                         if !tone.isNeutral {
                             // Toned: an AppKit view drawing the visible
                             // region at native backing resolution, toned by
@@ -863,18 +907,32 @@ struct PreviewPane<Header: View>: View {
                             // at 1× points — 2× soft on Retina — and
                             // drawingGroup ignores Image.interpolation.
                             TonedImagePane(image: image, nominalSize: nominal,
+                                           sourceOrigin: sourceOrigin,
+                                           sourceCanvas: sourceCanvas ?? nominal,
+                                           sourceAngle: sourceAngle,
                                            viewport: viewport, tone: tone)
                                 .allowsHitTesting(false)
                         } else {
+                            // Inner container = the crop region's view rect;
+                            // the (possibly rotated) bitmap is clipped to it,
+                            // so nothing outside the crop ever renders.
                             ZStack {
                                 Image(nsImage: image)
                                     .resizable()
                                     .interpolation(bitmapScale >= 2 ? .none : .high)
-                                    .frame(width: nominal.width * scale,
-                                           height: nominal.height * scale)
-                                    .position(x: geo.size.width / 2 - viewport.offset.width * scale,
-                                              y: geo.size.height / 2 - viewport.offset.height * scale)
+                                    .frame(width: canvas.width * scale,
+                                           height: canvas.height * scale)
+                                    .rotationEffect(.degrees(-sourceAngle), anchor: UnitPoint(
+                                        x: (sourceOrigin.x + nominal.width / 2) / max(canvas.width, 1),
+                                        y: (sourceOrigin.y + nominal.height / 2) / max(canvas.height, 1)))
+                                    .position(x: (canvas.width / 2 - sourceOrigin.x) * scale,
+                                              y: (canvas.height / 2 - sourceOrigin.y) * scale)
                             }
+                            .frame(width: nominal.width * scale,
+                                   height: nominal.height * scale)
+                            .clipped()
+                            .position(x: geo.size.width / 2 - viewport.offset.width * scale,
+                                      y: geo.size.height / 2 - viewport.offset.height * scale)
                             .frame(width: geo.size.width, height: geo.size.height)
                             .clipped()
                             // .clipped() clips drawing but NOT hit testing —
@@ -1007,6 +1065,17 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
             needsDisplay = true
         }
     }
+    /// Crop display: displayed-region origin within the bitmap's canvas,
+    /// and that canvas's size (nominalSize is the crop's size).
+    var sourceOrigin: CGPoint = .zero {
+        didSet { if sourceOrigin != oldValue { needsDisplay = true } }
+    }
+    var sourceCanvas: CGSize = .zero {
+        didSet { if sourceCanvas != oldValue { needsDisplay = true } }
+    }
+    var sourceAngle: Double = 0 {
+        didSet { if sourceAngle != oldValue { needsDisplay = true } }
+    }
     private var cgCache: CGImage?
     private var viewportSubscription: AnyCancellable?
     private var lastScale: CGFloat = -1
@@ -1040,21 +1109,42 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
         }
         guard let cg = cgCache else { return }
         let scale = viewport.effectiveScale(imageSize: nominalSize, viewSize: bounds.size)
-        let originX = bounds.width / 2 - (viewport.offset.width + nominalSize.width / 2) * scale
-        let originY = bounds.height / 2 - (viewport.offset.height + nominalSize.height / 2) * scale
+        let canvas = sourceCanvas == .zero ? nominalSize : sourceCanvas
+        // originX/Y = view position of the bitmap canvas's pixel (0, 0) in
+        // the displayed (possibly cropped) coordinate space.
+        let originX = bounds.width / 2
+            - (viewport.offset.width + nominalSize.width / 2 + sourceOrigin.x) * scale
+        let originY = bounds.height / 2
+            - (viewport.offset.height + nominalSize.height / 2 + sourceOrigin.y) * scale
         // Same rule as RetouchCanvas, in bitmap pixels per point because
         // progressive previews arrive at reduced resolution stretched to
-        // nominal space (RetouchCanvas's bitmap is always full-res).
-        let bitmapScale = nominalSize.width * scale / CGFloat(max(cg.width, 1))
+        // canvas space (RetouchCanvas's bitmap is always full-res).
+        let bitmapScale = canvas.width * scale / CGFloat(max(cg.width, 1))
         ctx.interpolationQuality = bitmapScale >= 2 ? .none : .low
         ctx.saveGState()
+        // Clip to the displayed (crop) region: the rotated bitmap extends
+        // past it, and unclipped spill renders the "whole image, tilted".
+        ctx.clip(to: CGRect(
+            x: bounds.width / 2 - (viewport.offset.width + nominalSize.width / 2) * scale,
+            y: bounds.height / 2 - (viewport.offset.height + nominalSize.height / 2) * scale,
+            width: nominalSize.width * scale,
+            height: nominalSize.height * scale))
+        if sourceAngle != 0 {
+            // Rotate about the crop center's view position (which the
+            // origin math keeps at pane center minus the pan offset).
+            let cx = bounds.width / 2 - viewport.offset.width * scale
+            let cy = bounds.height / 2 - viewport.offset.height * scale
+            ctx.translateBy(x: cx, y: cy)
+            ctx.rotate(by: -CGFloat(sourceAngle) * .pi / 180)
+            ctx.translateBy(x: -cx, y: -cy)
+        }
         // draw(_:in:) is bottom-up; re-flip within our flipped coordinates.
         ctx.translateBy(x: 0, y: bounds.height)
         ctx.scaleBy(x: 1, y: -1)
         ctx.draw(cg, in: CGRect(x: originX,
-                                y: bounds.height - originY - nominalSize.height * scale,
-                                width: nominalSize.width * scale,
-                                height: nominalSize.height * scale))
+                                y: bounds.height - originY - canvas.height * scale,
+                                width: canvas.width * scale,
+                                height: canvas.height * scale))
         ctx.restoreGState()
     }
 }
@@ -1062,6 +1152,9 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
 struct TonedImagePane: NSViewRepresentable {
     let image: NSImage
     let nominalSize: CGSize
+    var sourceOrigin: CGPoint = .zero
+    var sourceCanvas: CGSize = .zero
+    var sourceAngle: Double = 0
     let viewport: ViewportState
     let tone: ToneSettings
 
@@ -1072,6 +1165,9 @@ struct TonedImagePane: NSViewRepresentable {
         view.viewport = viewport
         view.image = image
         view.nominalSize = nominalSize
+        view.sourceOrigin = sourceOrigin
+        view.sourceCanvas = sourceCanvas
+        view.sourceAngle = sourceAngle
         view.applyTone(tone)
         return view
     }
@@ -1080,6 +1176,9 @@ struct TonedImagePane: NSViewRepresentable {
         view.viewport = viewport
         view.image = image
         view.nominalSize = nominalSize
+        view.sourceOrigin = sourceOrigin
+        view.sourceCanvas = sourceCanvas
+        view.sourceAngle = sourceAngle
         view.applyTone(tone)
         view.viewportDidUpdate()
     }
@@ -1455,5 +1554,562 @@ extension NSItemProvider {
                 }
             }
         }
+    }
+}
+
+
+/// Sidebar controls while crop mode is active: aspect constraint,
+/// orientation swap (X), Accept (return) / Cancel (escape).
+struct CropControls: View {
+    @ObservedObject var model: AppModel
+
+    /// A rectangle-with-rotation-arrow symbol when the OS has one; the
+    /// plain rotate arrow otherwise.
+    private var orientationSymbol: String {
+        let preferred = model.cropPortrait
+            ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate"
+        return NSImage(systemSymbolName: preferred, accessibilityDescription: nil) != nil
+            ? preferred : "rotate.right"
+    }
+
+    var body: some View {
+        Text("Crop")
+            .font(.headline)
+        HStack {
+            Picker("Aspect Ratio", selection: $model.cropAspect) {
+                ForEach(AppModel.CropAspect.allCases, id: \.self) { aspect in
+                    Text(aspect.rawValue).tag(aspect)
+                }
+            }
+            .accessibilityIdentifier("edit.crop-aspect")
+            Button {
+                model.toggleCropOrientation()
+            } label: {
+                // Fixed square: the landscape and portrait symbols have
+                // different intrinsic sizes, and letting them dictate the
+                // button size shifts the row layout on every toggle.
+                Image(systemName: orientationSymbol)
+                    .frame(width: 18, height: 18)
+            }
+            .keyboardShortcut("x", modifiers: [])
+            .accessibilityIdentifier("edit.crop-orientation")
+            .help("Swap the crop between landscape and portrait (X).")
+        }
+        HStack {
+            Button("Accept") { model.acceptCrop() }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("edit.crop-accept")
+            Button("Cancel") { model.cancelCrop() }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("edit.crop-cancel")
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// Crop-mode event/drawing layer on the output pane: the full canvas is
+/// shown behind it; this draws the dimmed surround, the (possibly rotated)
+/// crop rectangle and its handles, and turns drags into edits — handles
+/// resize in the rect's rotated frame, the interior moves it, anywhere
+/// outside rotates it. Every edit is hard-limited: the rect can never
+/// leave the image. Replaces PanZoomOverlay while active (crop mode is
+/// entered at fit zoom, so pan/zoom isn't needed mid-edit).
+final class CropOverlayNSView: NSView {
+    var viewport: ViewportState? {
+        didSet {
+            guard viewport !== oldValue else { return }
+            subscription = viewport?.objectWillChange.sink { [weak self] _ in
+                DispatchQueue.main.async { self?.needsDisplay = true }
+            }
+        }
+    }
+    var canvas: CGSize = .zero
+    var rect: CGRect = .zero {
+        didSet { if rect != oldValue { needsDisplay = true } }
+    }
+    /// Locked width/height ratio (nil = freeform).
+    var aspect: CGFloat?
+    /// Rotation in degrees. Convention everywhere (overlay, panes, export
+    /// samplers): positive = the crop rect rotated CLOCKWISE on screen
+    /// (y-down), about the rect's center.
+    var angle: Double = 0 {
+        didSet { if angle != oldValue { needsDisplay = true } }
+    }
+    var onChange: ((CGRect) -> Void)?
+    var onAngleChange: ((Double) -> Void)?
+    private var subscription: AnyCancellable?
+    private enum Drag { case move, handle(dx: Int, dy: Int), rotate }
+    private var drag: Drag?
+    private var dragStartImage = CGPoint.zero
+    private var dragStartRect = CGRect.zero
+    private var lastRotateVec: CGPoint?
+    /// Unwrapped angles for rotation drags: the target keeps accumulating
+    /// even while the rect is wedged against the canvas (windup), and the
+    /// applied angle only follows once the target swings back within reach.
+    private var rotationTarget = 0.0
+    private var rotationApplied = 0.0
+    /// The cursor captured at mouse-down, held for the whole drag — without
+    /// this the cursor flips to whichever region the pointer wanders into.
+    private var dragCursor: NSCursor?
+
+    override var isFlipped: Bool { true }
+    override func layout() {
+        super.layout()
+        needsDisplay = true
+    }
+
+    private var scale: CGFloat {
+        viewport?.effectiveScale(imageSize: canvas, viewSize: bounds.size) ?? 1
+    }
+    /// View position of canvas pixel (0, 0).
+    private var origin: CGPoint {
+        let s = scale
+        let off = viewport?.offset ?? .zero
+        return CGPoint(x: bounds.width / 2 - (off.width + canvas.width / 2) * s,
+                       y: bounds.height / 2 - (off.height + canvas.height / 2) * s)
+    }
+    private func toView(_ r: CGRect) -> CGRect {
+        let s = scale, o = origin
+        return CGRect(x: o.x + r.minX * s, y: o.y + r.minY * s,
+                      width: r.width * s, height: r.height * s)
+    }
+    private func toImage(_ p: NSPoint) -> CGPoint {
+        let s = scale, o = origin
+        return CGPoint(x: (p.x - o.x) / s, y: (p.y - o.y) / s)
+    }
+
+    /// A point inverse-rotated about the rect center — hit tests happen in
+    /// the crop's unrotated frame (inverse of clockwise-positive is R(-a)).
+    private func unrotated(_ p: CGPoint) -> CGPoint {
+        guard angle != 0 else { return p }
+        let rad = angle * .pi / 180
+        let dx = p.x - rect.midX, dy = p.y - rect.midY
+        return CGPoint(x: rect.midX + dx * cos(rad) + dy * sin(rad),
+                       y: rect.midY - dx * sin(rad) + dy * cos(rad))
+    }
+
+    /// Hard containment test: every corner of the rect, rotated about its
+    /// center, must lie inside the canvas. All drag operations refuse edits
+    /// that would fail this — the crop can never leave the image.
+    private func fits(_ r: CGRect, angle: Double) -> Bool {
+        guard canvas != .zero else { return false }
+        let rad = CGFloat(angle) * .pi / 180
+        let c = CGPoint(x: r.midX, y: r.midY)
+        let cosA = cos(rad), sinA = sin(rad)
+        for corner in [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                       CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY)] {
+            let dx = corner.x - c.x, dy = corner.y - c.y
+            let px = c.x + dx * cosA - dy * sinA   // clockwise-positive, y-down
+            let py = c.y + dx * sinA + dy * cosA
+            if px < -0.5 || py < -0.5 || px > canvas.width + 0.5
+                || py > canvas.height + 0.5 {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Eight rotation cursors, one per 45-degree sector around the rect
+    /// (Lightroom-style; macOS ships no rotation cursor). Index 0 =
+    /// top-left, clockwise.
+    /// Eight rotation cursors, one per 45-degree sector around the rect
+    /// (index 0 = top-left, clockwise). Built from two hand-drawn glyphs —
+    /// sector 0 (corner) and sector 1 (edge) — with the remaining six
+    /// derived by flips and transposes. Falls back to a generated symbol
+    /// cursor if the art is missing from the bundle.
+    private static let rotateCursors: [NSCursor] = {
+        guard let corner = NSImage(named: "crop-rotate-0"),
+              let edge = NSImage(named: "crop-rotate-1") else {
+            return fallbackRotateCursors
+        }
+        // Per-sector: source glyph + point mapping (x', y') as an affine
+        // matrix in AppKit's convention (x' = m11·x + m21·y, y' = m12·x + m22·y).
+        let sectors: [(NSImage, (CGFloat, CGFloat, CGFloat, CGFloat))] = [
+            (corner, (1, 0, 0, 1)),     // 0 top-left: as drawn
+            (edge, (1, 0, 0, 1)),       // 1 top: as drawn
+            (corner, (-1, 0, 0, 1)),    // 2 top-right: flip H
+            (edge, (0, 1, 1, 0)),       // 3 right: transpose
+            (corner, (-1, 0, 0, -1)),   // 4 bottom-right: flip both
+            (edge, (1, 0, 0, -1)),      // 5 bottom: flip V
+            (corner, (1, 0, 0, -1)),    // 6 bottom-left: flip V
+            (edge, (0, 1, -1, 0)),      // 7 left: transpose + flip H
+        ]
+        return sectors.map { source, m in
+            let size = NSSize(width: 24, height: 24)
+            let image = NSImage(size: size, flipped: false) { rect in
+                var transform = NSAffineTransformStruct()
+                (transform.m11, transform.m12, transform.m21, transform.m22)
+                    = (m.0, m.1, m.2, m.3)
+                transform.tX = size.width / 2
+                    - (m.0 * size.width / 2 + m.2 * size.height / 2)
+                transform.tY = size.height / 2
+                    - (m.1 * size.width / 2 + m.3 * size.height / 2)
+                let affine = NSAffineTransform()
+                affine.transformStruct = transform
+                affine.concat()
+                source.draw(in: rect)
+                return true
+            }
+            return NSCursor(image: image, hotSpot: NSPoint(x: 12, y: 12))
+        }
+    }()
+
+    private static let fallbackRotateCursors: [NSCursor] = {
+        let symbol = NSImage(systemSymbolName: "arrow.trianglehead.2.clockwise.rotate.90",
+                             accessibilityDescription: "rotate")
+            ?? NSImage(systemSymbolName: "arrow.clockwise",
+                       accessibilityDescription: "rotate")!
+        func tinted(_ color: NSColor) -> NSImage {
+            let image = NSImage(size: symbol.size)
+            image.lockFocus()
+            symbol.draw(in: NSRect(origin: .zero, size: symbol.size))
+            color.set()
+            NSRect(origin: .zero, size: symbol.size).fill(using: .sourceAtop)
+            image.unlockFocus()
+            return image
+        }
+        let white = tinted(.white)
+        let black = tinted(.black)
+        return (0..<8).map { sector in
+            let size = NSSize(width: 22, height: 22)
+            let image = NSImage(size: size, flipped: false) { rect in
+                let transform = NSAffineTransform()
+                transform.translateX(by: size.width / 2, yBy: size.height / 2)
+                transform.rotate(byDegrees: CGFloat(sector) * -45)
+                transform.translateX(by: -size.width / 2, yBy: -size.height / 2)
+                transform.concat()
+                let glyph = rect.insetBy(dx: 3, dy: 3)
+                for ox in [-0.8, 0, 0.8] as [CGFloat] {
+                    for oy in [-0.8, 0, 0.8] as [CGFloat] where ox != 0 || oy != 0 {
+                        white.draw(in: glyph.offsetBy(dx: ox, dy: oy))
+                    }
+                }
+                black.draw(in: glyph)
+                return true
+            }
+            return NSCursor(image: image, hotSpot: NSPoint(x: 11, y: 11))
+        }
+    }()
+
+    private static let handles: [(Int, Int)] =
+        [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+
+    private func handleRect(_ v: CGRect, dx: Int, dy: Int) -> CGRect {
+        let cx = v.midX + CGFloat(dx) * v.width / 2
+        let cy = v.midY + CGFloat(dy) * v.height / 2
+        return CGRect(x: cx - 4, y: cy - 4, width: 8, height: 8)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext, canvas != .zero else { return }
+        let v = toView(rect)
+        let full = toView(CGRect(origin: .zero, size: canvas))
+            .intersection(bounds.insetBy(dx: -1, dy: -1))
+        let center = CGPoint(x: v.midX, y: v.midY)
+        let rotation = CGAffineTransform.identity
+            .translatedBy(x: center.x, y: center.y)
+            .rotated(by: CGFloat(angle) * .pi / 180)  // flipped coords: + = clockwise
+            .translatedBy(x: -center.x, y: -center.y)
+        // Dim what the crop removes: canvas minus the rotated rect, via
+        // even-odd fill.
+        let dimPath = CGMutablePath()
+        dimPath.addRect(full)
+        dimPath.addRect(v, transform: rotation)
+        ctx.setFillColor(CGColor(gray: 0, alpha: 0.55))
+        ctx.addPath(dimPath)
+        ctx.fillPath(using: .evenOdd)
+        ctx.saveGState()
+        ctx.concatenate(rotation)
+        ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.9))
+        ctx.setLineWidth(1)
+        ctx.stroke(v.insetBy(dx: 0.5, dy: 0.5))
+        ctx.setFillColor(CGColor(gray: 1, alpha: 0.9))
+        for (dx, dy) in Self.handles {
+            ctx.fill(handleRect(v, dx: dx, dy: dy))
+        }
+        ctx.restoreGState()
+    }
+
+    // MARK: Cursors and hit testing
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        // .mouseMoved as well as .cursorUpdate: cursorUpdate only fires on
+        // ENTERING a tracking area, and this view is one big area — the
+        // cursor must re-evaluate on every move across it.
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard drag == nil else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        cursor(for: region(at: p), at: p).set()
+    }
+
+    private enum Region {
+        case handle(dx: Int, dy: Int)
+        case move
+        case rotate
+    }
+
+    /// Exact hit test in the rect's rotated frame — cursor updates and
+    /// mouse-down share it, so the hover cursor can never disagree with
+    /// what a click would grab.
+    private func region(at viewPoint: NSPoint) -> Region {
+        let pu = unrotated(toImage(viewPoint))
+        let vu = toView(CGRect(origin: pu, size: .zero)).origin
+        let v = toView(rect)
+        for (dx, dy) in Self.handles
+        where handleRect(v, dx: dx, dy: dy).insetBy(dx: -4, dy: -4).contains(vu) {
+            return .handle(dx: dx, dy: dy)
+        }
+        return v.contains(vu) ? .move : .rotate
+    }
+
+    private func cursor(for region: Region, at viewPoint: NSPoint) -> NSCursor {
+        switch region {
+        case .move:
+            return .openHand
+        case .handle(let dx, let dy):
+            // Orient by the handle's OUTWARD direction after rotation,
+            // quantized to 45-degree sectors (0 = east, clockwise, y-down).
+            let rad = CGFloat(angle) * .pi / 180
+            let ox = CGFloat(dx) * cos(rad) - CGFloat(dy) * sin(rad)
+            let oy = CGFloat(dx) * sin(rad) + CGFloat(dy) * cos(rad)
+            let deg = atan2(oy, ox) * 180 / .pi
+            let sector = Int((deg + 382.5) / 45) % 8
+            switch sector {
+            case 0, 4: return .resizeLeftRight
+            case 2, 6: return .resizeUpDown
+            default:
+                if #available(macOS 15, *) {
+                    let position: NSCursor.FrameResizePosition =
+                        switch sector {
+                        case 1: .bottomRight
+                        case 3: .bottomLeft
+                        case 5: .topLeft
+                        default: .topRight
+                        }
+                    return .frameResize(position: position, directions: .all)
+                }
+                return .crosshair  // no public diagonal cursor pre-15
+            }
+        case .rotate:
+            // Sector around the rect center picks the orientation-matched
+            // rotation cursor.
+            let c = toView(rect)
+            let deg = atan2(viewPoint.y - c.midY, viewPoint.x - c.midX) * 180 / .pi
+            // Sectors are CENTERED on the eight compass directions (index 0
+            // = top-left at -135°), so the breakpoints sit half a sector
+            // (±22.5°) either side of each center.
+            let sector = Int(((deg + 135 + 22.5 + 720)
+                .truncatingRemainder(dividingBy: 360)) / 45) % 8
+            return Self.rotateCursors[sector]
+        }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if drag != nil {
+            dragCursor?.set()
+            return
+        }
+        let p = convert(event.locationInWindow, from: nil)
+        cursor(for: region(at: p), at: p).set()
+    }
+
+    // MARK: Drag operations
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        let hit = region(at: p)
+        switch hit {
+        case .handle(let dx, let dy): drag = .handle(dx: dx, dy: dy)
+        case .move: drag = .move
+        case .rotate: drag = .rotate
+        }
+        dragStartImage = toImage(p)
+        dragStartRect = rect
+        lastRotateVec = CGPoint(x: dragStartImage.x - rect.midX,
+                                y: dragStartImage.y - rect.midY)
+        rotationTarget = angle
+        rotationApplied = angle
+        if case .move = hit {
+            dragCursor = .closedHand
+        } else {
+            dragCursor = cursor(for: hit, at: p)
+        }
+        dragCursor?.set()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let drag else { return }
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        if case .rotate = drag {
+            // Rotation stays ON a rotation cursor, but the sector tracks
+            // the pointer live so the orientation stays correct while
+            // sweeping around the circle.
+            cursor(for: .rotate, at: viewPoint).set()
+        } else {
+            dragCursor?.set()  // move/resize hold their grab cursor
+        }
+        let raw = toImage(viewPoint)
+        let rad = CGFloat(angle) * .pi / 180
+        let cosA = cos(rad), sinA = sin(rad)
+        switch drag {
+        case .rotate:
+            // Incremental signed delta between successive grab vectors
+            // (atan2 of cross/dot never crosses a branch cut). y-down:
+            // positive cross = clockwise drag = increasing angle. The new
+            // angle lands only if the rect still fits — a hard stop.
+            let c = CGPoint(x: rect.midX, y: rect.midY)
+            let v1 = CGPoint(x: raw.x - c.x, y: raw.y - c.y)
+            if let v0 = lastRotateVec {
+                let cross = Double(v0.x * v1.y - v0.y * v1.x)
+                let dot = Double(v0.x * v1.x + v0.y * v1.y)
+                // The target tracks the pointer absolutely (unwrapped):
+                // rotation refused at a wedge accumulates as windup that
+                // must be unwound before the rect moves again.
+                rotationTarget += atan2(cross, dot) * 180 / .pi
+                let step = rotationTarget - rotationApplied
+                func norm(_ a: Double) -> Double {
+                    var a = a.truncatingRemainder(dividingBy: 360)
+                    if a > 180 { a -= 360 }
+                    if a <= -180 { a += 360 }
+                    return a
+                }
+                if fits(rect, angle: norm(rotationTarget)) {
+                    rotationApplied = rotationTarget
+                } else if step != 0 {
+                    // Wedged: advance flush to the stop (boundary bisection
+                    // between the fitting current angle and the target).
+                    var lo = 0.0, hi = step
+                    for _ in 0..<20 {
+                        let mid = (lo + hi) / 2
+                        if fits(rect, angle: norm(rotationApplied + mid)) {
+                            lo = mid
+                        } else {
+                            hi = mid
+                        }
+                    }
+                    rotationApplied += lo
+                }
+                let next = norm(rotationApplied)
+                if next != angle {
+                    angle = next
+                    onAngleChange?(next)
+                }
+            }
+            lastRotateVec = v1
+        case .move:
+            // The rect follows the pointer in IMAGE space (rotation is
+            // about the rect's own center, so translating the stored rect
+            // translates the rotated one identically). Containment under
+            // pure translation is exactly "the center stays inside a
+            // margin rectangle" — the margins are the rotated bounding
+            // box's half-extents — so each axis clamps independently to
+            // the true boundary instead of refusing whole deltas.
+            let hw = dragStartRect.width / 2 * abs(cosA)
+                + dragStartRect.height / 2 * abs(sinA)
+            let hh = dragStartRect.width / 2 * abs(sinA)
+                + dragStartRect.height / 2 * abs(cosA)
+            let cx = min(max(dragStartRect.midX + raw.x - dragStartImage.x, hw),
+                         canvas.width - hw)
+            let cy = min(max(dragStartRect.midY + raw.y - dragStartImage.y, hh),
+                         canvas.height - hh)
+            // Round to whole pixels toward the interior — .integral rounds
+            // OUTWARD, which pushed a corner past the boundary and made the
+            // containment check refuse whole events (fast drags stranded
+            // the rect short of the edge).
+            let x = min(max((cx - dragStartRect.width / 2).rounded(), (hw - dragStartRect.width / 2).rounded(.up)),
+                        (canvas.width - hw - dragStartRect.width / 2).rounded(.down))
+            let y = min(max((cy - dragStartRect.height / 2).rounded(), (hh - dragStartRect.height / 2).rounded(.up)),
+                        (canvas.height - hh - dragStartRect.height / 2).rounded(.down))
+            let cand = CGRect(x: x, y: y, width: dragStartRect.width,
+                              height: dragStartRect.height)
+            if cand != rect {
+                rect = cand
+                onChange?(cand)
+            }
+        case .handle(let hx, let hy):
+            // Resize in the rect's local (rotated) frame, anchored so the
+            // opposite corner/edge stays fixed ON SCREEN: express the
+            // pointer relative to the anchor's image position, rotate that
+            // vector into the local frame, size from its components, then
+            // rebuild the center back in image space.
+            let minSize: CGFloat = 32
+            let c0 = CGPoint(x: dragStartRect.midX, y: dragStartRect.midY)
+            let anchorLocal = CGPoint(x: CGFloat(-hx) * dragStartRect.width / 2,
+                                      y: CGFloat(-hy) * dragStartRect.height / 2)
+            let anchor = CGPoint(
+                x: c0.x + anchorLocal.x * cosA - anchorLocal.y * sinA,
+                y: c0.y + anchorLocal.x * sinA + anchorLocal.y * cosA)
+            let vx = raw.x - anchor.x, vy = raw.y - anchor.y
+            let lx = vx * cosA + vy * sinA    // R(-angle)·v
+            let ly = -vx * sinA + vy * cosA
+            var newW = hx == 0 ? dragStartRect.width : max(CGFloat(hx) * lx, minSize)
+            var newH = hy == 0 ? dragStartRect.height : max(CGFloat(hy) * ly, minSize)
+            if let aspect {
+                if hy == 0 {
+                    newH = newW / aspect
+                } else if hx == 0 {
+                    newW = newH * aspect
+                } else if abs(newW - dragStartRect.width)
+                            >= abs(newH - dragStartRect.height) {
+                    newH = newW / aspect
+                } else {
+                    newW = newH * aspect
+                }
+            }
+            let centerLocal = CGPoint(x: hx == 0 ? 0 : CGFloat(hx) * newW / 2,
+                                      y: hy == 0 ? 0 : CGFloat(hy) * newH / 2)
+            let newCenter = CGPoint(
+                x: anchor.x + centerLocal.x * cosA - centerLocal.y * sinA,
+                y: anchor.y + centerLocal.x * sinA + centerLocal.y * cosA)
+            let cand = CGRect(x: newCenter.x - newW / 2, y: newCenter.y - newH / 2,
+                              width: newW, height: newH).integral
+            if fits(cand, angle: angle), cand != rect {
+                rect = cand
+                onChange?(cand)
+            }
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        drag = nil
+        dragCursor = nil
+    }
+}
+
+struct CropOverlay: NSViewRepresentable {
+    let viewport: ViewportState
+    let canvas: CGSize
+    var aspect: CGFloat? = nil
+    @Binding var rect: CGRect?
+    @Binding var angle: Double
+
+    func makeNSView(context: Context) -> CropOverlayNSView {
+        let view = CropOverlayNSView()
+        view.viewport = viewport
+        view.canvas = canvas
+        view.aspect = aspect
+        view.rect = rect ?? CGRect(origin: .zero, size: canvas)
+        view.angle = angle
+        view.onChange = { rect = $0 }
+        view.onAngleChange = { angle = $0 }
+        return view
+    }
+
+    func updateNSView(_ view: CropOverlayNSView, context: Context) {
+        view.viewport = viewport
+        view.canvas = canvas
+        view.aspect = aspect
+        view.onChange = { rect = $0 }
+        view.onAngleChange = { angle = $0 }
+        if let rect, rect != view.rect { view.rect = rect }
+        if angle != view.angle { view.angle = angle }
     }
 }

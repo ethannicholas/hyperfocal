@@ -34,6 +34,10 @@ import os
 ///   {"action": "export-all", "dir": d,  "result": r}
 ///   {"action": "export-aligned", "dir": d, "result": r}   selected frames, warped
 ///   {"action": "export-animation", "path": p, "result": r}   rocking mp4
+///   {"action": "set-crop", "x": x, "y": y, "w": w, "h": h, "result": r}
+///       — omit coordinates to clear; the crop overlay itself isn't
+///       XCUITest-drivable, so journeys set the rect here and verify
+///       exported dimensions
 ///   {"action": "save-project", "path": p, "result": r}
 ///   {"action": "set-export", "format": f?, "space": s?, "result": r}
 ///       — the pickers live in the export dialogs (panel accessories),
@@ -163,6 +167,21 @@ enum UITestSupport {
             Task { @MainActor in
                 finish(true, await model.exportAlignedFrames(to: url))
             }
+        case "set-crop":
+            // The crop rect is normally set by dragging in crop mode, which
+            // XCUITest can't do reliably — journeys set it here and verify
+            // exported dimensions. Empty/missing values clear the crop.
+            if let x = command["x"].flatMap(Double.init),
+               let y = command["y"].flatMap(Double.init),
+               let w = command["w"].flatMap(Double.init),
+               let h = command["h"].flatMap(Double.init) {
+                model.cropRect = CGRect(x: x, y: y, width: w, height: h)
+                model.cropAngle = command["angle"].flatMap(Double.init) ?? 0
+            } else {
+                model.cropRect = nil
+                model.cropAngle = 0
+            }
+            finish(true)
         case "export-animation":
             guard let path = command["path"] else { return finish(false, "no path") }
             Task { @MainActor in

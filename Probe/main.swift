@@ -247,6 +247,8 @@ Task { @MainActor in
     savedTone.shadows = 60
     var tonedStack = savedStack
     tonedStack.tone = savedTone
+    tonedStack.crop = [40, 30, 200, 150]
+    tonedStack.cropAngle = 8
     let saved = ProjectStore.Project(stacks: [tonedStack, unfusedStack], selectedIndex: 0)
     try! ProjectStore.write(saved, to: sessionURL)
     let restoredProject = try! ProjectStore.read(from: sessionURL)
@@ -420,6 +422,35 @@ Task { @MainActor in
     }
     print("probe: project restored — frames=\(model2.frames.count), result \(model2.result!.width)x\(model2.result!.height)")
     try? FileManager.default.removeItem(at: sessionURL)
+
+    // 3a2. Crop round-trips through the project, and exports honor it: the
+    // written file must have exactly the crop's dimensions, and clearing
+    // the crop must restore full-canvas exports.
+    guard model2.cropRect == CGRect(x: 40, y: 30, width: 200, height: 150),
+          model2.cropAngle == 8 else {
+        print("probe: CROP LOST IN ROUND TRIP (\(String(describing: model2.cropRect)), "
+              + "angle \(model2.cropAngle))")
+        exit(1)
+    }
+    let cropExport = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("probe-crop.tif")
+    guard model2.writeExport(to: cropExport),
+          let croppedOut = try? ImageFile.load(url: cropExport),
+          croppedOut.width == 200, croppedOut.height == 150 else {
+        print("probe: CROPPED EXPORT WRONG SIZE"); exit(1)
+    }
+    model2.cropRect = nil
+    guard model2.hasUnsavedWork else {
+        print("probe: CLEARING CROP DID NOT MARK UNSAVED"); exit(1)
+    }
+    guard model2.writeExport(to: cropExport),
+          let fullOut = try? ImageFile.load(url: cropExport),
+          fullOut.width == model2.result!.width,
+          fullOut.height == model2.result!.height else {
+        print("probe: UNCROPPED EXPORT WRONG SIZE"); exit(1)
+    }
+    try? FileManager.default.removeItem(at: cropExport)
+    print("probe: crop round-trip and cropped export OK")
     // 3b. Input pane with a selected-but-missing frame must explain itself
     // (the reported bug: it showed "Select a frame in the Stack list").
     let model3 = AppModel()

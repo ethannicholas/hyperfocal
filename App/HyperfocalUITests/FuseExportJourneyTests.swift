@@ -139,6 +139,19 @@ final class FuseExportJourneyTests: XCTestCase {
             }
         }
 
+        try XCTContext.runActivity(named: "crop applies to exports") { _ in
+            XCTAssertTrue(app.buttons["edit.crop"].exists, "crop button missing")
+            try sendCommand(["action": "set-crop",
+                             "x": "20", "y": "10", "w": "200", "h": "120"])
+            let cropped = try exportAndInspect("cropped.tif")
+            XCTAssertEqual(cropped.width, 200, "export must honor the crop")
+            XCTAssertEqual(cropped.height, 120)
+            try sendCommand(["action": "set-crop"])  // no coords = clear
+            let uncropped = try exportAndInspect("uncropped.tif")
+            XCTAssertEqual(uncropped.width, baseline.width,
+                           "clearing the crop must restore the full canvas")
+        }
+
         try XCTContext.runActivity(named: "rocking animation export") { _ in
             let movie = Fixtures.out.appendingPathComponent("rocking.mp4")
             try sendCommand(["action": "export-animation", "path": movie.path],
