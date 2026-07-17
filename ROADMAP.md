@@ -28,36 +28,109 @@ Mac with LibRaw elsewhere; OpenCV replaces Vision registration on all
 platforms if it validates. Work the phases in order; each item below is
 independently landable and keeps all existing gates green.
 
-### Phase 1: engine backend seams + Linux CI + portable CLI
+### Phase 1: portable engine + CLI on Linux — bring-up guide
 
-Decode/encode, EXIF, and spill backends behind build-time selection
-(ImageIO/CIRAW on Mac; LibRaw + libjpeg-turbo/libtiff/libpng + lcms2 +
-exiv2 elsewhere; DNG SDK flips `qMacOS` → `qLinux`/`qWinOS` — the
-vendored SDK already supports both). Linux container CI running synth →
-fuse → PSNR (synth fixtures are TIFF, so baselines port unchanged).
+**Do this in a Linux session** (swift.org toolchain); this macOS machine
+can't compile the non-Apple paths, so the work below was written but not
+built here. Scope is `HyperfocalKit` + `hyperfocal-cli` only — the app,
+`AppCore/`, and `retouch-probe` are macOS/Qt-shell targets (later
+phases). Strategy and decisions of record: `Docs/cross-platform-plan.md`
+(CIRAW stays on Mac, LibRaw elsewhere; CPU-only first, Metal dropped).
 Done = `hyperfocal-cli fuse/batch/synth/compare` passes the synth gates
-on Linux.
+(header baselines, esp. plane ≈ 38.7 dB) on Linux, in CI.
 
-**Landed:** the simd 3×3 shim (`Sources/HyperfocalKit/PortableSIMD.swift`
-— pure-Swift `Float3x3` + `simd_*` aliases/functions, active only where
-`simd` is absent; `import simd` is now `#if canImport(simd)` in the
-non-Metal engine files and the CLI). Verified on macOS by the probe's
-"portable simd shim" cross-check (entry-for-entry vs Apple's simd).
-**Still unverified until Linux CI exists:** that `#if !canImport(simd)`
-actually selects the shim and swift-corelibs provides its stdlib SIMD
-surface — this is a macOS machine, so the Linux compile path is
-untested. The three Metal files still `import simd` unconditionally;
-they're excluded on Linux by the (not-yet-done) Metal-path exclusion,
-so leave them until that lands.
+Follow the pattern the simd shim already set: gate the Apple `import`
+with `#if canImport(<Framework>)`, and put the portable implementation
+under `#else`. `retouch-probe` is AppKit-only and stays the *macOS*
+gate; the *Linux* gate is the CLI synth→fuse→compare path (synth
+fixtures are TIFF, so the PSNR baselines port unchanged).
+
+**Already landed / already portable:** the simd 3×3 shim
+(`Sources/HyperfocalKit/PortableSIMD.swift` — pure-Swift `Float3x3` +
+`simd_*` aliases active only under `#if !canImport(simd)`; `import simd`
+is conditional in the non-Metal engine files + CLI; probe cross-checks
+it against Apple's simd on macOS). The ~3,100-LOC fusion core
+(`DMapFusion`, `DepthRegularize`, `PyramidFusion`, `Filters`, `Warp`,
+`ToneCurve`, `ImageBuffer`, `StackPipeline`) needs only Foundation /
+Dispatch / stdlib-SIMD. The vendored DNG SDK and `XMPSidecar` are
+portable (see item 4).
+
+Work items (roughly in order; each keeps macOS green — verify with the
+probe + synth PSNR after touching shared code):
+
+1. **Exclude the Metal path.** `GPUDMap.swift`, `GPUPyramid.swift`,
+   `MetalEngine.swift` `import Metal` (and still `import simd`
+   unconditionally). Wrap each whole file in `#if canImport(Metal)` (or
+   exclude via `Package.swift` on non-Apple) and confirm nothing outside
+   them names an `MTL*`/`MetalEngine` type unguarded — callers gate on
+   `MetalEngine.shared != nil`, so `MetalEngine.shared` needs a
+   non-Metal stub returning nil (CPU path is the reference; `preferGPU`
+   then always falls through to CPU). This unblocks the whole Linux
+   compile.
+
+2. **Decode/encode — the big one (`ImageFile.swift`,
+   `import CoreImage/ImageIO/CoreGraphics/UniformTypeIdentifiers`).** The
+   single decode/encode hub; everything downstream consumes `ImageBuffer`
+   (Float32 RGBA, Display P3), so the seam is contained here. Replace:
+   RAW via **LibRaw** (full-quality demosaic, `use_camera_wb`, `flip`
+   orientation, `cam_mul`/`pre_mul` for the as-shot neutral that
+   `DNGWriter` reads as `neutralChromaticity`); JPEG/TIFF/PNG (8- and
+   16-bit) via libjpeg-turbo / libtiff / libpng; P3 tagging + conversion
+   via **lcms2** (replaces the CoreGraphics tagged-colorspace draws).
+   `CGImage` is CoreGraphics — see the caveat below; `cgImage8/16` and
+   `loadGray8CGImage` need a portable image handoff on Linux.
+
+3. **EXIF (`StackSplitter.swift`, `DNGWriter.sourceMetadata`,
+   `import ImageIO`).** Property-dict reads → **exiv2** (or libexif):
+   `DateTimeOriginal` + `SubSecTimeOriginal` for capture-time stack
+   splitting, and Make/Model/lens/exposure/ISO/GPS for DNG carry-over.
+
+4. **DNG output (`Package.swift` `CDNGSDK` target).** Flip
+   `.define("qMacOS", to: "1")` → `qLinux`/`qWinOS` (the vendored SDK
+   has first-class support in `dng_flags.h`; only `zlib` is linked, XMP
+   /libjpeg/JXL already compiled out). The C shim and `import CDNGSDK`
+   are unchanged. `DNGWriter.writeUncompressed` (pure-`Data` fallback)
+   and `XMPSidecar` (hand-rolled bytes) are already portable.
+
+5. **Spill (`FrameSpill.swift`).** Already POSIX. Darwin-only bits:
+   `fcntl(fd, F_NOCACHE, 1)` (line 75) → `posix_fadvise(..., DONTNEED)`;
+   `volumeAvailableCapacityForImportantUsage` (lines 47-48) → `statvfs`.
+   Unlink-after-open works on Linux as-is.
+
+6. **Rocking export (`RockingAnimation.swift`,
+   `import AVFoundation/ImageIO`).** MP4 → FFmpeg, GIF → giflib; the
+   warp/disparity math (~180 LOC) is already portable. **Deferrable** —
+   stub `RockingAnimation.write` to throw "unsupported" on Linux so the
+   core `fuse`/`batch` CLI ships first; it's not on the synth-gate path.
+
+7. **`Package.swift` + CI.** Add `systemLibrary` targets (pkg-config)
+   for libraw/lcms2/exiv2/libjpeg-turbo/libtiff/libpng; make target
+   sources / dependencies platform-conditional. GitHub Actions Linux
+   job: container with the swift toolchain + those `-dev` packages,
+   `swift build -c release`, then `synth → fuse → compare` asserting
+   PSNR ≈ header baselines.
+
+**Caveat — CGImage/Vision coupling forces registration on Linux.**
+`Aligner.register(moving: CGImage, fixed: CGImage) -> simd_float3x3`
+(line 67) uses Vision, and the whole registration path is `CGImage`-typed
+(`loadGray8CGImage`, `gradientImage`). CoreGraphics *and* Vision are
+Apple-only, so **Linux cannot defer the registration swap** the way
+macOS can — the Linux build has no Vision at all. Do Phase 1.5 (below)
+as part of this bring-up: introduce a portable gray-image handoff
+(raw bytes or `ImageBuffer`, not `CGImage`) through `register` and back
+it with OpenCV on Linux. Whether *macOS* also switches off Vision stays
+the A/B decision in 1.5.
 
 ### Phase 1.5: OpenCV vs Vision registration gate
 
-OpenCV `findHomography` behind `Aligner.register(moving:fixed:)`'s
-existing `(gray CGImage, gray CGImage) → simd_float3x3` seam (mind the
-bottom-left→top-left convention flip in `Aligner.convention`). A/B via
-the residual scores `Aligner` already computes, synth PSNR, and the
-fluorite mineral stack. Outcome recorded in the plan doc: adopt
-everywhere, or keep Vision on Mac and document the divergence.
+Put OpenCV `findHomography` behind `Aligner.register`'s seam — but first
+change that seam off `CGImage` to a portable gray representation (see the
+Phase 1 caveat; Linux has no `CGImage`). Mind the bottom-left→top-left
+convention flip in `Aligner.convention`. On Linux OpenCV is mandatory
+(no Vision); on macOS, A/B OpenCV vs Vision via the residual scores
+`Aligner` already computes, synth PSNR, and the fluorite mineral stack —
+if OpenCV matches, adopt it on macOS too (one engine everywhere), else
+keep Vision on Mac. Record the outcome in `Docs/cross-platform-plan.md`.
 
 ## Engine performance
 

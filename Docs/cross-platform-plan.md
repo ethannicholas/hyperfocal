@@ -35,11 +35,15 @@ not per completed task.
    Display-P3 float) on Windows/Linux. Accepted: per-platform render
    divergence; projects stay portable but re-render per-platform.
 2. **Registration:** build the OpenCV homography backend behind
-   `Aligner.register`'s existing `(gray, gray) → 3×3` seam and validate
-   against Vision (residual scoring harness + real stacks + synth
-   gates). **If quality matches, OpenCV becomes the registration engine
-   on every platform, including macOS.** Vision remains only if OpenCV
-   measurably loses.
+   `Aligner.register`'s seam and validate against Vision (residual
+   scoring harness + real stacks + synth gates). **If quality matches,
+   OpenCV becomes the registration engine on every platform, including
+   macOS.** Vision remains only if OpenCV measurably loses. Note: the
+   seam is currently `CGImage`-typed and Vision-backed, and both are
+   Apple-only — so on Linux OpenCV is *mandatory* (there is no Vision to
+   fall back to) and the seam must first move off `CGImage` to a
+   portable gray representation. The A/B is only about whether macOS
+   *also* drops Vision; Linux drops it regardless.
 3. **GPU:** Windows/Linux ship CPU-only first (the CPU path is the
    reference implementation; 45 MP fusion is decode-bound). If profiling
    later justifies it: one wgpu/WGSL compute backend translated from the
