@@ -1,6 +1,8 @@
 import Foundation
 import Dispatch
+#if canImport(simd)
 import simd
+#endif
 
 /// Depth-map fusion: estimate which frame is sharpest at every pixel, regularize
 /// that index map, then render the output by sampling frames along it.

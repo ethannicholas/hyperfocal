@@ -1,6 +1,8 @@
 import Foundation
 import ImageIO
+#if canImport(simd)
 import simd
+#endif
 
 /// Generates synthetic focus stacks with known ground truth, for validating the
 /// pipeline end to end: a detailed texture over a tilted depth plane, per-frame

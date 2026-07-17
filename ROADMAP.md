@@ -30,13 +30,25 @@ independently landable and keeps all existing gates green.
 
 ### Phase 1: engine backend seams + Linux CI + portable CLI
 
-Decode/encode, EXIF, simd-3×3, and spill backends behind build-time
-selection (ImageIO/CIRAW on Mac; LibRaw + libjpeg-turbo/libtiff/libpng +
-lcms2 + exiv2 elsewhere; DNG SDK flips `qMacOS` → `qLinux`/`qWinOS` —
-the vendored SDK already supports both). Linux container CI running
-synth → fuse → PSNR (synth fixtures are TIFF, so baselines port
-unchanged). Done = `hyperfocal-cli fuse/batch/synth/compare` passes the
-synth gates on Linux.
+Decode/encode, EXIF, and spill backends behind build-time selection
+(ImageIO/CIRAW on Mac; LibRaw + libjpeg-turbo/libtiff/libpng + lcms2 +
+exiv2 elsewhere; DNG SDK flips `qMacOS` → `qLinux`/`qWinOS` — the
+vendored SDK already supports both). Linux container CI running synth →
+fuse → PSNR (synth fixtures are TIFF, so baselines port unchanged).
+Done = `hyperfocal-cli fuse/batch/synth/compare` passes the synth gates
+on Linux.
+
+**Landed:** the simd 3×3 shim (`Sources/HyperfocalKit/PortableSIMD.swift`
+— pure-Swift `Float3x3` + `simd_*` aliases/functions, active only where
+`simd` is absent; `import simd` is now `#if canImport(simd)` in the
+non-Metal engine files and the CLI). Verified on macOS by the probe's
+"portable simd shim" cross-check (entry-for-entry vs Apple's simd).
+**Still unverified until Linux CI exists:** that `#if !canImport(simd)`
+actually selects the shim and swift-corelibs provides its stdlib SIMD
+surface — this is a macOS machine, so the Linux compile path is
+untested. The three Metal files still `import simd` unconditionally;
+they're excluded on Linux by the (not-yet-done) Metal-path exclusion,
+so leave them until that lands.
 
 ### Phase 1.5: OpenCV vs Vision registration gate
 

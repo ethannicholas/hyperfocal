@@ -1,7 +1,9 @@
 import Foundation
 import Vision
 import CoreGraphics
+#if canImport(simd)
 import simd
+#endif
 
 public enum AlignError: Error, CustomStringConvertible {
     case registrationFailed(Int)

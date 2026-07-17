@@ -2,7 +2,9 @@ import ArgumentParser
 import CoreGraphics
 import Foundation
 import HyperfocalKit
+#if canImport(simd)
 import simd
+#endif
 
 @main
 struct Hyperfocal: ParsableCommand {

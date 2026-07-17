@@ -1,6 +1,8 @@
 import Foundation
 import Dispatch
+#if canImport(simd)
 import simd
+#endif
 
 /// Per-frame alignment for a pyramid fusion whose `frame` closure returns
 /// *unwarped* frames. The GPU path applies these homographies on-device

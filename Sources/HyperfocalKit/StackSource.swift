@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(simd)
 import simd
+#endif
 
 /// Streaming access to a focus stack on disk: frames are decoded (and warped into
 /// the reference coordinate system) one at a time, on demand. Nothing is retained

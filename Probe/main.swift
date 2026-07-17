@@ -1,5 +1,6 @@
 import AppKit
 import HyperfocalKit
+import simd
 
 // Headless integration tests for the app layer: retouch session loading,
 // session serialization round-trip, and model-level project save/restore.
@@ -1127,6 +1128,48 @@ Task { @MainActor in
     }
     try? FileManager.default.removeItem(at: dngDir)
     print("probe: dng linear render tags OK")
+
+    // Portable simd shim: Float3x3 (the non-Apple stand-in for simd_float3x3,
+    // used on Windows/Linux) must match Apple's simd here, entry for entry,
+    // across the operations the engine relies on — construction, column
+    // subscript, matrix×vector, matrix×matrix, and inverse. This is the
+    // shim's correctness gate; on macOS both types are available so we diff
+    // them directly.
+    do {
+        func close(_ a: Float, _ b: Float) -> Bool {
+            abs(a - b) <= 1e-3 * max(1, abs(a), abs(b))
+        }
+        let testRows: [[SIMD3<Float>]] = [
+            [SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1)],
+            [SIMD3(1.2, -0.3, 30), SIMD3(0.25, 0.9, -15), SIMD3(0, 0, 1)],
+            [SIMD3(0.8, 0.1, 12), SIMD3(-0.2, 1.05, -7), SIMD3(0.0004, -0.0007, 1)],
+        ]
+        let vectors = [SIMD3<Float>(10, 20, 1), SIMD3<Float>(-3, 7, 1)]
+        for rows in testRows {
+            let apple = simd_float3x3(rows: rows)
+            let port = Float3x3(rows: rows)
+            func fail(_ what: String) { print("probe: PORTABLE SIMD \(what) MISMATCH"); exit(1) }
+            // Column subscript M[col][row] must agree (column-major, like simd).
+            for c in 0..<3 { for r in 0..<3 where !close(apple[c][r], port[c][r]) { fail("subscript") } }
+            for v in vectors {
+                let pa = apple * v, pp = port * v
+                if !close(pa.x, pp.x) || !close(pa.y, pp.y) || !close(pa.z, pp.z) { fail("mat*vec") }
+            }
+            let ai = apple.inverse, pi = port.inverse
+            for c in 0..<3 { for r in 0..<3 where !close(ai[c][r], pi[c][r]) { fail("inverse") } }
+        }
+        // Matrix×matrix and identity equality.
+        let a = simd_float3x3(rows: testRows[1]), b = simd_float3x3(rows: testRows[2])
+        let pa = Float3x3(rows: testRows[1]), pb = Float3x3(rows: testRows[2])
+        let ab = a * b, pab = pa * pb
+        for c in 0..<3 { for r in 0..<3 where !close(ab[c][r], pab[c][r]) {
+            print("probe: PORTABLE SIMD mat*mat MISMATCH"); exit(1)
+        } }
+        guard Float3x3.identity == Float3x3(rows: testRows[0]) else {
+            print("probe: PORTABLE SIMD identity MISMATCH"); exit(1)
+        }
+        print("probe: portable simd shim OK")
+    }
 
     print("probe: ALL PASS")
     exit(0)

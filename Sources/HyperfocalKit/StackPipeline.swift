@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(simd)
 import simd
+#endif
 
 /// One-call orchestration of the full stack → fused image pipeline, shared by
 /// the CLI and the app.
