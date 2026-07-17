@@ -48,7 +48,10 @@ enum GPUPyramid {
         var gauss: [MTLBuffer] = []   // per-frame Gaussian pyramid (levels+1)
         var fused: [MTLBuffer] = []   // running fused pyramid (levels+1)
         var bestE: [MTLBuffer] = []   // winner energy per band level (levels)
-        var rawBuf: MTLBuffer! = nil    // unwarped upload target (warp mode)
+        // Ping-pong upload targets: frame N+1's memcpy lands in one while the
+        // GPU still reads the other for frame N. In warp mode they hold the
+        // unwarped source; otherwise they alternate as the pyramid's level 0.
+        var uploadBufs: [MTLBuffer] = []
         var scratchA: MTLBuffer! = nil  // level-0-sized float4 scratch
         var scratchB: MTLBuffer! = nil
         var gritA: MTLBuffer! = nil     // level-0 scalar energy (grit suppression)
@@ -64,12 +67,40 @@ enum GPUPyramid {
         defer { prefetcher.cancel() }
 
         // Wall-clock phase buckets, reported through `log` at the end —
-        // optimization here must start from measurements, not vibes.
+        // optimization here must start from measurements, not vibes. `gpu`
+        // is time *blocked on* the GPU: the next frame's decode wait and
+        // upload memcpy overlap the in-flight command buffer, so it reads
+        // lower than true GPU execution time.
         var tDecodeWait = 0.0, tUpload = 0.0, tGPU = 0.0, tPreview = 0.0
         func bucket(_ total: inout Double, _ body: () throws -> Void) rethrows {
             let t0 = CFAbsoluteTimeGetCurrent()
             try body()
             total += CFAbsoluteTimeGetCurrent() - t0
+        }
+
+        // The in-flight frame: committed but not yet waited on. Draining
+        // waits, then reads back and emits its preview (encoded at the tail
+        // of the same command buffer — a separate preview commit would force
+        // the serializing wait the ping-pong exists to avoid).
+        var pending: (cmd: MTLCommandBuffer, frame: Int, preview: MTLBuffer?)? = nil
+        func drain() {
+            guard let p = pending else { return }
+            pending = nil
+            bucket(&tGPU) {
+                p.cmd.waitUntilCompleted()
+            }
+            if let progress, let buf = p.preview {
+                var preview: ImageBuffer! = nil
+                bucket(&tPreview) {
+                    let (w, h) = sizes[previewLevel]
+                    var img = ImageBuffer(width: w, height: h)
+                    img.pixels.withUnsafeMutableBufferPointer {
+                        _ = memcpy($0.baseAddress!, buf.contents(), w * h * 16)
+                    }
+                    preview = img
+                }
+                progress(Double(p.frame + 1) / Double(frameCount), preview)
+            }
         }
 
         for fi in 0..<frameCount {
@@ -82,9 +113,6 @@ enum GPUPyramid {
                 srcHeight = img.height
                 width = warp?.outputWidth ?? img.width
                 height = warp?.outputHeight ?? img.height
-                if warp != nil {
-                    rawBuf = try engine.makeBuffer(floats: srcWidth * srcHeight * 4)
-                }
                 levels = max(3, Int(log2(Double(min(width, height)) / 16.0)))
                 sizes = [(width, height)]
                 for _ in 0..<levels {
@@ -97,6 +125,16 @@ enum GPUPyramid {
                 }
                 for s in sizes.dropLast() {
                     bestE.append(try engine.makeBuffer(floats: s.w * s.h))
+                }
+                if warp != nil {
+                    uploadBufs = [try engine.makeBuffer(floats: srcWidth * srcHeight * 4),
+                                  try engine.makeBuffer(floats: srcWidth * srcHeight * 4)]
+                } else {
+                    // No warp stage to fill level 0 on-device, so the upload
+                    // buffers alternate as gauss[0] itself (one is the
+                    // original allocation, reused).
+                    uploadBufs = [gauss[0],
+                                  try engine.makeBuffer(floats: width * height * 4)]
                 }
                 scratchA = try engine.makeBuffer(floats: width * height * 4)
                 scratchB = try engine.makeBuffer(floats: width * height * 4)
@@ -114,15 +152,32 @@ enum GPUPyramid {
                 !($0.transforms[fi] == matrix_identity_float3x3
                     && width == srcWidth && height == srcHeight)
             } ?? false
+            let upload = uploadBufs[fi % 2]
             bucket(&tUpload) {
                 img.pixels.withUnsafeBufferPointer {
-                    _ = memcpy(needsWarp ? rawBuf.contents() : gauss[0].contents(),
-                               $0.baseAddress!, srcWidth * srcHeight * 16)
+                    _ = memcpy(upload.contents(), $0.baseAddress!,
+                               srcWidth * srcHeight * 16)
                 }
             }
+            // The previous frame's GPU work overlapped the decode wait and
+            // upload above; only now does the CPU need it finished.
+            drain()
+            if warp == nil { gauss[0] = upload }
 
-            guard let cmd = engine.queue.makeCommandBuffer(),
-                  let enc = cmd.makeComputeCommandEncoder() else {
+            guard let cmd = engine.queue.makeCommandBuffer() else {
+                throw StackError.metal("cannot create command buffer")
+            }
+            if warp != nil && !needsWarp {
+                // Identity frame in warp mode: device-side copy into level 0
+                // (dimensions match — that's what made the warp skippable).
+                guard let blit = cmd.makeBlitCommandEncoder() else {
+                    throw StackError.metal("cannot create blit encoder")
+                }
+                blit.copy(from: upload, sourceOffset: 0, to: gauss[0],
+                          destinationOffset: 0, size: srcWidth * srcHeight * 16)
+                blit.endEncoding()
+            }
+            guard let enc = cmd.makeComputeCommandEncoder() else {
                 throw StackError.metal("cannot create command buffer")
             }
             if needsWarp {
@@ -133,7 +188,7 @@ enum GPUPyramid {
                     r2: SIMD4<Float>(h[0][2], h[1][2], h[2][2], 0),
                     dims: SIMD4<UInt32>(UInt32(srcWidth), UInt32(srcHeight),
                                         UInt32(width), UInt32(height)))
-                enc.setBuffer(rawBuf, offset: 0, index: 0)
+                enc.setBuffer(upload, offset: 0, index: 0)
                 enc.setBuffer(gauss[0], offset: 0, index: 1)
                 enc.setBytes(&params, length: MemoryLayout<GPUDMap.WarpParams>.size, index: 2)
                 engine.dispatch2D(enc, warpPipeline!, width: width, height: height)
@@ -226,27 +281,25 @@ enum GPUPyramid {
             enc.setBytes(&baseCount, length: 4, index: 2)
             engine.dispatch1D(enc, add4, count: Int(baseCount))
             enc.endEncoding()
-            bucket(&tGPU) {
-                cmd.commit()
-                cmd.waitUntilCompleted()
-            }
-            log?("pyramid \(fi + 1)/\(frameCount) (GPU)")
-            if let progress {
+            var previewBuf: MTLBuffer? = nil
+            if progress != nil {
                 // Live preview: collapse the running pyramid down to a
-                // low-res level (a few ms) so there's something to watch.
-                var preview: ImageBuffer! = nil
+                // low-res level (a few ms of GPU) at the tail of this frame's
+                // command buffer; drain() reads it back and emits it.
                 try bucket(&tPreview) {
-                    preview = try collapse(engine: engine, fused: fused,
-                                           sizes: sizes, levels: levels,
-                                           toLevel: previewLevel,
-                                           baseScale: 1 / Float(fi + 1),
-                                           baseTmp: baseTmp,
-                                           scratchA: scratchA, scratchB: scratchB,
-                                           scale4: scale4, upsampleAdd: upsampleAdd)
+                    previewBuf = try encodeCollapse(
+                        engine: engine, cmd: cmd, fused: fused, sizes: sizes,
+                        levels: levels, toLevel: previewLevel,
+                        baseScale: 1 / Float(fi + 1), baseTmp: baseTmp,
+                        scratchA: scratchA, scratchB: scratchB,
+                        scale4: scale4, upsampleAdd: upsampleAdd)
                 }
-                progress(Double(fi + 1) / Double(frameCount), preview)
             }
+            cmd.commit()
+            pending = (cmd, fi, previewBuf)
+            log?("pyramid \(fi + 1)/\(frameCount) (GPU)")
         }
+        drain()
         log?(String(format: "pyramid phases: decode-wait %.2fs, upload %.2fs, "
                     + "gpu %.2fs, preview %.2fs", tDecodeWait, tUpload, tGPU, tPreview))
 
@@ -259,21 +312,28 @@ enum GPUPyramid {
                             scale4: scale4, upsampleAdd: upsampleAdd)
     }
 
-    /// Collapses the running fused pyramid down to `toLevel` (0 = full
-    /// resolution; higher = cheap low-res previews), averaging the base by
-    /// `baseScale` into a scratch copy first. Ping-pongs the two scratch
-    /// buffers for the upsample-add chain and reads the result back.
-    private static func collapse(engine: MetalEngine, fused: [MTLBuffer],
-                                 sizes: [(w: Int, h: Int)], levels: Int,
-                                 toLevel: Int, baseScale: Float,
-                                 baseTmp: MTLBuffer,
-                                 scratchA: MTLBuffer, scratchB: MTLBuffer,
-                                 scale4: MTLComputePipelineState,
-                                 upsampleAdd: MTLComputePipelineState) throws -> ImageBuffer {
+    /// Encodes (onto `cmd`, after whatever is already there) a collapse of
+    /// the running fused pyramid down to `toLevel` (0 = full resolution;
+    /// higher = cheap low-res previews), averaging the base by `baseScale`
+    /// into a blit-copied scratch first so the running sum stays intact.
+    /// Ping-pongs the two scratch buffers for the upsample-add chain and
+    /// returns the buffer the result lands in (valid once `cmd` completes).
+    private static func encodeCollapse(engine: MetalEngine, cmd: MTLCommandBuffer,
+                                       fused: [MTLBuffer],
+                                       sizes: [(w: Int, h: Int)], levels: Int,
+                                       toLevel: Int, baseScale: Float,
+                                       baseTmp: MTLBuffer,
+                                       scratchA: MTLBuffer, scratchB: MTLBuffer,
+                                       scale4: MTLComputePipelineState,
+                                       upsampleAdd: MTLComputePipelineState) throws -> MTLBuffer {
         let (bw, bh) = sizes[levels]
-        memcpy(baseTmp.contents(), fused[levels].contents(), bw * bh * 16)
-        guard let cmd = engine.queue.makeCommandBuffer(),
-              let enc = cmd.makeComputeCommandEncoder() else {
+        guard let blit = cmd.makeBlitCommandEncoder() else {
+            throw StackError.metal("cannot create blit encoder")
+        }
+        blit.copy(from: fused[levels], sourceOffset: 0, to: baseTmp,
+                  destinationOffset: 0, size: bw * bh * 16)
+        blit.endEncoding()
+        guard let enc = cmd.makeComputeCommandEncoder() else {
             throw StackError.metal("cannot create command buffer")
         }
         var scale = baseScale
@@ -297,11 +357,33 @@ enum GPUPyramid {
             currentSize = sizes[l]
         }
         enc.endEncoding()
+        return current
+    }
+
+    /// Synchronous collapse: encodes on a fresh command buffer, runs it to
+    /// completion, and reads the result back.
+    private static func collapse(engine: MetalEngine, fused: [MTLBuffer],
+                                 sizes: [(w: Int, h: Int)], levels: Int,
+                                 toLevel: Int, baseScale: Float,
+                                 baseTmp: MTLBuffer,
+                                 scratchA: MTLBuffer, scratchB: MTLBuffer,
+                                 scale4: MTLComputePipelineState,
+                                 upsampleAdd: MTLComputePipelineState) throws -> ImageBuffer {
+        guard let cmd = engine.queue.makeCommandBuffer() else {
+            throw StackError.metal("cannot create command buffer")
+        }
+        let result = try encodeCollapse(engine: engine, cmd: cmd, fused: fused,
+                                        sizes: sizes, levels: levels,
+                                        toLevel: toLevel, baseScale: baseScale,
+                                        baseTmp: baseTmp,
+                                        scratchA: scratchA, scratchB: scratchB,
+                                        scale4: scale4, upsampleAdd: upsampleAdd)
         cmd.commit()
         cmd.waitUntilCompleted()
-        var out = ImageBuffer(width: currentSize.w, height: currentSize.h)
+        let (w, h) = sizes[toLevel]
+        var out = ImageBuffer(width: w, height: h)
         out.pixels.withUnsafeMutableBufferPointer {
-            memcpy($0.baseAddress!, current.contents(), currentSize.w * currentSize.h * 16)
+            _ = memcpy($0.baseAddress!, result.contents(), w * h * 16)
         }
         return out
     }
