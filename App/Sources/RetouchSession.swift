@@ -64,11 +64,28 @@ final class RetouchSession: ObservableObject {
     var canPaint: Bool { sourceFloat != nil && !deadDrag }
 
     private(set) var working: ImageBuffer
-    private let depth: [Float]
+    /// The depth plane, co-painted by strokes: painting from frame N writes
+    /// N's index under the brush (those ARE the pixels being copied), the
+    /// eraser restores the session-start depth, and the PMax layer leaves
+    /// depth alone (its pixels have no single depth). This is what makes
+    /// depth artifacts in the rocking animation fixable by retouching.
+    private(set) var workingDepth: [Float]
+    /// Depth as the session started (eraser source and Revert All target).
+    private let originalDepth: [Float]
+    /// Set when a stroke, undo, redo, or revert may have changed
+    /// `workingDepth`; the model folds the plane back into `resultDepth`
+    /// (and re-renders the depth visualizations) then clears this.
+    private(set) var depthDirty = false
+    func markDepthMerged() { depthDirty = false }
     private let sharpness: FrameSharpness?
     private let stackSource: StackSource
 
     private var displayPixels: [UInt8]
+    /// Live grayscale visualization of `workingDepth` (1 byte/px), same
+    /// mapping as DMapFusion.depthImage so toggling between the fusion's
+    /// static depth pane and this live one shows identical shades.
+    private var depthDisplayPixels: [UInt8]
+    private let depthDisplayScale: Float
     /// The canvas view registers here; strokes report the image-space rect they
     /// touched so only that region repaints (NOT a full-frame image rebuild —
     /// that was unusably slow at 45 MP).
@@ -132,12 +149,17 @@ final class RetouchSession: ObservableObject {
         }
     }
 
-    // Tile-based per-stroke undo.
+    // Tile-based per-stroke undo. Snapshots carry the depth plane alongside
+    // the pixels — strokes co-paint depth, so undo must restore both.
+    private struct TileSnapshot {
+        var pixels: [Float]
+        var depth: [Float]
+    }
     private static let tileSize = 256
     private static let maxUndoStrokes = 20
-    private var currentStrokeTiles: [Int: [Float]] = [:]
-    private var undoStack: [[Int: [Float]]] = []
-    private var redoStack: [[Int: [Float]]] = []
+    private var currentStrokeTiles: [Int: TileSnapshot] = [:]
+    private var undoStack: [[Int: TileSnapshot]] = []
+    private var redoStack: [[Int: TileSnapshot]] = []
     private var strokeActive = false
 
     /// `source` must be the same StackSource configuration the fusion used
@@ -158,7 +180,11 @@ final class RetouchSession: ObservableObject {
         } else {
             self.working = result
         }
-        self.depth = depth
+        self.workingDepth = depth
+        self.originalDepth = depth
+        // Same normalization as DMapFusion.depthImage(frameCount:) so the
+        // live view matches the fusion's static depth render shade-for-shade.
+        self.depthDisplayScale = 1 / Float(max(source.count, 2) - 1)
         self.sharpness = sharpness
         self.stackSource = source
         self.sourceIndex = initialSourceIndex.map { min(max($0, 0), source.count - 1) }
@@ -168,6 +194,11 @@ final class RetouchSession: ObservableObject {
         Self.convertToBytes(from: working, into: &pixels,
                             rect: CGRect(x: 0, y: 0, width: result.width, height: result.height))
         self.displayPixels = pixels
+        var depthBytes = [UInt8](repeating: 0, count: result.width * result.height)
+        Self.convertDepthToBytes(from: depth, scale: depthDisplayScale,
+                                 into: &depthBytes, width: result.width,
+                                 rows: 0..<result.height)
+        self.depthDisplayPixels = depthBytes
 
         selectSource(sourceIndex)
     }
@@ -187,6 +218,27 @@ final class RetouchSession: ObservableObject {
             guard let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
                                    bytesPerRow: w * 4, space: space,
                                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                   provider: provider, decode: nil, shouldInterpolate: false,
+                                   intent: .defaultIntent) else {
+                return body(nil)
+            }
+            return body(cg)
+        }
+    }
+
+    /// Zero-copy grayscale CGImage over the live depth-view bytes, valid
+    /// within `body` only.
+    func withDepthDisplayCGImage<R>(_ body: (CGImage?) -> R) -> R {
+        let w = width, h = height
+        return depthDisplayPixels.withUnsafeMutableBytes { raw -> R in
+            guard let base = raw.baseAddress,
+                  let provider = CGDataProvider(dataInfo: nil, data: base, size: raw.count,
+                                                releaseData: { _, _, _ in }) else {
+                return body(nil)
+            }
+            guard let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 8,
+                                   bytesPerRow: w, space: CGColorSpaceCreateDeviceGray(),
+                                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
                                    provider: provider, decode: nil, shouldInterpolate: false,
                                    intent: .defaultIntent) else {
                 return body(nil)
@@ -425,7 +477,7 @@ final class RetouchSession: ObservableObject {
             while x <= x1 {
                 let dx = Double(x) - point.x, dy = Double(y) - point.y
                 if dx * dx + dy * dy <= r * r {
-                    let index = Int(depth[y * width + x].rounded())
+                    let index = Int(workingDepth[y * width + x].rounded())
                     votes[index, default: 0] += 1
                 }
                 x += step
@@ -515,29 +567,31 @@ final class RetouchSession: ObservableObject {
         guard let stroke = undoStack.popLast() else { return }
         // Capture the post-stroke pixels of the same tiles so redo can replay.
         redoStack.append(captureTiles(stroke.keys))
-        for (tileIndex, pixels) in stroke {
-            restoreTile(tileIndex, pixels: pixels)
+        for (tileIndex, snapshot) in stroke {
+            restoreTile(tileIndex, snapshot: snapshot)
         }
         canUndo = !undoStack.isEmpty
         canRedo = true
+        depthDirty = true
         onEdited?()
     }
 
     func redo() {
         guard let stroke = redoStack.popLast() else { return }
         undoStack.append(captureTiles(stroke.keys))
-        for (tileIndex, pixels) in stroke {
-            restoreTile(tileIndex, pixels: pixels)
+        for (tileIndex, snapshot) in stroke {
+            restoreTile(tileIndex, snapshot: snapshot)
         }
         canRedo = !redoStack.isEmpty
         canUndo = true
         hasEdits = true
+        depthDirty = true
         onEdited?()
     }
 
-    private func captureTiles<S: Sequence>(_ tiles: S) -> [Int: [Float]]
+    private func captureTiles<S: Sequence>(_ tiles: S) -> [Int: TileSnapshot]
         where S.Element == Int {
-        var snapshot = [Int: [Float]]()
+        var snapshot = [Int: TileSnapshot]()
         for tileIndex in tiles {
             snapshot[tileIndex] = copyTile(tx: tileIndex % tilesAcross,
                                            ty: tileIndex / tilesAcross)
@@ -547,14 +601,19 @@ final class RetouchSession: ObservableObject {
 
     func resetAll(to original: ImageBuffer) {
         working = original
+        workingDepth = originalDepth
         undoStack = []
         redoStack = []
         currentStrokeTiles = [:]
         canUndo = false
         canRedo = false
         hasEdits = false
+        depthDirty = true
         Self.convertToBytes(from: working, into: &displayPixels,
                             rect: CGRect(x: 0, y: 0, width: width, height: height))
+        Self.convertDepthToBytes(from: workingDepth, scale: depthDisplayScale,
+                                 into: &depthDisplayPixels, width: width,
+                                 rows: 0..<height)
         onDisplayDirty?(CGRect(x: 0, y: 0, width: width, height: height))
         onEdited?()
     }
@@ -570,9 +629,20 @@ final class RetouchSession: ObservableObject {
         snapshotTiles(x0: x0, y0: y0, x1: x1, y1: y1)
 
         let w = width
+        // The stroke's depth: a frame paints its own index (that IS the
+        // depth of the pixels being copied), the eraser paints the
+        // session-start depth back, and PMax — whose pixels have no single
+        // depth — leaves the plane alone.
+        let paintsDepth = !isPMaxSource
+        let eraseDepth = isResultSource
+        let frameDepth = Float(min(sourceIndex, urls.count - 1))
+        let dScale = depthDisplayScale
         working.pixels.withUnsafeMutableBufferPointer { dst in
             src.pixels.withUnsafeBufferPointer { s in
                 displayPixels.withUnsafeMutableBufferPointer { bytes in
+                    workingDepth.withUnsafeMutableBufferPointer { wd in
+                        originalDepth.withUnsafeBufferPointer { od in
+                            depthDisplayPixels.withUnsafeMutableBufferPointer { dbytes in
                     for y in y0...y1 {
                         let dy = Double(y) - center.y
                         for x in x0...x1 {
@@ -595,11 +665,23 @@ final class RetouchSession: ObservableObject {
                             }
                             dst[pi + 3] = 1
                             bytes[pi + 3] = 255
+                            if paintsDepth {
+                                let di = y * w + x
+                                let target = eraseDepth ? od[di] : frameDepth
+                                let v = wd[di] * (1 - alpha) + target * alpha
+                                wd[di] = v
+                                let g = 1 - v * dScale
+                                dbytes[di] = UInt8(min(max(g, 0), 1) * 255 + 0.5)
+                            }
+                        }
+                    }
+                            }
                         }
                     }
                 }
             }
         }
+        if paintsDepth { depthDirty = true }
         onDisplayDirty?(CGRect(x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1))
     }
 
@@ -624,29 +706,40 @@ final class RetouchSession: ObservableObject {
         return (x0, y0, min(ts, width - x0), min(ts, height - y0))
     }
 
-    private func copyTile(tx: Int, ty: Int) -> [Float] {
+    private func copyTile(tx: Int, ty: Int) -> TileSnapshot {
         let r = tileRect(tx: tx, ty: ty)
         var out = [Float](repeating: 0, count: r.w * r.h * 4)
+        var outDepth = [Float](repeating: 0, count: r.w * r.h)
         working.pixels.withUnsafeBufferPointer { src in
-            out.withUnsafeMutableBufferPointer { dst in
-                for row in 0..<r.h {
-                    let srcStart = ((r.y0 + row) * width + r.x0) * 4
-                    let dstStart = row * r.w * 4
-                    for i in 0..<(r.w * 4) {
-                        dst[dstStart + i] = src[srcStart + i]
+            workingDepth.withUnsafeBufferPointer { srcD in
+                out.withUnsafeMutableBufferPointer { dst in
+                    outDepth.withUnsafeMutableBufferPointer { dstD in
+                        for row in 0..<r.h {
+                            let srcStart = ((r.y0 + row) * width + r.x0) * 4
+                            let dstStart = row * r.w * 4
+                            for i in 0..<(r.w * 4) {
+                                dst[dstStart + i] = src[srcStart + i]
+                            }
+                            let srcDStart = (r.y0 + row) * width + r.x0
+                            let dstDStart = row * r.w
+                            for i in 0..<r.w {
+                                dstD[dstDStart + i] = srcD[srcDStart + i]
+                            }
+                        }
                     }
                 }
             }
         }
-        return out
+        return TileSnapshot(pixels: out, depth: outDepth)
     }
 
-    private func restoreTile(_ tileIndex: Int, pixels: [Float]) {
+    private func restoreTile(_ tileIndex: Int, snapshot: TileSnapshot) {
         let tx = tileIndex % tilesAcross, ty = tileIndex / tilesAcross
         let r = tileRect(tx: tx, ty: ty)
+        let dScale = depthDisplayScale
         working.pixels.withUnsafeMutableBufferPointer { dst in
             displayPixels.withUnsafeMutableBufferPointer { bytes in
-                pixels.withUnsafeBufferPointer { src in
+                snapshot.pixels.withUnsafeBufferPointer { src in
                     for row in 0..<r.h {
                         let dstStart = ((r.y0 + row) * width + r.x0) * 4
                         let srcStart = row * r.w * 4
@@ -654,6 +747,22 @@ final class RetouchSession: ObservableObject {
                             let v = src[srcStart + i]
                             dst[dstStart + i] = v
                             bytes[dstStart + i] = UInt8(min(max(v, 0), 1) * 255 + 0.5)
+                        }
+                    }
+                }
+            }
+        }
+        workingDepth.withUnsafeMutableBufferPointer { dst in
+            depthDisplayPixels.withUnsafeMutableBufferPointer { bytes in
+                snapshot.depth.withUnsafeBufferPointer { src in
+                    for row in 0..<r.h {
+                        let dstStart = (r.y0 + row) * width + r.x0
+                        let srcStart = row * r.w
+                        for i in 0..<r.w {
+                            let v = src[srcStart + i]
+                            dst[dstStart + i] = v
+                            let g = 1 - v * dScale
+                            bytes[dstStart + i] = UInt8(min(max(g, 0), 1) * 255 + 0.5)
                         }
                     }
                 }
@@ -686,6 +795,27 @@ final class RetouchSession: ObservableObject {
                     let y = y0 + row
                     for i in ((y * w + x0) * 4)..<((y * w + x1) * 4) {
                         dst[i] = UInt8(min(max(src[i], 0), 1) * 255 + 0.5)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Depth values → visualization bytes (v = 1 − depth·scale, the
+    /// DMapFusion.depthImage mapping) for the given rows.
+    nonisolated private static func convertDepthToBytes(from depth: [Float], scale: Float,
+                                                        into bytes: inout [UInt8],
+                                                        width: Int, rows: Range<Int>) {
+        depth.withUnsafeBufferPointer { src in
+            bytes.withUnsafeMutableBufferPointer { dst in
+                let srcBox = UncheckedSendable(src)
+                let dstBox = UncheckedSendable(dst)
+                DispatchQueue.concurrentPerform(iterations: rows.count) { row in
+                    let src = srcBox.value, dst = dstBox.value
+                    let y = rows.lowerBound + row
+                    for i in (y * width)..<((y + 1) * width) {
+                        let v = 1 - src[i] * scale
+                        dst[i] = UInt8(min(max(v, 0), 1) * 255 + 0.5)
                     }
                 }
             }

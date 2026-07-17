@@ -42,6 +42,13 @@ public enum RockingAnimation {
         public var fps = 30.0
         /// Peak disparity at the depth extremes, as a fraction of the
         /// output width. 0.01 reads "gentle but alive"; 0.02 is emphatic.
+        ///
+        /// Depth *direction* deliberately has no option: negating the
+        /// disparity is exactly a half-cycle phase shift of any of the
+        /// symmetric paths (−sin θ = sin(θ+π)), so an "inverted" rocking
+        /// animation is the same loop started elsewhere — verified
+        /// bit-exact. Stereo pairs (a fixed per-eye offset, no cycle to
+        /// hide in) are where direction will matter.
         public var amplitude = 0.01
         public var path = Path.horizontal
 

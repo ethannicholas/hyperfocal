@@ -27,9 +27,14 @@ grid stage removed the old threshold-flip caveat that had dmap at
 
 ## Release blockers
 
-### 1. Bug fixes & minor features
-
-(Empty — new small items land here.)
+None outstanding (as of 2026-07-16: edit undo/redo, bookmark re-grant on
+open, and depth-visible retouching — with strokes co-painting the depth
+plane — all shipped; git history and README are the record). The planned
+"invert depth on rocking animations" turned out to be a non-feature and was
+dropped: negating the disparity is exactly a half-cycle phase shift of the
+symmetric rocking/circle loops (−sin θ = sin(θ+π)), so an "inverted"
+animation is the same loop started elsewhere — verified bit-exact on real
+output. See item 5 for where depth direction genuinely matters.
 
 ---
 
@@ -163,6 +168,13 @@ disparity gives left/right eyes — export side-by-side and crossed-eye
 PNG pairs. At stereo-scale disparities the gather approximation may
 need revisiting (the old `nearestSeedFill` jump-flood, removed
 2026-07-12, is in git history if splat + inpaint wins).
+
+Depth *direction* matters here, unlike rocking (where inversion is just a
+phase shift — see Release blockers note): a fixed per-eye offset with
+inverted depth swaps the eyes and reads inside-out. Stereo needs a
+direction control or auto-detection — and note the app re-sorts frames by
+capture time at load (`StackSplitter.ordered`), so a "backwards" stack can
+only arise from shooting far-to-near, not from shuffled files.
 
 ### 6. Smaller parity items (grab-bag, roughly ordered)
 

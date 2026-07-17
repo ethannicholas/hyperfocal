@@ -90,6 +90,13 @@ enum UITestSupport {
                 // findable in the transcript rather than a silent stall.
                 print("uitest: FUSE FAILED: \(message)")
             }
+            // Fixtures live in the app's own container, so the re-grant
+            // prompt firing under test means detection broke — decline so
+            // the run fails on assertions instead of hanging on a panel.
+            model.accessPromptOverride = { count in
+                print("uitest: ACCESS RE-GRANT PROMPT (\(count) folders) — declined")
+                return false
+            }
         }
         // Deny-mode: confirmations answer "Cancel" (overrides AUTOCONFIRM's
         // yes) — for tests of the cancel paths themselves, e.g. the

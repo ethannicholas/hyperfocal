@@ -76,6 +76,13 @@ one up.
   the export CPU path).
 - A failed save/export must never touch `AppModel.phase` — the fused
   result is still valid.
+- Every non-stroke edit to a stack's output state (tone, crop, frame
+  inclusion, …) records an `AppModel.ModelEdit` so ⌘Z can walk it back —
+  new edit kinds join that enum (value snapshots, per-stack histories via
+  stash/install). Retouch strokes keep their own tile-based undo in
+  `RetouchSession`, and they co-paint the depth plane (frame → its index,
+  eraser → session-start depth, PMax → untouched); the model folds session
+  depth back into `resultDepth` via `mergeRetouchDepth()` at every consumer.
 - Bundle ID `com.ethannicholas.hyperfocal` (lowercase — the capitalized
   form collides case-insensitively in Apple's App ID registry), team
   `Y3GFBT2WQ2`.

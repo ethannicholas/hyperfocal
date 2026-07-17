@@ -65,6 +65,24 @@ final class StackListJourneyTests: XCTestCase {
             XCTAssertTrue(waitFor { text(of: count) == before })
         }
 
+        XCTContext.runActivity(named: "frame selection is undoable") { _ in
+            // Non-stroke edits carry model-level undo; a checkbox change is
+            // the automatable representative (tone needs a slider gesture,
+            // which XCUITest can't drive — the probe covers that path).
+            let before = text(of: count)
+            let box = app.checkBoxes["frame.row.\(framesA[0]).included"]
+            box.click()
+            XCTAssertTrue(waitFor { text(of: count) != before }, "count never moved")
+            clickMenuItem(app, menu: "Edit", item: "Undo Frame Selection")
+            XCTAssertTrue(waitFor { text(of: count) == before },
+                          "undo did not restore the frame count")
+            clickMenuItem(app, menu: "Edit", item: "Redo Frame Selection")
+            XCTAssertTrue(waitFor { text(of: count) != before },
+                          "redo did not replay the exclusion")
+            clickMenuItem(app, menu: "Edit", item: "Undo Frame Selection")
+            XCTAssertTrue(waitFor { text(of: count) == before })
+        }
+
         XCTContext.runActivity(named: "mouse-driven slider (the one context "
                                + "where XCUITest slider mechanics work)") { _ in
             setSlider(app, app.sliders["fusion.slider.sharpness"],

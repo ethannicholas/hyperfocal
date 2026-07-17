@@ -315,32 +315,38 @@ struct ContentView: View {
             LabeledSlider(
                 label: "Exposure", id: "tone.slider.exposure", value: $model.tone.exposure, range: -5...5,
                 format: "%+.2f EV",
-                help: "Overall brightness, in stops of linear light — the loupe for judging a fuse in deep shadow. Like every Tone control, it applies to the previews (including retouching) and bakes into TIFF/PNG/JPEG exports; Linear DNG is never affected.")
+                help: "Overall brightness, in stops of linear light — the loupe for judging a fuse in deep shadow. Like every Tone control, it applies to the previews (including retouching) and bakes into TIFF/PNG/JPEG exports; Linear DNG is never affected.",
+                onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
                 label: "Contrast", id: "tone.slider.contrast", value: $model.tone.contrast, range: -100...100,
                 format: "%+.0f",
-                help: "S-curve around the midtones: positive deepens shadows and brightens highlights, negative flattens.")
+                help: "S-curve around the midtones: positive deepens shadows and brightens highlights, negative flattens.",
+                onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
                 label: "Highlights", id: "tone.slider.highlights", value: $model.tone.highlights, range: -100...100,
                 format: "%+.0f",
-                help: "Brightens or recovers the upper midtones and highlights without moving pure white.")
+                help: "Brightens or recovers the upper midtones and highlights without moving pure white.",
+                onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
                 label: "Shadows", id: "tone.slider.shadows", value: $model.tone.shadows, range: -100...100,
                 format: "%+.0f",
-                help: "Lifts or deepens the shadows without moving pure black — usually the fastest way to inspect a dark fuse.")
+                help: "Lifts or deepens the shadows without moving pure black — usually the fastest way to inspect a dark fuse.",
+                onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
                 label: "Whites", id: "tone.slider.whites", value: $model.tone.whites, range: -100...100,
                 format: "%+.0f",
-                help: "Moves the white point itself: the very top of the range.")
+                help: "Moves the white point itself: the very top of the range.",
+                onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
                 label: "Blacks", id: "tone.slider.blacks", value: $model.tone.blacks, range: -100...100,
                 format: "%+.0f",
-                help: "Moves the black point itself: the very bottom of the range.")
+                help: "Moves the black point itself: the very bottom of the range.",
+                onEditingChanged: { model.toneEditing($0) })
             }
         } header: {
             sectionHeader("Tone", .tone) {
                 if !model.tone.isNeutral {
-                    Button("Reset") { model.tone = ToneSettings() }
+                    Button("Reset") { model.resetTone() }
                         .controlSize(.small)
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("tone.reset")
@@ -441,7 +447,8 @@ struct ContentView: View {
     private var previewSide: some View {
         VStack(spacing: 0) {
             if model.retouchMode, let session = model.retouch {
-                RetouchPreviewArea(session: session, tone: model.tone)
+                RetouchPreviewArea(session: session, tone: model.tone,
+                                   outputMode: $model.outputMode)
             } else {
                 fusionPreviewPanes
             }
@@ -569,6 +576,10 @@ struct ContentView: View {
 struct RetouchPreviewArea: View {
     @ObservedObject var session: RetouchSession
     var tone = ToneSettings()
+    /// The Result/Depth toggle stays available while retouching: strokes
+    /// co-paint the depth plane, so depth artifacts (which the rocking
+    /// animation turns into motion) are fixed with the depth view live.
+    @Binding var outputMode: AppModel.OutputMode
 
     var body: some View {
         HStack(spacing: 1) {
@@ -584,7 +595,9 @@ struct RetouchPreviewArea: View {
                 header: { EmptyView() }
             )
             PreviewPane(
-                title: "Retouched Output — drag to paint from source",
+                title: outputMode == .depth
+                    ? "Retouched Depth — drag to paint from source"
+                    : "Retouched Output — drag to paint from source",
                 image: nil,
                 nominalSize: session.nominalSize,
                 loading: false,
@@ -595,8 +608,19 @@ struct RetouchPreviewArea: View {
                                    imageSize: session.nominalSize,
                                    session: session)),
                 canvas: AnyView(RetouchCanvas(session: session, viewport: viewport,
-                                              tone: tone)),
-                header: { EmptyView() }
+                                              tone: tone,
+                                              showDepth: outputMode == .depth)),
+                header: {
+                    Picker("", selection: $outputMode) {
+                        ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .frame(width: 130)
+                    .accessibilityIdentifier("output.mode")
+                }
             )
         }
     }
@@ -1358,6 +1382,16 @@ final class RetouchEventView: PanZoomEventView {
 /// re-uploads — this is what makes 45 MP painting smooth.
 final class RetouchCanvasNSView: ToneFilteredPaneView {
     weak var session: RetouchSession?
+    /// Depth view: draw the session's live depth visualization instead of
+    /// the working pixels (strokes co-paint depth, so it updates as you
+    /// paint). The depth map is data, not image content — callers pass a
+    /// neutral tone alongside.
+    var showDepth = false {
+        didSet {
+            guard showDepth != oldValue else { return }
+            needsDisplay = true
+        }
+    }
     /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
     /// re-invoked through the AnyView wrapping when only the viewport changes.
     var viewport: ViewportState? {
@@ -1423,7 +1457,10 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
         let originX = bounds.width / 2 - (viewport.offset.width + imageSize.width / 2) * scale
         let originY = bounds.height / 2 - (viewport.offset.height + imageSize.height / 2) * scale
         ctx.interpolationQuality = scale >= 2 ? .none : .low
-        session.withDisplayCGImage { cg in
+        let drawImage: ((CGImage?) -> Void) -> Void = self.showDepth
+            ? session.withDepthDisplayCGImage
+            : session.withDisplayCGImage
+        drawImage { cg in
             guard let cg else { return }
             ctx.saveGState()
             // draw(_:in:) is bottom-up; re-flip within our flipped coordinates.
@@ -1443,6 +1480,7 @@ struct RetouchCanvas: NSViewRepresentable {
     let session: RetouchSession
     let viewport: ViewportState
     var tone = ToneSettings()
+    var showDepth = false
 
     func makeNSView(context: Context) -> RetouchCanvasNSView {
         let view = RetouchCanvasNSView()
@@ -1450,14 +1488,17 @@ struct RetouchCanvas: NSViewRepresentable {
         view.layerUsesCoreImageFilters = true
         view.viewport = viewport
         view.attach(session: session)
-        view.applyTone(tone)
+        view.showDepth = showDepth
+        // The depth map is a data visualization — never tone it.
+        view.applyTone(showDepth ? ToneSettings() : tone)
         return view
     }
 
     func updateNSView(_ view: RetouchCanvasNSView, context: Context) {
         view.viewport = viewport
         view.attach(session: session)
-        view.applyTone(tone)
+        view.showDepth = showDepth
+        view.applyTone(showDepth ? ToneSettings() : tone)
         view.viewportDidUpdate()
     }
 }

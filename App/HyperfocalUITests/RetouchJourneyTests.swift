@@ -16,6 +16,12 @@ final class RetouchJourneyTests: XCTestCase {
         waitForFuseDone(app)
         try sendCommand(["action": "set-export", "format": "TIFF (16-bit)"])
         let baseline = try exportAndInspect("retouch-baseline.tif")
+        try XCTContext.runActivity(named: "depth baseline for the revert check") { _ in
+            let mode = app.radioGroups["output.mode"]
+            mode.radioButtons["Depth"].click()
+            _ = try exportAndInspect("retouch-depth-baseline.tif")
+            mode.radioButtons["Result"].click()
+        }
 
         XCTContext.runActivity(named: "enter retouch: controls appear") { _ in
             app.buttons["retouch.start"].click()
@@ -64,6 +70,19 @@ final class RetouchJourneyTests: XCTestCase {
                 1.0, "painted export should differ from the baseline")
         }
 
+        try XCTContext.runActivity(named: "Result/Depth toggle lives in retouch too") { _ in
+            // Strokes co-paint the depth plane, so the toggle stays: the
+            // depth view is how animation-breaking depth artifacts get
+            // found and fixed. Exporting depth mid-session exercises the
+            // live session→model depth merge; the exact painted-depth
+            // values are the probe's territory.
+            let mode = app.radioGroups["output.mode"]
+            XCTAssertTrue(mode.exists, "Result/Depth toggle gone in retouch mode")
+            mode.radioButtons["Depth"].click()
+            _ = try exportAndInspect("retouch-depth-edited.tif")
+            mode.radioButtons["Result"].click()
+        }
+
         XCTContext.runActivity(named: "eraser mode selectable") { _ in
             app.radioGroups["retouch.source-kind"]
                 .radioButtons["Original Result (erase)"].click()
@@ -96,6 +115,15 @@ final class RetouchJourneyTests: XCTestCase {
                 try pixelDiff(Fixtures.out.appendingPathComponent("retouch-baseline.tif"),
                               Fixtures.out.appendingPathComponent("retouch-reverted.tif")),
                 1.0, "reverted render should match the baseline")
+            // Revert restores the co-painted depth plane exactly too.
+            let mode = app.radioGroups["output.mode"]
+            mode.radioButtons["Depth"].click()
+            _ = try exportAndInspect("retouch-depth-reverted.tif")
+            XCTAssertLessThan(
+                try pixelDiff(Fixtures.out.appendingPathComponent("retouch-depth-baseline.tif"),
+                              Fixtures.out.appendingPathComponent("retouch-depth-reverted.tif")),
+                1.0, "reverted depth should match the fusion's")
+            mode.radioButtons["Result"].click()
         }
     }
 }

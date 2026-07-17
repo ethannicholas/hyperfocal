@@ -177,10 +177,36 @@ Task { @MainActor in
         }
         return m
     }
+    // Depth co-painting: a stamp from frame 0 writes depth 0 under the
+    // brush (inner-brush alpha is exactly 1), the eraser stamp restores the
+    // fusion's depth exactly, and undo/redo replay both.
+    func maxDepthDisk(_ depths: [Float], against reference: (Int) -> Float,
+                      radius: Int) -> Float {
+        var m: Float = 0
+        for y in (cy - radius)...(cy + radius) {
+            for x in (cx - radius)...(cx + radius) where
+                (x - cx) * (x - cx) + (y - cy) * (y - cy) <= radius * radius {
+                let i = y * output.image.width + x
+                m = max(m, abs(depths[i] - reference(i)))
+            }
+        }
+        return m
+    }
+    // The check below is only meaningful if the fusion's own depth here
+    // differs from the painted value (0) — true for every synth fixture
+    // (center depth is mid-stack), but say so if a fixture ever changes.
+    if maxDepthDisk(output.depth, against: { _ in 0 }, radius: 20) < 0.5 {
+        print("probe: WARNING depth-paint check vacuous (center depth ~0)")
+    }
     session.beginStroke(at: brushPoint)
     session.endStroke()
     guard maxDiskDiff(session.working.pixels, output.image.pixels, radius: 20) > 0.005 else {
         print("probe: ERASER TEST STAMP DID NOT CHANGE PIXELS"); exit(1)
+    }
+    guard session.depthDirty,
+          maxDepthDisk(session.workingDepth, against: { _ in 0 }, radius: 20) < 1e-4 else {
+        print("probe: FRAME STAMP DID NOT PAINT DEPTH 0 (dirty \(session.depthDirty))")
+        exit(1)
     }
     session.toggleResultLayer()
     guard session.isResultSource else {
@@ -193,6 +219,22 @@ Task { @MainActor in
     guard maxDiskDiff(session.working.pixels, output.image.pixels, radius: 20) < 1e-4 else {
         print("probe: ERASER DID NOT REVERT PIXELS"); exit(1)
     }
+    guard maxDepthDisk(session.workingDepth, against: { output.depth[$0] },
+                       radius: 20) < 1e-4 else {
+        print("probe: ERASER DID NOT REVERT DEPTH"); exit(1)
+    }
+    // Undo pops the eraser stamp (depth back to the painted 0), redo
+    // replays it (depth back to the fusion's).
+    session.undo()
+    guard maxDepthDisk(session.workingDepth, against: { _ in 0 }, radius: 20) < 1e-4 else {
+        print("probe: UNDO DID NOT RESTORE PAINTED DEPTH"); exit(1)
+    }
+    session.redo()
+    guard maxDepthDisk(session.workingDepth, against: { output.depth[$0] },
+                       radius: 20) < 1e-4 else {
+        print("probe: REDO DID NOT RESTORE ERASED DEPTH"); exit(1)
+    }
+    print("probe: depth co-painting (stamp/erase/undo/redo) OK")
     ticks = 0
     while session.sourceLoading && ticks < 100 {
         try? await Task.sleep(nanoseconds: 100_000_000)
@@ -206,6 +248,24 @@ Task { @MainActor in
         print("probe: ERASER TOGGLE DID NOT RESTORE FRAME"); exit(1)
     }
     print("probe: eraser layer OK")
+
+    // 1a4. PMax stamps leave the depth plane alone (their pixels have no
+    // single depth), and Revert All restores the fusion's depth exactly.
+    session.togglePMaxLayer()
+    guard session.isPMaxSource, session.sourceFloat != nil else {
+        print("probe: PMAX RESELECT LOST CACHE"); exit(1)
+    }
+    let depthBeforePMax = session.workingDepth
+    session.beginStroke(at: brushPoint)
+    session.endStroke()
+    guard session.workingDepth == depthBeforePMax else {
+        print("probe: PMAX STAMP TOUCHED DEPTH"); exit(1)
+    }
+    session.resetAll(to: output.image)
+    guard session.workingDepth == output.depth, !session.hasEdits else {
+        print("probe: REVERT ALL DID NOT RESTORE DEPTH"); exit(1)
+    }
+    print("probe: pmax depth non-interference + revert OK")
 
 
     // 1b. Missing source file (e.g. memory card unplugged) must surface a
@@ -408,7 +468,114 @@ Task { @MainActor in
     }
     print("probe: noise floor preview OK")
 
+    // 3a1. Retouch depth merge: strokes co-paint the depth plane, and
+    // leaving retouch folds it into resultDepth (what saves, the depth
+    // export, and the rocking animation read). Reverting and re-merging
+    // restores the fusion's plane, leaving the model pristine for the
+    // checks below.
+    let depthBeforeRetouch = model.resultDepth
+    let mw = model.result!.width, mh = model.result!.height
+    model.enterRetouch()
+    guard let mergeSession = model.retouch else {
+        print("probe: ENTER RETOUCH FAILED"); exit(1)
+    }
+    mergeSession.selectSource(0)
+    ticks = 0
+    while mergeSession.sourceLoading && ticks < 300 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard mergeSession.sourceFloat != nil else {
+        print("probe: DEPTH-MERGE SOURCE STUCK"); exit(1)
+    }
+    mergeSession.brushRadius = 40
+    mergeSession.beginStroke(at: CGPoint(x: mw / 2, y: mh / 2))
+    mergeSession.endStroke()
+    model.exitRetouch()
+    let mci = (mh / 2) * mw + mw / 2
+    guard abs(model.resultDepth[mci]) < 1e-4,
+          abs(depthBeforeRetouch[mci]) > 0.5 else {
+        print("probe: RETOUCH DEPTH NOT MERGED (\(model.resultDepth[mci]) "
+              + "was \(depthBeforeRetouch[mci]))")
+        exit(1)
+    }
+    model.resetRetouch()
+    model.exitRetouch()  // merge again after the revert
+    guard model.resultDepth == depthBeforeRetouch else {
+        print("probe: REVERTED DEPTH DID NOT MERGE BACK"); exit(1)
+    }
+    print("probe: retouch depth merge OK")
+
+    // 3a2. Undo/redo of non-stroke edits: a tone slider gesture is one
+    // step however many ticks it delivered, frame inclusion records, and
+    // the crop transaction records on Accept — ⌘Z's model path walks each
+    // back exactly and redo replays it.
+    let tone0 = model.tone
+    model.toneEditing(true)
+    model.tone.exposure = 1.25
+    model.tone.shadows = 30
+    model.toneEditing(false)
+    guard model.canUndoEdit, model.undoMenuTitle == "Undo Tone Adjustment" else {
+        print("probe: TONE GESTURE DID NOT RECORD (\(model.undoMenuTitle))"); exit(1)
+    }
+    model.undoEdit()
+    guard model.tone == tone0 else {
+        print("probe: UNDO DID NOT RESTORE TONE"); exit(1)
+    }
+    model.redoEdit()
+    guard model.tone.exposure == 1.25, model.tone.shadows == 30 else {
+        print("probe: REDO DID NOT REPLAY TONE"); exit(1)
+    }
+    model.undoEdit()  // leave tone pristine for the checks below
+
+    let included0 = model.included
+    model.setIncluded(urls[2], to: false)
+    guard model.undoMenuTitle == "Undo Frame Selection" else {
+        print("probe: INCLUSION DID NOT RECORD"); exit(1)
+    }
+    model.undoEdit()
+    guard model.included == included0 else {
+        print("probe: UNDO DID NOT RESTORE INCLUSION"); exit(1)
+    }
+
+    let probeCrop = CGRect(x: 12, y: 8, width: 320, height: 240)
+    model.beginCrop()
+    guard model.cropMode, !model.canUndoEdit else {
+        print("probe: CROP MODE SHOULD SUSPEND EDIT UNDO"); exit(1)
+    }
+    model.cropRect = probeCrop
+    model.acceptCrop()
+    guard model.cropRect == probeCrop, model.undoMenuTitle == "Undo Crop" else {
+        print("probe: CROP ACCEPT DID NOT RECORD"); exit(1)
+    }
+    model.undoEdit()
+    guard model.cropRect == nil else {
+        print("probe: UNDO DID NOT CLEAR CROP"); exit(1)
+    }
+    model.redoEdit()
+    guard model.cropRect == probeCrop else {
+        print("probe: REDO DID NOT RESTORE CROP"); exit(1)
+    }
+    model.undoEdit()  // leave uncropped
+    // A cancelled crop is no edit at all.
+    let undoCount0 = model.undoHistory.count
+    model.beginCrop()
+    model.cropRect = probeCrop
+    model.cancelCrop()
+    guard model.cropRect == nil, model.undoHistory.count == undoCount0 else {
+        print("probe: CANCELLED CROP RECORDED AN EDIT"); exit(1)
+    }
+    print("probe: edit undo/redo OK")
+
     let model2 = AppModel()
+    // The probe's project has no bookmarks, but every frame is readable
+    // (unsandboxed) — the access re-grant prompt firing here would be a
+    // false positive (it must key on actual read denial, not on missing
+    // bookmarks).
+    model2.accessPromptOverride = { count in
+        print("probe: UNEXPECTED ACCESS RE-GRANT PROMPT (\(count) folders)")
+        exit(1)
+    }
     model2.openProject(from: sessionURL)
     ticks = 0
     while model2.phase != .done && ticks < 300 {

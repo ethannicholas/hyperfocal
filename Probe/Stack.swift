@@ -86,6 +86,11 @@ final class Stack: Identifiable {
     var savedWorking: ImageBuffer?
     var savedSourceIndex: Int?
 
+    // Per-stack undo/redo of non-stroke edits (tone, crop, inclusion).
+    // Session-only, like retouch stroke undo — not saved in projects.
+    var undoHistory: [AppModel.ModelEdit] = []
+    var redoHistory: [AppModel.ModelEdit] = []
+
     init(name: String, frames: [URL]) {
         self.name = name
         // Preserve the caller's order: frame ordering policy (capture time vs

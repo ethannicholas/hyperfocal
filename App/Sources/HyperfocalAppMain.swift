@@ -191,18 +191,21 @@ struct HyperfocalApp: App {
                 Button("Export Rocking Animation…") { model.exportAnimation() }
                     .disabled(!model.canAnimate)
             }
-            // Route Edit > Undo/Redo to the retouch session (we don't use
-            // NSUndoManager). Enabled whenever a session exists; empty-stack
-            // invocations no-op — the session's canUndo/canRedo changes aren't
-            // republished through the model, deliberately, to keep cursor-move
-            // updates from re-rendering the whole scene.
+            // Edit > Undo/Redo, mode-scoped (we don't use NSUndoManager):
+            // inside retouch it drives stroke undo — enabled whenever a
+            // session exists; empty-stack invocations no-op, since the
+            // session's canUndo/canRedo changes aren't republished through
+            // the model, deliberately, to keep cursor-move updates from
+            // re-rendering the whole scene. Everywhere else it walks the
+            // per-stack history of non-stroke edits (tone, crop, frame
+            // selection).
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo Stroke") { model.retouch?.undo() }
+                Button(model.undoMenuTitle) { model.undoEdit() }
                     .keyboardShortcut("z", modifiers: .command)
-                    .disabled(model.retouch == nil)
-                Button("Redo Stroke") { model.retouch?.redo() }
+                    .disabled(!model.canUndoEdit)
+                Button(model.redoMenuTitle) { model.redoEdit() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(model.retouch == nil)
+                    .disabled(!model.canRedoEdit)
             }
             // Replace the default (nonfunctional) help book entry with the
             // tutorial — someone reaching for Help wants the walkthrough,

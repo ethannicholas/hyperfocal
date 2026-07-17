@@ -612,6 +612,7 @@ final class AppModel: ObservableObject {
     /// retouch session is reduced to its working pixels (source caches are
     /// gigabytes; only the selected stack keeps a session).
     private func stash(into stack: Stack) {
+        mergeRetouchDepth()
         stack.frames = frames
         stack.included = included
         stack.frameIssues = frameIssues
@@ -639,6 +640,8 @@ final class AppModel: ObservableObject {
             stack.savedWorking = savedWorking
             stack.savedSourceIndex = savedSourceIndex
         }
+        stack.undoHistory = undoHistory
+        stack.redoHistory = redoHistory
     }
 
     /// Installs a Stack into the selected-stack mirrors, resetting everything
@@ -663,6 +666,9 @@ final class AppModel: ObservableObject {
         depthPreview = stack.depthPreview
         savedWorking = stack.savedWorking
         savedSourceIndex = stack.savedSourceIndex
+        undoHistory = stack.undoHistory
+        redoHistory = stack.redoHistory
+        toneEditBaseline = nil
         retouch = nil
         retouchMode = false
         noiseFloorPreview = nil
@@ -1083,6 +1089,131 @@ final class AppModel: ObservableObject {
             selectedStackID = nil
             phase = .empty
         }
+        // The sandbox may still be unable to read the frames — a project
+        // saved while bookmark creation was broken (e.g. the app bundle was
+        // rebuilt under a running instance) carries none, and stale ones can
+        // fail to resolve. Detect by actually trying to read, and offer to
+        // re-grant now — at save time there was nothing the user could do,
+        // but here a folder pick fixes the project for good.
+        let denied = deniedFrameRoots()
+        if !denied.isEmpty {
+            Self.bookmarkLog.error(
+                "restore: \(denied.count) folder(s) unreadable, offering re-grant")
+            afterUpdate { $0.offerAccessRegrant(for: denied) }
+        }
+    }
+
+    /// Parent folders of restored frames the sandbox refuses to read
+    /// (permission errors only — a *missing* file is a different problem
+    /// with its own diagnostics, and a re-grant wouldn't help it). One
+    /// probe read per folder; unsandboxed builds and already-granted
+    /// sessions read fine and return nothing.
+    private func deniedFrameRoots() -> [URL] {
+        var checked = Set<URL>()
+        var denied = [URL]()
+        for frame in stacks.flatMap(\.frames) {
+            let parent = frame.deletingLastPathComponent()
+            guard checked.insert(parent).inserted else { continue }
+            do {
+                let handle = try FileHandle(forReadingFrom: frame)
+                try? handle.close()
+            } catch {
+                let ns = error as NSError
+                let posix = (ns.userInfo[NSUnderlyingErrorKey] as? NSError)
+                    .flatMap { $0.domain == NSPOSIXErrorDomain ? $0.code : nil }
+                if ns.code == CocoaError.fileReadNoPermission.rawValue
+                    || posix == Int(EPERM) || posix == Int(EACCES) {
+                    denied.append(parent)
+                }
+            }
+        }
+        return denied
+    }
+
+    /// Testability hooks: the re-grant alert (argument: folder count; true =
+    /// "Grant Access…") and the folder picker (returns the "picked" folder
+    /// for a requested root, nil = cancel) — panels can't run headless.
+    var accessPromptOverride: ((Int) -> Bool)?
+    var accessGrantPicker: ((URL) -> URL?)?
+
+    private func offerAccessRegrant(for roots: [URL]) {
+        let folders = roots.count == 1
+            ? "the folder “\(roots[0].lastPathComponent)”"
+            : "\(roots.count) folders"
+        let proceed: Bool
+        if let accessPromptOverride {
+            proceed = accessPromptOverride(roots.count)
+        } else {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Hyperfocal doesn’t have permission to read this project’s images"
+            alert.informativeText = "macOS grants access folder by folder, and the permission "
+                + "this project saved couldn’t be restored. Grant access to \(folders) to load "
+                + "the images — saving the project afterward keeps the access for next time. "
+                + "Fused results are intact either way."
+            alert.addButton(withTitle: "Grant Access…")
+            alert.addButton(withTitle: "Not Now")
+            proceed = alert.runModal() == .alertFirstButtonReturn
+        }
+        guard proceed else { return }
+        regrantAccess(to: roots)
+    }
+
+    private func regrantAccess(to roots: [URL]) {
+        var newGrants = [URL]()
+        func coveredByNewGrant(_ root: URL) -> Bool {
+            newGrants.contains {
+                root.path == $0.path || root.path.hasPrefix($0.path + "/")
+            }
+        }
+        for root in roots where !coveredByNewGrant(root) {
+            while true {
+                let picked: URL?
+                if let accessGrantPicker {
+                    picked = accessGrantPicker(root)
+                } else {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = false
+                    panel.canChooseDirectories = true
+                    panel.allowsMultipleSelection = false
+                    panel.directoryURL = root
+                    panel.message = "Grant access to “\(root.lastPathComponent)” — \(root.path)"
+                    panel.prompt = "Grant Access"
+                    picked = panel.runModal() == .OK ? panel.url : nil
+                }
+                guard let picked else { break }  // cancelled: skip this folder
+                // The pick helps only if it covers the folder the frames
+                // live in (the folder itself or any ancestor).
+                if root.path == picked.path || root.path.hasPrefix(picked.path + "/") {
+                    grantedRoots.append(picked)
+                    newGrants.append(picked)
+                    Self.bookmarkLog.notice(
+                        "re-granted \(picked.path, privacy: .public) for \(root.path, privacy: .public)")
+                    break
+                }
+                // A real panel gets a correction + retry; a test hook would
+                // just return the same answer forever.
+                guard accessGrantPicker == nil else { break }
+                let oops = NSAlert()
+                oops.alertStyle = .warning
+                oops.messageText = "That folder doesn’t contain the project’s images"
+                oops.informativeText = "The images are in “\(root.path)”. Choose that folder, "
+                    + "or any folder that contains it."
+                oops.addButton(withTitle: "Try Again")
+                oops.addButton(withTitle: "Skip")
+                guard oops.runModal() == .alertFirstButtonReturn else { break }
+            }
+        }
+        guard !newGrants.isEmpty else { return }
+        // Fresh bookmarks exist only in a re-saved project file.
+        hasUnsavedWork = true
+        // The input pane may have already tried (and failed) to decode.
+        inputCache = [:]
+        inputCacheOrder = []
+        if let url = inputPreviewURL ?? selection.first {
+            inputPreviewURL = nil
+            showInputFrame(url)
+        }
     }
 
     /// Lock-protected counter readable from any thread — the noise-floor
@@ -1249,6 +1380,95 @@ final class AppModel: ObservableObject {
         return Self.validCrop(cropRect, width: result.width, height: result.height)
     }
 
+    // MARK: - Undo history (non-stroke edits)
+
+    /// A reversible model edit. Value snapshots, not closures: applying one
+    /// writes the stored values through the same paths the UI uses, and a
+    /// snapshot can't dangle — histories are per stack, stashed and
+    /// installed with everything else (and, like retouch stroke undo, they
+    /// live for the session only; project files don't carry them).
+    enum ModelEdit {
+        case tone(from: ToneSettings, to: ToneSettings)
+        case crop(fromRect: CGRect?, fromAngle: Double,
+                  toRect: CGRect?, toAngle: Double)
+        case included(from: Set<URL>, to: Set<URL>)
+
+        var noun: String {
+            switch self {
+            case .tone: return "Tone Adjustment"
+            case .crop: return "Crop"
+            case .included: return "Frame Selection"
+            }
+        }
+    }
+    @Published private(set) var undoHistory: [ModelEdit] = []
+    @Published private(set) var redoHistory: [ModelEdit] = []
+    static let maxUndoEdits = 50
+
+    /// ⌘Z is mode-scoped: inside retouch it drives stroke undo (as ever);
+    /// everywhere else it walks the model-edit history. Crop mode has its
+    /// own transaction (⎋ cancels), so history stays out of its way.
+    var canUndoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !undoHistory.isEmpty }
+    var canRedoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !redoHistory.isEmpty }
+    var undoMenuTitle: String {
+        retouchMode ? "Undo Stroke" : undoHistory.last.map { "Undo \($0.noun)" } ?? "Undo"
+    }
+    var redoMenuTitle: String {
+        retouchMode ? "Redo Stroke" : redoHistory.last.map { "Redo \($0.noun)" } ?? "Redo"
+    }
+
+    func undoEdit() {
+        if retouchMode { retouch?.undo(); return }
+        guard !cropMode, let edit = undoHistory.popLast() else { return }
+        redoHistory.append(edit)
+        apply(edit, forward: false)
+    }
+
+    func redoEdit() {
+        if retouchMode { retouch?.redo(); return }
+        guard !cropMode, let edit = redoHistory.popLast() else { return }
+        undoHistory.append(edit)
+        apply(edit, forward: true)
+    }
+
+    private func recordEdit(_ edit: ModelEdit) {
+        undoHistory.append(edit)
+        if undoHistory.count > Self.maxUndoEdits { undoHistory.removeFirst() }
+        redoHistory = []
+    }
+
+    private func apply(_ edit: ModelEdit, forward: Bool) {
+        switch edit {
+        case .tone(let from, let to):
+            tone = forward ? to : from
+        case .crop(let fromRect, let fromAngle, let toRect, let toAngle):
+            cropRect = forward ? toRect : fromRect
+            cropAngle = forward ? toAngle : fromAngle
+            viewport.reset()  // the panes refit to the (un)cropped canvas
+        case .included(let from, let to):
+            included = forward ? to : from
+        }
+    }
+
+    /// Tone slider gesture hooks (LabeledSlider's onEditingChanged): one
+    /// undo step per drag, however many ticks it delivered.
+    private var toneEditBaseline: ToneSettings?
+    func toneEditing(_ editing: Bool) {
+        if editing {
+            toneEditBaseline = toneEditBaseline ?? tone
+        } else if let from = toneEditBaseline {
+            toneEditBaseline = nil
+            if from != tone { recordEdit(.tone(from: from, to: tone)) }
+        }
+    }
+
+    /// The Tone section's Reset button — an edit like any drag.
+    func resetTone() {
+        guard !tone.isNeutral else { return }
+        recordEdit(.tone(from: tone, to: ToneSettings()))
+        tone = ToneSettings()
+    }
+
     /// Pre-edit state, restored by Cancel — crop editing is transactional.
     private var cropBackup: CGRect?
     private var cropAngleBackup: Double = 0
@@ -1277,6 +1497,10 @@ final class AppModel: ObservableObject {
             cropRect = nil
         }
         cropMode = false
+        if cropBackup != cropRect || cropAngleBackup != cropAngle {
+            recordEdit(.crop(fromRect: cropBackup, fromAngle: cropAngleBackup,
+                             toRect: cropRect, toAngle: cropAngle))
+        }
         viewport.reset()
     }
 
@@ -1544,6 +1768,9 @@ final class AppModel: ObservableObject {
         retouchMode = false
         savedWorking = nil
         savedSourceIndex = nil
+        undoHistory = []
+        redoHistory = []
+        toneEditBaseline = nil
         noiseFloorPreview = nil
         noiseFloorPreviewData = nil
         noiseFloorPreviewDataEpoch += 1  // invalidate any in-flight build
@@ -1655,7 +1882,7 @@ final class AppModel: ObservableObject {
             let sourceFrame = stack.fuseURLs.first
             let tone = exportFormat == .dng ? ToneSettings() : stack.tone
             do {
-                let stackTone = stack.tone ?? ToneSettings()
+                let stackTone = stack.tone
                 let wantsSidecar = exportFormat == .dng && !stackTone.isNeutral
                 try await Task.detached(priority: .userInitiated) {
                     var toned = image
@@ -1793,6 +2020,7 @@ final class AppModel: ObservableObject {
     /// bakes in like every display-referred export, retouch edits included.
     /// Renders off-main; returns whether the file was written.
     func writeAnimation(to url: URL) async -> Bool {
+        mergeRetouchDepth()  // animate what the user retouched, depth included
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
         guard let uncropped = baseImage, !resultDepth.isEmpty else { return false }
         let image = Self.cropped(uncropped, to: cropRect, angle: cropAngle)
@@ -1870,8 +2098,11 @@ final class AppModel: ObservableObject {
                       id: "export.animation-fps",
                       tip: "Frames per second. 30 suits sharing; 60 is silkier and larger; 24 is filmic.")
 
-            // Container-ish options first, motion options last.
-            let rows: [(String, NSPopUpButton)] = [
+            // Container-ish options first, motion options last. (No depth
+            // direction option on purpose: negated disparity is exactly a
+            // half-cycle phase shift of these symmetric loops — provably
+            // invisible; see RockingAnimation.Options.)
+            let rows: [(String, NSControl)] = [
                 ("Format:", formatPopup),
                 ("Frame rate:", fpsPopup),
                 ("Duration:", durationPopup),
@@ -2077,12 +2308,26 @@ final class AppModel: ObservableObject {
         if !frames.contains(url),
            let owner = stacks.first(where: { $0.frames.contains(url) }) {
             objectWillChange.send()
+            let before = owner.included
             if value { owner.included.insert(url) } else { owner.included.remove(url) }
+            if owner.included != before {
+                // Not the selected stack: the edit belongs to *its* history
+                // (installed with the stack if it's selected later).
+                owner.undoHistory.append(.included(from: before, to: owner.included))
+                if owner.undoHistory.count > Self.maxUndoEdits {
+                    owner.undoHistory.removeFirst()
+                }
+                owner.redoHistory = []
+            }
             return
         }
+        let before = included
         let targets = selection.contains(url) && selection.count > 1 ? selection : [url]
         for target in targets {
             if value { included.insert(target) } else { included.remove(target) }
+        }
+        if included != before {
+            recordEdit(.included(from: before, to: included))
         }
     }
 
@@ -2101,7 +2346,11 @@ final class AppModel: ObservableObject {
     }
 
     func includeAll(_ value: Bool) {
+        let before = included
         included = value ? Set(frames) : []
+        if included != before {
+            recordEdit(.included(from: before, to: included))
+        }
     }
 
     // MARK: - Input preview
@@ -2558,7 +2807,6 @@ final class AppModel: ObservableObject {
                 self.selection = [session.urls[index]]
             }
         }
-        outputMode = .result
         retouchMode = true
         // Sync the list to the session's current source immediately.
         if let session = retouch, session.urls.indices.contains(session.sourceIndex) {
@@ -2572,6 +2820,27 @@ final class AppModel: ObservableObject {
         if let session = retouch, session.hasEdits,
            let snapshot = session.makeSnapshotImage() {
             outputPreview = snapshot
+        }
+        mergeRetouchDepth()
+    }
+
+    /// Retouch strokes co-paint the depth plane (that's what makes depth
+    /// artifacts in the rocking animation fixable) — fold the session's
+    /// depth back into the model and refresh the visualizations. Called
+    /// wherever the session's working image is consumed: stash (which
+    /// covers saves and stack switches), retouch exit, and the depth /
+    /// animation output paths.
+    private func mergeRetouchDepth() {
+        guard let session = retouch, session.depthDirty else { return }
+        session.markDepthMerged()
+        resultDepth = session.workingDepth
+        let image = DMapFusion.depthImage(from: resultDepth,
+                                          width: session.width,
+                                          height: session.height,
+                                          frameCount: max(session.urls.count, 2))
+        depthResult = image
+        if let cg = try? ImageFile.cgImage8(from: image) {
+            depthPreview = NSImage(cgImage: cg, size: .zero)
         }
     }
 
@@ -2702,6 +2971,7 @@ final class AppModel: ObservableObject {
     /// (UITestSupport's command channel).
     @discardableResult
     func writeExport(to url: URL) -> Bool {
+        if outputMode == .depth { mergeRetouchDepth() }
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
         guard let raw = outputMode == .depth ? depthResult : baseImage else { return false }
         let image = Self.cropped(raw, to: cropRect, angle: cropAngle)

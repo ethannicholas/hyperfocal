@@ -52,7 +52,14 @@ result every time.
 
 - **Retouching that understands stacks.** Paint from any source frame, jump to
   the sharpest frame under the brush, blend in the PMax rendering where it
-  produced better results, or paint back to the original fusion.
+  produced better results, or paint back to the original fusion. Strokes
+  repair the depth map along with the pixels — flip the output pane to Depth
+  while retouching and watch artifacts disappear from both.
+
+- **Non-destructive editing.** Lightroom-style tone controls and a rotatable
+  crop, applied to previews and baked into exports, saved per stack in the
+  project, and undoable (⌘Z covers tone, crop, frame selection, and retouch
+  strokes).
 
 - **Raw in, raw out.** Supports camera raw (NEF, DNG, CR3, ARW, …) input,
   working in Display P3 end to end, and produces DNG output. Or you can stick
@@ -60,7 +67,8 @@ result every time.
 
 - **Rocking animations.** Export a short looping video that rocks the result
   left and right, using the computed depth map for parallax — the depth your
-  stack captured becomes visible motion.
+  stack captured becomes visible motion. Choose the path, speed, strength,
+  and format (MP4 or loop-forever GIF).
 
 - **Projects and batches.** Multi-stack projects with per-stack results and
   retouch state, a queue that fuses every stack in a session, export-all, and
