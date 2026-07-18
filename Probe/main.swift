@@ -421,7 +421,7 @@ Task { @MainActor in
     assert(etaModel.stageETA == nil, "eta before any elapsed time")
     etaModel.updateStageETA(stage: .depth, fraction: 0.2,
                             now: e0.addingTimeInterval(4))
-    assert(etaModel.stageETA == "~15 s left",
+    assert(etaModel.stageETA == "~15s left",
            "eta at 20% after 4s: \(etaModel.stageETA ?? "nil")")
     etaModel.updateStageETA(stage: .render, fraction: 0.5,
                             now: e0.addingTimeInterval(5))
@@ -429,7 +429,7 @@ Task { @MainActor in
     etaModel.updateStageETA(stage: .render, fraction: 0.02,
                             now: e0.addingTimeInterval(60))
     assert(etaModel.stageETA == nil, "tiny fractions extrapolate to nonsense")
-    assert(AppModel.etaLabel(47) == "~45 s left", "5 s rounding")
+    assert(AppModel.etaLabel(47) == "~45s left", "5 s rounding")
     assert(AppModel.etaLabel(200) == "~3 min left", "minute rounding")
     assert(AppModel.etaLabel(1.5) == nil, "sub-3s eta drops the label")
     print("probe: stage eta OK")
