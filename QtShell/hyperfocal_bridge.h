@@ -1,0 +1,65 @@
+// C ABI of HyperfocalBridge.dylib (Bridge/HyperfocalBridge.swift) — the
+// command surface the Qt shell drives AppCore through.
+//
+// Threading contract:
+//  - Every hf_* call MUST be made on the process main thread (Qt's GUI
+//    thread). On macOS that thread pumps the CFRunLoop, which keeps
+//    AppCore's main-queue work draining under Qt's event loop.
+//  - The change callback fires on the main thread, coalesced per runloop
+//    turn; model state is settled when it fires. Treat it as "something
+//    changed, re-read what you display".
+//
+// Pixel handoff: caller-allocated RGBA8888 (QImage::Format_RGBA8888),
+// row-major, width*4 stride, sized per hf_display_size.
+#ifndef HYPERFOCAL_BRIDGE_H
+#define HYPERFOCAL_BRIDGE_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef void (*hf_changed_cb)(void *ctx);
+
+// Create the model. Returns 1 (idempotent).
+int hf_init(void);
+
+// Register the (single) change callback; NULL unregisters.
+void hf_set_changed_callback(hf_changed_cb cb, void *ctx);
+
+// Load a stack: a folder of frames or a .hyperfocal project path, like a
+// drop on the native app. 0 if refused (e.g. while a fuse runs).
+int hf_load_stack(const char *path);
+
+int hf_can_fuse(void);
+int hf_fuse(void);        // 0 if canFuse is false
+int hf_is_running(void);
+double hf_stage_fraction(void);
+// UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
+int hf_stage_text(char *buf, int cap);
+
+void hf_set_tone_exposure(double ev);
+double hf_tone_exposure(void);
+
+// Current display image: progressive preview mid-fuse, toned result
+// preview otherwise. 0 sizes = nothing to show yet.
+int hf_display_size(int32_t *w, int32_t *h);
+// Copy it as RGBA8888 into rgba (>= w*h*4 bytes). 1 on success; 0 also
+// when the image changed size since hf_display_size — re-query and retry
+// on the next change callback.
+int hf_display_pixels(uint8_t *rgba, size_t cap);
+
+// Export the result through the model's export path (tone baked for
+// display-referred formats, crop applied). `format`, when non-NULL, is
+// the export format's UI name (e.g. "TIFF (16-bit)") applied for this
+// export only — the persisted preference the native app shares is
+// restored before returning. NULL uses the model's current settings.
+int hf_export(const char *path, const char *format);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // HYPERFOCAL_BRIDGE_H
