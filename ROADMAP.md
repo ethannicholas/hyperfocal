@@ -94,7 +94,13 @@ asserts frame i lost its checkbox during the fuse (run against a
 `--misfire-frame` synth stack, this exercises the bad-frame confirm
 through the bridge dialog seam end-to-end); `HFQT_EXPECT_DISPLAY=WxH`
 asserts the display serves the full result resolution (the runner knows
-the fused size). Display currency is production-shaped: tone is a LUT
+the fused size); `HFQT_STACK2=<dir>` runs the batch journey (a second
+stack is added after the first load settles, "Fuse N Stacks" walks
+both, and both must end fused with nothing pending). The sidebar
+mirrors the native stack tree flatly: rows with enable checkbox,
+status glyph, and frame count; row click select (stash/install);
+hf_load_stack has drop semantics (folders ADD stacks; a .hyperfocal
+project opens/replacing). Display currency is production-shaped: tone is a LUT
 shader on the pane layer (hf_tone_lut; parity with the CPU-toned render
 0.03/255), and the pane is a tiled textured QQuickItem over
 hf_display_tile/hf_display_epoch — level-of-detail matched to on-screen
@@ -103,10 +109,14 @@ invalidate tiles (the selftest asserts the epoch holds).
 
 Next, in rough order (each independently landable):
 
-1. **Sidebar remainder**: multi-stack tree + batch fuse ("Fuse N
-   Stacks"), input pane alongside the output pane, crop presentation.
-   The single-stack sidebar (sliders via the shared UITest id namespace,
-   frame checkboxes, Result/Depth toggle) is in.
+1. **Sidebar remainder**: input pane alongside the output pane (native:
+   selected frame decoded raw or warped into the fused canvas once
+   alignment transforms exist, shared viewport with the output pane),
+   crop presentation (native: displayCrop restricts the pane viewport
+   to the crop rect/angle when not editing; outputPreview stays
+   uncropped, crop applies at display and export). The single-stack
+   sidebar (sliders, frame checkboxes, Result/Depth) and the
+   multi-stack tree + batch fuse are in.
 2. **Settings isolation** (shared `org.hyperfocal.settings` suite —
    per-call restore is a stopgap; the shell needs its own store, Phase 3
    glue on the plan).

@@ -141,6 +141,19 @@ private final class BridgeDialogs: DialogService {
     func chooseSaveExport(suggestedName: String) -> URL? { nil }
 }
 
+/// Copy `string` into a caller-allocated, NUL-terminated UTF-8 buffer;
+/// returns the byte count written (excluding the terminator).
+private func fillUTF8(_ string: String,
+                      _ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) -> Int32 {
+    guard let buffer, cap > 0 else { return 0 }
+    let bytes = Array(string.utf8.prefix(Int(cap) - 1))
+    buffer.withMemoryRebound(to: UInt8.self, capacity: bytes.count + 1) { p in
+        for (i, b) in bytes.enumerated() { p[i] = b }
+        p[bytes.count] = 0
+    }
+    return Int32(bytes.count)
+}
+
 // MARK: - Exports
 
 @_cdecl("hf_init")
@@ -190,14 +203,15 @@ public func hf_set_dialog_callbacks(
 }
 
 /// Load a stack: a folder of frames (or a single .hyperfocal project),
-/// exactly like dropping it on the native app. Returns 0 if refused
-/// (e.g. a fuse is running).
+/// exactly like dropping it on the native app — drops ADD stacks to the
+/// project (a second folder becomes a second stack); a project file
+/// opens/replaces. Returns 0 if refused (e.g. a fuse is running).
 @_cdecl("hf_load_stack")
 public func hf_load_stack(_ path: UnsafePointer<CChar>?) -> Int32 {
     guard let path, let string = String(validatingUTF8: path) else { return 0 }
     return MainActor.assumeIsolated {
         guard let model = Bridge.model, !model.phase.isRunning else { return 0 }
-        model.ingest(urls: [URL(fileURLWithPath: string)])
+        model.addStacks(urls: [URL(fileURLWithPath: string)])
         return 1
     }
 }
@@ -218,7 +232,12 @@ public func hf_fuse() -> Int32 {
 
 @_cdecl("hf_is_running")
 public func hf_is_running() -> Int32 {
-    MainActor.assumeIsolated { Bridge.model?.phase.isRunning == true ? 1 : 0 }
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        // A batch counts as running across its brief between-stack gaps,
+        // so the shell's enabled/progress bindings hold for the whole run.
+        return model.phase.isRunning || model.batchStatus != nil ? 1 : 0
+    }
 }
 
 @_cdecl("hf_stage_fraction")
@@ -231,15 +250,13 @@ public func hf_stage_fraction() -> Double {
 @_cdecl("hf_stage_text")
 public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) -> Int32 {
     MainActor.assumeIsolated {
-        guard let model = Bridge.model, model.phase.isRunning,
-              let buffer, cap > 0 else { return 0 }
-        let text = model.stageText + (model.stageETA.map { "  \($0)" } ?? "")
-        let bytes = Array(text.utf8.prefix(Int(cap) - 1))
-        buffer.withMemoryRebound(to: UInt8.self, capacity: bytes.count + 1) { p in
-            for (i, b) in bytes.enumerated() { p[i] = b }
-            p[bytes.count] = 0
-        }
-        return Int32(bytes.count)
+        guard let model = Bridge.model,
+              model.phase.isRunning || model.batchStatus != nil else { return 0 }
+        // The batch prefix ("Stack i of N · ") rides along, as in the
+        // native toolbar.
+        let text = (model.batchStatus ?? "") + model.stageText
+            + (model.stageETA.map { "  \($0)" } ?? "")
+        return fillUTF8(text, buffer, cap)
     }
 }
 
@@ -334,15 +351,9 @@ public func hf_frame_count() -> Int32 {
 public func hf_frame_name(_ index: Int32, _ buffer: UnsafeMutablePointer<CChar>?,
                           _ cap: Int32) -> Int32 {
     MainActor.assumeIsolated {
-        guard let model = Bridge.model, let buffer, cap > 0,
+        guard let model = Bridge.model,
               model.frames.indices.contains(Int(index)) else { return 0 }
-        let name = model.frames[Int(index)].lastPathComponent
-        let bytes = Array(name.utf8.prefix(Int(cap) - 1))
-        buffer.withMemoryRebound(to: UInt8.self, capacity: bytes.count + 1) { p in
-            for (i, b) in bytes.enumerated() { p[i] = b }
-            p[bytes.count] = 0
-        }
-        return Int32(bytes.count)
+        return fillUTF8(model.frames[Int(index)].lastPathComponent, buffer, cap)
     }
 }
 
@@ -363,6 +374,130 @@ public func hf_set_frame_included(_ index: Int32, _ included: Int32) -> Int32 {
         guard let model = Bridge.model,
               model.frames.indices.contains(Int(index)) else { return 0 }
         model.setIncluded(model.frames[Int(index)], to: included != 0)
+        return 1
+    }
+}
+
+// MARK: Stack list (native Stack-tree order) + batch fuse
+
+@_cdecl("hf_stack_count")
+public func hf_stack_count() -> Int32 {
+    MainActor.assumeIsolated { Int32(Bridge.model?.stacks.count ?? 0) }
+}
+
+@_cdecl("hf_stack_name")
+public func hf_stack_name(_ index: Int32, _ buffer: UnsafeMutablePointer<CChar>?,
+                          _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        return fillUTF8(model.stacks[Int(index)].name, buffer, cap)
+    }
+}
+
+/// Index of the selected stack, -1 when none.
+@_cdecl("hf_stack_selected")
+public func hf_stack_selected() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let index = model.stacks.firstIndex(where: {
+                  $0.id == model.selectedStackID }) else { return -1 }
+        return Int32(index)
+    }
+}
+
+/// Select a stack — stashes the outgoing stack's state and installs the
+/// target's, exactly like clicking its row. 0 if refused (running, or
+/// already selected).
+@_cdecl("hf_select_stack")
+public func hf_select_stack(_ index: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.phase.isRunning,
+              model.stacks.indices.contains(Int(index)),
+              model.stacks[Int(index)].id != model.selectedStackID else { return 0 }
+        model.selectStack(model.stacks[Int(index)].id)
+        return 1
+    }
+}
+
+@_cdecl("hf_stack_enabled")
+public func hf_stack_enabled(_ index: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        return model.stacks[Int(index)].enabled ? 1 : 0
+    }
+}
+
+/// The "include this stack in Fuse Enabled Stacks" checkbox.
+@_cdecl("hf_set_stack_enabled")
+public func hf_set_stack_enabled(_ index: Int32, _ enabled: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        model.setStackEnabled(model.stacks[Int(index)].id, to: enabled != 0)
+        return 1
+    }
+}
+
+/// Status for the tree's glyphs: 0 unfused, 1 fusing, 2 fused, 3 failed
+/// (hf_stack_failure carries the message).
+@_cdecl("hf_stack_status")
+public func hf_stack_status(_ index: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        switch model.status(of: model.stacks[Int(index)]) {
+        case .unfused: return 0
+        case .fusing: return 1
+        case .fused: return 2
+        case .failed: return 3
+        }
+    }
+}
+
+@_cdecl("hf_stack_failure")
+public func hf_stack_failure(_ index: Int32, _ buffer: UnsafeMutablePointer<CChar>?,
+                             _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)),
+              case .failed(let message) =
+                  model.status(of: model.stacks[Int(index)]) else { return 0 }
+        return fillUTF8(message, buffer, cap)
+    }
+}
+
+/// Frame count per stack row (the selected stack reads the live mirrors —
+/// its Stack object is stale until stashed).
+@_cdecl("hf_stack_frame_count")
+public func hf_stack_frame_count(_ index: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        let stack = model.stacks[Int(index)]
+        if stack.id == model.selectedStackID { return Int32(model.frames.count) }
+        return Int32(stack.frames.count)
+    }
+}
+
+/// How many enabled stacks need a (re)fuse — the native "Fuse N Stacks"
+/// button's N.
+@_cdecl("hf_pending_stack_count")
+public func hf_pending_stack_count() -> Int32 {
+    MainActor.assumeIsolated { Int32(Bridge.model?.pendingStackCount ?? 0) }
+}
+
+/// Serially fuse every enabled stack needing it, mirroring the native
+/// batch: selection walks the queue, hf_stage_text carries the
+/// "Stack i of N · " prefix, and hf_is_running holds until the batch
+/// ends. 0 when refused (running) or nothing is pending.
+@_cdecl("hf_fuse_enabled_stacks")
+public func hf_fuse_enabled_stacks() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.phase.isRunning,
+              model.pendingStackCount > 0 else { return 0 }
+        model.fuseEnabledStacks()
         return 1
     }
 }

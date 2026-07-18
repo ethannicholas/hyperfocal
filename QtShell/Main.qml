@@ -92,6 +92,63 @@ ApplicationWindow {
                 onClicked: openDialog.open()
             }
 
+            // Stack tree (flat mirror): shown once a second stack exists,
+            // like the native sidebar. Row click selects (stash/install);
+            // the checkbox is the batch-fuse opt-in.
+            Label {
+                text: "Stacks"
+                visible: stackList.count > 1
+                color: "#d5d5d5"
+                font.bold: true
+            }
+            ListView {
+                id: stackList
+                visible: count > 1
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(160, contentHeight)
+                clip: true
+                model: Shell.stacks
+                delegate: RowLayout {
+                    required property int index
+                    required property var modelData
+                    width: stackList.width
+                    spacing: 6
+                    CheckBox {
+                        checked: modelData.enabled
+                        enabled: !Shell.isRunning
+                        onToggled: Shell.setStackEnabled(index, checked)
+                    }
+                    Label {
+                        text: modelData.name
+                        color: index === Shell.selectedStack ? "#ffffff"
+                                                             : "#a5a5a5"
+                        font.bold: index === Shell.selectedStack
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
+                        TapHandler {
+                            enabled: !Shell.isRunning
+                            onTapped: Shell.selectStack(index)
+                        }
+                    }
+                    Label {
+                        // The native tree's status glyph, textified:
+                        // fusing / fused / failed (hover = message).
+                        text: modelData.status === 1 ? "…"
+                            : modelData.status === 2 ? "✓"
+                            : modelData.status === 3 ? "⚠" : ""
+                        color: modelData.status === 3 ? "#e0c04a" : "#6fbf73"
+                        ToolTip.visible: modelData.status === 3 && hover.hovered
+                        ToolTip.text: modelData.failure
+                        HoverHandler { id: hover }
+                    }
+                    Label {
+                        text: modelData.frameCount
+                        color: "#8a8a8a"
+                        font.pixelSize: 11
+                    }
+                }
+            }
+
             Label { text: "Stack"; color: "#d5d5d5"; font.bold: true }
             ListView {
                 id: frameList
@@ -143,6 +200,13 @@ ApplicationWindow {
                 enabled: Shell.canFuse
                 highlighted: true
                 onClicked: Shell.fuse()
+            }
+            Button {
+                Layout.fillWidth: true
+                visible: stackList.count > 1
+                text: "Fuse " + Shell.pendingStackCount + " Stacks"
+                enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
+                onClicked: Shell.fuseEnabledStacks()
             }
             ProgressBar {
                 Layout.fillWidth: true

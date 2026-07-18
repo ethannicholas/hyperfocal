@@ -102,6 +102,37 @@ void Shell::setDepthMode(bool depth) {
     if (depth != (hf_output_depth() != 0)) hf_set_output_depth(depth ? 1 : 0);
 }
 
+QVariantList Shell::stacks() const {
+    // Rebuilt wholesale per change signal, like frames() — dev-shell scale.
+    QVariantList list;
+    const int count = hf_stack_count();
+    list.reserve(count);
+    char text[512];
+    for (int i = 0; i < count; ++i) {
+        QVariantMap row;
+        int n = hf_stack_name(i, text, sizeof text);
+        row.insert(QStringLiteral("name"), QString::fromUtf8(text, n));
+        row.insert(QStringLiteral("enabled"), hf_stack_enabled(i) != 0);
+        row.insert(QStringLiteral("status"), hf_stack_status(i));
+        n = hf_stack_failure(i, text, sizeof text);
+        row.insert(QStringLiteral("failure"), QString::fromUtf8(text, n));
+        row.insert(QStringLiteral("frameCount"), hf_stack_frame_count(i));
+        list.append(row);
+    }
+    return list;
+}
+
+int Shell::selectedStack() const { return hf_stack_selected(); }
+int Shell::pendingStackCount() const { return hf_pending_stack_count(); }
+
+bool Shell::selectStack(int index) { return hf_select_stack(index) != 0; }
+
+void Shell::setStackEnabled(int index, bool enabled) {
+    hf_set_stack_enabled(index, enabled ? 1 : 0);
+}
+
+bool Shell::fuseEnabledStacks() { return hf_fuse_enabled_stacks() != 0; }
+
 QVariantList Shell::frames() const {
     // Rebuilt wholesale per change signal — fine at dev-shell scale; the
     // production shell gets a QAbstractListModel over the same calls.

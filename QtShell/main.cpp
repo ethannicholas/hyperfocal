@@ -17,6 +17,8 @@ namespace {
 
 struct SelfTest {
     QString stackDir;
+    QString stack2Dir;    // HFQT_STACK2: batch journey (two stacks)
+    bool stack2Opened = false;
     QString outPath;
     QString shotPath;
     bool sawRunning = false;
@@ -36,10 +38,21 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
     auto *poll = new QTimer(engine);
     QObject::connect(poll, &QTimer::timeout, engine, [engine, shell, state] {
         if (state->done) return;
+        // HFQT_STACK2: a second stack turns the run into the batch journey
+        // ("Fuse N Stacks" must walk both and leave both fused). Opened
+        // once the first load settles — loads refuse ingests while
+        // running, exactly like drops on the native app.
+        if (!state->stack2Dir.isEmpty() && !state->stack2Opened) {
+            if (shell->isRunning()) return;
+            if (shell->openStack(QUrl::fromLocalFile(state->stack2Dir)))
+                state->stack2Opened = true;
+            return;
+        }
         if (!state->fused) {
             if (shell->canFuse()) {
                 state->fused = true;
-                shell->fuse();
+                if (state->stack2Dir.isEmpty()) shell->fuse();
+                else shell->fuseEnabledStacks();
             }
             return;
         }
@@ -77,6 +90,20 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         const bool depthExported =
             shell->exportTo(QUrl::fromLocalFile(state->outPath + ".depth.tif"));
         shell->setDepthMode(false);
+        // Batch journey: both stacks listed, both fused, nothing pending —
+        // checked BEFORE the staleness edit below re-pends a stack.
+        bool batchOK = true;
+        if (!state->stack2Dir.isEmpty()) {
+            const QVariantList stacks = shell->stacks();
+            batchOK = stacks.size() == 2 && shell->pendingStackCount() == 0;
+            for (const QVariant &row : stacks)
+                batchOK = batchOK
+                    && row.toMap().value(QStringLiteral("status")).toInt() == 2;
+            if (!batchOK) {
+                qWarning() << "selftest batch state: pending"
+                           << shell->pendingStackCount() << "stacks" << stacks;
+            }
+        }
         // Moving a fusion slider must mark the result stale (canFuse back
         // on) — the staleness contract the sidebar depends on.
         const bool wasStale = shell->canFuse();
@@ -99,7 +126,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         QTimer::singleShot(250, engine, [engine, state, exported, depthExported,
                                          wasStale, staleAfterEdit, exclusionOK,
                                          toneKeptPixels, depthBumpedPixels,
-                                         fullRes] {
+                                         fullRes, batchOK] {
             if (!state->shotPath.isEmpty()) {
                 const auto roots = engine->rootObjects();
                 if (!roots.isEmpty()) {
@@ -117,6 +144,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 return;
             }
             if (!fullRes) { QCoreApplication::exit(10); return; }
+            if (!batchOK) { QCoreApplication::exit(11); return; }
             QCoreApplication::exit(0);
         });
     });
@@ -141,6 +169,7 @@ int main(int argc, char *argv[]) {
     SelfTest state;
     if (args.size() >= 4 && args[1] == QStringLiteral("--selftest")) {
         state.stackDir = args[2];
+        state.stack2Dir = QString::fromLocal8Bit(qgetenv("HFQT_STACK2"));
         state.outPath = args[3];
         state.shotPath = args.size() >= 5 ? args[4] : QString();
         // After the QML engine settles, so the Shell singleton exists.

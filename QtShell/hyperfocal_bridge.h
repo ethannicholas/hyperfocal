@@ -70,6 +70,27 @@ double hf_slider(const char *id);
 void hf_set_output_depth(int depth);
 int hf_output_depth(void);
 
+// Stack list, in native Stack-tree order. Selecting a stack stashes the
+// outgoing stack's state and installs the target's, like clicking its
+// row in the native tree; the frame list and display then mirror it.
+int hf_stack_count(void);
+int hf_stack_name(int index, char *buf, int cap);      // returns bytes
+int hf_stack_selected(void);                           // index, -1 = none
+int hf_select_stack(int index);        // 0 while running / already selected
+int hf_stack_enabled(int index);       // the batch-fuse checkbox
+int hf_set_stack_enabled(int index, int enabled);
+// 0 unfused, 1 fusing, 2 fused, 3 failed (hf_stack_failure = message).
+int hf_stack_status(int index);
+int hf_stack_failure(int index, char *buf, int cap);   // returns bytes
+int hf_stack_frame_count(int index);
+// Batch fuse ("Fuse N Stacks"): N = hf_pending_stack_count (enabled +
+// needing a (re)fuse). hf_is_running holds for the whole batch and
+// hf_stage_text carries the "Stack i of N · " prefix; bad stacks are
+// reported through the notice dialog seam at the end, like the native
+// app. 0 when refused (running) or nothing is pending.
+int hf_pending_stack_count(void);
+int hf_fuse_enabled_stacks(void);
+
 // Frame list of the selected stack, in native Stack-list order.
 int hf_frame_count(void);
 int hf_frame_name(int index, char *buf, int cap);   // returns bytes

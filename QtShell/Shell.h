@@ -21,6 +21,9 @@ class Shell : public QObject {
     Q_PROPERTY(QString stageText READ stageText NOTIFY changed)
     Q_PROPERTY(double exposure READ exposure WRITE setExposure NOTIFY changed)
     Q_PROPERTY(bool depthMode READ depthMode WRITE setDepthMode NOTIFY changed)
+    Q_PROPERTY(QVariantList stacks READ stacks NOTIFY changed)
+    Q_PROPERTY(int selectedStack READ selectedStack NOTIFY changed)
+    Q_PROPERTY(int pendingStackCount READ pendingStackCount NOTIFY changed)
     Q_PROPERTY(QVariantList frames READ frames NOTIFY changed)
     Q_PROPERTY(bool displayIsData READ displayIsData NOTIFY changed)
     Q_PROPERTY(int lutEpoch READ lutEpoch NOTIFY changed)
@@ -38,6 +41,9 @@ public:
 
     bool depthMode() const;
     void setDepthMode(bool depth);
+    QVariantList stacks() const;
+    int selectedStack() const;
+    int pendingStackCount() const;
     QVariantList frames() const;
     bool displayIsData() const;
     /// Bumps only when the tone curve's bytes actually change — the LUT
@@ -60,6 +66,9 @@ public:
     Q_INVOKABLE double slider(const QString &id) const;
     Q_INVOKABLE void setSlider(const QString &id, double value);
     Q_INVOKABLE void setFrameIncluded(int index, bool included);
+    Q_INVOKABLE bool selectStack(int index);
+    Q_INVOKABLE void setStackEnabled(int index, bool enabled);
+    Q_INVOKABLE bool fuseEnabledStacks();
 
 signals:
     void changed();
