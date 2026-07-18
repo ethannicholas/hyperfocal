@@ -1,9 +1,24 @@
 import ArgumentParser
-import CoreGraphics
 import Foundation
 import HyperfocalKit
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 #if canImport(simd)
 import simd
+#endif
+
+// The CGImage-typed debug helpers (debug-align, debug-source) exist only where
+// Apple's imaging stack does; the rest of the CLI is portable.
+#if canImport(CoreGraphics)
+private let subcommandList: [ParsableCommand.Type] =
+    [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
+     DebugAlign.self, DebugChain.self,
+     DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self]
+#else
+private let subcommandList: [ParsableCommand.Type] =
+    [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
+     DebugChain.self, DebugWarp.self, DebugDiff.self, DebugBoost.self]
 #endif
 
 @main
@@ -11,9 +26,7 @@ struct Hyperfocal: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hyperfocal",
         abstract: "Focus stacking engine.",
-        subcommands: [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
-                      DebugAlign.self, DebugChain.self,
-                      DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self]
+        subcommands: subcommandList
     )
 }
 
@@ -73,6 +86,7 @@ struct FusionOptions: ParsableArguments {
     }
 
     func resolveUseGPU() throws -> Bool {
+        #if canImport(Metal)
         switch engine {
         case .auto: return MetalEngine.shared != nil
         case .gpu:
@@ -82,6 +96,10 @@ struct FusionOptions: ParsableArguments {
             return true
         case .cpu: return false
         }
+        #else
+        if engine == .gpu { throw ValidationError("GPU engine is not available on this platform") }
+        return false
+        #endif
     }
 }
 
@@ -103,6 +121,7 @@ enum ColorSpaceChoice: String, ExpressibleByArgument {
     case p3
     case prophoto
 
+    #if canImport(CoreGraphics)
     /// nil means "already the working space" — no conversion.
     var cgColorSpace: CGColorSpace? {
         switch self {
@@ -111,6 +130,31 @@ enum ColorSpaceChoice: String, ExpressibleByArgument {
         case .prophoto: return CGColorSpace(name: CGColorSpace.rommrgb)
         }
     }
+    #endif
+
+    /// Portable export-space token for the non-Apple encode path (lcms2). nil
+    /// keeps the Display-P3 working space — same meaning as `cgColorSpace` nil.
+    var name: String? {
+        switch self {
+        case .srgb: return "srgb"
+        case .p3: return nil
+        case .prophoto: return "prophoto"
+        }
+    }
+}
+
+/// Save a fused result with the CLI's chosen export color space, bridging the
+/// per-platform `ImageFile.save` signature (CGColorSpace on Apple, a portable
+/// name elsewhere).
+func saveFused(_ image: ImageBuffer, to url: URL, sourceFrame: URL?,
+               colorSpace: ColorSpaceChoice) throws {
+    #if canImport(CoreGraphics)
+    try ImageFile.save(image, to: url, sourceFrame: sourceFrame,
+                       colorSpace: colorSpace.cgColorSpace)
+    #else
+    try ImageFile.save(image, to: url, sourceFrame: sourceFrame,
+                       colorSpaceName: colorSpace.name)
+    #endif
 }
 
 func vlog(_ enabled: Bool) -> (String) -> Void {
@@ -206,6 +250,7 @@ struct Fuse: ParsableCommand {
                 let opts = fusion.dmapOptions
                 let useGPU = try fusion.resolveUseGPU()
                 let out: DMapFusion.Output
+                #if canImport(Metal)
                 if useGPU {
                     print("engine: GPU (\(MetalEngine.shared!.device.name))")
                     out = try GPUDMap.fuseWithDepth(source: source, options: opts, log: log)
@@ -216,6 +261,14 @@ struct Fuse: ParsableCommand {
                         try source.frame(at: $0)
                     }
                 }
+                #else
+                _ = useGPU
+                print("engine: CPU")
+                out = try DMapFusion.fuseWithDepth(frameCount: source.count, options: opts,
+                                                   log: log) {
+                    try source.frame(at: $0)
+                }
+                #endif
                 result = out.image
                 depth = out.depthMap
             case .pmax:
@@ -234,13 +287,18 @@ struct Fuse: ParsableCommand {
                 print("note: --depth-map is only produced by --method dmap")
             }
         }
-        try ImageFile.save(result!, to: URL(fileURLWithPath: output),
-                           sourceFrame: fuseURLs.first,
-                           colorSpace: fusion.colorSpace.cgColorSpace)
+        try saveFused(result!, to: URL(fileURLWithPath: output),
+                      sourceFrame: fuseURLs.first, colorSpace: fusion.colorSpace)
         print("wrote \(output)")
         var usage = rusage()
+        #if canImport(Darwin)
         getrusage(RUSAGE_SELF, &usage)
-        print(String(format: "peak memory: %.2f GB", Double(usage.ru_maxrss) / 1_073_741_824))
+        let peakGB = Double(usage.ru_maxrss) / 1_073_741_824   // Darwin: bytes
+        #else
+        getrusage(RUSAGE_SELF.rawValue, &usage)
+        let peakGB = Double(usage.ru_maxrss) / 1_048_576        // Linux: kilobytes
+        #endif
+        print(String(format: "peak memory: %.2f GB", peakGB))
     }
 }
 
@@ -343,9 +401,8 @@ struct Batch: ParsableCommand {
                         fusedCount = kept.count
                     }
                 }
-                try ImageFile.save(image!, to: outDir.appendingPathComponent(name),
-                                   sourceFrame: group.first,
-                                   colorSpace: fusion.colorSpace.cgColorSpace)
+                try saveFused(image!, to: outDir.appendingPathComponent(name),
+                              sourceFrame: group.first, colorSpace: fusion.colorSpace)
                 print("\(label): wrote \(name) (\(fusedCount) frames, \(elapsed))")
             } catch {
                 failures.append("\(label) (\(group[0].lastPathComponent) …): \(error)")
@@ -512,6 +569,7 @@ struct DebugWarp: ParsableCommand {
     }
 }
 
+#if canImport(CoreGraphics)
 struct DebugSource: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "debug-source",
@@ -543,6 +601,7 @@ struct DebugSource: ParsableCommand {
         print("cgImage8: \(convertTime)")
     }
 }
+#endif
 
 struct DebugDiff: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -621,6 +680,7 @@ struct DebugChain: ParsableCommand {
     }
 }
 
+#if canImport(CoreGraphics)
 struct DebugAlign: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "debug-align",
@@ -641,3 +701,5 @@ struct DebugAlign: ParsableCommand {
         }
     }
 }
+
+#endif

@@ -1,3 +1,4 @@
+#if canImport(Metal)
 import Foundation
 import Metal
 import simd
@@ -388,3 +389,5 @@ enum GPUPyramid {
         return out
     }
 }
+
+#endif // canImport(Metal)

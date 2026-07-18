@@ -133,6 +133,7 @@ public enum StackPipeline {
         }
         let source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
         let output: DMapFusion.Output
+        #if canImport(Metal)
         if configuration.preferGPU, MetalEngine.shared != nil {
             output = try GPUDMap.fuseWithDepth(source: source, options: configuration.fusion,
                                                log: log, progress: progress,
@@ -145,6 +146,14 @@ public enum StackPipeline {
                 try source.frame(at: $0)
             }
         }
+        #else
+        output = try DMapFusion.fuseWithDepth(frameCount: source.count,
+                                              options: configuration.fusion, log: log,
+                                              progress: progress,
+                                              cancellation: cancellation) {
+            try source.frame(at: $0)
+        }
+        #endif
         progress?(FusionProgress(stage: .finishing, fraction: 1))
         return FuseResult(output: output, issues: issues, fusedURLs: fuseURLs)
     }

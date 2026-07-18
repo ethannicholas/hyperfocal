@@ -1,7 +1,9 @@
 import Foundation
+#if canImport(AVFoundation)
 import AVFoundation
 import CoreGraphics
 import ImageIO
+#endif
 
 /// Zerene-style rocking animation: the fused image reprojected with a
 /// per-pixel horizontal disparity proportional to the regularized depth
@@ -75,6 +77,7 @@ public enum RockingAnimation {
     /// anything else writes H.264 MP4. `image` and `depth` are
     /// full-resolution and same-sized (the fused result — tone already
     /// applied by the caller — and DMapFusion.Output.depth).
+    #if canImport(AVFoundation)
     public static func write(to url: URL, image: ImageBuffer, depth: [Float],
                              options: Options = Options(),
                              log: ((String) -> Void)? = nil,
@@ -321,4 +324,18 @@ public enum RockingAnimation {
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         return
     }
+    #else
+    /// Rocking export depends on AVFoundation (MP4) / ImageIO (GIF); on
+    /// platforms without them it is not yet available (FFmpeg + giflib backend
+    /// is a later port item). Kept as a throwing stub so the rest of the CLI
+    /// builds and ships. Not on the synth-gate path.
+    public static func write(to url: URL, image: ImageBuffer, depth: [Float],
+                             options: Options = Options(),
+                             log: ((String) -> Void)? = nil,
+                             progress: ((Double) -> Void)? = nil,
+                             cancellation: CancellationToken? = nil) throws {
+        throw ImageFileError.unsupported(
+            "rocking animation export is not available on this platform yet")
+    }
+    #endif
 }

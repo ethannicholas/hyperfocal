@@ -1,8 +1,13 @@
 import Foundation
+#if canImport(Vision)
 import Vision
 import CoreGraphics
+#endif
 #if canImport(simd)
 import simd
+#endif
+#if !canImport(CoreGraphics)
+import CImaging
 #endif
 
 public enum AlignError: Error, CustomStringConvertible {
@@ -19,9 +24,9 @@ public enum AlignError: Error, CustomStringConvertible {
 }
 
 /// A frame the registration pass judged suspect: a flash misfire (exposure far
-/// off the stack), a frame Vision could not register, or one whose post-warp
-/// residual says the registration didn't actually line it up (bumped rail,
-/// subject moved). Indexes into the frame list that was registered.
+/// off the stack), a frame the registrar could not register, or one whose
+/// post-warp residual says the registration didn't actually line it up (bumped
+/// rail, subject moved). Indexes into the frame list that was registered.
 public struct FrameQualityIssue: Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
         /// Mean luminance vs the stack median, same encoded-space measurement
@@ -51,6 +56,15 @@ public enum RegistrationPass {
     case register
 }
 
+/// The image a registration progress callback hands back for preview. It is the
+/// grayscale representation the pass just touched — a `CGImage` where Apple's
+/// imaging stack exists, the portable `GrayImage` otherwise.
+#if canImport(CoreGraphics)
+public typealias RegistrationPreview = CGImage
+#else
+public typealias RegistrationPreview = GrayImage
+#endif
+
 public enum Aligner {
 
     /// Full-length frame→reference transforms plus any quality flags raised
@@ -62,36 +76,13 @@ public enum Aligner {
         public let issues: [FrameQualityIssue]
     }
 
-    /// Registers `moving` onto `fixed` and returns a homography mapping moving-image
-    /// pixel coordinates (top-left origin, y down) to fixed-image pixel coordinates.
-    public static func register(moving: CGImage, fixed: CGImage) throws -> simd_float3x3 {
-        let request = VNHomographicImageRegistrationRequest(targetedCGImage: moving)
-        let handler = VNImageRequestHandler(cgImage: fixed, options: [:])
-        try handler.perform([request])
-        guard let obs = request.results?.first else {
-            throw AlignError.registrationFailed(0)
-        }
-        return convention(obs.warpTransform, height: Float(fixed.height))
-    }
-
-    /// Vision reports the warp in a bottom-left-origin pixel coordinate system.
-    /// Conjugate by a vertical flip to get our top-left convention.
-    static func convention(_ m: matrix_float3x3, height: Float) -> simd_float3x3 {
-        let f = simd_float3x3(rows: [
-            SIMD3<Float>(1, 0, 0),
-            SIMD3<Float>(0, -1, height),
-            SIMD3<Float>(0, 0, 1),
-        ])
-        return f * m * f
-    }
-
     /// Strict variant: throws if any frame failed to register (the historical
     /// behavior). Exposure/misalignment flags don't throw — those frames were
     /// always fused silently before detection existed.
     public static func transforms(forFrames urls: [URL],
                                   log: ((String) -> Void)? = nil,
                                   cancellation: CancellationToken? = nil,
-                                  progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: CGImage?, _ pass: RegistrationPass) -> Void)? = nil) throws -> [simd_float3x3] {
+                                  progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: RegistrationPreview?, _ pass: RegistrationPass) -> Void)? = nil) throws -> [simd_float3x3] {
         let output = try transformsAndQuality(forFrames: urls, log: log,
                                               cancellation: cancellation, progress: progress)
         if let failure = output.issues.first(where: {
@@ -125,7 +116,7 @@ public enum Aligner {
     public static func transformsAndQuality(forFrames urls: [URL],
                                             log: ((String) -> Void)? = nil,
                                             cancellation: CancellationToken? = nil,
-                                            progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: CGImage?, _ pass: RegistrationPass) -> Void)? = nil) throws -> RegistrationOutput {
+                                            progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: RegistrationPreview?, _ pass: RegistrationPass) -> Void)? = nil) throws -> RegistrationOutput {
         let n = urls.count
         guard n > 1 else {
             return RegistrationOutput(transforms: [matrix_identity_float3x3], issues: [])
@@ -138,7 +129,7 @@ public enum Aligner {
         let totalUnits = Double(n + n - 1)
         var completedUnits = 0
         let progressLock = NSLock()
-        func bump(frameIndex: Int, frame: CGImage?, pass: RegistrationPass) {
+        func bump(frameIndex: Int, frame: RegistrationPreview?, pass: RegistrationPass) {
             guard let progress else { return }
             progressLock.lock()
             completedUnits += 1
@@ -157,13 +148,13 @@ public enum Aligner {
         // content nearly vanishes and the in-focus texture dominates. Only the
         // gradient plane stays in memory (~1/16th of the float image); the
         // luminance mean rides along for the exposure check.
-        let decoded = try boundedConcurrentMap(count: n, concurrency: 4) { i -> (CGImage, GrayStats, Float) in
+        let decoded = try boundedConcurrentMap(count: n, concurrency: 4) { i -> (GrayImage, GrayStats, Float) in
             try cancellation?.checkCancelled()
-            let g = try ImageFile.loadGray8CGImage(url: urls[i])
+            let g = try ImageFile.loadGray8(url: urls[i])
             let (gradient, lumMean) = gradientImage(g)
             let stats = grayStats(gradient)
             log?("decoded frame \(i)")
-            bump(frameIndex: i, frame: g, pass: .decode)
+            bump(frameIndex: i, frame: preview(of: g), pass: .decode)
             return (gradient, stats, lumMean)
         }
         let grays = decoded.map(\.0)
@@ -199,17 +190,18 @@ public enum Aligner {
         let pairs = try boundedConcurrentMap(count: kept.count - 1, concurrency: 4) { j -> Pair in
             try cancellation?.checkCancelled()
             let a = kept[j], b = kept[j + 1]
-            defer { bump(frameIndex: b, frame: grays[b], pass: .register) }
+            defer { bump(frameIndex: b, frame: preview(of: grays[b]), pass: .register) }
             do {
                 let h = try register(moving: grays[b], fixed: grays[a])
                 let residual = pairResidual(fixed: stats[a], moving: stats[b], homography: h)
                 // Occam gate: on featureless pairs (focus racked past every
-                // surface — nothing but bokeh gradients) Vision confidently
-                // fits garbage homographies whose residuals still look normal,
-                // and chaining a run of them bends the whole tail of the stack
-                // (−46° rotations, 0.63× scales on a solid rail). A warp that
-                // fits no better than not warping has not earned its place in
-                // the chain; identity is the physical prior on a static rail.
+                // surface — nothing but bokeh gradients) the registrar
+                // confidently fits garbage homographies whose residuals still
+                // look normal, and chaining a run of them bends the whole tail
+                // of the stack (−46° rotations, 0.63× scales on a solid rail). A
+                // warp that fits no better than not warping has not earned its
+                // place in the chain; identity is the physical prior on a static
+                // rail.
                 let idResidual = pairResidual(fixed: stats[a], moving: stats[b],
                                               homography: matrix_identity_float3x3)
                 // Clearly-worse only (garbage warps lose by 1.5–14×): a warp
@@ -339,8 +331,8 @@ public enum Aligner {
         }
 
         // Best-effort transforms for flagged frames, in case the caller keeps
-        // them anyway: a spur registration onto the nearest survivor when Vision
-        // can manage one, else that survivor's transform verbatim.
+        // them anyway: a spur registration onto the nearest survivor when the
+        // registrar can manage one, else that survivor's transform verbatim.
         for f in flagged.sorted() {
             let nearest = survivors.min { abs($0 - f) < abs($1 - f) }!
             if let h = try? register(moving: grays[f], fixed: grays[nearest]) {
@@ -371,18 +363,11 @@ public enum Aligner {
     /// per-frame normalization keeps faintly-textured frames (deep-stack
     /// tails focused only on the substrate) comparable to sharp ones.
     /// Returns the source's luminance mean too (the exposure check needs it;
-    /// gradient means are meaningless for that).
-    static func gradientImage(_ cg: CGImage) -> (image: CGImage, lumMean: Float) {
-        let w = cg.width, h = cg.height
-        var lum = [UInt8](repeating: 0, count: w * h)
-        lum.withUnsafeMutableBytes { buf in
-            guard let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
-                  let ctx = CGContext(data: buf.baseAddress, width: w, height: h,
-                                      bitsPerComponent: 8, bytesPerRow: w,
-                                      space: space,
-                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
-            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        }
+    /// gradient means are meaningless for that). Pure — identical on every
+    /// platform; only decode/downscale/register touch the OS imaging stack.
+    static func gradientImage(_ img: GrayImage) -> (image: GrayImage, lumMean: Float) {
+        let w = img.width, h = img.height
+        let lum = img.pixels
         var lumSum = 0
         for v in lum { lumSum += Int(v) }
         let lumMean = Float(lumSum) / Float(max(w * h, 1))
@@ -426,36 +411,7 @@ public enum Aligner {
                 }
             }
         }
-        let image = bytes.withUnsafeBufferPointer { p -> CGImage? in
-            guard let provider = CGDataProvider(data: Data(buffer: p) as CFData),
-                  let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2) else {
-                return nil
-            }
-            return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 8,
-                           bytesPerRow: w, space: space,
-                           bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
-                           provider: provider, decode: nil, shouldInterpolate: false,
-                           intent: .defaultIntent)
-        }
-        return (image ?? cg, lumMean)
-    }
-
-    static func grayStats(_ cg: CGImage, factor: Int = 4) -> GrayStats {
-        let pw = max(1, cg.width / factor), ph = max(1, cg.height / factor)
-        var bytes = [UInt8](repeating: 0, count: pw * ph)
-        bytes.withUnsafeMutableBytes { buf in
-            guard let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
-                  let ctx = CGContext(data: buf.baseAddress, width: pw, height: ph,
-                                      bitsPerComponent: 8, bytesPerRow: pw,
-                                      space: space,
-                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
-            ctx.interpolationQuality = .medium
-            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: pw, height: ph))
-        }
-        var sum = 0
-        for b in bytes { sum += Int(b) }
-        return GrayStats(mean: Float(sum) / Float(max(bytes.count, 1)),
-                         plane: bytes, width: pw, height: ph, factor: factor)
+        return (GrayImage(width: w, height: h, pixels: bytes), lumMean)
     }
 
     /// Mean |difference| between `fixed` and `moving` warped by `homography`
@@ -528,4 +484,127 @@ public enum Aligner {
         if let firstError { throw firstError }
         return results.map { $0! }
     }
+
+    // MARK: - Platform primitives (decode-adjacent: downscale, register, preview)
+
+#if canImport(Vision)
+
+    /// Registers `moving` onto `fixed` and returns a homography mapping
+    /// moving-image pixel coordinates (top-left origin, y down) to fixed-image
+    /// pixel coordinates. Vision reports the warp in bottom-left pixel space,
+    /// so `convention` conjugates by a vertical flip.
+    public static func register(moving: CGImage, fixed: CGImage) throws -> simd_float3x3 {
+        let request = VNHomographicImageRegistrationRequest(targetedCGImage: moving)
+        let handler = VNImageRequestHandler(cgImage: fixed, options: [:])
+        try handler.perform([request])
+        guard let obs = request.results?.first else {
+            throw AlignError.registrationFailed(0)
+        }
+        return convention(obs.warpTransform, height: Float(fixed.height))
+    }
+
+    static func register(moving: GrayImage, fixed: GrayImage) throws -> simd_float3x3 {
+        try register(moving: cgImage(from: moving), fixed: cgImage(from: fixed))
+    }
+
+    /// Vision reports the warp in a bottom-left-origin pixel coordinate system.
+    /// Conjugate by a vertical flip to get our top-left convention.
+    static func convention(_ m: matrix_float3x3, height: Float) -> simd_float3x3 {
+        let f = simd_float3x3(rows: [
+            SIMD3<Float>(1, 0, 0),
+            SIMD3<Float>(0, -1, height),
+            SIMD3<Float>(0, 0, 1),
+        ])
+        return f * m * f
+    }
+
+    /// 8-bit gray `CGImage` wrapping a `GrayImage`'s bytes (no copy of intent —
+    /// same space and layout the CoreGraphics gray path always used).
+    static func cgImage(from g: GrayImage) -> CGImage {
+        let w = g.width, h = g.height
+        let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2)!
+        let provider = CGDataProvider(data: Data(g.pixels) as CFData)!
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 8,
+                       bytesPerRow: w, space: space,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false,
+                       intent: .defaultIntent)!
+    }
+
+    static func preview(of g: GrayImage) -> RegistrationPreview { cgImage(from: g) }
+
+    static func grayStats(_ img: GrayImage, factor: Int = 4) -> GrayStats {
+        let cg = cgImage(from: img)
+        let pw = max(1, cg.width / factor), ph = max(1, cg.height / factor)
+        var bytes = [UInt8](repeating: 0, count: pw * ph)
+        bytes.withUnsafeMutableBytes { buf in
+            guard let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
+                  let ctx = CGContext(data: buf.baseAddress, width: pw, height: ph,
+                                      bitsPerComponent: 8, bytesPerRow: pw,
+                                      space: space,
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
+            ctx.interpolationQuality = .medium
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: pw, height: ph))
+        }
+        var sum = 0
+        for b in bytes { sum += Int(b) }
+        return GrayStats(mean: Float(sum) / Float(max(bytes.count, 1)),
+                         plane: bytes, width: pw, height: ph, factor: factor)
+    }
+
+#else  // Linux/Windows — OpenCV registration + a plain box downscale.
+
+    static func preview(of g: GrayImage) -> RegistrationPreview { g }
+
+    static func register(moving: GrayImage, fixed: GrayImage) throws -> simd_float3x3 {
+        precondition(moving.width == fixed.width && moving.height == fixed.height,
+                     "OpenCV registration expects same-sized gray frames")
+        var h = [Float](repeating: 0, count: 9)
+        let status = fixed.pixels.withUnsafeBufferPointer { f in
+            moving.pixels.withUnsafeBufferPointer { m in
+                hf_register(CInt(fixed.width), CInt(fixed.height),
+                            f.baseAddress, m.baseAddress, &h)
+            }
+        }
+        guard status == hf_ok else { throw AlignError.registrationFailed(0) }
+        // OpenCV already works top-left / y-down, matching our convention — no
+        // flip (unlike Vision's bottom-left warp).
+        return simd_float3x3(rows: [
+            SIMD3<Float>(h[0], h[1], h[2]),
+            SIMD3<Float>(h[3], h[4], h[5]),
+            SIMD3<Float>(h[6], h[7], h[8]),
+        ])
+    }
+
+    static func grayStats(_ img: GrayImage, factor: Int = 4) -> GrayStats {
+        let w = img.width, h = img.height
+        let pw = max(1, w / factor), ph = max(1, h / factor)
+        var bytes = [UInt8](repeating: 0, count: pw * ph)
+        img.pixels.withUnsafeBufferPointer { src in
+            bytes.withUnsafeMutableBufferPointer { dst in
+                DispatchQueue.concurrentPerform(iterations: ph) { y in
+                    let y0 = y * h / ph, y1 = max(y0 + 1, (y + 1) * h / ph)
+                    for x in 0..<pw {
+                        let x0 = x * w / pw, x1 = max(x0 + 1, (x + 1) * w / pw)
+                        var acc = 0, cnt = 0
+                        var yy = y0
+                        while yy < y1 && yy < h {
+                            var xx = x0
+                            while xx < x1 && xx < w {
+                                acc += Int(src[yy * w + xx]); cnt += 1; xx += 1
+                            }
+                            yy += 1
+                        }
+                        dst[y * pw + x] = UInt8(acc / max(cnt, 1))
+                    }
+                }
+            }
+        }
+        var sum = 0
+        for b in bytes { sum += Int(b) }
+        return GrayStats(mean: Float(sum) / Float(max(bytes.count, 1)),
+                         plane: bytes, width: pw, height: ph, factor: factor)
+    }
+
+#endif
 }

@@ -1,3 +1,4 @@
+#if canImport(Metal)
 import Foundation
 import Metal
 import simd
@@ -710,3 +711,5 @@ public enum GPUDMap {
         return depth
     }
 }
+
+#endif // canImport(Metal)

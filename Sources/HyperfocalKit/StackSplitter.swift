@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(ImageIO)
 import ImageIO
+#else
+import CImaging
+#endif
 
 /// Splits a session's frames into stacks by capture-time gaps. Stackers shoot
 /// sessions — ten stacks of 50–200 frames into one folder — and the bursts are
@@ -15,6 +19,7 @@ public enum StackSplitter {
     /// EXIF capture time (DateTimeOriginal + subseconds), or nil if the file
     /// carries none.
     public static func captureDate(of url: URL) -> Date? {
+        #if canImport(ImageIO)
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil)
                 as? [CFString: Any],
@@ -26,6 +31,13 @@ public enum StackSplitter {
             return date.addingTimeInterval(fraction)
         }
         return date
+        #else
+        // exiv2 reads DateTimeOriginal (+ SubSecTimeOriginal) and returns it as
+        // a UTC-naive epoch — matching exifFormatter's GMT, timezone-free basis.
+        var epoch: Double = 0
+        guard hf_exif_capture_epoch(url.path, &epoch) == hf_ok else { return nil }
+        return Date(timeIntervalSince1970: epoch)
+        #endif
     }
 
     /// Fusion frame order for a stack: capture time (name as tiebreaker),

@@ -140,6 +140,7 @@ public enum PyramidFusion {
                             decodeWorkers: Int? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
+        #if canImport(Metal)
         if preferGPU, MetalEngine.shared != nil {
             do {
                 return try GPUPyramid.fuse(frameCount: frameCount, warp: warp,
@@ -150,6 +151,7 @@ public enum PyramidFusion {
                 log?("GPU pyramid failed (\(error)); falling back to CPU")
             }
         }
+        #endif
         var levels = 0
         var fused: [ImageBuffer]? = nil
         // Winner energy per band-pass level, updated as frames stream through.

@@ -1,8 +1,12 @@
 import Foundation
+#if canImport(CoreGraphics)
 import CoreGraphics
 import CoreImage
 import ImageIO
 import UniformTypeIdentifiers
+#else
+import CImaging
+#endif
 
 public enum ImageFileError: Error, CustomStringConvertible {
     case cannotLoad(String)
@@ -20,6 +24,23 @@ public enum ImageFileError: Error, CustomStringConvertible {
 
 public enum ImageFile {
 
+    /// Identifier persisted in project manifests; restoring a project written
+    /// in a different working space is refused rather than color-shifted.
+    public static let workingSpaceName = "display-p3"
+
+    /// Camera RAW extensions decoded through the RAW pipeline (demosaic +
+    /// as-shot white balance) instead of a plain raster decoder.
+    public static let rawExtensions: Set<String> = [
+        "nef", "nrw", "dng", "cr2", "cr3", "crw", "arw", "raf", "orf", "rw2",
+        "pef", "srw", "3fr", "fff", "iiq", "rwl",
+    ]
+
+    public static func isRAW(_ url: URL) -> Bool {
+        rawExtensions.contains(url.pathExtension.lowercased())
+    }
+
+#if canImport(CoreGraphics)
+
     /// The pipeline's working color space. `ImageBuffer` floats are untagged;
     /// by convention they are Display P3 (P3 primaries, sRGB transfer curve) —
     /// wide enough that saturated subjects survive to export instead of
@@ -29,22 +50,8 @@ public enum ImageFile {
     /// (per-pixel argmax and blends); the Rec.709 luma constants used for
     /// sharpness/exposure heuristics are fine in any RGB space.
     public static let workingSpace = CGColorSpace(name: CGColorSpace.displayP3)!
-    /// Identifier persisted in project manifests; restoring a project written
-    /// in a different working space is refused rather than color-shifted.
-    public static let workingSpaceName = "display-p3"
 
     // MARK: - Loading
-
-    /// Camera RAW extensions decoded through the Core Image RAW pipeline
-    /// (demosaic + as-shot white balance) instead of plain ImageIO.
-    public static let rawExtensions: Set<String> = [
-        "nef", "nrw", "dng", "cr2", "cr3", "crw", "arw", "raf", "orf", "rw2",
-        "pef", "srw", "3fr", "fff", "iiq", "rwl",
-    ]
-
-    public static func isRAW(_ url: URL) -> Bool {
-        rawExtensions.contains(url.pathExtension.lowercased())
-    }
 
     /// Pixel dimensions from the file header — no decode.
     public static func pixelSize(url: URL) -> (width: Int, height: Int)? {
@@ -141,6 +148,24 @@ public enum ImageFile {
             throw ImageFileError.cannotLoad("cannot render grayscale image")
         }
         return gray
+    }
+
+    /// 8-bit luminance plane for registration (the portable `GrayImage` seam).
+    /// Produced from the same grayscale CGImage the Apple path always used, so
+    /// the bytes Vision registers on are unchanged.
+    public static func loadGray8(url: URL) throws -> GrayImage {
+        let cg = try loadGray8CGImage(url: url)
+        let w = cg.width, h = cg.height
+        var bytes = [UInt8](repeating: 0, count: w * h)
+        bytes.withUnsafeMutableBytes { buf in
+            guard let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
+                  let ctx = CGContext(data: buf.baseAddress, width: w, height: h,
+                                      bitsPerComponent: 8, bytesPerRow: w,
+                                      space: space,
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        return GrayImage(width: w, height: h, pixels: bytes)
     }
 
     /// Small Float32 RGBA buffer from any CGImage (grayscale included), drawn at
@@ -354,4 +379,113 @@ public enum ImageFile {
         }
         return out.isEmpty ? nil : out
     }
+
+#else  // !canImport(CoreGraphics) — Linux/Windows via the CImaging shim.
+
+    // MARK: - Loading
+
+    public static func pixelSize(url: URL) -> (width: Int, height: Int)? {
+        var w: CInt = 0, h: CInt = 0
+        guard hf_pixel_size(url.path, isRAW(url) ? 1 : 0, &w, &h) == hf_ok else { return nil }
+        return (Int(w), Int(h))
+    }
+
+    public static func load(url: URL) throws -> ImageBuffer {
+        var w: CInt = 0, h: CInt = 0
+        var ptr: UnsafeMutablePointer<Float>? = nil
+        let status = isRAW(url)
+            ? hf_decode_raw(url.path, &w, &h, &ptr)
+            : hf_decode(url.path, &w, &h, &ptr)
+        guard status == hf_ok, let ptr, w > 0, h > 0 else {
+            throw ImageFileError.cannotLoad("\(url.path) (shim status \(status.rawValue))")
+        }
+        defer { hf_free(ptr) }
+        let count = Int(w) * Int(h) * 4
+        let pixels = Array(UnsafeBufferPointer(start: ptr, count: count))
+        return ImageBuffer(width: Int(w), height: Int(h), pixels: pixels)
+    }
+
+    public static func loadRAW(url: URL) throws -> ImageBuffer {
+        var w: CInt = 0, h: CInt = 0
+        var ptr: UnsafeMutablePointer<Float>? = nil
+        let status = hf_decode_raw(url.path, &w, &h, &ptr)
+        guard status == hf_ok, let ptr, w > 0, h > 0 else {
+            throw ImageFileError.cannotLoad("\(url.lastPathComponent): RAW decode failed (\(status.rawValue))")
+        }
+        defer { hf_free(ptr) }
+        let count = Int(w) * Int(h) * 4
+        let pixels = Array(UnsafeBufferPointer(start: ptr, count: count))
+        return ImageBuffer(width: Int(w), height: Int(h), pixels: pixels)
+    }
+
+    /// 8-bit luminance plane for registration (the portable `GrayImage` seam).
+    public static func loadGray8(url: URL) throws -> GrayImage {
+        var w: CInt = 0, h: CInt = 0
+        var ptr: UnsafeMutablePointer<UInt8>? = nil
+        let status = hf_decode_gray8(url.path, isRAW(url) ? 1 : 0, &w, &h, &ptr)
+        guard status == hf_ok, let ptr, w > 0, h > 0 else {
+            throw ImageFileError.cannotLoad("\(url.path) (gray decode status \(status.rawValue))")
+        }
+        defer { hf_free(ptr) }
+        let bytes = Array(UnsafeBufferPointer(start: ptr, count: Int(w) * Int(h)))
+        return GrayImage(width: Int(w), height: Int(h), pixels: bytes)
+    }
+
+    /// Small Float32 RGBA buffer from a `GrayImage`, sampled down — the
+    /// registration progress preview (the Apple path takes a `CGImage`; the
+    /// portable seam hands back a `GrayImage`).
+    public static func previewBuffer(from gray: GrayImage, maxSide: Int) throws -> ImageBuffer {
+        let scale = min(1.0, Double(maxSide) / Double(max(gray.width, gray.height)))
+        let pw = max(1, Int(Double(gray.width) * scale))
+        let ph = max(1, Int(Double(gray.height) * scale))
+        var buf = ImageBuffer(width: pw, height: ph)
+        gray.pixels.withUnsafeBufferPointer { src in
+            buf.pixels.withUnsafeMutableBufferPointer { dst in
+                for y in 0..<ph {
+                    let sy = min(y * gray.height / ph, gray.height - 1)
+                    for x in 0..<pw {
+                        let sx = min(x * gray.width / pw, gray.width - 1)
+                        let v = Float(src[sy * gray.width + sx]) / 255
+                        let di = (y * pw + x) * 4
+                        dst[di] = v; dst[di + 1] = v; dst[di + 2] = v; dst[di + 3] = 1
+                    }
+                }
+            }
+        }
+        return buf
+    }
+
+    // MARK: - Saving
+
+    /// Saves by extension: .tif/.tiff/.png → 16-bit, .jpg/.jpeg → 8-bit,
+    /// .dng → 16-bit Linear DNG. `colorSpaceName` ("srgb"/"p3"/"prophoto")
+    /// converts the export out of the working space (nil keeps Display P3; DNG
+    /// always declares P3). `sourceFrame` carries EXIF into a DNG export; for
+    /// raster exports EXIF carry-over is not yet wired on this platform.
+    public static func save(_ image: ImageBuffer, to url: URL,
+                            sourceFrame: URL? = nil,
+                            colorSpaceName: String? = nil) throws {
+        let ext = url.pathExtension.lowercased()
+        if ext == "dng" {
+            try DNGWriter.write(image, to: url, sourceFrame: sourceFrame)
+            return
+        }
+        let cs = colorSpaceName ?? "p3"
+        let w = CInt(image.width), h = CInt(image.height)
+        let status: hf_status = try image.pixels.withUnsafeBufferPointer { buf in
+            let base = buf.baseAddress
+            switch ext {
+            case "tif", "tiff": return hf_encode_tiff16(url.path, w, h, base, cs)
+            case "png":         return hf_encode_png16(url.path, w, h, base, cs)
+            case "jpg", "jpeg": return hf_encode_jpeg8(url.path, w, h, base, cs)
+            default:
+                throw ImageFileError.unsupported("extension .\(ext) (use tif, png, or jpg)")
+            }
+        }
+        guard status == hf_ok else {
+            throw ImageFileError.cannotSave("\(url.path) (shim status \(status.rawValue))")
+        }
+    }
+
+#endif
 }

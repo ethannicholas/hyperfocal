@@ -1,7 +1,11 @@
 import Foundation
 import Dispatch
+#if canImport(CoreImage)
 import CoreImage
 import ImageIO
+#else
+import CImaging
+#endif
 import CDNGSDK
 
 /// Linear DNG export: demosaiced 16-bit linear RGB with PhotometricInterpretation
@@ -25,14 +29,19 @@ public enum DNGWriter {
         public var fNumber: Double?
         public var focalLengthMM: Double?
         public var iso: Int?
-        /// As-shot white chromaticity (CIE xy) from the raw decode.
+        #if canImport(CoreGraphics)
+        /// As-shot white chromaticity (CIE xy) from the raw decode. Apple-only
+        /// for now — the Linux LibRaw path doesn't surface it yet, so the DNG
+        /// export there declares a generic neutral (WB un-bake skipped).
         public var neutralXY: CGPoint?
+        #endif
     }
 
     /// Reads EXIF + as-shot white balance from a source frame (typically the
     /// first frame of the stack). Header parse only — no pixel decode.
     public static func sourceMetadata(from url: URL) -> SourceMetadata {
         var meta = SourceMetadata()
+        #if canImport(CoreImage)
         if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] {
             if let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
@@ -51,6 +60,28 @@ public enum DNGWriter {
         if ImageFile.isRAW(url), let filter = CIRAWFilter(imageURL: url) {
             meta.neutralXY = filter.neutralChromaticity
         }
+        #else
+        // exiv2 reads the same EXIF fields; as-shot neutral is not yet wired.
+        var nums = hf_exif_numbers()
+        let cap = 256
+        var make = [CChar](repeating: 0, count: cap)
+        var model = [CChar](repeating: 0, count: cap)
+        var lens = [CChar](repeating: 0, count: cap)
+        var datetime = [CChar](repeating: 0, count: cap)
+        _ = hf_exif_source_meta(url.path, &make, cap, &model, cap, &lens, cap,
+                                &datetime, cap, &nums)
+        func str(_ buf: [CChar]) -> String? {
+            let s = String(cString: buf); return s.isEmpty ? nil : s
+        }
+        meta.make = str(make)
+        meta.model = str(model)
+        meta.lensName = str(lens)
+        meta.dateTimeOriginal = str(datetime)
+        if nums.exposure_time.isFinite { meta.exposureTime = nums.exposure_time }
+        if nums.f_number.isFinite { meta.fNumber = nums.f_number }
+        if nums.focal_length_mm.isFinite { meta.focalLengthMM = nums.focal_length_mm }
+        if nums.iso >= 0 { meta.iso = Int(nums.iso) }
+        #endif
         return meta
     }
 
@@ -72,6 +103,7 @@ public enum DNGWriter {
         // the WB sliders now showing the shot's real temperature/tint.
         var neutral: (Double, Double, Double)? = nil
         var channelFactors: (Float, Float, Float)? = nil
+        #if canImport(CoreGraphics)
         if let xy = meta.neutralXY, xy.y > 0.0001 {
             let X = xy.x / xy.y, Y = 1.0, Z = (1 - xy.x - xy.y) / xy.y
             // Through the same XYZ→camera matrix the profile declares, so the
@@ -87,6 +119,7 @@ public enum DNGWriter {
                 channelFactors = (Float(n.0), Float(n.1), Float(n.2))
             }
         }
+        #endif
 
         let rgb = linearRGB16(from: image, channelFactors: channelFactors)
 

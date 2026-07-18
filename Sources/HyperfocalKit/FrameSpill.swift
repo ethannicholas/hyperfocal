@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Spills per-frame planes to a temp file during one fusion pass so a later
 /// pass can stream them back instead of re-decoding the stack. DMap decodes
@@ -43,12 +48,23 @@ public final class FrameSpill {
                                  frameCount: Int) -> (needed: Int64, available: Int64)? {
         let slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
         let needed = Int64(slotBytes) * Int64(frameCount) + margin
+        #if canImport(Darwin)
         guard let capacity = (try? FileManager.default.temporaryDirectory.resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
-                .volumeAvailableCapacityForImportantUsage,
-              capacity < needed else {
+                .volumeAvailableCapacityForImportantUsage else {
             return nil
         }
+        #else
+        // Linux has no "important usage" capacity; statvfs on the temp volume
+        // reports the blocks available to an unprivileged writer, which is the
+        // figure the spill has to fit inside.
+        var vfs = Glibc.statvfs()
+        guard statvfs(FileManager.default.temporaryDirectory.path, &vfs) == 0 else {
+            return nil
+        }
+        let capacity = Int64(vfs.f_bavail) * Int64(vfs.f_frsize)
+        #endif
+        guard capacity < needed else { return nil }
         return (needed, capacity)
     }
 
@@ -72,7 +88,13 @@ public final class FrameSpill {
             return nil
         }
         unlink(url.path)
+        #if canImport(Darwin)
         _ = fcntl(fd, F_NOCACHE, 1)
+        #else
+        // Linux has no F_NOCACHE; drop this write-once/read-once file from the
+        // page cache so its multi-GB traffic doesn't evict the working set.
+        _ = posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)
+        #endif
     }
 
     deinit {

@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(ImageIO)
 import ImageIO
+#endif
 #if canImport(simd)
 import simd
 #endif
@@ -313,6 +315,7 @@ public enum SynthStack {
             }
 
             let url = outDir.appendingPathComponent(String(format: "frame_%03d.%@", i, frameExtension))
+            #if canImport(ImageIO)
             var extra: [CFString: Any]? = nil
             if let start = options.captureStart {
                 let stamp = StackSplitter.exifFormatter.string(
@@ -321,6 +324,11 @@ public enum SynthStack {
                             [kCGImagePropertyExifDateTimeOriginal: stamp]]
             }
             try ImageFile.save(frame, to: url, extraProperties: extra)
+            #else
+            // Capture-time EXIF stamping (for session-split tests) rides on
+            // ImageIO destination properties; not yet wired on this platform.
+            try ImageFile.save(frame, to: url)
+            #endif
             frameURLs.append(url)
             log?("frame \(i + 1)/\(n) (focus \(String(format: "%.2f", focus)))")
         }
