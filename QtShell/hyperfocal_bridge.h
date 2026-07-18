@@ -43,6 +43,23 @@ int hf_stage_text(char *buf, int cap);
 void hf_set_tone_exposure(double ev);
 double hf_tone_exposure(void);
 
+// Sliders, addressed by the accessibility-identifier vocabulary the
+// native UITest command channel speaks (e.g. "fusion.slider.sharpness",
+// "tone.slider.contrast") — one id namespace across both shells.
+int hf_set_slider(const char *id, double value);
+double hf_slider(const char *id);
+
+// Output mode: 0 = Result, 1 = Depth (the depth map is data — it
+// displays and exports untoned).
+void hf_set_output_depth(int depth);
+int hf_output_depth(void);
+
+// Frame list of the selected stack, in native Stack-list order.
+int hf_frame_count(void);
+int hf_frame_name(int index, char *buf, int cap);   // returns bytes
+int hf_frame_included(int index);
+int hf_set_frame_included(int index, int included);
+
 // Current display image: progressive preview mid-fuse, toned result
 // preview otherwise. 0 sizes = nothing to show yet.
 int hf_display_size(int32_t *w, int32_t *h);

@@ -53,11 +53,15 @@ private enum Bridge {
     }
 
     /// The image the shell should display right now (mirrors the native
-    /// output pane's priority): progressive while running, else the toned
-    /// result preview.
+    /// output pane's priority): progressive while running, the depth map
+    /// in depth mode, else the toned result preview. Data visualizations
+    /// (progressive depth/gradient stages, the depth map) are served
+    /// exactly as computed — tone applies to image pixels only, the same
+    /// content rule the native pane follows.
     static func displayImage() -> CGImage? {
         guard let model else { return nil }
         if model.phase.isRunning { return model.progressive }
+        if model.outputMode == .depth { return model.depthPreview }
         guard let result = model.result else { return nil }
         // Rebuild the untoned preview when the result changes.
         let downsampled: ImageBuffer
@@ -181,6 +185,120 @@ public func hf_set_tone_exposure(_ ev: Double) {
 @_cdecl("hf_tone_exposure")
 public func hf_tone_exposure() -> Double {
     MainActor.assumeIsolated { Bridge.model?.tone.exposure ?? 0 }
+}
+
+/// Slider access by the accessibility-identifier vocabulary the UITest
+/// command channel already speaks (UITestSupport "set-slider") — one id
+/// namespace across the native journeys, the Qt shell, and any future
+/// Qt journey harness.
+@MainActor
+private func sliderBinding(_ id: String, model: AppModel)
+    -> (get: () -> Double, set: (Double) -> Void)? {
+    switch id {
+    case "fusion.slider.sharpness":
+        return ({ model.sharpnessSigma }, { model.sharpnessSigma = $0 })
+    case "fusion.slider.noise-floor":
+        return ({ model.noiseFloor }, { model.noiseFloor = $0 })
+    case "fusion.slider.median-radius":
+        return ({ model.medianRadius }, { model.medianRadius = $0 })
+    case "fusion.slider.blend-radius":
+        return ({ model.blendRadius }, { model.blendRadius = $0 })
+    case "tone.slider.exposure":
+        return ({ model.tone.exposure }, { model.tone.exposure = $0 })
+    case "tone.slider.contrast":
+        return ({ model.tone.contrast }, { model.tone.contrast = $0 })
+    case "tone.slider.highlights":
+        return ({ model.tone.highlights }, { model.tone.highlights = $0 })
+    case "tone.slider.shadows":
+        return ({ model.tone.shadows }, { model.tone.shadows = $0 })
+    case "tone.slider.whites":
+        return ({ model.tone.whites }, { model.tone.whites = $0 })
+    case "tone.slider.blacks":
+        return ({ model.tone.blacks }, { model.tone.blacks = $0 })
+    default:
+        return nil
+    }
+}
+
+@_cdecl("hf_set_slider")
+public func hf_set_slider(_ id: UnsafePointer<CChar>?, _ value: Double) -> Int32 {
+    guard let id, let string = String(validatingUTF8: id) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let binding = sliderBinding(string, model: model) else { return 0 }
+        binding.set(value)
+        return 1
+    }
+}
+
+@_cdecl("hf_slider")
+public func hf_slider(_ id: UnsafePointer<CChar>?) -> Double {
+    guard let id, let string = String(validatingUTF8: id) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let binding = sliderBinding(string, model: model) else { return 0 }
+        return binding.get()
+    }
+}
+
+/// Output mode: 0 = Result, 1 = Depth (the depth map displays and exports
+/// untoned — it is data, not pixels).
+@_cdecl("hf_set_output_depth")
+public func hf_set_output_depth(_ depth: Int32) {
+    MainActor.assumeIsolated {
+        Bridge.model?.outputMode = depth != 0 ? .depth : .result
+    }
+}
+
+@_cdecl("hf_output_depth")
+public func hf_output_depth() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.outputMode == .depth ? 1 : 0 }
+}
+
+// MARK: Frame list (the selected stack's frames, native Stack-list order)
+
+@_cdecl("hf_frame_count")
+public func hf_frame_count() -> Int32 {
+    MainActor.assumeIsolated { Int32(Bridge.model?.frames.count ?? 0) }
+}
+
+/// UTF-8 display name (last path component) of frame `index`; returns
+/// bytes written.
+@_cdecl("hf_frame_name")
+public func hf_frame_name(_ index: Int32, _ buffer: UnsafeMutablePointer<CChar>?,
+                          _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, let buffer, cap > 0,
+              model.frames.indices.contains(Int(index)) else { return 0 }
+        let name = model.frames[Int(index)].lastPathComponent
+        let bytes = Array(name.utf8.prefix(Int(cap) - 1))
+        buffer.withMemoryRebound(to: UInt8.self, capacity: bytes.count + 1) { p in
+            for (i, b) in bytes.enumerated() { p[i] = b }
+            p[bytes.count] = 0
+        }
+        return Int32(bytes.count)
+    }
+}
+
+@_cdecl("hf_frame_included")
+public func hf_frame_included(_ index: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.frames.indices.contains(Int(index)) else { return 0 }
+        return model.included.contains(model.frames[Int(index)]) ? 1 : 0
+    }
+}
+
+/// Toggle a frame's checkbox through the model's edit-recording path
+/// (undo-able in the native app; staleness tracking updates either way).
+@_cdecl("hf_set_frame_included")
+public func hf_set_frame_included(_ index: Int32, _ included: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.frames.indices.contains(Int(index)) else { return 0 }
+        model.setIncluded(model.frames[Int(index)], to: included != 0)
+        return 1
+    }
 }
 
 /// Size of the current display image (progressive mid-fuse, toned result

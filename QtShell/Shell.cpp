@@ -1,7 +1,7 @@
 #include "Shell.h"
 
 #include <QMetaObject>
-#include <vector>
+#include <QVariantMap>
 
 #include "hyperfocal_bridge.h"
 
@@ -43,6 +43,42 @@ double Shell::exposure() const { return hf_tone_exposure(); }
 
 void Shell::setExposure(double ev) {
     if (ev != hf_tone_exposure()) hf_set_tone_exposure(ev);
+}
+
+bool Shell::depthMode() const { return hf_output_depth() != 0; }
+
+void Shell::setDepthMode(bool depth) {
+    if (depth != (hf_output_depth() != 0)) hf_set_output_depth(depth ? 1 : 0);
+}
+
+QVariantList Shell::frames() const {
+    // Rebuilt wholesale per change signal — fine at dev-shell scale; the
+    // production shell gets a QAbstractListModel over the same calls.
+    QVariantList list;
+    const int count = hf_frame_count();
+    list.reserve(count);
+    char name[512];
+    for (int i = 0; i < count; ++i) {
+        const int n = hf_frame_name(i, name, sizeof name);
+        QVariantMap row;
+        row.insert(QStringLiteral("name"), QString::fromUtf8(name, n));
+        row.insert(QStringLiteral("included"), hf_frame_included(i) != 0);
+        list.append(row);
+    }
+    return list;
+}
+
+double Shell::slider(const QString &id) const {
+    return hf_slider(id.toUtf8().constData());
+}
+
+void Shell::setSlider(const QString &id, double value) {
+    if (value != hf_slider(id.toUtf8().constData()))
+        hf_set_slider(id.toUtf8().constData(), value);
+}
+
+void Shell::setFrameIncluded(int index, bool included) {
+    hf_set_frame_included(index, included ? 1 : 0);
 }
 
 bool Shell::openStack(const QUrl &folder) {

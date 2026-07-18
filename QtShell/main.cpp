@@ -51,15 +51,34 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         shell->setExposure(0.5);  // tone reaches the preview + export
         const bool exported =
             shell->exportTo(QUrl::fromLocalFile(state->outPath));
-        if (!state->shotPath.isEmpty()) {
-            const auto roots = engine->rootObjects();
-            if (!roots.isEmpty()) {
-                if (auto *window = qobject_cast<QQuickWindow *>(roots.first())) {
-                    window->grabWindow().save(state->shotPath);
+        // Depth mode displays + exports the (untoned) depth map.
+        shell->setDepthMode(true);
+        const bool depthExported =
+            shell->exportTo(QUrl::fromLocalFile(state->outPath + ".depth.tif"));
+        shell->setDepthMode(false);
+        // Moving a fusion slider must mark the result stale (canFuse back
+        // on) — the staleness contract the sidebar depends on.
+        const bool wasStale = shell->canFuse();
+        shell->setSlider(QStringLiteral("fusion.slider.sharpness"),
+                         shell->slider(QStringLiteral("fusion.slider.sharpness")) + 2);
+        const bool staleAfterEdit = shell->canFuse();
+        // Grab after the queued change signal has delivered, so the shot
+        // shows the settled UI (the assertions above already ran).
+        QTimer::singleShot(250, engine, [engine, state, exported,
+                                         depthExported, wasStale, staleAfterEdit] {
+            if (!state->shotPath.isEmpty()) {
+                const auto roots = engine->rootObjects();
+                if (!roots.isEmpty()) {
+                    if (auto *window = qobject_cast<QQuickWindow *>(roots.first())) {
+                        window->grabWindow().save(state->shotPath);
+                    }
                 }
             }
-        }
-        QCoreApplication::exit(exported ? 0 : 5);
+            if (!exported) { QCoreApplication::exit(5); return; }
+            if (!depthExported) { QCoreApplication::exit(6); return; }
+            if (wasStale || !staleAfterEdit) { QCoreApplication::exit(7); return; }
+            QCoreApplication::exit(0);
+        });
     });
     poll->start(200);
 

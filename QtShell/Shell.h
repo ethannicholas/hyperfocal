@@ -7,6 +7,7 @@
 
 #include <QObject>
 #include <QUrl>
+#include <QVariantList>
 #include <qqmlregistration.h>
 
 class Shell : public QObject {
@@ -18,6 +19,8 @@ class Shell : public QObject {
     Q_PROPERTY(double stageFraction READ stageFraction NOTIFY changed)
     Q_PROPERTY(QString stageText READ stageText NOTIFY changed)
     Q_PROPERTY(double exposure READ exposure WRITE setExposure NOTIFY changed)
+    Q_PROPERTY(bool depthMode READ depthMode WRITE setDepthMode NOTIFY changed)
+    Q_PROPERTY(QVariantList frames READ frames NOTIFY changed)
 
 public:
     explicit Shell(QObject *parent = nullptr);
@@ -30,9 +33,16 @@ public:
     double exposure() const;
     void setExposure(double ev);
 
+    bool depthMode() const;
+    void setDepthMode(bool depth);
+    QVariantList frames() const;
+
     Q_INVOKABLE bool openStack(const QUrl &folder);
     Q_INVOKABLE bool fuse();
     Q_INVOKABLE bool exportTo(const QUrl &file);
+    Q_INVOKABLE double slider(const QString &id) const;
+    Q_INVOKABLE void setSlider(const QString &id, double value);
+    Q_INVOKABLE void setFrameIncluded(int index, bool included);
 
 signals:
     void changed();
