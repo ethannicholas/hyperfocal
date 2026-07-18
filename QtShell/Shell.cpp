@@ -10,6 +10,19 @@
 
 namespace {
 Shell *liveShell = nullptr;
+QByteArray liveLut;    // last-seen curve bytes (16-bit ramp)
+int liveLutEpoch = 0;
+
+// Re-read the curve; bump the epoch only on real change so the LUT
+// texture doesn't reload on every model tick.
+void refreshLut() {
+    QByteArray lut(4096 * 2, Qt::Uninitialized);
+    if (!hf_tone_lut(reinterpret_cast<uint16_t *>(lut.data()), 4096)) return;
+    if (lut != liveLut) {
+        liveLut = lut;
+        ++liveLutEpoch;
+    }
+}
 
 // HFQT_AUTOCONFIRM=1 answers every confirm with its default button and
 // swallows notices — the headless hook the selftest uses (the native
@@ -40,6 +53,7 @@ void shellNotify(const char *message, const char *informative, int warning,
 void bridgeChanged(void *) {
     // Fires on the main thread; queue the signal so QML never re-enters a
     // half-applied model turn.
+    refreshLut();
     if (liveShell) {
         QMetaObject::invokeMethod(liveShell, &Shell::changed,
                                   Qt::QueuedConnection);
@@ -49,6 +63,7 @@ void bridgeChanged(void *) {
 
 Shell::Shell(QObject *parent) : QObject(parent) {
     hf_init();
+    refreshLut();
     liveShell = this;
     hf_set_changed_callback(bridgeChanged, nullptr);
     hf_set_dialog_callbacks(shellConfirm, shellNotify, nullptr);
@@ -76,6 +91,11 @@ void Shell::setExposure(double ev) {
     if (ev != hf_tone_exposure()) hf_set_tone_exposure(ev);
 }
 
+bool Shell::displayIsData() const { return hf_display_is_data() != 0; }
+int Shell::lutEpoch() const { return liveLutEpoch; }
+
+QByteArray Shell::currentLut() { return liveLut; }
+
 bool Shell::depthMode() const { return hf_output_depth() != 0; }
 
 void Shell::setDepthMode(bool depth) {
@@ -97,6 +117,11 @@ QVariantList Shell::frames() const {
         list.append(row);
     }
     return list;
+}
+
+bool Shell::hasDisplay() const {
+    int32_t w = 0, h = 0;
+    return hf_display_size(&w, &h) != 0 && w > 0 && h > 0;
 }
 
 double Shell::slider(const QString &id) const {

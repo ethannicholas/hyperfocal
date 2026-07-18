@@ -5,6 +5,7 @@
 #ifndef SHELL_H
 #define SHELL_H
 
+#include <QByteArray>
 #include <QObject>
 #include <QUrl>
 #include <QVariantList>
@@ -21,6 +22,8 @@ class Shell : public QObject {
     Q_PROPERTY(double exposure READ exposure WRITE setExposure NOTIFY changed)
     Q_PROPERTY(bool depthMode READ depthMode WRITE setDepthMode NOTIFY changed)
     Q_PROPERTY(QVariantList frames READ frames NOTIFY changed)
+    Q_PROPERTY(bool displayIsData READ displayIsData NOTIFY changed)
+    Q_PROPERTY(int lutEpoch READ lutEpoch NOTIFY changed)
 
 public:
     explicit Shell(QObject *parent = nullptr);
@@ -36,10 +39,18 @@ public:
     bool depthMode() const;
     void setDepthMode(bool depth);
     QVariantList frames() const;
+    bool displayIsData() const;
+    /// Bumps only when the tone curve's bytes actually change — the LUT
+    /// Image reloads off this, not off every model change.
+    int lutEpoch() const;
 
     Q_INVOKABLE bool openStack(const QUrl &folder);
     Q_INVOKABLE bool fuse();
     Q_INVOKABLE bool exportTo(const QUrl &file);
+    /// The current 16-bit tone ramp (4096 entries) for the LUT provider.
+    static QByteArray currentLut();
+
+    Q_INVOKABLE bool hasDisplay() const;
     Q_INVOKABLE double slider(const QString &id) const;
     Q_INVOKABLE void setSlider(const QString &id, double value);
     Q_INVOKABLE void setFrameIncluded(int index, bool included);

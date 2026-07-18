@@ -16,7 +16,7 @@ project(HyperfocalQtShell LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Widgets ShaderTools)
 qt_standard_project_setup(REQUIRES 6.5)
 
 set(HYPERFOCAL_BRIDGE_DIR "" CACHE PATH
@@ -31,7 +31,14 @@ qt_add_qml_module(hyperfocal-qt
     URI Hyperfocal
     VERSION 1.0
     QML_FILES Main.qml
-    SOURCES Shell.h Shell.cpp PaneItem.h PaneItem.cpp
+    SOURCES Shell.h Shell.cpp PaneItem.h PaneItem.cpp LutImageProvider.h
+)
+
+# The pane's tone shader (see lut.frag) — compiled to qsb for the scene
+# graph's RHI backends.
+qt_add_shaders(hyperfocal-qt "hyperfocal-shaders"
+    PREFIX "/"
+    FILES lut.frag
 )
 
 target_include_directories(hyperfocal-qt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

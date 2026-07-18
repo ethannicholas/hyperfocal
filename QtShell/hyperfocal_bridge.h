@@ -73,13 +73,19 @@ int hf_frame_name(int index, char *buf, int cap);   // returns bytes
 int hf_frame_included(int index);
 int hf_set_frame_included(int index, int included);
 
-// Current display image: progressive preview mid-fuse, toned result
-// preview otherwise. 0 sizes = nothing to show yet.
+// Current display image: progressive preview mid-fuse, result preview
+// otherwise — always UNTONED; the pane applies hf_tone_lut in its LUT
+// shader unless hf_display_is_data says the image is a data
+// visualization (aligner gradients, depth). 0 sizes = nothing to show.
 int hf_display_size(int32_t *w, int32_t *h);
 // Copy it as RGBA8888 into rgba (>= w*h*4 bytes). 1 on success; 0 also
 // when the image changed size since hf_display_size — re-query and retry
 // on the next change callback.
 int hf_display_pixels(uint8_t *rgba, size_t cap);
+int hf_display_is_data(void);
+// The tone curve as `size` 16-bit grayscale entries (per-channel-
+// separable — one shared ramp is the entire color cube).
+int hf_tone_lut(uint16_t *out, int size);
 
 // Export the result through the model's export path (tone baked for
 // display-referred formats, crop applied). `format`, when non-NULL, is

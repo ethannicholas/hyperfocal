@@ -99,11 +99,14 @@ after per-call overrides.
 
 Next, in rough order (each independently landable):
 
-1. **Display currency past the skeleton.** The bridge serves a ≤1600px
-   toned preview copy per change; the plan's zero-copy tiled pane (custom
-   textured QQuickItem, dirty rects, full-res zoom) replaces
-   QQuickPaintedItem + full-image copies. (Depth already serves untoned —
-   the pixels-only tone rule is in the bridge's display path.)
+1. **Display currency past the skeleton.** Tone is now a LUT shader on
+   the pane layer (lut.frag; hf_tone_lut serves the per-channel-separable
+   ramp ToneCurve's color cube is built from; hf_display_is_data gates
+   data visualizations out, and the shader path matches the CPU-toned
+   render within 0.03/255 on the selftest grab) — tone drags no longer
+   re-copy pixels. Remaining: the zero-copy tiled pane itself (custom
+   textured QQuickItem, dirty rects, full-res zoom) replacing
+   QQuickPaintedItem's ≤1600px full-image copies.
 2. **Sidebar remainder**: multi-stack tree + batch fuse ("Fuse N
    Stacks"), input pane alongside the output pane, crop presentation.
    The single-stack sidebar (sliders via the shared UITest id namespace,

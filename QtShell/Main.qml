@@ -209,6 +209,28 @@ ApplicationWindow {
                 padding: 0
                 background: Rectangle { color: "black" }
 
+                // Tone as a LUT shader over the pane's layer — the native
+                // ToneFilteredPaneView's color-cube-on-layer, mirrored.
+                // The PaneItem stays on top (hideSource hides its direct
+                // rendering) so it keeps receiving wheel/drag events.
+                ShaderEffect {
+                    anchors.fill: parent
+                    property variant source: ShaderEffectSource {
+                        sourceItem: pane
+                        hideSource: true
+                        live: true
+                    }
+                    property variant lut: lutImage
+                    property real lutEnabled: Shell.displayIsData ? 0.0 : 1.0
+                    fragmentShader: "qrc:/lut.frag.qsb"
+                }
+                Image {
+                    id: lutImage
+                    visible: false
+                    source: "image://hflut/" + Shell.lutEpoch
+                    smooth: true
+                }
+
                 PaneItem {
                     id: pane
                     anchors.fill: parent

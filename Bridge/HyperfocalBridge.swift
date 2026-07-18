@@ -35,14 +35,12 @@ private enum Bridge {
     /// Coalescing: objectWillChange can fire dozens of times per turn.
     static var notifyScheduled = false
 
-    /// Toned display preview cache: rebuilt when the result identity or
-    /// tone changes. The full-res result stays in the model; the bridge
-    /// serves a bounded preview (the pane's zoom-to-pixels comes later
-    /// with tiling).
-    static var previewBase: ImageBuffer?      // downsampled, untoned
-    static var previewBaseSource: ObjectIdentifier?  // identity of model.result backing
-    static var previewToned: CGImage?
-    static var previewTone: ToneSettings?
+    /// Untoned display preview cache, rebuilt when the result changes.
+    /// Tone never touches these pixels — the pane applies it as a LUT
+    /// shader (hf_tone_lut), mirroring the native color-cube-on-layer
+    /// design, so tone drags re-render without re-copying pixels.
+    static var previewBase: CGImage?
+    static var previewResultEpoch = 0
 
     static func scheduleNotify() {
         guard !notifyScheduled else { return }
@@ -64,28 +62,22 @@ private enum Bridge {
         if model.phase.isRunning { return model.progressive }
         if model.outputMode == .depth { return model.depthPreview }
         guard let result = model.result else { return nil }
-        // Rebuild the untoned preview when the result changes.
-        let downsampled: ImageBuffer
-        if let cached = previewBase, previewBaseSource == ObjectIdentifier(model),
-           cached.width > 0, previewResultEpoch == model.resultEpochForBridge {
-            downsampled = cached
-        } else {
-            downsampled = result.downsampledNearest(maxSide: 1600)
-            previewBase = downsampled
-            previewBaseSource = ObjectIdentifier(model)
+        if previewBase == nil || previewResultEpoch != model.resultEpochForBridge {
+            previewBase = try? ImageFile.cgImage8(
+                from: result.downsampledNearest(maxSide: 1600))
             previewResultEpoch = model.resultEpochForBridge
-            previewToned = nil
         }
-        // Re-tone only when the settings changed.
-        if previewToned == nil || previewTone != model.tone {
-            var toned = downsampled
-            ToneCurve.apply(settings: model.tone, to: &toned)
-            previewToned = try? ImageFile.cgImage8(from: toned)
-            previewTone = model.tone
-        }
-        return previewToned
+        return previewBase
     }
-    static var previewResultEpoch = 0
+
+    /// Whether the current display image is a data visualization (mid-fuse
+    /// progressive, depth map) — the pane must not run its tone LUT over
+    /// these, the same pixels-only rule the native pane follows.
+    static func displayIsData() -> Bool {
+        guard let model else { return false }
+        if model.phase.isRunning { return model.progressiveIsData }
+        return model.outputMode == .depth
+    }
 }
 
 /// Cheap identity for "did the result change": AppModel has no epoch, so
@@ -399,9 +391,10 @@ public func hf_display_size(_ w: UnsafeMutablePointer<Int32>?,
 }
 
 /// Copy the current display image as RGBA8888 (row-major, width*4 stride)
-/// into a caller-allocated buffer of at least `cap` bytes. Returns 1 on
-/// success. Call hf_display_size first; a mid-turn size change returns 0
-/// (fetch again on the next change callback).
+/// into a caller-allocated buffer of at least `cap` bytes — UNTONED; the
+/// pane applies tone via hf_tone_lut unless hf_display_is_data. Returns 1
+/// on success. Call hf_display_size first; a mid-turn size change returns
+/// 0 (fetch again on the next change callback).
 @_cdecl("hf_display_pixels")
 public func hf_display_pixels(_ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
     MainActor.assumeIsolated {
@@ -416,6 +409,30 @@ public func hf_display_pixels(_ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> I
         ctx.interpolationQuality = .none
         ctx.draw(image, in: CGRect(x: 0, y: 0,
                                    width: image.width, height: image.height))
+        return 1
+    }
+}
+
+/// 1 when the display image is a data visualization (aligner gradients,
+/// forming depth map, the depth view) — the pane must skip its tone LUT.
+@_cdecl("hf_display_is_data")
+public func hf_display_is_data() -> Int32 {
+    MainActor.assumeIsolated { Bridge.displayIsData() ? 1 : 0 }
+}
+
+/// Fill `out` with the current tone curve as `size` 16-bit grayscale
+/// entries (the curve is per-channel-separable, so one shared ramp is the
+/// whole cube — ToneCurve.colorCubeData builds the native color cube from
+/// this same table). The pane samples it per channel in its LUT shader.
+@_cdecl("hf_tone_lut")
+public func hf_tone_lut(_ out: UnsafeMutablePointer<UInt16>?, _ size: Int32) -> Int32 {
+    guard let out, size > 1 else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        let table = ToneCurve.lut(settings: model.tone, size: Int(size))
+        for i in 0..<Int(size) {
+            out[i] = UInt16((max(0, min(1, table[i])) * 65535).rounded())
+        }
         return 1
     }
 }

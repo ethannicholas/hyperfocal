@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "LutImageProvider.h"
 #include "Shell.h"
 
 // --selftest <stack-dir> <out.tif> [screenshot.png]
@@ -46,7 +47,9 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             state->sawRunning = true;
             return;
         }
-        if (!state->sawRunning) return;  // fuse not started yet
+        // Done when we either watched it run or the display appeared — a
+        // small stack can fuse entirely between two polls.
+        if (!state->sawRunning && !shell->hasDisplay()) return;
         state->done = true;
         shell->setExposure(0.5);  // tone reaches the preview + export
         const bool exported =
@@ -103,6 +106,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);  // QtWidgets: modal QMessageBox dialogs
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("hflut"), new LutImageProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
                      &app, [] { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);
