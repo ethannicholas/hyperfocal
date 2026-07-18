@@ -30,6 +30,19 @@ func pkgConfig(_ mode: String, _ packages: [String]) -> [String] {
         .map(String.init).filter { !$0.isEmpty }
 }
 
+// True if pkg-config knows the package (exit status 0). Used to detect an
+// optional OpenCV install on macOS for the Phase 1.5 registration A/B — absent
+// it, macOS builds Vision-only exactly as before.
+func pkgExists(_ pkg: String) -> Bool {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    proc.arguments = ["pkg-config", "--exists", pkg]
+    proc.standardError = FileHandle.nullDevice
+    guard (try? proc.run()) != nil else { return false }
+    proc.waitUntilExit()
+    return proc.terminationStatus == 0
+}
+
 // Platform flag the vendored DNG SDK selects its OS layer on (dng_flags.h has
 // first-class qLinux support; only zlib is linked — XMP/JPEG/JXL are compiled
 // out via the qDNG* defines below).
@@ -46,6 +59,14 @@ let dngPlatformDefine: CXXSetting = .define("qWinOS", to: "1")
 var hyperfocalKitDeps: [Target.Dependency] = ["CDNGSDK"]
 var extraTargets: [Target] = []
 
+// HyperfocalKit's own build settings, extended per-platform below.
+var kitSwiftSettings: [SwiftSetting] = [
+    // The engine's per-pixel loops are ~30-50x slower at -Onone — a 45MP depth
+    // regularization goes from ~30s to tens of minutes. Keep the engine
+    // optimized even in Debug builds; the app layer stays debuggable.
+    .unsafeFlags(["-O"], .when(configuration: .debug)),
+]
+
 #if os(macOS)
 // The shared model layer (AppCore/) compiled headless — the same files the app
 // target compiles (App/project.yml references them by path). AppKit-backed, so
@@ -61,6 +82,33 @@ extraTargets.append(
                   "AppCore/DialogService.swift"]
     )
 )
+// Phase 1.5 registration A/B: if OpenCV is installed (e.g. `brew install
+// opencv`), compile a small OpenCV-only registration target so the fusion
+// pipeline can run OpenCV registration on macOS and be compared against Vision
+// on identical frames (Docs/cross-platform-plan.md decision 2). Absent OpenCV,
+// macOS builds Vision-only and this is a no-op — CI and clean Macs are
+// unaffected. Selected at runtime via HYPERFOCAL_REGISTER=opencv (see Aligner).
+// Homebrew ships OpenCV 5 (module `opencv5`); Linux/older installs use
+// `opencv4`. Take whichever pkg-config knows.
+if let cvPkg = ["opencv5", "opencv4"].first(where: pkgExists) {
+    extraTargets.append(
+        .target(
+            name: "COpenCVRegister",
+            path: "Sources/COpenCVRegister",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .unsafeFlags(pkgConfig("--cflags", [cvPkg])),
+                .unsafeFlags(["-Wno-deprecated-declarations"]),
+            ],
+            linkerSettings: [
+                .unsafeFlags(pkgConfig("--libs", [cvPkg])),
+                .linkedLibrary("c++"),
+            ]
+        )
+    )
+    hyperfocalKitDeps.append("COpenCVRegister")
+    kitSwiftSettings.append(.define("HYPERFOCAL_HAVE_OPENCV"))
+}
 #elseif os(Linux)
 // The C-ABI imaging shim over the system libraries. pkg-config supplies the
 // (multiarch) include and link flags at manifest-eval time.
@@ -129,13 +177,7 @@ var targets: [Target] = [
     .target(
         name: "HyperfocalKit",
         dependencies: hyperfocalKitDeps,
-        swiftSettings: [
-            // The engine's per-pixel loops are ~30-50x slower at -Onone —
-            // a 45MP depth regularization goes from ~30s to tens of
-            // minutes. Keep the engine optimized even in Debug builds;
-            // the app layer stays debuggable.
-            .unsafeFlags(["-O"], .when(configuration: .debug)),
-        ]
+        swiftSettings: kitSwiftSettings
     ),
     .executableTarget(
         name: "hyperfocal-cli",
