@@ -124,6 +124,20 @@ bool Shell::hasDisplay() const {
     return hf_display_size(&w, &h) != 0 && w > 0 && h > 0;
 }
 
+int Shell::displayEpoch() const { return hf_display_epoch(); }
+
+int Shell::displayWidth() const {
+    int32_t w = 0, h = 0;
+    hf_display_size(&w, &h);
+    return w;
+}
+
+int Shell::displayHeight() const {
+    int32_t w = 0, h = 0;
+    hf_display_size(&w, &h);
+    return h;
+}
+
 double Shell::slider(const QString &id) const {
     return hf_slider(id.toUtf8().constData());
 }

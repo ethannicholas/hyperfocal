@@ -92,31 +92,32 @@ nonzero on failure — the seed of the Qt journey harness. Env hooks:
 suite's HYPERFOCAL_AUTOCONFIRM, mirrored); `HFQT_EXPECT_EXCLUDED=<i>`
 asserts frame i lost its checkbox during the fuse (run against a
 `--misfire-frame` synth stack, this exercises the bad-frame confirm
-through the bridge dialog seam end-to-end). Verified: fused pane renders with
-cursor-anchored pan/zoom, progress reaches the toolbar, 0.5 EV bakes into
-a 16-bit TIFF export, and the shared persisted export format is restored
-after per-call overrides.
+through the bridge dialog seam end-to-end); `HFQT_EXPECT_DISPLAY=WxH`
+asserts the display serves the full result resolution (the runner knows
+the fused size). Display currency is production-shaped: tone is a LUT
+shader on the pane layer (hf_tone_lut; parity with the CPU-toned render
+0.03/255), and the pane is a tiled textured QQuickItem over
+hf_display_tile/hf_display_epoch — level-of-detail matched to on-screen
+scale up to full-res at 1:1 zoom, matrix-only pan/zoom, tone edits never
+invalidate tiles (the selftest asserts the epoch holds).
 
 Next, in rough order (each independently landable):
 
-1. **Display currency past the skeleton.** Tone is now a LUT shader on
-   the pane layer (lut.frag; hf_tone_lut serves the per-channel-separable
-   ramp ToneCurve's color cube is built from; hf_display_is_data gates
-   data visualizations out, and the shader path matches the CPU-toned
-   render within 0.03/255 on the selftest grab) — tone drags no longer
-   re-copy pixels. Remaining: the zero-copy tiled pane itself (custom
-   textured QQuickItem, dirty rects, full-res zoom) replacing
-   QQuickPaintedItem's ≤1600px full-image copies.
-2. **Sidebar remainder**: multi-stack tree + batch fuse ("Fuse N
+1. **Sidebar remainder**: multi-stack tree + batch fuse ("Fuse N
    Stacks"), input pane alongside the output pane, crop presentation.
    The single-stack sidebar (sliders via the shared UITest id namespace,
    frame checkboxes, Result/Depth toggle) is in.
-3. **Settings isolation** (shared `org.hyperfocal.settings` suite —
+2. **Settings isolation** (shared `org.hyperfocal.settings` suite —
    per-call restore is a stopgap; the shell needs its own store, Phase 3
    glue on the plan).
-4. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
+3. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
    loop on macOS via CFRunLoop; Linux/Windows need an explicit pump (Qt
    timer or glib hook) — the known open question the prototype defers.
+4. **Dirty-rect tile invalidation** once a partial-update producer exists
+   (retouch strokes in the Qt shell): today any epoch bump drops every
+   tile, which is right for wholesale changes (progressive updates, new
+   fuse) and wasteful only for localized ones — build it with the
+   feature that needs it.
 
 ## Engine performance
 

@@ -51,6 +51,12 @@ public:
     static QByteArray currentLut();
 
     Q_INVOKABLE bool hasDisplay() const;
+    /// Display-pixel currency, exposed for the selftest: the epoch moves
+    /// exactly when the display image's pixels change (never for tone),
+    /// and the size is the full result resolution.
+    Q_INVOKABLE int displayEpoch() const;
+    Q_INVOKABLE int displayWidth() const;
+    Q_INVOKABLE int displayHeight() const;
     Q_INVOKABLE double slider(const QString &id) const;
     Q_INVOKABLE void setSlider(const QString &id, double value);
     Q_INVOKABLE void setFrameIncluded(int index, bool included);

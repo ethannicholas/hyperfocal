@@ -10,7 +10,10 @@
 //    changed, re-read what you display".
 //
 // Pixel handoff: caller-allocated RGBA8888 (QImage::Format_RGBA8888),
-// row-major, width*4 stride, sized per hf_display_size.
+// row-major, width*4 stride, fetched as tiles (hf_display_tile) of the
+// current display image; hf_display_epoch says when fetched tiles went
+// stale. Tone never invalidates tiles — panes apply hf_tone_lut in a
+// shader.
 #ifndef HYPERFOCAL_BRIDGE_H
 #define HYPERFOCAL_BRIDGE_H
 
@@ -73,15 +76,23 @@ int hf_frame_name(int index, char *buf, int cap);   // returns bytes
 int hf_frame_included(int index);
 int hf_set_frame_included(int index, int included);
 
-// Current display image: progressive preview mid-fuse, result preview
-// otherwise — always UNTONED; the pane applies hf_tone_lut in its LUT
-// shader unless hf_display_is_data says the image is a data
-// visualization (aligner gradients, depth). 0 sizes = nothing to show.
+// Current display image: progressive preview mid-fuse, the full-res
+// result preview otherwise — always UNTONED; the pane applies
+// hf_tone_lut in its LUT shader unless hf_display_is_data says the
+// image is a data visualization (aligner gradients, depth). 0 sizes =
+// nothing to show.
 int hf_display_size(int32_t *w, int32_t *h);
-// Copy it as RGBA8888 into rgba (>= w*h*4 bytes). 1 on success; 0 also
-// when the image changed size since hf_display_size — re-query and retry
-// on the next change callback.
-int hf_display_pixels(uint8_t *rgba, size_t cap);
+// Pixel epoch: bumps only when the display image's pixels change
+// (progressive updates, fuse completion, Result/Depth toggle) — never
+// for tone edits. Fetched tiles stay valid while it holds.
+int hf_display_epoch(void);
+// Copy a tile as RGBA8888 into rgba (>= w*h*4 bytes). `level` is a
+// power-of-two downsample exponent (0 = native); the level image
+// measures ceil(size / 2^level) and x/y/w/h must lie inside it.
+// Nearest sampling. 1 on success; 0 also when the image changed since
+// hf_display_size — re-query and retry on the next change callback.
+int hf_display_tile(int32_t level, int32_t x, int32_t y,
+                    int32_t w, int32_t h, uint8_t *rgba, size_t cap);
 int hf_display_is_data(void);
 // The tone curve as `size` 16-bit grayscale entries (per-channel-
 // separable — one shared ramp is the entire color cube).

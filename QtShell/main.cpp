@@ -51,11 +51,29 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         // small stack can fuse entirely between two polls.
         if (!state->sawRunning && !shell->hasDisplay()) return;
         state->done = true;
+        // Zero-copy currency: tone edits render through the LUT shader and
+        // must NOT invalidate display pixels — the epoch may not move.
+        const int epochBeforeTone = shell->displayEpoch();
         shell->setExposure(0.5);  // tone reaches the preview + export
+        const bool toneKeptPixels = shell->displayEpoch() == epochBeforeTone;
+        // Full-res currency: the display is the result itself, not a capped
+        // preview (HFQT_EXPECT_DISPLAY=WxH from a runner that knows the
+        // stack's frame size).
+        bool fullRes = true;
+        const QByteArray expectSize = qgetenv("HFQT_EXPECT_DISPLAY");
+        if (!expectSize.isEmpty()) {
+            const auto parts = expectSize.split('x');
+            fullRes = parts.size() == 2
+                && shell->displayWidth() == parts[0].toInt()
+                && shell->displayHeight() == parts[1].toInt();
+        }
         const bool exported =
             shell->exportTo(QUrl::fromLocalFile(state->outPath));
-        // Depth mode displays + exports the (untoned) depth map.
+        // Depth mode displays + exports the (untoned) depth map — and the
+        // pixel swap must move the epoch, or the pane would keep showing
+        // the result's tiles.
         shell->setDepthMode(true);
+        const bool depthBumpedPixels = shell->displayEpoch() != epochBeforeTone;
         const bool depthExported =
             shell->exportTo(QUrl::fromLocalFile(state->outPath + ".depth.tif"));
         shell->setDepthMode(false);
@@ -79,7 +97,9 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         // Grab after the queued change signal has delivered, so the shot
         // shows the settled UI (the assertions above already ran).
         QTimer::singleShot(250, engine, [engine, state, exported, depthExported,
-                                         wasStale, staleAfterEdit, exclusionOK] {
+                                         wasStale, staleAfterEdit, exclusionOK,
+                                         toneKeptPixels, depthBumpedPixels,
+                                         fullRes] {
             if (!state->shotPath.isEmpty()) {
                 const auto roots = engine->rootObjects();
                 if (!roots.isEmpty()) {
@@ -92,6 +112,11 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!depthExported) { QCoreApplication::exit(6); return; }
             if (wasStale || !staleAfterEdit) { QCoreApplication::exit(7); return; }
             if (!exclusionOK) { QCoreApplication::exit(8); return; }
+            if (!toneKeptPixels || !depthBumpedPixels) {
+                QCoreApplication::exit(9);
+                return;
+            }
+            if (!fullRes) { QCoreApplication::exit(10); return; }
             QCoreApplication::exit(0);
         });
     });

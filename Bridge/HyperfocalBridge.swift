@@ -10,9 +10,10 @@
 //    turn: many @Published mutations collapse into one callback, and the
 //    model state is fully settled by the time it fires (objectWillChange
 //    fires before values land, so delivery is deferred one turn).
-//  - Pixel handoff is caller-allocated RGBA8888 (QImage::Format_RGBA8888),
-//    sized by hf_display_size. The skeleton copies; the zero-copy tiled
-//    currency comes with the real pane item.
+//  - Pixel handoff is caller-allocated RGBA8888 (QImage::Format_RGBA8888)
+//    tiles (hf_display_tile) of the model's own full-res preview CGImage —
+//    the bridge holds no pixel cache; hf_display_epoch tells the pane when
+//    its tiles went stale (tone edits never do — they are LUT-shader-only).
 //
 // Command surface is deliberately the walking skeleton's: open → fuse
 // (progress) → display → tone → export. It grows feature-by-feature as
@@ -35,12 +36,20 @@ private enum Bridge {
     /// Coalescing: objectWillChange can fire dozens of times per turn.
     static var notifyScheduled = false
 
-    /// Untoned display preview cache, rebuilt when the result changes.
-    /// Tone never touches these pixels — the pane applies it as a LUT
-    /// shader (hf_tone_lut), mirroring the native color-cube-on-layer
-    /// design, so tone drags re-render without re-copying pixels.
-    static var previewBase: CGImage?
-    static var previewResultEpoch = 0
+    /// Identity of the last image hf_display_epoch saw — the epoch bumps
+    /// only when displayImage() returns a different CGImage, so tone drags
+    /// (LUT-shader-only) and slider edits never invalidate the pane's tiles.
+    static var lastDisplayImage: CGImage?
+    static var displayEpoch: Int32 = 0
+
+    static func currentDisplayEpoch() -> Int32 {
+        let image = displayImage()
+        if image !== lastDisplayImage {
+            lastDisplayImage = image
+            displayEpoch &+= 1
+        }
+        return displayEpoch
+    }
 
     static func scheduleNotify() {
         guard !notifyScheduled else { return }
@@ -53,21 +62,17 @@ private enum Bridge {
 
     /// The image the shell should display right now (mirrors the native
     /// output pane's priority): progressive while running, the depth map
-    /// in depth mode, else the toned result preview. Data visualizations
-    /// (progressive depth/gradient stages, the depth map) are served
-    /// exactly as computed — tone applies to image pixels only, the same
-    /// content rule the native pane follows.
+    /// in depth mode, else the model's full-resolution untoned result
+    /// preview — the very CGImage the native panes display, so the bridge
+    /// keeps no pixel cache of its own. Data visualizations (progressive
+    /// depth/gradient stages, the depth map) are served exactly as
+    /// computed — tone applies to image pixels only, the same content
+    /// rule the native pane follows.
     static func displayImage() -> CGImage? {
         guard let model else { return nil }
         if model.phase.isRunning { return model.progressive }
         if model.outputMode == .depth { return model.depthPreview }
-        guard let result = model.result else { return nil }
-        if previewBase == nil || previewResultEpoch != model.resultEpochForBridge {
-            previewBase = try? ImageFile.cgImage8(
-                from: result.downsampledNearest(maxSide: 1600))
-            previewResultEpoch = model.resultEpochForBridge
-        }
-        return previewBase
+        return model.outputPreview
     }
 
     /// Whether the current display image is a data visualization (mid-fuse
@@ -77,17 +82,6 @@ private enum Bridge {
         guard let model else { return false }
         if model.phase.isRunning { return model.progressiveIsData }
         return model.outputMode == .depth
-    }
-}
-
-/// Cheap identity for "did the result change": AppModel has no epoch, so
-/// the bridge tracks the buffer's dimensions + a sample; good enough for
-/// the skeleton (a new fuse always changes at least the progressive→done
-/// transition that triggers a refresh anyway).
-extension AppModel {
-    var resultEpochForBridge: Int {
-        guard let result else { return 0 }
-        return result.width &* 31 &+ result.height
     }
 }
 
@@ -390,25 +384,48 @@ public func hf_display_size(_ w: UnsafeMutablePointer<Int32>?,
     }
 }
 
-/// Copy the current display image as RGBA8888 (row-major, width*4 stride)
-/// into a caller-allocated buffer of at least `cap` bytes — UNTONED; the
-/// pane applies tone via hf_tone_lut unless hf_display_is_data. Returns 1
-/// on success. Call hf_display_size first; a mid-turn size change returns
-/// 0 (fetch again on the next change callback).
-@_cdecl("hf_display_pixels")
-public func hf_display_pixels(_ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
+/// Epoch of the display image's *pixels*: bumps only when displayImage()
+/// returns a different image (progressive updates, fuse completion, the
+/// Result/Depth toggle, retouch folds) — never for tone edits, which the
+/// pane renders through its LUT shader without touching tiles.
+@_cdecl("hf_display_epoch")
+public func hf_display_epoch() -> Int32 {
+    MainActor.assumeIsolated { Bridge.currentDisplayEpoch() }
+}
+
+/// Copy a tile of the current display image as RGBA8888 (row-major,
+/// width*4 stride) — UNTONED; the pane applies tone via hf_tone_lut
+/// unless hf_display_is_data. `level` is a power-of-two downsample
+/// exponent (0 = native resolution); the level image measures
+/// ceil(size / 2^level) and x/y/w/h are in level coordinates, the rect
+/// inside the level image. Sampling is nearest, matching the engine's
+/// preview discipline. Returns 1 on success; 0 on any bounds mismatch
+/// (size changed mid-turn — re-query and retry on the next callback).
+@_cdecl("hf_display_tile")
+public func hf_display_tile(_ level: Int32, _ x: Int32, _ y: Int32,
+                            _ w: Int32, _ h: Int32,
+                            _ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
     MainActor.assumeIsolated {
-        guard let rgba, let image = Bridge.displayImage(),
-              cap >= image.width * image.height * 4 else { return 0 }
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+        guard let rgba, level >= 0, level < 16, x >= 0, y >= 0, w > 0, h > 0,
+              cap >= Int(w) * Int(h) * 4,
+              let image = Bridge.displayImage() else { return 0 }
+        let shift = Int(level)
+        let levelW = (image.width + (1 << shift) - 1) >> shift
+        let levelH = (image.height + (1 << shift) - 1) >> shift
+        guard Int(x) + Int(w) <= levelW, Int(y) + Int(h) <= levelH else { return 0 }
+        let srcX = Int(x) << shift, srcY = Int(y) << shift
+        let srcW = min(Int(w) << shift, image.width - srcX)
+        let srcH = min(Int(h) << shift, image.height - srcY)
+        guard let tile = image.cropping(
+                to: CGRect(x: srcX, y: srcY, width: srcW, height: srcH)),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(
-                data: rgba, width: image.width, height: image.height,
-                bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                data: rgba, width: Int(w), height: Int(h),
+                bitsPerComponent: 8, bytesPerRow: Int(w) * 4,
                 space: space,
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
         ctx.interpolationQuality = .none
-        ctx.draw(image, in: CGRect(x: 0, y: 0,
-                                   width: image.width, height: image.height))
+        ctx.draw(tile, in: CGRect(x: 0, y: 0, width: Int(w), height: Int(h)))
         return 1
     }
 }
