@@ -31,6 +31,7 @@ private enum Bridge {
     static var changeSink: AnyCancellable?
     static var changedCallback: (@convention(c) (UnsafeMutableRawPointer?) -> Void)?
     static var changedContext: UnsafeMutableRawPointer?
+    static var dialogs: BridgeDialogs?
     /// Coalescing: objectWillChange can fire dozens of times per turn.
     static var notifyScheduled = false
 
@@ -98,6 +99,62 @@ extension AppModel {
     }
 }
 
+/// DialogService over C callbacks: modal confirms and notices reach the
+/// shell (which shows its own message boxes); file choosers stay empty —
+/// the shell drives opens/saves explicitly through its own dialogs, so
+/// the model never needs to ask for a path. Callbacks are invoked on the
+/// main thread, synchronously, exactly like the AppKit implementation
+/// (off-main model callers hop via DispatchQueue.main.sync first).
+public typealias HFConfirmCallback = @convention(c) (
+    UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+    UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+    Int32, UnsafeMutableRawPointer?) -> Int32
+public typealias HFNotifyCallback = @convention(c) (
+    UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+    Int32, UnsafeMutableRawPointer?) -> Void
+
+@MainActor
+private final class BridgeDialogs: DialogService {
+    var confirmCallback: HFConfirmCallback?
+    var notifyCallback: HFNotifyCallback?
+    var context: UnsafeMutableRawPointer?
+
+    func confirm(message: String, informative: String,
+                 confirmTitle: String, cancelTitle: String,
+                 warning: Bool) -> Bool {
+        guard let confirmCallback else { return false }
+        return message.withCString { m in
+            informative.withCString { i in
+                confirmTitle.withCString { c in
+                    cancelTitle.withCString { x in
+                        confirmCallback(m, i, c, x, warning ? 1 : 0, context) != 0
+                    }
+                }
+            }
+        }
+    }
+
+    func notify(message: String, informative: String, warning: Bool) {
+        guard let notifyCallback else { return }
+        message.withCString { m in
+            informative.withCString { i in
+                notifyCallback(m, i, warning ? 1 : 0, context)
+            }
+        }
+    }
+
+    // The shell chooses files itself; an unanswerable chooser reads as
+    // "cancelled", which every call site treats as a safe no-op.
+    func chooseProjectToOpen() -> URL? { nil }
+    func chooseFrames(message: String) -> [URL] { [] }
+    func chooseStackFolders(message: String) -> [URL] { [] }
+    func chooseAccessGrant(for root: URL) -> URL? { nil }
+    func chooseExportDirectory(message: String) -> URL? { nil }
+    func chooseSaveProject(directory: URL?, suggestedName: String) -> URL? { nil }
+    func chooseSaveAnimation(suggestedName: String) -> URL? { nil }
+    func chooseSaveExport(suggestedName: String) -> URL? { nil }
+}
+
 // MARK: - Exports
 
 @_cdecl("hf_init")
@@ -120,6 +177,29 @@ public func hf_set_changed_callback(
     MainActor.assumeIsolated {
         Bridge.changedCallback = cb
         Bridge.changedContext = ctx
+    }
+}
+
+/// Install the shell's modal handlers (both NULL uninstalls, reverting to
+/// "every interaction resolves as cancelled").
+@_cdecl("hf_set_dialog_callbacks")
+public func hf_set_dialog_callbacks(
+    _ confirm: HFConfirmCallback?,
+    _ notify: HFNotifyCallback?,
+    _ ctx: UnsafeMutableRawPointer?) {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return }
+        if confirm == nil && notify == nil {
+            model.dialogs = nil
+            Bridge.dialogs = nil
+            return
+        }
+        let dialogs = Bridge.dialogs ?? BridgeDialogs()
+        dialogs.confirmCallback = confirm
+        dialogs.notifyCallback = notify
+        dialogs.context = ctx
+        Bridge.dialogs = dialogs
+        model.dialogs = dialogs
     }
 }
 

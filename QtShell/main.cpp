@@ -1,4 +1,4 @@
-#include <QGuiApplication>
+#include <QApplication>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QTimer>
@@ -62,10 +62,21 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         shell->setSlider(QStringLiteral("fusion.slider.sharpness"),
                          shell->slider(QStringLiteral("fusion.slider.sharpness")) + 2);
         const bool staleAfterEdit = shell->canFuse();
+        // HFQT_EXPECT_EXCLUDED=<index>: that frame must have lost its
+        // checkbox during the fuse — proves the bad-frame confirm went
+        // through the bridge dialog seam (with HFQT_AUTOCONFIRM answering).
+        bool exclusionOK = true;
+        const QByteArray expect = qgetenv("HFQT_EXPECT_EXCLUDED");
+        if (!expect.isEmpty()) {
+            const int idx = expect.toInt();
+            const QVariantList frames = shell->frames();
+            exclusionOK = idx < frames.size()
+                && !frames[idx].toMap().value(QStringLiteral("included")).toBool();
+        }
         // Grab after the queued change signal has delivered, so the shot
         // shows the settled UI (the assertions above already ran).
-        QTimer::singleShot(250, engine, [engine, state, exported,
-                                         depthExported, wasStale, staleAfterEdit] {
+        QTimer::singleShot(250, engine, [engine, state, exported, depthExported,
+                                         wasStale, staleAfterEdit, exclusionOK] {
             if (!state->shotPath.isEmpty()) {
                 const auto roots = engine->rootObjects();
                 if (!roots.isEmpty()) {
@@ -77,6 +88,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!exported) { QCoreApplication::exit(5); return; }
             if (!depthExported) { QCoreApplication::exit(6); return; }
             if (wasStale || !staleAfterEdit) { QCoreApplication::exit(7); return; }
+            if (!exclusionOK) { QCoreApplication::exit(8); return; }
             QCoreApplication::exit(0);
         });
     });
@@ -89,7 +101,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
 }  // namespace
 
 int main(int argc, char *argv[]) {
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);  // QtWidgets: modal QMessageBox dialogs
     QQmlApplicationEngine engine;
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
                      &app, [] { QCoreApplication::exit(1); },

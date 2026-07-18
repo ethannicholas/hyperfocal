@@ -86,8 +86,13 @@ the probe until AppCore is a real module, plan 0d) exports the `hf_*`
 surface in `QtShell/hyperfocal_bridge.h`; `QtShell/` is the Qt 6 shell
 (build: `QtShell/build.sh`, needs Homebrew qtbase/qtdeclarative + cmake ≥
 3.22). `hyperfocal-qt --selftest <stack> <out.tif> [shot.png]` self-drives
-open → fuse → tone → export → window grab and exits nonzero on failure —
-the seed of the Qt journey harness. Verified: fused pane renders with
+open → fuse → tone → export (result + depth) → window grab and exits
+nonzero on failure — the seed of the Qt journey harness. Env hooks:
+`HFQT_AUTOCONFIRM=1` answers modals with their default (the native
+suite's HYPERFOCAL_AUTOCONFIRM, mirrored); `HFQT_EXPECT_EXCLUDED=<i>`
+asserts frame i lost its checkbox during the fuse (run against a
+`--misfire-frame` synth stack, this exercises the bad-frame confirm
+through the bridge dialog seam end-to-end). Verified: fused pane renders with
 cursor-anchored pan/zoom, progress reaches the toolbar, 0.5 EV bakes into
 a 16-bit TIFF export, and the shared persisted export format is restored
 after per-call overrides.
@@ -103,13 +108,10 @@ Next, in rough order (each independently landable):
 2. **Mirror the sidebar**: fusion sliders (share the `hf_` naming with
    the UITest set-slider ids), stack list with per-frame include
    checkboxes, output mode toggle, batch fuse.
-3. **Dialog seam**: a Qt DialogService counterpart so confirms/notices
-   (bad frames, disk cache) reach the user instead of resolving as
-   "cancelled" (bridge model currently has `dialogs = nil`).
-4. **Settings isolation** (shared `org.hyperfocal.settings` suite —
+3. **Settings isolation** (shared `org.hyperfocal.settings` suite —
    per-call restore is a stopgap; the shell needs its own store, Phase 3
    glue on the plan).
-5. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
+4. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
    loop on macOS via CFRunLoop; Linux/Windows need an explicit pump (Qt
    timer or glib hook) — the known open question the prototype defers.
 

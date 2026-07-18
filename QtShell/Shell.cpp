@@ -5,8 +5,37 @@
 
 #include "hyperfocal_bridge.h"
 
+#include <QMessageBox>
+#include <QPushButton>
+
 namespace {
 Shell *liveShell = nullptr;
+
+// HFQT_AUTOCONFIRM=1 answers every confirm with its default button and
+// swallows notices — the headless hook the selftest uses (the native
+// suite's HYPERFOCAL_AUTOCONFIRM, mirrored).
+int shellConfirm(const char *message, const char *informative,
+                 const char *confirmTitle, const char *cancelTitle,
+                 int warning, void *) {
+    if (qEnvironmentVariableIsSet("HFQT_AUTOCONFIRM")) return 1;
+    QMessageBox box(warning ? QMessageBox::Warning : QMessageBox::Question,
+                    QString::fromUtf8(message), QString::fromUtf8(message));
+    box.setInformativeText(QString::fromUtf8(informative));
+    QAbstractButton *confirm = box.addButton(QString::fromUtf8(confirmTitle),
+                                             QMessageBox::AcceptRole);
+    box.addButton(QString::fromUtf8(cancelTitle), QMessageBox::RejectRole);
+    box.exec();
+    return box.clickedButton() == confirm ? 1 : 0;
+}
+
+void shellNotify(const char *message, const char *informative, int warning,
+                 void *) {
+    if (qEnvironmentVariableIsSet("HFQT_AUTOCONFIRM")) return;
+    QMessageBox box(warning ? QMessageBox::Warning : QMessageBox::Information,
+                    QString::fromUtf8(message), QString::fromUtf8(message));
+    box.setInformativeText(QString::fromUtf8(informative));
+    box.exec();
+}
 
 void bridgeChanged(void *) {
     // Fires on the main thread; queue the signal so QML never re-enters a
@@ -22,9 +51,11 @@ Shell::Shell(QObject *parent) : QObject(parent) {
     hf_init();
     liveShell = this;
     hf_set_changed_callback(bridgeChanged, nullptr);
+    hf_set_dialog_callbacks(shellConfirm, shellNotify, nullptr);
 }
 
 Shell::~Shell() {
+    hf_set_dialog_callbacks(nullptr, nullptr, nullptr);
     hf_set_changed_callback(nullptr, nullptr);
     liveShell = nullptr;
 }

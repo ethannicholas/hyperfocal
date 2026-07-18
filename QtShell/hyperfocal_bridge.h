@@ -22,12 +22,25 @@ extern "C" {
 #endif
 
 typedef void (*hf_changed_cb)(void *ctx);
+// Modal handlers. confirm returns nonzero when the user chose the
+// confirm (first) button; both NULL uninstalls, and interactions then
+// resolve as "cancelled" (confirms false, notices dropped).
+typedef int (*hf_confirm_cb)(const char *message, const char *informative,
+                             const char *confirm_title,
+                             const char *cancel_title, int warning, void *ctx);
+typedef void (*hf_notify_cb)(const char *message, const char *informative,
+                             int warning, void *ctx);
 
 // Create the model. Returns 1 (idempotent).
 int hf_init(void);
 
 // Register the (single) change callback; NULL unregisters.
 void hf_set_changed_callback(hf_changed_cb cb, void *ctx);
+
+// Install the shell's modal handlers (called on the main thread,
+// synchronously — a modal event loop there matches the AppKit shell).
+void hf_set_dialog_callbacks(hf_confirm_cb confirm, hf_notify_cb notify,
+                             void *ctx);
 
 // Load a stack: a folder of frames or a .hyperfocal project path, like a
 // drop on the native app. 0 if refused (e.g. while a fuse runs).

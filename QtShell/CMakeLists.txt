@@ -16,7 +16,7 @@ project(HyperfocalQtShell LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2)
+find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Widgets)
 qt_standard_project_setup(REQUIRES 6.5)
 
 set(HYPERFOCAL_BRIDGE_DIR "" CACHE PATH
@@ -36,7 +36,7 @@ qt_add_qml_module(hyperfocal-qt
 
 target_include_directories(hyperfocal-qt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hyperfocal-qt PRIVATE
-    Qt6::Quick Qt6::QuickControls2
+    Qt6::Quick Qt6::QuickControls2 Qt6::Widgets
     "${HYPERFOCAL_BRIDGE_DIR}/HyperfocalBridge.dylib")
 set_target_properties(hyperfocal-qt PROPERTIES
     BUILD_RPATH "${HYPERFOCAL_BRIDGE_DIR}"
