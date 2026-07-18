@@ -16,9 +16,19 @@ ApplicationWindow {
     title: "Hyperfocal (Qt shell — dev)"
     color: "#1b1b1b"
 
+    // One viewport across both panes, the native shells' shared
+    // ViewportState: a gesture on either pane lands on both.
+    Component.onCompleted: {
+        inputPane.item.syncPane = outputPane.item
+        outputPane.item.syncPane = inputPane.item
+    }
+
     Connections {
         target: Shell
-        function onChanged() { pane.refresh() }
+        function onChanged() {
+            outputPane.item.refresh()
+            inputPane.item.refresh()
+        }
     }
 
     FolderDialog {
@@ -34,6 +44,48 @@ ApplicationWindow {
         defaultSuffix: "tif"
         nameFilters: ["TIFF (*.tif)"]
         onAccepted: Shell.exportTo(selectedFile)
+    }
+
+    // A pane with the tone LUT shader over its layer — the native
+    // ToneFilteredPaneView's color-cube-on-layer, mirrored. The PaneItem
+    // stays on top (hideSource hides its direct rendering) so it keeps
+    // receiving wheel/drag events.
+    component TonedPane: Pane {
+        id: toned
+        property bool inputSource: false
+        property bool dataDisplay: false
+        property string title: ""
+        readonly property PaneItem item: paneItem
+        padding: 0
+        background: Rectangle { color: "black" }
+
+        ShaderEffect {
+            anchors.fill: parent
+            property variant source: ShaderEffectSource {
+                sourceItem: paneItem
+                hideSource: true
+                live: true
+            }
+            property variant lut: lutImage
+            property real lutEnabled: toned.dataDisplay ? 0.0 : 1.0
+            fragmentShader: "qrc:/lut.frag.qsb"
+        }
+        PaneItem {
+            id: paneItem
+            anchors.fill: parent
+            input: toned.inputSource
+        }
+        Label {
+            text: toned.title
+            visible: text !== ""
+            color: "#d5d5d5"
+            font.pixelSize: 12
+            padding: 4
+            background: Rectangle { color: "#c0000000"; radius: 3 }
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.margins: 6
+        }
     }
 
     component SidebarSlider: ColumnLayout {
@@ -165,10 +217,13 @@ ApplicationWindow {
                         onToggled: Shell.setFrameIncluded(index, checked)
                     }
                     Label {
+                        // Click selects the frame — the input pane follows.
                         text: modelData.name
                         color: modelData.included ? "#d5d5d5" : "#777777"
+                        font.bold: index === Shell.selectedFrame
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
+                        TapHandler { onTapped: Shell.selectFrame(index) }
                     }
                 }
             }
@@ -267,27 +322,11 @@ ApplicationWindow {
                 }
             }
 
-            Pane {
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                padding: 0
-                background: Rectangle { color: "black" }
+                spacing: 1
 
-                // Tone as a LUT shader over the pane's layer — the native
-                // ToneFilteredPaneView's color-cube-on-layer, mirrored.
-                // The PaneItem stays on top (hideSource hides its direct
-                // rendering) so it keeps receiving wheel/drag events.
-                ShaderEffect {
-                    anchors.fill: parent
-                    property variant source: ShaderEffectSource {
-                        sourceItem: pane
-                        hideSource: true
-                        live: true
-                    }
-                    property variant lut: lutImage
-                    property real lutEnabled: Shell.displayIsData ? 0.0 : 1.0
-                    fragmentShader: "qrc:/lut.frag.qsb"
-                }
                 Image {
                     id: lutImage
                     visible: false
@@ -295,9 +334,23 @@ ApplicationWindow {
                     smooth: true
                 }
 
-                PaneItem {
-                    id: pane
-                    anchors.fill: parent
+                // The input pane appears once a frame preview exists,
+                // beside the output — the native fusionPreviewPanes HStack.
+                // Both panes share one viewport (syncPane) and the same
+                // tone LUT; the input is toned too, like the native app.
+                TonedPane {
+                    id: inputPane
+                    visible: Shell.hasInput
+                    inputSource: true
+                    title: Shell.inputTitle
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                }
+                TonedPane {
+                    id: outputPane
+                    dataDisplay: Shell.displayIsData
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                 }
             }
         }

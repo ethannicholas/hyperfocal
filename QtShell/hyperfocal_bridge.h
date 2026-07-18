@@ -97,6 +97,21 @@ int hf_frame_name(int index, char *buf, int cap);   // returns bytes
 int hf_frame_included(int index);
 int hf_set_frame_included(int index, int included);
 
+// Frame selection + the input pane. Selecting a frame (like clicking
+// its row) points the input pane at it; decoding is async — re-read on
+// change callbacks, hf_input_epoch says when pixels moved. The input
+// image is the selected frame's preview (decoded raw, or warped into
+// the fused canvas once alignment transforms exist — the title carries
+// " (aligned)"), or the cycling processing source mid-fuse. The pane
+// tones it with the same LUT as the output, matching the native app.
+int hf_select_frame(int index);
+int hf_selected_frame(void);                        // index, -1 = none
+int hf_input_size(int32_t *w, int32_t *h);
+int hf_input_epoch(void);
+int hf_input_tile(int32_t level, int32_t x, int32_t y,
+                  int32_t w, int32_t h, uint8_t *rgba, size_t cap);
+int hf_input_title(char *buf, int cap);             // returns bytes
+
 // Current display image: progressive preview mid-fuse, the full-res
 // result preview otherwise — always UNTONED; the pane applies
 // hf_tone_lut in its LUT shader unless hf_display_is_data says the

@@ -36,11 +36,13 @@ private enum Bridge {
     /// Coalescing: objectWillChange can fire dozens of times per turn.
     static var notifyScheduled = false
 
-    /// Identity of the last image hf_display_epoch saw — the epoch bumps
-    /// only when displayImage() returns a different CGImage, so tone drags
-    /// (LUT-shader-only) and slider edits never invalidate the pane's tiles.
+    /// Identity of the last image each epoch saw — an epoch bumps only
+    /// when its source returns a different CGImage, so tone drags
+    /// (LUT-shader-only) and slider edits never invalidate pane tiles.
     static var lastDisplayImage: CGImage?
     static var displayEpoch: Int32 = 0
+    static var lastInputImage: CGImage?
+    static var inputEpoch: Int32 = 0
 
     static func currentDisplayEpoch() -> Int32 {
         let image = displayImage()
@@ -49,6 +51,25 @@ private enum Bridge {
             displayEpoch &+= 1
         }
         return displayEpoch
+    }
+
+    static func currentInputEpoch() -> Int32 {
+        let image = inputImage()
+        if image !== lastInputImage {
+            lastInputImage = image
+            inputEpoch &+= 1
+        }
+        return inputEpoch
+    }
+
+    /// The input pane's image (mirrors the native pane): the cycling
+    /// processing source mid-fuse, else the selected frame's preview
+    /// (decoded raw, or warped into the fused canvas once alignment
+    /// transforms exist). Toned by the pane like the output.
+    static func inputImage() -> CGImage? {
+        guard let model else { return nil }
+        if model.phase.isRunning { return model.processingSource }
+        return model.inputPreview
     }
 
     static func scheduleNotify() {
@@ -541,27 +562,110 @@ public func hf_display_tile(_ level: Int32, _ x: Int32, _ y: Int32,
                             _ w: Int32, _ h: Int32,
                             _ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
     MainActor.assumeIsolated {
-        guard let rgba, level >= 0, level < 16, x >= 0, y >= 0, w > 0, h > 0,
-              cap >= Int(w) * Int(h) * 4,
-              let image = Bridge.displayImage() else { return 0 }
-        let shift = Int(level)
-        let levelW = (image.width + (1 << shift) - 1) >> shift
-        let levelH = (image.height + (1 << shift) - 1) >> shift
-        guard Int(x) + Int(w) <= levelW, Int(y) + Int(h) <= levelH else { return 0 }
-        let srcX = Int(x) << shift, srcY = Int(y) << shift
-        let srcW = min(Int(w) << shift, image.width - srcX)
-        let srcH = min(Int(h) << shift, image.height - srcY)
-        guard let tile = image.cropping(
-                to: CGRect(x: srcX, y: srcY, width: srcW, height: srcH)),
-              let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(
-                data: rgba, width: Int(w), height: Int(h),
-                bitsPerComponent: 8, bytesPerRow: Int(w) * 4,
-                space: space,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
-        ctx.interpolationQuality = .none
-        ctx.draw(tile, in: CGRect(x: 0, y: 0, width: Int(w), height: Int(h)))
+        tileCopy(Bridge.displayImage(), level, x, y, w, h, rgba, cap)
+    }
+}
+
+/// The shared tile-copy body behind hf_display_tile/hf_input_tile.
+@MainActor
+private func tileCopy(_ image: CGImage?, _ level: Int32, _ x: Int32, _ y: Int32,
+                      _ w: Int32, _ h: Int32,
+                      _ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
+    guard let rgba, let image, level >= 0, level < 16, x >= 0, y >= 0,
+          w > 0, h > 0, cap >= Int(w) * Int(h) * 4 else { return 0 }
+    let shift = Int(level)
+    let levelW = (image.width + (1 << shift) - 1) >> shift
+    let levelH = (image.height + (1 << shift) - 1) >> shift
+    guard Int(x) + Int(w) <= levelW, Int(y) + Int(h) <= levelH else { return 0 }
+    let srcX = Int(x) << shift, srcY = Int(y) << shift
+    let srcW = min(Int(w) << shift, image.width - srcX)
+    let srcH = min(Int(h) << shift, image.height - srcY)
+    guard let tile = image.cropping(
+            to: CGRect(x: srcX, y: srcY, width: srcW, height: srcH)),
+          let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let ctx = CGContext(
+            data: rgba, width: Int(w), height: Int(h),
+            bitsPerComponent: 8, bytesPerRow: Int(w) * 4,
+            space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+    ctx.interpolationQuality = .none
+    ctx.draw(tile, in: CGRect(x: 0, y: 0, width: Int(w), height: Int(h)))
+    return 1
+}
+
+// MARK: Input pane (selected frame / processing source)
+
+/// Select frame `index` in the stack list, like clicking its row — the
+/// input pane follows (decoding is async; watch hf_input_epoch).
+@_cdecl("hf_select_frame")
+public func hf_select_frame(_ index: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.frames.indices.contains(Int(index)) else { return 0 }
+        model.selection = [model.frames[Int(index)]]
+        model.selectionChanged()
         return 1
+    }
+}
+
+/// Index of the selected frame, -1 when none (or multi-selection).
+@_cdecl("hf_selected_frame")
+public func hf_selected_frame() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.selection.count == 1,
+              let url = model.selection.first,
+              let index = model.frames.firstIndex(of: url) else { return -1 }
+        return Int32(index)
+    }
+}
+
+/// Input-pane image surface, mirroring hf_display_*: the cycling
+/// processing source mid-fuse, else the selected frame's preview
+/// (decoded raw, or warped into the fused canvas once alignment
+/// transforms exist — the title says which). Toned by the pane exactly
+/// like the output.
+@_cdecl("hf_input_size")
+public func hf_input_size(_ w: UnsafeMutablePointer<Int32>?,
+                          _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let image = Bridge.inputImage() else {
+            w?.pointee = 0
+            h?.pointee = 0
+            return 0
+        }
+        w?.pointee = Int32(image.width)
+        h?.pointee = Int32(image.height)
+        return 1
+    }
+}
+
+@_cdecl("hf_input_epoch")
+public func hf_input_epoch() -> Int32 {
+    MainActor.assumeIsolated { Bridge.currentInputEpoch() }
+}
+
+@_cdecl("hf_input_tile")
+public func hf_input_tile(_ level: Int32, _ x: Int32, _ y: Int32,
+                          _ w: Int32, _ h: Int32,
+                          _ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
+    MainActor.assumeIsolated {
+        tileCopy(Bridge.inputImage(), level, x, y, w, h, rgba, cap)
+    }
+}
+
+/// The input pane's title: selected frame name + " (aligned)" when the
+/// preview is warped into the fused canvas. Empty while nothing shows.
+@_cdecl("hf_input_title")
+public func hf_input_title(_ buffer: UnsafeMutablePointer<CChar>?,
+                           _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        if model.phase.isRunning { return fillUTF8("Input", buffer, cap) }
+        guard model.selection.count == 1, let url = model.selection.first,
+              model.inputPreview != nil else { return 0 }
+        let title = url.lastPathComponent
+            + (model.inputPreviewAligned ? " (aligned)" : "")
+        return fillUTF8(title, buffer, cap)
     }
 }
 

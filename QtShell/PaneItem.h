@@ -20,9 +20,21 @@ class QSGSimpleTextureNode;
 class PaneItem : public QQuickItem {
     Q_OBJECT
     QML_ELEMENT
+    // Which bridge surface this pane shows: the output display (default)
+    // or the input pane (hf_input_*). Set once at creation.
+    Q_PROPERTY(bool input READ isInput WRITE setInput)
+    // Buddy pane sharing this pane's viewport (the native shells share
+    // one ViewportState across input/output): pan/zoom here is pushed
+    // there, one-way per gesture, so comparing panes stays aligned.
+    Q_PROPERTY(PaneItem *syncPane READ syncPane WRITE setSyncPane)
 
 public:
     explicit PaneItem(QQuickItem *parent = nullptr);
+
+    bool isInput() const { return input_; }
+    void setInput(bool input) { input_ = input; }
+    PaneItem *syncPane() const { return sync_; }
+    void setSyncPane(PaneItem *pane) { sync_ = pane; }
 
     // Re-check the bridge's display size/epoch (change callback fired);
     // drops every tile iff the pixels actually changed.
@@ -52,6 +64,19 @@ private:
     int targetLevel() const;
     QRectF visibleImageRect() const;
     void schedule();    // polish (GUI-thread tile fetches) + repaint
+
+    // The bridge surface behind this pane (hf_display_* or hf_input_*).
+    int sourceSize(int32_t *w, int32_t *h) const;
+    int sourceEpoch() const;
+    int sourceTile(int level, int x, int y, int w, int h,
+                   uint8_t *rgba, size_t cap) const;
+
+    // Mirror this pane's viewport onto the buddy after a gesture here.
+    void pushViewport();
+    void adoptViewport(double zoom, QPointF offset);
+
+    bool input_ = false;
+    PaneItem *sync_ = nullptr;
 
     int imgW_ = 0, imgH_ = 0;
     int epoch_ = -1;

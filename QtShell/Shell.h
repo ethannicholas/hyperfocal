@@ -26,6 +26,9 @@ class Shell : public QObject {
     Q_PROPERTY(int pendingStackCount READ pendingStackCount NOTIFY changed)
     Q_PROPERTY(QVariantList frames READ frames NOTIFY changed)
     Q_PROPERTY(bool displayIsData READ displayIsData NOTIFY changed)
+    Q_PROPERTY(bool hasInput READ hasInput NOTIFY changed)
+    Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
+    Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY changed)
     Q_PROPERTY(int lutEpoch READ lutEpoch NOTIFY changed)
 
 public:
@@ -46,6 +49,9 @@ public:
     int pendingStackCount() const;
     QVariantList frames() const;
     bool displayIsData() const;
+    bool hasInput() const;
+    QString inputTitle() const;
+    int selectedFrame() const;
     /// Bumps only when the tone curve's bytes actually change — the LUT
     /// Image reloads off this, not off every model change.
     int lutEpoch() const;
@@ -66,6 +72,7 @@ public:
     Q_INVOKABLE double slider(const QString &id) const;
     Q_INVOKABLE void setSlider(const QString &id, double value);
     Q_INVOKABLE void setFrameIncluded(int index, bool included);
+    Q_INVOKABLE void selectFrame(int index);
     Q_INVOKABLE bool selectStack(int index);
     Q_INVOKABLE void setStackEnabled(int index, bool enabled);
     Q_INVOKABLE bool fuseEnabledStacks();

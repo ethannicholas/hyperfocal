@@ -92,6 +92,21 @@ void Shell::setExposure(double ev) {
 }
 
 bool Shell::displayIsData() const { return hf_display_is_data() != 0; }
+
+bool Shell::hasInput() const {
+    int32_t w = 0, h = 0;
+    return hf_input_size(&w, &h) != 0 && w > 0 && h > 0;
+}
+
+QString Shell::inputTitle() const {
+    char buffer[512];
+    const int n = hf_input_title(buffer, sizeof buffer);
+    return QString::fromUtf8(buffer, n);
+}
+
+int Shell::selectedFrame() const { return hf_selected_frame(); }
+
+void Shell::selectFrame(int index) { hf_select_frame(index); }
 int Shell::lutEpoch() const { return liveLutEpoch; }
 
 QByteArray Shell::currentLut() { return liveLut; }

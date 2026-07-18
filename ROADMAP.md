@@ -109,14 +109,14 @@ invalidate tiles (the selftest asserts the epoch holds).
 
 Next, in rough order (each independently landable):
 
-1. **Sidebar remainder**: input pane alongside the output pane (native:
-   selected frame decoded raw or warped into the fused canvas once
-   alignment transforms exist, shared viewport with the output pane),
-   crop presentation (native: displayCrop restricts the pane viewport
-   to the crop rect/angle when not editing; outputPreview stays
-   uncropped, crop applies at display and export). The single-stack
-   sidebar (sliders, frame checkboxes, Result/Depth) and the
-   multi-stack tree + batch fuse are in.
+1. **Crop presentation** (native: displayCrop restricts the pane
+   viewport to the crop rect/angle when not editing; outputPreview
+   stays uncropped, crop applies at display and export; the UITest
+   channel's set-crop command is the drive-by-test seam). The rest of
+   the sidebar is in: single-stack controls, multi-stack tree + batch
+   fuse, and the input pane (selected frame, aligned once transforms
+   exist, shared viewport with the output pane, toned like the native
+   app).
 2. **Settings isolation** (shared `org.hyperfocal.settings` suite —
    per-call restore is a stopgap; the shell needs its own store, Phase 3
    glue on the plan).

@@ -39,10 +39,36 @@ void PaneItem::componentComplete() {
     refresh();
 }
 
+int PaneItem::sourceSize(int32_t *w, int32_t *h) const {
+    return input_ ? hf_input_size(w, h) : hf_display_size(w, h);
+}
+
+int PaneItem::sourceEpoch() const {
+    return input_ ? hf_input_epoch() : hf_display_epoch();
+}
+
+int PaneItem::sourceTile(int level, int x, int y, int w, int h,
+                         uint8_t *rgba, size_t cap) const {
+    return input_ ? hf_input_tile(level, x, y, w, h, rgba, cap)
+                  : hf_display_tile(level, x, y, w, h, rgba, cap);
+}
+
+void PaneItem::pushViewport() {
+    if (sync_) sync_->adoptViewport(zoom_, offset_);
+}
+
+void PaneItem::adoptViewport(double zoom, QPointF offset) {
+    if (zoom == zoom_ && offset == offset_) return;
+    zoom_ = zoom;
+    offset_ = offset;
+    clampOffset();
+    schedule();
+}
+
 void PaneItem::refresh() {
     int32_t w = 0, h = 0;
-    hf_display_size(&w, &h);
-    const int epoch = hf_display_epoch();
+    sourceSize(&w, &h);
+    const int epoch = sourceEpoch();
     if (epoch == epoch_ && w == imgW_ && h == imgH_) return;
     epoch_ = epoch;
     imgW_ = w;
@@ -102,8 +128,8 @@ void PaneItem::updatePolish() {
         const int lw = (imgW_ + (1 << level) - 1) >> level;
         const int lh = (imgH_ + (1 << level) - 1) >> level;
         QImage img(lw, lh, QImage::Format_RGBA8888);
-        if (hf_display_tile(level, 0, 0, lw, lh, img.bits(),
-                            size_t(img.sizeInBytes())))
+        if (sourceTile(level, 0, 0, lw, lh, img.bits(),
+                       size_t(img.sizeInBytes())))
             base_ = {img, QRectF(0, 0, imgW_, imgH_)};
     }
 
@@ -129,8 +155,8 @@ void PaneItem::updatePolish() {
             const int x = tx * TILE, y = ty * TILE;
             const int w = std::min(TILE, lw - x), h = std::min(TILE, lh - y);
             QImage img(w, h, QImage::Format_RGBA8888);
-            if (!hf_display_tile(level, x, y, w, h, img.bits(),
-                                 size_t(img.sizeInBytes())))
+            if (!sourceTile(level, x, y, w, h, img.bits(),
+                            size_t(img.sizeInBytes())))
                 continue;    // size changed mid-turn; next callback retries
             --budget;
             const double s = double(1 << level);
@@ -240,6 +266,7 @@ void PaneItem::wheelEvent(QWheelEvent *event) {
     const QPointF pane = event->position() - QPointF(width() / 2, height() / 2);
     offset_ += pane / before - pane / after;
     clampOffset();
+    pushViewport();
     schedule();
     event->accept();
 }
@@ -254,5 +281,6 @@ void PaneItem::mouseMoveEvent(QMouseEvent *event) {
     lastPos_ = event->position();
     offset_ -= delta / (fitScale() * zoom_);
     clampOffset();
+    pushViewport();
     schedule();
 }

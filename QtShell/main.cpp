@@ -24,6 +24,14 @@ struct SelfTest {
     bool sawRunning = false;
     bool fused = false;
     bool done = false;
+    // Verdicts collected by the done block; the finish poll (which waits
+    // out the async input-frame decode) turns them into the exit code.
+    bool exported = false, depthExported = false;
+    bool wasStale = false, staleAfterEdit = false;
+    bool exclusionOK = false, batchOK = false;
+    bool toneKeptPixels = false, depthBumpedPixels = false, fullRes = false;
+    QString expectedInput;    // selected frame's name
+    int finishTries = 0;
 };
 
 void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
@@ -68,65 +76,77 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         // must NOT invalidate display pixels — the epoch may not move.
         const int epochBeforeTone = shell->displayEpoch();
         shell->setExposure(0.5);  // tone reaches the preview + export
-        const bool toneKeptPixels = shell->displayEpoch() == epochBeforeTone;
+        state->toneKeptPixels = shell->displayEpoch() == epochBeforeTone;
         // Full-res currency: the display is the result itself, not a capped
         // preview (HFQT_EXPECT_DISPLAY=WxH from a runner that knows the
         // stack's frame size).
-        bool fullRes = true;
+        state->fullRes = true;
         const QByteArray expectSize = qgetenv("HFQT_EXPECT_DISPLAY");
         if (!expectSize.isEmpty()) {
             const auto parts = expectSize.split('x');
-            fullRes = parts.size() == 2
+            state->fullRes = parts.size() == 2
                 && shell->displayWidth() == parts[0].toInt()
                 && shell->displayHeight() == parts[1].toInt();
         }
-        const bool exported =
+        state->exported =
             shell->exportTo(QUrl::fromLocalFile(state->outPath));
         // Depth mode displays + exports the (untoned) depth map — and the
         // pixel swap must move the epoch, or the pane would keep showing
         // the result's tiles.
         shell->setDepthMode(true);
-        const bool depthBumpedPixels = shell->displayEpoch() != epochBeforeTone;
-        const bool depthExported =
+        state->depthBumpedPixels = shell->displayEpoch() != epochBeforeTone;
+        state->depthExported =
             shell->exportTo(QUrl::fromLocalFile(state->outPath + ".depth.tif"));
         shell->setDepthMode(false);
         // Batch journey: both stacks listed, both fused, nothing pending —
         // checked BEFORE the staleness edit below re-pends a stack.
-        bool batchOK = true;
+        state->batchOK = true;
         if (!state->stack2Dir.isEmpty()) {
             const QVariantList stacks = shell->stacks();
-            batchOK = stacks.size() == 2 && shell->pendingStackCount() == 0;
+            state->batchOK = stacks.size() == 2
+                && shell->pendingStackCount() == 0;
             for (const QVariant &row : stacks)
-                batchOK = batchOK
+                state->batchOK = state->batchOK
                     && row.toMap().value(QStringLiteral("status")).toInt() == 2;
-            if (!batchOK) {
+            if (!state->batchOK) {
                 qWarning() << "selftest batch state: pending"
                            << shell->pendingStackCount() << "stacks" << stacks;
             }
         }
         // Moving a fusion slider must mark the result stale (canFuse back
         // on) — the staleness contract the sidebar depends on.
-        const bool wasStale = shell->canFuse();
+        state->wasStale = shell->canFuse();
         shell->setSlider(QStringLiteral("fusion.slider.sharpness"),
                          shell->slider(QStringLiteral("fusion.slider.sharpness")) + 2);
-        const bool staleAfterEdit = shell->canFuse();
+        state->staleAfterEdit = shell->canFuse();
         // HFQT_EXPECT_EXCLUDED=<index>: that frame must have lost its
         // checkbox during the fuse — proves the bad-frame confirm went
         // through the bridge dialog seam (with HFQT_AUTOCONFIRM answering).
-        bool exclusionOK = true;
+        state->exclusionOK = true;
         const QByteArray expect = qgetenv("HFQT_EXPECT_EXCLUDED");
         if (!expect.isEmpty()) {
             const int idx = expect.toInt();
             const QVariantList frames = shell->frames();
-            exclusionOK = idx < frames.size()
+            state->exclusionOK = idx < frames.size()
                 && !frames[idx].toMap().value(QStringLiteral("included")).toBool();
         }
-        // Grab after the queued change signal has delivered, so the shot
-        // shows the settled UI (the assertions above already ran).
-        QTimer::singleShot(250, engine, [engine, state, exported, depthExported,
-                                         wasStale, staleAfterEdit, exclusionOK,
-                                         toneKeptPixels, depthBumpedPixels,
-                                         fullRes, batchOK] {
+        // Select a frame: the input pane must follow (async decode — the
+        // finish poll below waits for it, then grabs and exits).
+        const QVariantList frames = shell->frames();
+        if (frames.size() > 1) {
+            state->expectedInput =
+                frames[1].toMap().value(QStringLiteral("name")).toString();
+            shell->selectFrame(1);
+        }
+        auto *finish = new QTimer(engine);
+        QObject::connect(finish, &QTimer::timeout, engine, [engine, shell,
+                                                            state, finish] {
+            const bool inputOK = state->expectedInput.isEmpty()
+                || (shell->hasInput()
+                    && shell->inputTitle().startsWith(state->expectedInput));
+            // ~10s ceiling for a small preview decode, then fail loudly.
+            if (!inputOK && ++state->finishTries < 40) return;
+            finish->stop();
             if (!state->shotPath.isEmpty()) {
                 const auto roots = engine->rootObjects();
                 if (!roots.isEmpty()) {
@@ -135,18 +155,25 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     }
                 }
             }
-            if (!exported) { QCoreApplication::exit(5); return; }
-            if (!depthExported) { QCoreApplication::exit(6); return; }
-            if (wasStale || !staleAfterEdit) { QCoreApplication::exit(7); return; }
-            if (!exclusionOK) { QCoreApplication::exit(8); return; }
-            if (!toneKeptPixels || !depthBumpedPixels) {
+            if (!state->exported) { QCoreApplication::exit(5); return; }
+            if (!state->depthExported) { QCoreApplication::exit(6); return; }
+            if (state->wasStale || !state->staleAfterEdit) {
+                QCoreApplication::exit(7);
+                return;
+            }
+            if (!state->exclusionOK) { QCoreApplication::exit(8); return; }
+            if (!state->toneKeptPixels || !state->depthBumpedPixels) {
                 QCoreApplication::exit(9);
                 return;
             }
-            if (!fullRes) { QCoreApplication::exit(10); return; }
-            if (!batchOK) { QCoreApplication::exit(11); return; }
+            if (!state->fullRes) { QCoreApplication::exit(10); return; }
+            if (!state->batchOK) { QCoreApplication::exit(11); return; }
+            if (!inputOK) { QCoreApplication::exit(12); return; }
             QCoreApplication::exit(0);
         });
+        // First tick after the queued change signal has delivered, so the
+        // grab shows the settled UI.
+        finish->start(250);
     });
     poll->start(200);
 
