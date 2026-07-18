@@ -21,6 +21,8 @@ ApplicationWindow {
     Component.onCompleted: {
         inputPane.item.syncPane = outputPane.item
         outputPane.item.syncPane = inputPane.item
+        // The selftest's zoom-cycle journey finds the pane by this name.
+        outputPane.item.objectName = "outputPaneItem"
     }
 
     Connections {

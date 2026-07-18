@@ -1,10 +1,12 @@
 #include <QApplication>
+#include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QUrl>
 
 #include "LutImageProvider.h"
+#include "PaneItem.h"
 #include "Shell.h"
 
 // --selftest <stack-dir> <out.tif> [screenshot.png]
@@ -25,13 +27,18 @@ struct SelfTest {
     bool fused = false;
     bool done = false;
     // Verdicts collected by the done block; the finish poll (which waits
-    // out the async input-frame decode) turns them into the exit code.
+    // out the async input-frame decode, then runs the zoom-cycle
+    // journey) turns them into the exit code.
     bool exported = false, depthExported = false;
     bool wasStale = false, staleAfterEdit = false;
     bool exclusionOK = false, batchOK = false, cropOK = false;
     bool toneKeptPixels = false, depthBumpedPixels = false, fullRes = false;
+    bool inputOK = false, zoomOK = true;
     QString expectedInput;    // selected frame's name
+    int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
     int finishTries = 0;
+    int stageTicks = 0;
+    QImage zoomPrev, zoomShotA;
 };
 
 void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
@@ -152,22 +159,87 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 frames[1].toMap().value(QStringLiteral("name")).toString();
             shell->selectFrame(1);
         }
+        PaneItem *pane = nullptr;
+        {
+            const auto roots = engine->rootObjects();
+            if (!roots.isEmpty()) {
+                pane = roots.first()->findChild<PaneItem *>(
+                    QStringLiteral("outputPaneItem"));
+            }
+        }
         auto *finish = new QTimer(engine);
         QObject::connect(finish, &QTimer::timeout, engine, [engine, shell,
-                                                            state, finish] {
-            const bool inputOK = state->expectedInput.isEmpty()
-                || (shell->hasInput()
-                    && shell->inputTitle().startsWith(state->expectedInput));
-            // ~10s ceiling for a small preview decode, then fail loudly.
-            if (!inputOK && ++state->finishTries < 40) return;
+                                                            state, finish,
+                                                            pane] {
+            auto grab = [engine]() -> QImage {
+                const auto roots = engine->rootObjects();
+                if (roots.isEmpty()) return QImage();
+                if (auto *window = qobject_cast<QQuickWindow *>(roots.first()))
+                    return window->grabWindow();
+                return QImage();
+            };
+            // Settled = two consecutive identical grabs (tile fetches
+            // arrive over frames; grabWindow forces a render per tick).
+            auto stable = [state, &grab]() -> bool {
+                QImage now = grab();
+                const bool same = !now.isNull() && now == state->zoomPrev;
+                state->zoomPrev = now;
+                return same;
+            };
+            auto advance = [state](int stage) {
+                state->finishStage = stage;
+                state->stageTicks = 0;
+                state->zoomPrev = QImage();
+            };
+            switch (state->finishStage) {
+            case 0:    // async input-frame decode, ~10s ceiling
+                state->inputOK = state->expectedInput.isEmpty()
+                    || (shell->hasInput()
+                        && shell->inputTitle().startsWith(state->expectedInput));
+                if (!state->inputOK && ++state->finishTries < 40) return;
+                // Zoom-cycle journey: deep zoom, out, and back — the same
+                // pixels must return (a stale coarse tile left covering
+                // the fine level would blur the pane; the layering trap).
+                if (!pane) { advance(4); return; }
+                pane->setZoom(8);
+                advance(1);
+                return;
+            case 1:    // settle at 8x, keep the reference grab
+                if (stable()) {
+                    state->zoomShotA = state->zoomPrev;
+                    pane->setZoom(0.2);
+                    advance(2);
+                } else if (++state->stageTicks > 40) {
+                    state->zoomOK = false;
+                    advance(4);
+                }
+                return;
+            case 2:    // settle zoomed out
+                if (stable()) {
+                    pane->setZoom(8);
+                    advance(3);
+                } else if (++state->stageTicks > 40) {
+                    state->zoomOK = false;
+                    advance(4);
+                }
+                return;
+            case 3:    // back at 8x: detail must have returned
+                if (stable()) {
+                    state->zoomOK = state->zoomPrev == state->zoomShotA;
+                    pane->setZoom(1);
+                    advance(4);
+                } else if (++state->stageTicks > 40) {
+                    state->zoomOK = false;
+                    advance(4);
+                }
+                return;
+            default:
+                break;
+            }
             finish->stop();
             if (!state->shotPath.isEmpty()) {
-                const auto roots = engine->rootObjects();
-                if (!roots.isEmpty()) {
-                    if (auto *window = qobject_cast<QQuickWindow *>(roots.first())) {
-                        window->grabWindow().save(state->shotPath);
-                    }
-                }
+                const QImage shot = grab();
+                if (!shot.isNull()) shot.save(state->shotPath);
             }
             shell->setCrop(0, 0, 0, 0, 0);
             state->cropOK = state->cropOK && shell->displayCrop().isEmpty();
@@ -184,8 +256,9 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             }
             if (!state->fullRes) { QCoreApplication::exit(10); return; }
             if (!state->batchOK) { QCoreApplication::exit(11); return; }
-            if (!inputOK) { QCoreApplication::exit(12); return; }
+            if (!state->inputOK) { QCoreApplication::exit(12); return; }
             if (!state->cropOK) { QCoreApplication::exit(13); return; }
+            if (!state->zoomOK) { QCoreApplication::exit(14); return; }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the
@@ -195,7 +268,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
     poll->start(200);
 
     // Backstop: a hung fuse must fail the test, not wedge it.
-    QTimer::singleShot(180000, engine, [] { QCoreApplication::exit(2); });
+    QTimer::singleShot(300000, engine, [] { QCoreApplication::exit(2); });
 }
 
 }  // namespace

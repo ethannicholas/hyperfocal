@@ -136,6 +136,13 @@ void PaneItem::schedule() {
     update();
 }
 
+void PaneItem::setZoom(double zoom) {
+    zoom_ = std::clamp(zoom, 0.2, 64.0);
+    clampOffset();
+    pushViewport();
+    schedule();
+}
+
 double PaneItem::fitScale() const {
     if (imgW_ <= 0 || width() <= 0 || height() <= 0) return 1.0;
     const QRectF viewport = viewportRect();
@@ -243,6 +250,7 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         baseNode_ = nullptr;
         clipNode_ = nullptr;
         contentNode_ = nullptr;
+        levelGroups_.clear();
         return nullptr;
     }
     if (!root) {
@@ -251,6 +259,7 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         baseNode_ = nullptr;
         clipNode_ = nullptr;
         contentNode_ = nullptr;
+        levelGroups_.clear();
         reset_ = false;    // building from scratch anyway
     } else if (reset_) {
         while (QSGNode *child = root->firstChild()) delete child;
@@ -258,6 +267,7 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         baseNode_ = nullptr;
         clipNode_ = nullptr;
         contentNode_ = nullptr;
+        levelGroups_.clear();
         reset_ = false;
     }
 
@@ -318,11 +328,30 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
             ++it;
         }
     }
+    // Tiles hang in per-level groups sorted coarse→fine: a cached
+    // other-level tile rendered later must never cover the current
+    // level's pixels (the zoom-out-then-in trap).
+    auto groupFor = [&](int level) -> QSGNode * {
+        auto *&group = levelGroups_[level];
+        if (group) return group;
+        group = new QSGNode;
+        QSGNode *nextFiner = nullptr;
+        int nextFinerLevel = -1;
+        for (auto it = levelGroups_.cbegin(); it != levelGroups_.cend(); ++it) {
+            if (it.key() < level && it.key() > nextFinerLevel) {
+                nextFiner = it.value();
+                nextFinerLevel = it.key();
+            }
+        }
+        if (nextFiner) contentNode_->insertChildNodeBefore(group, nextFiner);
+        else contentNode_->appendChildNode(group);
+        return group;
+    };
     for (auto it = tiles_.cbegin(); it != tiles_.cend(); ++it) {
         auto *&node = nodes_[it.key()];
         if (!node) {
             node = makeNode(it.value());
-            contentNode_->appendChildNode(node);
+            groupFor(int(it.key() >> 48))->appendChildNode(node);
         }
         applyFiltering(node, it.value());
     }

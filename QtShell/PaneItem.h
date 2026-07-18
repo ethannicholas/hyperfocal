@@ -43,6 +43,10 @@ public:
     // drops every tile iff the pixels actually changed.
     Q_INVOKABLE void refresh();
 
+    // Center-anchored programmatic zoom (fit-relative, clamped like the
+    // wheel) — the selftest's zoom-cycle journey drives this.
+    Q_INVOKABLE void setZoom(double zoom);
+
 protected:
     QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *) override;
     void updatePolish() override;
@@ -114,6 +118,10 @@ private:
     QSGSimpleTextureNode *baseNode_ = nullptr;
     QSGClipNode *clipNode_ = nullptr;
     QSGTransformNode *contentNode_ = nullptr;
+    // One child group per level, kept sorted coarse→fine under
+    // contentNode_ so finer tiles always paint over coarser ones —
+    // cached other-level tiles must never cover the current level.
+    QHash<int, QSGNode *> levelGroups_;
 };
 
 #endif // PANEITEM_H
