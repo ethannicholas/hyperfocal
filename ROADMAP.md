@@ -113,18 +113,19 @@ rect center, clip between the pan/zoom and rotation transforms;
 hf_set_crop is the UITest set-crop seam; the selftest proves epoch
 stability and the 400×300 export through the 5° sampler).
 
+The shell keeps its own settings store (`HYPERFOCAL_SETTINGS_SUITE`,
+set to `org.hyperfocal.qtshell-settings` in main.cpp before any hf_*
+call) — nothing bleeds between the shells' persisted state.
+
 Next, in rough order (each independently landable):
 
-1. **Settings isolation** (shared `org.hyperfocal.settings` suite —
-   per-call restore is a stopgap; the shell needs its own store, Phase 3
-   glue on the plan).
-2. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
+1. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
    loop on macOS via CFRunLoop; Linux/Windows need an explicit pump (Qt
    timer or glib hook) — the known open question the prototype defers.
-3. **Crop editing in the Qt shell** (the drag-handle overlay is
+2. **Crop editing in the Qt shell** (the drag-handle overlay is
    native-only; the bridge already speaks hf_set_crop, so this is a QML
    overlay over the output pane feeding the same call).
-4. **Dirty-rect tile invalidation** once a partial-update producer exists
+3. **Dirty-rect tile invalidation** once a partial-update producer exists
    (retouch strokes in the Qt shell): today any epoch bump drops every
    tile, which is right for wholesale changes (progressive updates, new
    fuse) and wasteful only for localized ones — build it with the

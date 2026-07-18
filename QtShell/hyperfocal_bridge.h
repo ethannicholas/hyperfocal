@@ -150,8 +150,9 @@ int hf_tone_lut(uint16_t *out, int size);
 // Export the result through the model's export path (tone baked for
 // display-referred formats, crop applied). `format`, when non-NULL, is
 // the export format's UI name (e.g. "TIFF (16-bit)") applied for this
-// export only — the persisted preference the native app shares is
-// restored before returning. NULL uses the model's current settings.
+// export only — the persisted preference (the shell's own settings
+// suite; see HYPERFOCAL_SETTINGS_SUITE in main.cpp) is restored before
+// returning. NULL uses the model's current settings.
 int hf_export(const char *path, const char *format);
 
 #ifdef __cplusplus

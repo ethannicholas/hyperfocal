@@ -220,10 +220,9 @@ bool Shell::openStack(const QUrl &folder) {
 bool Shell::fuse() { return hf_fuse() != 0; }
 
 bool Shell::exportTo(const QUrl &file) {
-    // The chosen extension states the intent; don't inherit whatever format
-    // the native app persisted last (the settings suite is shared until the
-    // Phase 3 storage glue isolates it — the bridge restores the user's
-    // preference after the write).
+    // The chosen extension states the intent; don't inherit whatever
+    // format was persisted last (the bridge restores the preference
+    // after the write, so this never becomes a sticky settings change).
     const QString path = file.toLocalFile();
     const bool tiff = path.endsWith(QStringLiteral(".tif"), Qt::CaseInsensitive)
                    || path.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive);

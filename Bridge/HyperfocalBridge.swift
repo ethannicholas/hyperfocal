@@ -773,10 +773,10 @@ public func hf_tone_lut(_ out: UnsafeMutablePointer<UInt16>?, _ size: Int32) -> 
 /// Export the current result through the model's export path (tone baked
 /// for display-referred formats, crop applied). `format`, when non-NULL,
 /// is an AppModel.ExportFormat raw value (e.g. "TIFF (16-bit)") applied
-/// for THIS export only — the model's export settings live in the shared
-/// persisted suite the native app reads, and a dev shell must not clobber
-/// the user's preference as a side effect; the prior value is restored
-/// before returning. NULL exports with the model's current settings.
+/// for THIS export only — the persisted preference (the shell's own
+/// suite, HYPERFOCAL_SETTINGS_SUITE) is restored before returning, so an
+/// explicit-format export never becomes a sticky settings change. NULL
+/// exports with the model's current settings.
 @_cdecl("hf_export")
 public func hf_export(_ path: UnsafePointer<CChar>?,
                       _ format: UnsafePointer<CChar>?) -> Int32 {

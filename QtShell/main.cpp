@@ -201,6 +201,12 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
 }  // namespace
 
 int main(int argc, char *argv[]) {
+    // The Qt shell keeps its own settings store: AppModel reads the suite
+    // name before hf_init touches any persisted value, so nothing bleeds
+    // between this shell and the native app (whose org.hyperfocal.settings
+    // this process would otherwise share). Overridable for debugging.
+    if (qEnvironmentVariableIsEmpty("HYPERFOCAL_SETTINGS_SUITE"))
+        qputenv("HYPERFOCAL_SETTINGS_SUITE", "org.hyperfocal.qtshell-settings");
     QApplication app(argc, argv);  // QtWidgets: modal QMessageBox dialogs
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("hflut"), new LutImageProvider);

@@ -190,10 +190,14 @@ final class AppModel: ObservableObject {
     // Deliberately decoupled from the bundle ID (renaming the suite orphans
     // saved settings). UI-test runs get their own throwaway suite so tests
     // can toggle sections/settings without polluting the user's real state.
+    // HYPERFOCAL_SETTINGS_SUITE overrides the suite outright — the Qt
+    // shell names its own store there so the two shells' settings never
+    // bleed into each other (same isolation idea as the UI-test suite).
     static let settings = UserDefaults(
-        suiteName: ProcessInfo.processInfo.environment["HYPERFOCAL_UITEST"] == "1"
-            ? "org.hyperfocal.uitest-settings"
-            : "org.hyperfocal.settings") ?? .standard
+        suiteName: ProcessInfo.processInfo.environment["HYPERFOCAL_SETTINGS_SUITE"]
+            ?? (ProcessInfo.processInfo.environment["HYPERFOCAL_UITEST"] == "1"
+                ? "org.hyperfocal.uitest-settings"
+                : "org.hyperfocal.settings")) ?? .standard
 
     // Fusion parameters
     @Published var alignFrames: Bool {
