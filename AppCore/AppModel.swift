@@ -906,11 +906,9 @@ final class AppModel: ObservableObject {
         let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         return runConfirmAlert(
             message: "Not enough disk space for the fusion cache",
-            informative: "Fusing normally caches aligned frames in a temporary file "
-                + "so the stack isn't decoded twice — this stack needs about "
-                + "\(fmt(short.needed)) and the disk has \(fmt(short.available)) free. "
-                + "Fusing works without the cache, just slower. You can also free up "
-                + "space, or turn the cache off in Settings.",
+            informative: "Fusion normally uses a disk cache to improve performance. This stack "
+                + " needs about \(fmt(short.needed)) and the disk has \(fmt(short.available)) "
+                + "free. Fusion will be slower without a disk cache.",
             confirmTitle: "Fuse Anyway")
     }
 
@@ -2405,14 +2403,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// "~40 s left" / "~3 min left" — deliberately coarse (5 s / 1 min
+    /// "~40s left" / "~3 min left" — deliberately coarse (5s / 1 min
     /// steps): the extrapolation is only as steady as the stage's per-frame
-    /// cost, and a twitchy countdown reads as broken. Nil under 3 s so the
+    /// cost, and a twitchy countdown reads as broken. Nil under 3s so the
     /// label disappears instead of counting down to a lie.
     static func etaLabel(_ seconds: Double) -> String? {
         guard seconds.isFinite, seconds >= 3 else { return nil }
         if seconds < 90 {
-            return "~\(max(5, Int((seconds / 5).rounded()) * 5)) s left"
+            return "~\(max(5, Int((seconds / 5).rounded()) * 5))s left"
         }
         return "~\(Int((seconds / 60).rounded())) min left"
     }

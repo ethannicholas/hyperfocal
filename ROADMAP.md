@@ -185,3 +185,9 @@ retouch with a crop (including a rotated one) shows only the cropped
 region, aligned with the panes at every zoom, strokes land exactly
 under the brush, and RetouchJourney gains a crop-then-retouch step
 verifying pixels via the export command channel.
+
+### Zoom values are broken
+
+Something has caused a regression, where 100% zoom is apparently no
+longer taking the image display scale into account - 50% zoom is
+actually the correct 1:1 zoom on my 2x retina screen.
