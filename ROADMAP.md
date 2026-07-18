@@ -84,8 +84,8 @@ The walking skeleton is landed on macOS: `Bridge/HyperfocalBridge.swift`
 (an XcodeGen dylib target — SwiftPM can't share the AppCore sources with
 the probe until AppCore is a real module, plan 0d) exports the `hf_*`
 surface in `QtShell/hyperfocal_bridge.h`; `QtShell/` is the Qt 6 shell
-(build: `QtShell/build.sh`, needs Homebrew qtbase/qtdeclarative + cmake ≥
-3.22). `hyperfocal-qt --selftest <stack> <out.tif> [shot.png]` self-drives
+(build: `QtShell/build.sh`, needs Homebrew qtbase/qtdeclarative/
+qtshadertools + cmake ≥ 3.22). `hyperfocal-qt --selftest <stack> <out.tif> [shot.png]` self-drives
 open → fuse → tone → export (result + depth) → window grab and exits
 nonzero on failure — the seed of the Qt journey harness. Env hooks:
 `HFQT_AUTOCONFIRM=1` answers modals with their default (the native
