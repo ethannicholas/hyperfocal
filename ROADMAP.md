@@ -97,32 +97,33 @@ asserts the display serves the full result resolution (the runner knows
 the fused size); `HFQT_STACK2=<dir>` runs the batch journey (a second
 stack is added after the first load settles, "Fuse N Stacks" walks
 both, and both must end fused with nothing pending). The sidebar
-mirrors the native stack tree flatly: rows with enable checkbox,
-status glyph, and frame count; row click select (stash/install);
-hf_load_stack has drop semantics (folders ADD stacks; a .hyperfocal
-project opens/replacing). Display currency is production-shaped: tone is a LUT
+mirrors the native app: stack tree (flat) with enable checkbox, status
+glyph, frame count, row-click select (stash/install); frame rows select
+into the input pane (aligned once transforms exist, shared viewport
+with the output pane, toned like the native app); hf_load_stack has
+drop semantics (folders ADD stacks; a .hyperfocal project
+opens/replacing). Display currency is production-shaped: tone is a LUT
 shader on the pane layer (hf_tone_lut; parity with the CPU-toned render
 0.03/255), and the pane is a tiled textured QQuickItem over
 hf_display_tile/hf_display_epoch — level-of-detail matched to on-screen
 scale up to full-res at 1:1 zoom, matrix-only pan/zoom, tone edits never
-invalidate tiles (the selftest asserts the epoch holds).
+invalidate tiles (the selftest asserts the epoch holds). Crop presents
+natively (hf_display_crop/hf_input_crop viewport + rotation about the
+rect center, clip between the pan/zoom and rotation transforms;
+hf_set_crop is the UITest set-crop seam; the selftest proves epoch
+stability and the 400×300 export through the 5° sampler).
 
 Next, in rough order (each independently landable):
 
-1. **Crop presentation** (native: displayCrop restricts the pane
-   viewport to the crop rect/angle when not editing; outputPreview
-   stays uncropped, crop applies at display and export; the UITest
-   channel's set-crop command is the drive-by-test seam). The rest of
-   the sidebar is in: single-stack controls, multi-stack tree + batch
-   fuse, and the input pane (selected frame, aligned once transforms
-   exist, shared viewport with the output pane, toned like the native
-   app).
-2. **Settings isolation** (shared `org.hyperfocal.settings` suite —
+1. **Settings isolation** (shared `org.hyperfocal.settings` suite —
    per-call restore is a stopgap; the shell needs its own store, Phase 3
    glue on the plan).
-3. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
+2. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
    loop on macOS via CFRunLoop; Linux/Windows need an explicit pump (Qt
    timer or glib hook) — the known open question the prototype defers.
+3. **Crop editing in the Qt shell** (the drag-handle overlay is
+   native-only; the bridge already speaks hf_set_crop, so this is a QML
+   overlay over the output pane feeding the same call).
 4. **Dirty-rect tile invalidation** once a partial-update producer exists
    (retouch strokes in the Qt shell): today any epoch bump drops every
    tile, which is right for wholesale changes (progressive updates, new

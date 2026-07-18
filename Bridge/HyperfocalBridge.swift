@@ -653,6 +653,83 @@ public func hf_input_tile(_ level: Int32, _ x: Int32, _ y: Int32,
     }
 }
 
+// MARK: Crop
+
+/// Set (w/h > 0) or clear (otherwise) the crop rect, in result-canvas
+/// pixels, plus its angle in degrees — the UITest set-crop command's
+/// semantics (the native overlay's drag handles are the interactive
+/// path; the Qt shell grows those with its crop editing later).
+@_cdecl("hf_set_crop")
+public func hf_set_crop(_ x: Double, _ y: Double, _ w: Double, _ h: Double,
+                        _ angle: Double) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        if w > 0 && h > 0 {
+            model.cropRect = CGRect(x: x, y: y, width: w, height: h)
+            model.cropAngle = angle
+        } else {
+            model.cropRect = nil
+            model.cropAngle = 0
+        }
+        return 1
+    }
+}
+
+@MainActor
+private func fillCrop(_ crop: CGRect?, _ cropAngle: Double,
+                      _ x: UnsafeMutablePointer<Double>?,
+                      _ y: UnsafeMutablePointer<Double>?,
+                      _ w: UnsafeMutablePointer<Double>?,
+                      _ h: UnsafeMutablePointer<Double>?,
+                      _ angle: UnsafeMutablePointer<Double>?) -> Int32 {
+    x?.pointee = crop.map { Double($0.minX) } ?? 0
+    y?.pointee = crop.map { Double($0.minY) } ?? 0
+    w?.pointee = crop.map { Double($0.width) } ?? 0
+    h?.pointee = crop.map { Double($0.height) } ?? 0
+    angle?.pointee = crop != nil ? cropAngle : 0
+    return crop != nil ? 1 : 0
+}
+
+/// The crop the output pane should present right now (native
+/// displayCrop): bounds-checked against the result, absent while a fuse
+/// runs or none is set. The pane restricts its viewport to the rect —
+/// the image rotated by -angle about the rect's center, clipped to the
+/// rect — exactly the region hf_export writes. Pixels are untouched:
+/// hf_display_epoch does not move on crop changes.
+@_cdecl("hf_display_crop")
+public func hf_display_crop(_ x: UnsafeMutablePointer<Double>?,
+                            _ y: UnsafeMutablePointer<Double>?,
+                            _ w: UnsafeMutablePointer<Double>?,
+                            _ h: UnsafeMutablePointer<Double>?,
+                            _ angle: UnsafeMutablePointer<Double>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else {
+            return fillCrop(nil, 0, x, y, w, h, angle)
+        }
+        return fillCrop(model.displayCrop, model.displayCropAngle,
+                        x, y, w, h, angle)
+    }
+}
+
+/// The input pane's crop: the display crop, but only when the preview is
+/// warped into the fused canvas (raw frame decodes aren't crop-mapped) —
+/// the native inputCrop rule.
+@_cdecl("hf_input_crop")
+public func hf_input_crop(_ x: UnsafeMutablePointer<Double>?,
+                          _ y: UnsafeMutablePointer<Double>?,
+                          _ w: UnsafeMutablePointer<Double>?,
+                          _ h: UnsafeMutablePointer<Double>?,
+                          _ angle: UnsafeMutablePointer<Double>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.phase.isRunning,
+              model.inputPreviewAligned else {
+            return fillCrop(nil, 0, x, y, w, h, angle)
+        }
+        return fillCrop(model.displayCrop, model.displayCropAngle,
+                        x, y, w, h, angle)
+    }
+}
+
 /// The input pane's title: selected frame name + " (aligned)" when the
 /// preview is warped into the fused canvas. Empty while nothing shows.
 @_cdecl("hf_input_title")

@@ -112,6 +112,19 @@ int hf_input_tile(int32_t level, int32_t x, int32_t y,
                   int32_t w, int32_t h, uint8_t *rgba, size_t cap);
 int hf_input_title(char *buf, int cap);             // returns bytes
 
+// Crop, in result-canvas pixels + degrees. hf_set_crop mirrors the
+// UITest set-crop command (w/h <= 0 clears). hf_display_crop /
+// hf_input_crop report the crop each pane should present (1 = active):
+// the pane restricts its viewport to the rect — the image rotated by
+// -angle about the rect's center, clipped to the rect, the region
+// hf_export writes. Crop changes never move the pixel epochs; the
+// input pane crops only when its preview is aligned into the canvas.
+int hf_set_crop(double x, double y, double w, double h, double angle);
+int hf_display_crop(double *x, double *y, double *w, double *h,
+                    double *angle);
+int hf_input_crop(double *x, double *y, double *w, double *h,
+                  double *angle);
+
 // Current display image: progressive preview mid-fuse, the full-res
 // result preview otherwise — always UNTONED; the pane applies
 // hf_tone_lut in its LUT shader unless hf_display_is_data says the

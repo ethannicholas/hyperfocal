@@ -13,9 +13,12 @@
 
 #include <QHash>
 #include <QImage>
+#include <QMatrix4x4>
 #include <QQuickItem>
 
+class QSGClipNode;
 class QSGSimpleTextureNode;
+class QSGTransformNode;
 
 class PaneItem : public QQuickItem {
     Q_OBJECT
@@ -70,6 +73,19 @@ private:
     int sourceEpoch() const;
     int sourceTile(int level, int x, int y, int w, int h,
                    uint8_t *rgba, size_t cap) const;
+    int sourceCrop(double *x, double *y, double *w, double *h,
+                   double *angle) const;
+
+    // The presented viewport: the crop rect when one is active, else the
+    // whole image. The image→item transform factors as viewportMatrix
+    // (fit/zoom/pan — the crop rect stays axis-aligned under it) times
+    // rotationMatrix (image content rotated by -angle about the crop
+    // center); the clip lives between the two so the crop's edges stay
+    // straight while the content tilts, the native presentation.
+    QRectF viewportRect() const;
+    QMatrix4x4 viewportMatrix() const;
+    QMatrix4x4 rotationMatrix() const;
+    QMatrix4x4 contentMatrix() const;    // viewportMatrix * rotationMatrix
 
     // Mirror this pane's viewport onto the buddy after a gesture here.
     void pushViewport();
@@ -80,8 +96,10 @@ private:
 
     int imgW_ = 0, imgH_ = 0;
     int epoch_ = -1;
+    QRectF crop_;       // active crop in image px; empty = full image
+    double cropAngle_ = 0;
     double zoom_ = 1.0;
-    QPointF offset_;    // image px from center
+    QPointF offset_;    // image px from viewport center
     QPointF lastPos_;
 
     QHash<quint64, Tile> tiles_;    // keyed by (level, tx, ty)
@@ -90,9 +108,12 @@ private:
 
     // Scene-graph mirrors of base_/tiles_ — owned by the node tree; only
     // touched inside updatePaintNode (GUI thread blocked), and forgotten
-    // whenever the tree is rebuilt.
+    // whenever the tree is rebuilt. Textures hang under a clip node that
+    // bounds them to the presented viewport (the crop rect).
     QHash<quint64, QSGSimpleTextureNode *> nodes_;
     QSGSimpleTextureNode *baseNode_ = nullptr;
+    QSGClipNode *clipNode_ = nullptr;
+    QSGTransformNode *contentNode_ = nullptr;
 };
 
 #endif // PANEITEM_H

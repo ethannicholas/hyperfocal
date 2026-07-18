@@ -1,6 +1,7 @@
 #include "PaneItem.h"
 
 #include <QQuickWindow>
+#include <QSGClipNode>
 #include <QSGSimpleTextureNode>
 #include <QSGTransformNode>
 #include <QSet>
@@ -53,6 +54,44 @@ int PaneItem::sourceTile(int level, int x, int y, int w, int h,
                   : hf_display_tile(level, x, y, w, h, rgba, cap);
 }
 
+int PaneItem::sourceCrop(double *x, double *y, double *w, double *h,
+                         double *angle) const {
+    return input_ ? hf_input_crop(x, y, w, h, angle)
+                  : hf_display_crop(x, y, w, h, angle);
+}
+
+QRectF PaneItem::viewportRect() const {
+    return crop_.isEmpty() ? QRectF(0, 0, imgW_, imgH_) : crop_;
+}
+
+QMatrix4x4 PaneItem::viewportMatrix() const {
+    // Fit/zoom/pan maps the viewport (crop or whole image) to the pane;
+    // the crop rect stays axis-aligned under this part.
+    const QPointF center = viewportRect().center();
+    QMatrix4x4 m;
+    m.translate(width() / 2, height() / 2);
+    m.scale(fitScale() * zoom_);
+    m.translate(-center.x() - offset_.x(), -center.y() - offset_.y());
+    return m;
+}
+
+QMatrix4x4 PaneItem::rotationMatrix() const {
+    // An angled crop rotates the image content by -angle about the
+    // rect's center — the native presentation, and what export samples.
+    QMatrix4x4 m;
+    if (cropAngle_ != 0 && !crop_.isEmpty()) {
+        const QPointF center = crop_.center();
+        m.translate(center.x(), center.y());
+        m.rotate(-cropAngle_, 0, 0, 1);
+        m.translate(-center.x(), -center.y());
+    }
+    return m;
+}
+
+QMatrix4x4 PaneItem::contentMatrix() const {
+    return viewportMatrix() * rotationMatrix();
+}
+
 void PaneItem::pushViewport() {
     if (sync_) sync_->adoptViewport(zoom_, offset_);
 }
@@ -69,6 +108,19 @@ void PaneItem::refresh() {
     int32_t w = 0, h = 0;
     sourceSize(&w, &h);
     const int epoch = sourceEpoch();
+    double cx = 0, cy = 0, cw = 0, ch = 0, cangle = 0;
+    sourceCrop(&cx, &cy, &cw, &ch, &cangle);
+    const QRectF crop(cx, cy, cw, ch);
+    // A crop change is viewport-only: pixels (and the fetched tiles)
+    // stay valid; the node tree rebuilds from the cached images so the
+    // clip takes hold.
+    if (crop != crop_ || cangle != cropAngle_) {
+        crop_ = crop;
+        cropAngle_ = cangle;
+        reset_ = true;
+        clampOffset();
+        schedule();
+    }
     if (epoch == epoch_ && w == imgW_ && h == imgH_) return;
     epoch_ = epoch;
     imgW_ = w;
@@ -86,12 +138,14 @@ void PaneItem::schedule() {
 
 double PaneItem::fitScale() const {
     if (imgW_ <= 0 || width() <= 0 || height() <= 0) return 1.0;
-    return std::min(width() / imgW_, height() / imgH_);
+    const QRectF viewport = viewportRect();
+    return std::min(width() / viewport.width(), height() / viewport.height());
 }
 
 void PaneItem::clampOffset() {
     if (imgW_ <= 0) { offset_ = QPointF(); return; }
-    const double hw = imgW_ / 2.0, hh = imgH_ / 2.0;
+    const QRectF viewport = viewportRect();
+    const double hw = viewport.width() / 2.0, hh = viewport.height() / 2.0;
     offset_.setX(std::clamp(offset_.x(), -hw, hw));
     offset_.setY(std::clamp(offset_.y(), -hh, hh));
 }
@@ -110,11 +164,14 @@ int PaneItem::targetLevel() const {
 }
 
 QRectF PaneItem::visibleImageRect() const {
-    const double scale = fitScale() * zoom_;
-    if (scale <= 0 || imgW_ <= 0) return QRectF();
-    const QPointF center(imgW_ / 2.0 + offset_.x(), imgH_ / 2.0 + offset_.y());
-    const double w = width() / scale, h = height() / scale;
-    return QRectF(center.x() - w / 2, center.y() - h / 2, w, h)
+    if (fitScale() * zoom_ <= 0 || imgW_ <= 0) return QRectF();
+    // Inverse-map the pane onto the image; with an angled crop the
+    // bounding rect over-covers a little, which only means a few spare
+    // tile fetches under the clipped corners.
+    bool invertible = false;
+    const QMatrix4x4 inverse = contentMatrix().inverted(&invertible);
+    if (!invertible) return QRectF();
+    return inverse.mapRect(QRectF(0, 0, width(), height()))
         .intersected(QRectF(0, 0, imgW_, imgH_));
 }
 
@@ -184,27 +241,51 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         delete root;
         nodes_.clear();
         baseNode_ = nullptr;
+        clipNode_ = nullptr;
+        contentNode_ = nullptr;
         return nullptr;
     }
     if (!root) {
         root = new QSGTransformNode;
         nodes_.clear();
         baseNode_ = nullptr;
+        clipNode_ = nullptr;
+        contentNode_ = nullptr;
         reset_ = false;    // building from scratch anyway
     } else if (reset_) {
         while (QSGNode *child = root->firstChild()) delete child;
         nodes_.clear();
         baseNode_ = nullptr;
+        clipNode_ = nullptr;
+        contentNode_ = nullptr;
         reset_ = false;
     }
 
-    // Pan/zoom is only this matrix — no texture touches the bus for it.
+    // Pan/zoom is only these matrices — no texture touches the bus for
+    // it. The clip sits between them: bounded to the (axis-aligned under
+    // viewportMatrix) crop rect, while the content below it tilts.
     const double scale = fitScale() * zoom_;
-    QMatrix4x4 m;
-    m.translate(width() / 2, height() / 2);
-    m.scale(scale);
-    m.translate(-imgW_ / 2.0 - offset_.x(), -imgH_ / 2.0 - offset_.y());
-    root->setMatrix(m);
+    root->setMatrix(viewportMatrix());
+
+    // The clip's geometry is mandatory — isRectangular/clipRect is only
+    // the scissor fast path, and once ancestors rotate (or a layer grab
+    // re-bases the transform) the renderer falls back to stencil
+    // clipping, which renders the geometry (a null one crashes the batch
+    // renderer).
+    if (!clipNode_) {
+        clipNode_ = new QSGClipNode;
+        clipNode_->setFlag(QSGNode::OwnsGeometry);
+        auto *geometry =
+            new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
+        QSGGeometry::updateRectGeometry(geometry, viewportRect());
+        clipNode_->setGeometry(geometry);
+        clipNode_->setIsRectangular(true);
+        clipNode_->setClipRect(viewportRect());
+        root->appendChildNode(clipNode_);
+        contentNode_ = new QSGTransformNode;
+        clipNode_->appendChildNode(contentNode_);
+    }
+    contentNode_->setMatrix(rotationMatrix());
 
     auto *win = window();
     auto makeNode = [&](const Tile &tile) {
@@ -225,7 +306,7 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
     if (!baseNode_ && !base_.image.isNull()) {
         baseNode_ = makeNode(base_);
         // First child renders first: the coarse base stays under the tiles.
-        root->prependChildNode(baseNode_);
+        contentNode_->prependChildNode(baseNode_);
     }
     if (baseNode_) applyFiltering(baseNode_, base_);
 
@@ -241,7 +322,7 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         auto *&node = nodes_[it.key()];
         if (!node) {
             node = makeNode(it.value());
-            root->appendChildNode(node);
+            contentNode_->appendChildNode(node);
         }
         applyFiltering(node, it.value());
     }

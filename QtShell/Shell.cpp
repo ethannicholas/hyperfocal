@@ -107,6 +107,22 @@ QString Shell::inputTitle() const {
 int Shell::selectedFrame() const { return hf_selected_frame(); }
 
 void Shell::selectFrame(int index) { hf_select_frame(index); }
+
+void Shell::setCrop(double x, double y, double w, double h, double angle) {
+    hf_set_crop(x, y, w, h, angle);
+}
+
+QRectF Shell::displayCrop() const {
+    double x = 0, y = 0, w = 0, h = 0, angle = 0;
+    if (!hf_display_crop(&x, &y, &w, &h, &angle)) return QRectF();
+    return QRectF(x, y, w, h);
+}
+
+double Shell::displayCropAngle() const {
+    double x = 0, y = 0, w = 0, h = 0, angle = 0;
+    hf_display_crop(&x, &y, &w, &h, &angle);
+    return angle;
+}
 int Shell::lutEpoch() const { return liveLutEpoch; }
 
 QByteArray Shell::currentLut() { return liveLut; }

@@ -28,7 +28,7 @@ struct SelfTest {
     // out the async input-frame decode) turns them into the exit code.
     bool exported = false, depthExported = false;
     bool wasStale = false, staleAfterEdit = false;
-    bool exclusionOK = false, batchOK = false;
+    bool exclusionOK = false, batchOK = false, cropOK = false;
     bool toneKeptPixels = false, depthBumpedPixels = false, fullRes = false;
     QString expectedInput;    // selected frame's name
     int finishTries = 0;
@@ -98,6 +98,20 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         state->depthExported =
             shell->exportTo(QUrl::fromLocalFile(state->outPath + ".depth.tif"));
         shell->setDepthMode(false);
+        // Crop: set-crop (the UITest seam's semantics) must present
+        // through displayCrop WITHOUT touching pixels — crop is a
+        // viewport, the epoch may not move — and export the rect's size
+        // (the runner checks the file's dimensions; the 5° angle
+        // exercises the rotated sampler). Stays set through the window
+        // grab so shots show the cropped panes; the finish poll clears
+        // it and checks the clear.
+        const int epochBeforeCrop = shell->displayEpoch();
+        shell->setCrop(101, 51, 400, 300, 5);
+        state->cropOK =
+            shell->displayCrop() == QRectF(101, 51, 400, 300)
+            && shell->displayCropAngle() == 5
+            && shell->displayEpoch() == epochBeforeCrop
+            && shell->exportTo(QUrl::fromLocalFile(state->outPath + ".crop.tif"));
         // Batch journey: both stacks listed, both fused, nothing pending —
         // checked BEFORE the staleness edit below re-pends a stack.
         state->batchOK = true;
@@ -155,6 +169,8 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     }
                 }
             }
+            shell->setCrop(0, 0, 0, 0, 0);
+            state->cropOK = state->cropOK && shell->displayCrop().isEmpty();
             if (!state->exported) { QCoreApplication::exit(5); return; }
             if (!state->depthExported) { QCoreApplication::exit(6); return; }
             if (state->wasStale || !state->staleAfterEdit) {
@@ -169,6 +185,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!state->fullRes) { QCoreApplication::exit(10); return; }
             if (!state->batchOK) { QCoreApplication::exit(11); return; }
             if (!inputOK) { QCoreApplication::exit(12); return; }
+            if (!state->cropOK) { QCoreApplication::exit(13); return; }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the
