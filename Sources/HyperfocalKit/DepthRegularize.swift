@@ -27,6 +27,14 @@ public enum DepthRegularize {
         /// units than the coefficients were fit in.
         public let guideScale: Float
         public let factor: Int
+        /// Spill floor at the grid (empty when no luminance planes were
+        /// retained): the argmin-luminance frame per cell and the 0…1
+        /// evidence strength. The apply pass pulls signal-free pixels
+        /// toward this depth directly — the WGIF window straddling a
+        /// silhouette averages subject depths into the adjacent background,
+        /// and no prior seeding can fully undo that mixing.
+        public let spillDepth: [Float]
+        public let spillStrength: [Float]
     }
 
     /// Prior floor: the push-pull prior's weight in the combined value field,
@@ -39,6 +47,11 @@ public enum DepthRegularize {
     /// Tier-2 vote scale: an aggregate-curve depth opinion never outvotes
     /// real per-pixel seeds.
     static let tier2Scale: Float = 0.1
+    /// Spill-floor (tier-S) vote scale: below tier 2 so it never outvotes a
+    /// real depth opinion, but decisively above `pushPullTau` so the pyramid
+    /// doesn't dilute it — in signal-free regions the finest level's spill
+    /// vote must win over coarser mean-of-region diffusion.
+    static let spillScale: Float = 0.05
     /// Variance stabilizer for the adaptive-epsilon (WGIF) weighting.
     static let lambda: Float = 1e-6
     /// Below this max combined confidence the stage reports "no signal
@@ -64,7 +77,9 @@ public enum DepthRegularize {
     /// dominates the cost, so it polls per row.
     public static func gridCoefficients(confidence: [Float], depthMed: [Float],
                                         guide: [Float], width: Int, height: Int,
-                                        planes: [[Float]], factor: Int,
+                                        planes: [[Float]],
+                                        luminancePlanes: [[Float]] = [],
+                                        factor: Int,
                                         frameCount: Int,
                                         options: DMapFusion.Options,
                                         log: ((String) -> Void)? = nil,
@@ -166,14 +181,98 @@ public enum DepthRegularize {
             return nil
         }
 
-        // Tier 3: push-pull prior over the tier-1+2 measurements — a dense,
+        // Tier S: spill floor. A signal-free pixel next to a subject shows
+        // nothing of its own — every photon it ever receives is defocus
+        // spill from the subject, which only ever *adds* light. The frame
+        // where the cell is darkest is therefore the least-contaminated one
+        // (the adjacent subject in focus), and that is the right depth to
+        // render — without it the prior interpolates toward the regional
+        // mean of subject depths, and those mid-stack frames carry the
+        // subject's glow straight into the background (the halo). Weighted
+        // by how much the cell's luminance swings across the stack (no
+        // swing → no spill → nothing to protect against) and masked by
+        // confidence, so cells with any real vote are untouched.
+        let noSpill = env["HYPERFOCAL_GUIDED_NO_SPILL"] != nil
+        var dS = [Float](repeating: 0, count: gridCount)
+        var wS = [Float](repeating: 0, count: gridCount)
+        var sS = [Float](repeating: 0, count: gridCount)  // 0…1 evidence strength
+        if luminancePlanes.count > 2, !noSpill {
+            let n = luminancePlanes.count
+            var lMaxPlane = [Float](repeating: 0, count: gridCount)
+            var spanPlane = [Float](repeating: 0, count: gridCount)
+            lMaxPlane.withUnsafeMutableBufferPointer { mp in
+                spanPlane.withUnsafeMutableBufferPointer { sp in
+                    dS.withUnsafeMutableBufferPointer { dp in
+                        DispatchQueue.concurrentPerform(iterations: gh) { gy in
+                            if isStale?() == true { return }
+                            for gx in 0..<gw {
+                                let i = gy * gw + gx
+                                var lo: Float = .infinity
+                                var hi: Float = -.infinity
+                                var argmin = 0
+                                for f in 0..<n {
+                                    let l = luminancePlanes[f][i]
+                                    if l < lo { lo = l; argmin = f }
+                                    if l > hi { hi = l }
+                                }
+                                mp[i] = hi
+                                sp[i] = hi - lo
+                                dp[i] = Float(argmin)
+                            }
+                        }
+                    }
+                }
+            }
+            // Absolute significance floor: black-noise cells (span at the
+            // sensor floor) hold no spill evidence and stay with diffusion.
+            // 0.2% of the scene's bright end — glow is dim in linear light,
+            // and the relative term already shields static surfaces, so this
+            // only needs to clear sensor noise.
+            let spanEps = 0.002 * max(DMapFusion.percentile95(lMaxPlane), 1e-6)
+            let spanEps2 = spanEps * spanEps
+            sS.withUnsafeMutableBufferPointer { ssp in
+                wS.withUnsafeMutableBufferPointer { wp in
+                    lMaxPlane.withUnsafeBufferPointer { mp in
+                        spanPlane.withUnsafeBufferPointer { sp in
+                            cG.withUnsafeBufferPointer { cgp in
+                                DispatchQueue.concurrentPerform(iterations: gh) { gy in
+                                    for gx in 0..<gw {
+                                        let i = gy * gw + gx
+                                        let span = sp[i]
+                                        // Relative swing ≈ 1 for spill over black,
+                                        // small for any static surface (defocus
+                                        // preserves a cell's mean); absolute gate
+                                        // keeps noise-only cells out.
+                                        let rel = span / (mp[i] + 1e-6)
+                                        let sig = span * span / (span * span + spanEps2)
+                                        ssp[i] = rel * sig * max(1 - min(cgp[i], 1), 0)
+                                        wp[i] = spillScale * ssp[i]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DMapFusion.dumpPlane(wS, env: "HYPERFOCAL_DUMP_SPILLW")
+            DMapFusion.dumpPlane(dS, env: "HYPERFOCAL_DUMP_SPILLD")
+        }
+
+        if isStale?() == true { return nil }
+
+        // Tier 3: push-pull prior over the tier-1+2+S measurements — a dense,
         // scale-free interpolation that gives far-from-any-signal cells a
-        // sane value for the α floor to lean on.
+        // sane value for the α floor to lean on. Tier-1 weight is discounted
+        // by spill strength: a cell whose luminance tracks the *frame* is
+        // seeing defocus spill, and any sharpness it measured is the glow's
+        // own edge — near-rim glow is bright enough to clear the noise floor,
+        // so no confidence threshold catches it.
         var vw = [Float](repeating: 0, count: gridCount)
         var wt = [Float](repeating: 0, count: gridCount)
         for i in 0..<gridCount {
-            vw[i] = cdG[i] + c2[i] * d2[i]
-            wt[i] = cG[i] + c2[i]
+            let keep = 1 - sS[i]
+            vw[i] = cdG[i] * keep + c2[i] * d2[i] + wS[i] * dS[i]
+            wt[i] = cG[i] * keep + c2[i] + wS[i]
         }
         let dPP = pushPull(valueWeight: vw, weight: wt, width: gw, height: gh)
 
@@ -259,7 +358,8 @@ public enum DepthRegularize {
         log?(String(format: "guided regularizer: r=%d cells, eps=%g, guide scale %.4f",
                     r, eps, s))
         return Coefficients(a: aBar, b: bBar, gridWidth: gw, gridHeight: gh,
-                            guideScale: s, factor: factor)
+                            guideScale: s, factor: factor,
+                            spillDepth: dS, spillStrength: sS)
     }
 
     // MARK: - Full-res apply (CPU)
@@ -304,9 +404,12 @@ public enum DepthRegularize {
             ?? 0.35
         let cons = consensus ?? []
         let hasConsensus = cons.count == width * height
+        let hasSpill = c.spillDepth.count == gw * gh && c.spillStrength.count == gw * gh
         var out = [Float](repeating: 0, count: width * height)
         c.a.withUnsafeBufferPointer { ap in
         c.b.withUnsafeBufferPointer { bp in
+        c.spillDepth.withUnsafeBufferPointer { sdp in
+        c.spillStrength.withUnsafeBufferPointer { ssp in
         guide.withUnsafeBufferPointer { gp in
         confidence.withUnsafeBufferPointer { cp in
         depthMed.withUnsafeBufferPointer { dp in
@@ -329,9 +432,28 @@ public enum DepthRegularize {
                     let bS = (bp[i00] * (1 - fx) + bp[i01] * fx) * (1 - fy)
                            + (bp[i10] * (1 - fx) + bp[i11] * fx) * fy
                     let i = y * width + x
-                    let dReg = aS * (scale * gp[i]) + bS
+                    var dReg = aS * (scale * gp[i]) + bS
                     let agreement = hasConsensus ? np[i] : 0
-                    let cf = max(cp[i], agreement * agreement)
+                    var cf = max(cp[i], agreement * agreement)
+                    if hasSpill {
+                        // Spill discount + pull. Luminance that tracks the
+                        // *frame* is defocus spill; sharpness measured there
+                        // is the glow's own edge, and its votes agree as
+                        // coherently as real texture — so the swing evidence
+                        // must discount the trust itself (near-rim glow
+                        // clears the noise floor, and consensus would
+                        // otherwise promote it to full confidence). What
+                        // trust remains after the discount still wins;
+                        // the rest pulls toward the darkest (least-
+                        // contaminated) frame.
+                        let sSm = (ssp[i00] * (1 - fx) + ssp[i01] * fx) * (1 - fy)
+                                + (ssp[i10] * (1 - fx) + ssp[i11] * fx) * fy
+                        let dSm = (sdp[i00] * (1 - fx) + sdp[i01] * fx) * (1 - fy)
+                                + (sdp[i10] * (1 - fx) + sdp[i11] * fx) * fy
+                        cf *= 1 - sSm
+                        let pull = sSm * (1 - cf)
+                        dReg += pull * (dSm - dReg)
+                    }
                     let r = dReg - dp[i]
                     let t = r * r / (r * r + rw2)
                     let s = min(max((cf - gateLo) / 0.35, 0), 1)
@@ -340,7 +462,7 @@ public enum DepthRegularize {
                     op[i] = min(max(cb * dp[i] + (1 - cb) * dReg, 0), maxIndex)
                 }
             }
-        }}}}}}}
+        }}}}}}}}}
         return out
     }
 

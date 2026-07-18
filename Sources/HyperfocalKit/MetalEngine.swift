@@ -292,6 +292,16 @@ public final class MetalEngine {
         dst[gid.y * p.dstW + gid.x] = acc / float((x1 - x0) * (y1 - y0));
     }
 
+    // Rec. 709 luma plane — must match ImageBuffer.luminancePlane.
+    kernel void luma_plane(device const float4* img [[buffer(0)]],
+                           device float* out [[buffer(1)]],
+                           constant uint& count [[buffer(2)]],
+                           uint gid [[thread_position_in_grid]]) {
+        if (gid >= count) return;
+        float4 p = img[gid];
+        out[gid] = 0.2126f * p.x + 0.7152f * p.y + 0.0722f * p.z;
+    }
+
     struct PreviewParams { uint srcW; uint srcH; uint dstW; uint dstH; };
 
     // Preview threshold 0.01: above anything the tent floor alone can
@@ -326,10 +336,14 @@ public final class MetalEngine {
 
     // ---- Depth-map regularization ----
 
-    struct ConfidenceParams { uint width; uint concW; uint concH; uint factor; float floor2; float conc2; };
+    struct ConfidenceParams { uint width; uint concW; uint concH; uint factor; float halfFloor; float conc2; };
 
     // Confidence = noise-floor factor × peak-concentration factor; both land
-    // on 0.5 exactly at their thresholds. The concentration plane arrives at
+    // on 0.5 exactly at their thresholds, and the energy factor hard-zeros at
+    // or below half the floor (sigmoid over the excess above floor/2) so
+    // glow-only background pixels hold exactly no opinion — an asymptotic
+    // tail would outweigh the regularizer's prior floor and feed the median's
+    // ratio-based consensus. The concentration plane arrives at
     // the sharpness-downsample grid (bokeh sweeps are hundreds of pixels wide
     // — grid resolution is plenty) and is sampled bilinearly: nearest lookup
     // imprinted hard grid squares into the confidence-blended depth. Must
@@ -341,8 +355,9 @@ public final class MetalEngine {
                                device const float* concentration [[buffer(4)]],
                                uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float e2 = energy[gid] * energy[gid];
-        float c = e2 / (e2 + p.floor2);
+        float es = max(energy[gid] - p.halfFloor, 0.0f);
+        float e2 = es * es;
+        float c = e2 / (e2 + p.halfFloor * p.halfFloor);
         if (p.conc2 > 0.0f) {
             float invF = 1.0f / float(p.factor);
             uint x = gid % p.width, y = gid / p.width;
@@ -454,6 +469,7 @@ public final class MetalEngine {
     struct GuidedApplyParams {
         uint width; uint height; uint gridW; uint gridH;
         float invFactor; float guideScale; float maxIndex; float residualW2;
+        uint hasSpill;
     };
 
     // Guided-regularizer apply + preservation blend: bilinearly sample the
@@ -471,6 +487,8 @@ public final class MetalEngine {
                                    device float* out [[buffer(5)]],
                                    constant GuidedApplyParams& p [[buffer(6)]],
                                    device const float* consensus [[buffer(7)]],
+                                   device const float* spillD [[buffer(8)]],
+                                   device const float* spillS [[buffer(9)]],
                                    uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= p.width || gid.y >= p.height) return;
         int gw = int(p.gridW), gh = int(p.gridH);
@@ -492,6 +510,16 @@ public final class MetalEngine {
         float dReg = aS * (p.guideScale * guide[i]) + bS;
         float agreement = consensus[i];
         float cf = max(conf[i], agreement * agreement);
+        if (p.hasSpill != 0) {
+            // Spill discount + pull — see DepthRegularize.applyBlend.
+            float sSm = (spillS[i00] * (1.0f - fx) + spillS[i01] * fx) * (1.0f - fy)
+                      + (spillS[i10] * (1.0f - fx) + spillS[i11] * fx) * fy;
+            float dSm = (spillD[i00] * (1.0f - fx) + spillD[i01] * fx) * (1.0f - fy)
+                      + (spillD[i10] * (1.0f - fx) + spillD[i11] * fx) * fy;
+            cf *= 1.0f - sSm;
+            float pull = sSm * (1.0f - cf);
+            dReg += pull * (dSm - dReg);
+        }
         float r = dReg - depthMed[i];
         float t = r * r / (r * r + p.residualW2);
         float s = clamp((cf - 0.35f) / 0.35f, 0.0f, 1.0f);

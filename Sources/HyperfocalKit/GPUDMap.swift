@@ -27,7 +27,7 @@ public enum GPUDMap {
         var concW: UInt32
         var concH: UInt32
         var factor: UInt32
-        var floor2: Float
+        var halfFloor: Float
         var conc2: Float
     }
 
@@ -93,6 +93,7 @@ public enum GPUDMap {
         let previewPipeline = try engine.pipeline("progressive_preview")
         let planePreviewPipeline = try engine.pipeline("plane_preview")
         let boxDownPipeline = try engine.pipeline("box_downsample")
+        let lumaPipeline = try engine.pipeline("luma_plane")
 
         let blurWeights = Filters.gaussianKernel(sigma: options.sharpnessSigma)
         let blurRadius = blurWeights.count / 2
@@ -105,9 +106,11 @@ public enum GPUDMap {
         var previewBuf: MTLBuffer!
         var pw = 0, ph = 0
         var sharpBuf: MTLBuffer!
+        var lumGridBuf: MTLBuffer!
         var guideBuf: MTLBuffer!  // guided path only
         var sw = 0, sh = 0
         var sharpnessPlanes: [[Float]] = []
+        var luminancePlanes: [[Float]] = []  // per-frame grid luminance (spill floor)
         var gains0 = [SIMD3<Float>]()  // per-channel gain per frame, vs frame 0
         var meanRGB0 = SIMD3<Float>(repeating: 1)
 
@@ -183,6 +186,7 @@ public enum GPUDMap {
                 sw = (width + factor - 1) / factor
                 sh = (height + factor - 1) / factor
                 sharpBuf = try engine.makeBuffer(floats: sw * sh)
+                lumGridBuf = try engine.makeBuffer(floats: sw * sh)
                 guideBuf = try engine.makeBuffer(floats: pixelCount)
                 memset(guideBuf.contents(), 0, pixelCount * 4)
                 if wantSpill {
@@ -271,6 +275,17 @@ public enum GPUDMap {
             encoder.setBytes(&boxParams, length: MemoryLayout<BoxDownParams>.size, index: 2)
             engine.dispatch2D(encoder, boxDownPipeline, width: sw, height: sh)
 
+            // Grid luminance for the spill floor (tmpBuf is free after the
+            // blurs). Same shape as the retained sharpness planes.
+            encoder.setBuffer(input, offset: 0, index: 0)
+            encoder.setBuffer(tmpBuf, offset: 0, index: 1)
+            encoder.setBytes(&count32, length: 4, index: 2)
+            engine.dispatch1D(encoder, lumaPipeline, count: pixelCount)
+            encoder.setBuffer(tmpBuf, offset: 0, index: 0)
+            encoder.setBuffer(lumGridBuf, offset: 0, index: 1)
+            encoder.setBytes(&boxParams, length: MemoryLayout<BoxDownParams>.size, index: 2)
+            engine.dispatch2D(encoder, boxDownPipeline, width: sw, height: sh)
+
             if progress != nil {
                 // Snapshot the argmax plane — the depth map forming. Inverted so
                 // near (first frame, close-to-far capture order) is bright.
@@ -309,6 +324,12 @@ public enum GPUDMap {
                 for i in plane.indices { plane[i] *= gain }
             }
             sharpnessPlanes.append(plane)
+            var lumPlane = [Float](UnsafeBufferPointer(
+                start: lumGridBuf.contents().assumingMemoryBound(to: Float.self), count: sw * sh))
+            if gain != 1 {
+                for i in lumPlane.indices { lumPlane[i] *= gain }
+            }
+            luminancePlanes.append(lumPlane)
             log?("depth pass \(fi + 1)/\(frameCount)")
             if let progress {
                 progress(FusionProgress(stage: .depth,
@@ -365,6 +386,7 @@ public enum GPUDMap {
                                         concentration: concentration,
                                         concentrationWidth: sw,
                                         planes: sharpnessPlanes,
+                                        luminancePlanes: luminancePlanes,
                                         guide: guide, guideBuf: guideBuf,
                                         width: width, height: height,
                                         frameCount: frameCount, options: options,
@@ -554,6 +576,7 @@ public enum GPUDMap {
         var guideScale: Float
         var maxIndex: Float
         var residualW2: Float
+        var hasSpill: UInt32
     }
 
     /// The regularization chain (confidence → weighted median → guided filter
@@ -566,6 +589,7 @@ public enum GPUDMap {
                                 bestEBuf: MTLBuffer, bestIdxBuf: MTLBuffer,
                                 concentration: [Float], concentrationWidth: Int,
                                 planes: [[Float]],
+                                luminancePlanes: [[Float]] = [],
                                 guide: [Float], guideBuf: MTLBuffer,
                                 width: Int, height: Int, frameCount: Int,
                                 options: DMapFusion.Options,
@@ -580,7 +604,7 @@ public enum GPUDMap {
         let energies = UnsafeBufferPointer(
             start: bestEBuf.contents().assumingMemoryBound(to: Float.self), count: pixelCount)
         let floor = max(1e-6, options.noiseFloor * DMapFusion.percentile95(energies))
-        let floor2 = floor * floor
+        let halfFloor = floor / 2
         let conc2 = options.peakConcentration * options.peakConcentration
         let factor = DMapFusion.sharpnessDownsample
 
@@ -593,7 +617,7 @@ public enum GPUDMap {
                                           concH: UInt32(concentration.count
                                                         / max(concentrationWidth, 1)),
                                           factor: UInt32(factor),
-                                          floor2: floor2, conc2: conc2)
+                                          halfFloor: halfFloor, conc2: conc2)
 
         let confBuf = try engine.makeBuffer(floats: pixelCount)
         let medBuf = try engine.makeBuffer(floats: pixelCount)
@@ -658,6 +682,7 @@ public enum GPUDMap {
         if let coeff = DepthRegularize.gridCoefficients(
                 confidence: confPlane, depthMed: medPlane, guide: guide,
                 width: width, height: height, planes: planes,
+                luminancePlanes: luminancePlanes,
                 factor: factor, frameCount: frameCount,
                 options: options, log: log) {
             progress?(0.7)
@@ -670,16 +695,31 @@ public enum GPUDMap {
             coeff.b.withUnsafeBufferPointer {
                 memcpy(bBuf.contents(), $0.baseAddress!, gridCount * 4)
             }
+            let spillDBuf = try engine.makeBuffer(floats: gridCount)
+            let spillSBuf = try engine.makeBuffer(floats: gridCount)
+            memset(spillDBuf.contents(), 0, gridCount * 4)
+            memset(spillSBuf.contents(), 0, gridCount * 4)
+            if coeff.spillDepth.count == gridCount, coeff.spillStrength.count == gridCount {
+                coeff.spillDepth.withUnsafeBufferPointer {
+                    memcpy(spillDBuf.contents(), $0.baseAddress!, gridCount * 4)
+                }
+                coeff.spillStrength.withUnsafeBufferPointer {
+                    memcpy(spillSBuf.contents(), $0.baseAddress!, gridCount * 4)
+                }
+            }
             let applyPipeline = try engine.pipeline("guided_apply_blend")
             try run("guided apply") { encoder in
                 let rw = Float(max(2, frameCount / 16))
+                let hasSpill = coeff.spillDepth.count == gridCount
+                    && coeff.spillStrength.count == gridCount
                 var params = GuidedApplyParams(
                     width: UInt32(width), height: UInt32(height),
                     gridW: UInt32(coeff.gridWidth), gridH: UInt32(coeff.gridHeight),
                     invFactor: 1 / Float(coeff.factor),
                     guideScale: coeff.guideScale,
                     maxIndex: Float(frameCount - 1),
-                    residualW2: rw * rw)
+                    residualW2: rw * rw,
+                    hasSpill: hasSpill ? 1 : 0)
                 encoder.setBuffer(aBuf, offset: 0, index: 0)
                 encoder.setBuffer(bBuf, offset: 0, index: 1)
                 encoder.setBuffer(guideBuf, offset: 0, index: 2)
@@ -689,6 +729,8 @@ public enum GPUDMap {
                 encoder.setBytes(&params, length: MemoryLayout<GuidedApplyParams>.size,
                                  index: 6)
                 encoder.setBuffer(consensusBuf, offset: 0, index: 7)
+                encoder.setBuffer(spillDBuf, offset: 0, index: 8)
+                encoder.setBuffer(spillSBuf, offset: 0, index: 9)
                 engine.dispatch2D(encoder, applyPipeline, width: width, height: height)
             }
             swap(&cur, &spare)

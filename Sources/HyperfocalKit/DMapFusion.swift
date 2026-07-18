@@ -131,6 +131,7 @@ public enum DMapFusion {
         var bestEnergy: [Float] = []
         var bestIndex: [Float] = []
         var sharpnessPlanes: [[Float]] = []
+        var luminancePlanes: [[Float]] = []  // per-frame grid luminance (spill floor)
         var guidePlane: [Float] = []  // winner-frame luminance (regularizer guide)
         var gains0 = [SIMD3<Float>]()  // per-channel gain per frame, vs frame 0
         var meanRGB0 = SIMD3<Float>(repeating: 1)
@@ -177,6 +178,16 @@ public enum DMapFusion {
             }
             sharpnessPlanes.append(boxDownsample(energy, width: width, height: height,
                                                  factor: Self.sharpnessDownsample))
+            // Grid luminance, gain-corrected like the energy, for the spill
+            // floor: on signal-free background the least-contaminated frame is
+            // the darkest one, and that judgment needs the luminance-vs-frame
+            // curve.
+            var lumGrid = boxDownsample(lum, width: width, height: height,
+                                        factor: Self.sharpnessDownsample)
+            if gain != 1 {
+                for i in lumGrid.indices { lumGrid[i] *= gain }
+            }
+            luminancePlanes.append(lumGrid)
             let index = Float(fi)
             let first = fi == 0
             energy.withUnsafeBufferPointer { ep in
@@ -241,6 +252,7 @@ public enum DMapFusion {
                                         / sharpnessDownsample,
                                     concentrationFactor: sharpnessDownsample,
                                     planes: sharpnessPlanes,
+                                    luminancePlanes: luminancePlanes,
                                     guide: guidePlane.isEmpty ? nil : guidePlane,
                                     width: width, height: height,
                                     frameCount: frameCount, options: options, log: log,
@@ -638,6 +650,7 @@ public enum DMapFusion {
                                        concentrationWidth: Int = 0,
                                        concentrationFactor: Int = 1,
                                        planes: [[Float]]? = nil,
+                                       luminancePlanes: [[Float]]? = nil,
                                        guide: [Float]? = nil,
                                        width: Int, height: Int, frameCount: Int,
                                        options: Options, log: ((String) -> Void)? = nil,
@@ -650,8 +663,19 @@ public enum DMapFusion {
         // are 0.5 exactly at their thresholds: an at-threshold pixel that's
         // otherwise fully confident lands right on the seed boundary; below
         // it, it can't seed at all.
+        //
+        // The energy factor hard-zeros at half the floor (sigmoid over the
+        // *excess* above floor/2) rather than tailing off asymptotically: on
+        // featureless background the only energy is defocus glow spilling off
+        // the subject, and an asymptotic tail leaves those pixels holding
+        // 1e-3…1e-1 confidence — enough to outweigh the regularizer's prior
+        // floor and to feed the weighted median's consensus (a weight *ratio*,
+        // blind to how tiny the weights are — which is why no noise-floor
+        // setting could kill the resulting halos). Below-half-floor pixels
+        // must hold exactly no opinion.
         let floor = max(1e-6, options.noiseFloor * percentile95(bestEnergy))
-        let floor2 = floor * floor
+        let halfFloor = floor / 2
+        let halfFloor2 = halfFloor * halfFloor
         let conc2 = options.peakConcentration * options.peakConcentration
         var confidence = [Float](repeating: 0, count: width * height)
         // The concentration plane lives at the sharpness grid; sample it
@@ -675,8 +699,9 @@ public enum DMapFusion {
                     }
                     for x in 0..<width {
                         let i = y * width + x
-                        let e2 = be[i] * be[i]
-                        var c = e2 / (e2 + floor2)
+                        let es = max(be[i] - halfFloor, 0)
+                        let e2 = es * es
+                        var c = e2 / (e2 + halfFloor2)
                         if let concentration, conc2 > 0 {
                             let gx = min(max((Float(x) + 0.5) * invConcF - 0.5, 0),
                                          Float(concentrationWidth - 1))
@@ -712,6 +737,11 @@ public enum DMapFusion {
                 radius: options.medianRadius, bins: frameCount,
                 consensusWindow: max(2, frameCount / 16))
         }
+        // Ablation switch (debug, like HYPERFOCAL_GUIDED_*): drop the
+        // dense-voting consensus from the blend to measure what it costs.
+        if ProcessInfo.processInfo.environment["HYPERFOCAL_NO_CONSENSUS"] != nil {
+            consensus = []
+        }
         dumpPlane(index, env: "HYPERFOCAL_DUMP_DMED")
         dumpPlane(consensus, env: "HYPERFOCAL_DUMP_CONSENSUS")
 
@@ -727,6 +757,7 @@ public enum DMapFusion {
            let coeff = DepthRegularize.gridCoefficients(
                 confidence: confidence, depthMed: index, guide: guide,
                 width: width, height: height, planes: planes ?? [],
+                luminancePlanes: luminancePlanes ?? [],
                 factor: concentrationFactor, frameCount: frameCount,
                 options: options, log: log, isStale: isStale) {
             progress?(0.7)
