@@ -39,7 +39,10 @@ paths stay behind `#if canImport(<Framework>)`; Linux decode/encode/EXIF/
 registration go through a C-ABI shim (`Sources/CImaging` over libtiff /
 libpng / libjpeg-turbo / LibRaw / lcms2 / exiv2 / OpenCV) wired into
 `Package.swift` via pkg-config. TIFF/PNG/JPEG round-trips verified; the
-registration seam moved off `CGImage` to a portable `GrayImage`.
+registration seam moved off `CGImage` to a portable `GrayImage`. macOS
+re-verified after the bring-up: `retouch-probe` ALL PASS, synth baselines
+unchanged (plane 38.71/38.26, object 41.29), UI suite green — the
+`GrayImage` seam is byte-identical on the Apple/Vision path.
 
 System deps (Ubuntu): `swiftlang build-essential pkg-config libraw-dev
 liblcms2-dev libexiv2-dev libjpeg-turbo8-dev libtiff-dev libpng-dev
@@ -48,33 +51,26 @@ libgif-dev` for the later rocking backend).
 
 Residuals to close (each independently landable; keep macOS green):
 
-1. **macOS verification — blocks a merge.** The shared-code changes were
-   written and only built on Linux. On a Mac, confirm `swift build &&
-   retouch-probe … ALL PASS` and the synth PSNR baselines are unchanged —
-   especially the registration seam refactor (`Aligner`/`ImageFile` moved off
-   `CGImage` to `GrayImage`; the macOS gray bytes + Vision call are meant to be
-   byte-identical, but that was not verifiable on Linux).
-
-2. **Object-scene registration gap → the Phase 1.5 A/B.** Linux registration is
+1. **Object-scene registration gap → the Phase 1.5 A/B.** Linux registration is
    OpenCV SIFT + RANSAC. The plane scene matches/exceeds Vision, but the object
    scene lags ~5 dB (35.9 vs 41.3): high-contrast subject edges punish
    sub-pixel residuals and SIFT features cluster on the lit subject. ECC
    refinement was tried and **reverted** — dense intensity alignment drifts
    across the defocus change between focus levels. Resolve as the A/B below.
 
-3. **RAW + EXIF on real frames.** `hf_decode_raw` (LibRaw, output ProPhoto→P3
+2. **RAW + EXIF on real frames.** `hf_decode_raw` (LibRaw, output ProPhoto→P3
    via lcms2) and the exiv2 EXIF reads compile but are unexercised by the synth
    gate (TIFF, no EXIF). Verify against a real NEF stack; refine the RAW color
    mapping (the ProPhoto-output first cut) and surface the as-shot neutral
    (LibRaw `cam_mul`/`pre_mul`) that DNG export's WB un-bake reads — currently
    Apple-only, so Linux DNG declares a generic neutral.
 
-4. **SIFT performance on big images.** Registration runs SIFT on full-res
+3. **SIFT performance on big images.** Registration runs SIFT on full-res
    gradient images; on 45 MP stacks that is slow (unbounded features + O(n²)
    match). Bound it (downscale-for-registration or a feature cap) without
    losing the plane-gate precision.
 
-5. **CI.** GitHub Actions Linux job: a container with the toolchain + the `-dev`
+4. **CI.** GitHub Actions Linux job: a container with the toolchain + the `-dev`
    packages above, `swift build -c release`, then synth→fuse→compare asserting
    PSNR ≈ the plane baseline.
 
