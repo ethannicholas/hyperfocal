@@ -146,30 +146,3 @@ Gates: synth baselines in the header, probe ALL PASS, CPU/GPU parity,
 and the mineral stack's three regions (shadow under the rim, substrate
 above the specimen, silhouette band) eyeballed against Helicon's result.
 
-## UI fixes
-
-### Retouch canvas ignores the crop
-
-Entering retouch on a cropped stack shows the entire uncropped image
-(reported by Ethan 2026-07-17; pre-existing, not a regression). The
-preview panes clip to the crop at draw time — inner container = the
-crop region's view rect (`ContentView.swift` `PreviewPane`, "nothing
-outside the crop ever renders") plus the rotated-crop clip path in
-`TonedImagePaneNSView.draw` — but `RetouchCanvasNSView.draw` has no
-crop handling at all and draws the full working buffer. Fix: give the
-retouch canvas the same cropped-canvas presentation the panes use
-(the shared pan/zoom coordinate space is the *cropped* canvas — see
-the nominalSize comments in ContentView). Mind that strokes and the
-session's tile invalidation work in full-image coordinates, so the
-display clip/offset must not shift where paint lands; rotated crops
-need the same clip-path treatment as the toned pane. Done = entering
-retouch with a crop (including a rotated one) shows only the cropped
-region, aligned with the panes at every zoom, strokes land exactly
-under the brush, and RetouchJourney gains a crop-then-retouch step
-verifying pixels via the export command channel.
-
-### Zoom values are broken
-
-Something has caused a regression, where 100% zoom is apparently no
-longer taking the image display scale into account - 50% zoom is
-actually the correct 1:1 zoom on my 2x retina screen.

@@ -44,6 +44,11 @@ struct ContentView: View {
                 exportSection
             }
             .formStyle(.grouped)
+            // New identity per project: a fresh form starts scrolled to the
+            // top (a leftover scroll position from the last project would
+            // hide the Fusion controls). All form state is model-backed, so
+            // nothing else is lost in the rebuild.
+            .id(model.projectGeneration)
         }
     }
 
@@ -254,6 +259,9 @@ struct ContentView: View {
         // controls.
         Section {
             if !model.isCollapsed(.fusion) {
+            // Locked during a fuse: the run uses the values it started with,
+            // so edits mid-run would neither affect it nor be recorded.
+            Group {
             LabeledSlider(
                 label: "Sharpness σ", id: "fusion.slider.sharpness", value: $model.sharpnessSigma, range: 1...16,
                 format: "%.1f px",
@@ -278,6 +286,8 @@ struct ContentView: View {
                 range: Double(DMapFusion.minBlendRadius)...4,
                 format: "%.2f",
                 help: "How many neighboring frames blend together at each pixel when rendering. Wider is smoother across focus transitions, but slightly softer.")
+            }
+            .disabled(model.phase.isRunning)
 
             Button {
                 model.fuse()
@@ -310,6 +320,7 @@ struct ContentView: View {
                     Button("Reset") { model.resetFusionSettings() }
                         .controlSize(.small)
                         .buttonStyle(.borderless)
+                        .disabled(model.phase.isRunning)
                         .accessibilityIdentifier("fusion.reset")
                 }
             }
@@ -455,6 +466,8 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if model.retouchMode, let session = model.retouch {
                 RetouchPreviewArea(session: session, tone: model.tone,
+                                   crop: model.displayCrop,
+                                   cropAngle: model.displayCropAngle,
                                    outputMode: $model.outputMode)
             } else {
                 fusionPreviewPanes
@@ -494,10 +507,7 @@ struct ContentView: View {
                     sourceAngle: model.displayCropAngle,
                     loading: false,
                     emptyHint: model.canFuse ? "Press “Fuse Stack”" : "No output yet",
-                    // Depth maps and the noise-floor preview are data
-                    // visualizations, not image content — leave them alone.
-                    tone: (model.outputMode == .depth
-                           || model.noiseFloorPreview != nil) ? ToneSettings() : model.tone,
+                    tone: outputPaneShowsData ? ToneSettings() : model.tone,
                     eventOverlay: model.cropMode ? AnyView(CropOverlay(
                         viewport: model.viewport,
                         canvas: model.outputNominalSize ?? .zero,
@@ -553,6 +563,17 @@ struct ContentView: View {
         return model.outputMode == .depth ? model.depthPreview : model.outputPreview
     }
 
+    /// True when the output pane is showing a data visualization — the depth
+    /// map, the noise-floor preview, or a non-render progressive (the
+    /// aligner's gradient image, the depth map forming) — rather than image
+    /// pixels. Tone applies to pixels only; visualizations render exactly
+    /// as computed.
+    private var outputPaneShowsData: Bool {
+        if model.noiseFloorPreview != nil { return true }
+        if model.phase.isRunning { return model.progressiveIsData }
+        return model.outputMode == .depth
+    }
+
     // During a run, the input pane cycles through frames as they're processed.
     private var showProcessingSource: Bool {
         model.phase.isRunning && model.processingSource != nil
@@ -589,17 +610,26 @@ struct ContentView: View {
 struct RetouchPreviewArea: View {
     @ObservedObject var session: RetouchSession
     var tone = ToneSettings()
+    /// Crop presentation (nil = full canvas). The session — strokes,
+    /// cursor, tiles — stays in full-image coordinates throughout; the
+    /// panes display the crop exactly like the fusion panes do.
+    var crop: CGRect? = nil
+    var cropAngle: Double = 0
     /// The Result/Depth toggle stays available while retouching: strokes
     /// co-paint the depth plane, so depth artifacts (which the rocking
     /// animation turns into motion) are fixed with the depth view live.
     @Binding var outputMode: AppModel.OutputMode
 
     var body: some View {
+        let nominal = crop?.size ?? session.nominalSize
         HStack(spacing: 1) {
             PreviewPane(
                 title: "Source: \(session.sourceName)  ↑/↓ cycle · space picks sharpest",
                 image: session.sourceDisplay,
-                nominalSize: session.nominalSize,
+                nominalSize: nominal,
+                sourceOrigin: crop?.origin ?? .zero,
+                sourceCanvas: session.nominalSize,
+                sourceAngle: cropAngle,
                 loading: session.sourceLoading,
                 emptyHint: session.sourceError ?? "Loading source…",
                 loadingStatus: session.sourceStatus,
@@ -612,17 +642,21 @@ struct RetouchPreviewArea: View {
                     ? "Retouched Depth — drag to paint from source"
                     : "Retouched Output — drag to paint from source",
                 image: nil,
-                nominalSize: session.nominalSize,
+                nominalSize: nominal,
                 loading: false,
                 emptyHint: "",
                 brushCursor: brushCursor,
                 eventOverlay: AnyView(
                     RetouchOverlay(viewport: viewport,
-                                   imageSize: session.nominalSize,
-                                   session: session)),
+                                   imageSize: nominal,
+                                   session: session,
+                                   cropOrigin: crop?.origin ?? .zero,
+                                   cropAngle: cropAngle)),
                 canvas: AnyView(RetouchCanvas(session: session, viewport: viewport,
                                               tone: tone,
-                                              showDepth: outputMode == .depth)),
+                                              showDepth: outputMode == .depth,
+                                              cropRect: crop,
+                                              cropAngle: cropAngle)),
                 header: {
                     Picker("", selection: $outputMode) {
                         ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
@@ -640,10 +674,21 @@ struct RetouchPreviewArea: View {
 
     /// Only offered when a stroke would actually paint — no circle over a
     /// still-loading source, and none for the rest of a drag that started
-    /// before the source arrived.
+    /// before the source arrived. The session cursor is a full-image point;
+    /// the panes draw in displayed (crop) space.
     private var brushCursor: (point: CGPoint, radius: CGFloat)? {
         guard session.canPaint else { return nil }
-        return session.cursor.map { ($0, CGFloat(session.brushRadius)) }
+        return session.cursor.map { (displayedPoint(from: $0), CGFloat(session.brushRadius)) }
+    }
+
+    /// Full-image → displayed (inverse of RetouchEventView.fullImagePoint).
+    private func displayedPoint(from full: CGPoint) -> CGPoint {
+        guard let crop else { return full }
+        let bx = full.x - crop.midX
+        let by = full.y - crop.midY
+        let rad = CGFloat(cropAngle) * .pi / 180
+        return CGPoint(x: crop.width / 2 + bx * cos(rad) + by * sin(rad),
+                       y: crop.height / 2 - bx * sin(rad) + by * cos(rad))
     }
 
     @EnvironmentObject var viewport: ViewportState
@@ -1299,6 +1344,26 @@ final class RetouchEventView: PanZoomEventView {
     var onBrushResize: ((Double) -> Void)?  // multiplicative factor
     var onTogglePMax: (() -> Void)?
     var onToggleResult: (() -> Void)?
+    /// Crop presentation: `imageSize` is the displayed (cropped) space, but
+    /// the session — strokes, cursor, tiles — lives in full-image
+    /// coordinates. These describe the crop so events can convert.
+    var cropOrigin: CGPoint = .zero
+    var cropAngle: Double = 0
+
+    /// Displayed (crop-space) point → full-image point. Same mapping as
+    /// AppModel.cropped's sampling: b = center + R(angle)·(d − size/2).
+    /// Identity when no crop is shown (origin zero, angle zero).
+    func fullImagePoint(from displayed: CGPoint) -> CGPoint {
+        let dx = displayed.x - imageSize.width / 2
+        let dy = displayed.y - imageSize.height / 2
+        let cx = cropOrigin.x + imageSize.width / 2
+        let cy = cropOrigin.y + imageSize.height / 2
+        guard cropAngle != 0 else { return CGPoint(x: cx + dx, y: cy + dy) }
+        let rad = CGFloat(cropAngle) * .pi / 180
+        return CGPoint(x: cx + dx * cos(rad) - dy * sin(rad),
+                       y: cy + dx * sin(rad) + dy * cos(rad))
+    }
+
 
     /// Painting happens at a point; the arrow cursor obscures it, the brush
     /// circle only shows the radius.
@@ -1329,13 +1394,14 @@ final class RetouchEventView: PanZoomEventView {
 
     override func mouseMoved(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
-        onHover?(imagePoint(from: location))
+        onHover?(imagePoint(from: location).map(fullImagePoint(from:)))
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let location = convert(event.locationInWindow, from: nil)
-        guard let point = imagePoint(from: location) else { return }
+        guard let point = imagePoint(from: location).map(fullImagePoint(from:))
+        else { return }
         lastImagePoint = point
         onStrokeBegan?(point)
     }
@@ -1343,7 +1409,8 @@ final class RetouchEventView: PanZoomEventView {
     override func mouseDragged(with event: NSEvent) {
         // Left-drag paints; panning stays on two-finger scroll / pinch.
         let location = convert(event.locationInWindow, from: nil)
-        guard let point = imagePoint(from: location) else { return }
+        guard let point = imagePoint(from: location).map(fullImagePoint(from:))
+        else { return }
         onHover?(point)
         if let last = lastImagePoint {
             onStrokeMoved?(last, point)
@@ -1376,7 +1443,7 @@ final class RetouchEventView: PanZoomEventView {
     /// to the image point now under the mouse.
     private func refreshHover(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
-        onHover?(imagePoint(from: location))
+        onHover?(imagePoint(from: location).map(fullImagePoint(from:)))
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1412,6 +1479,20 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
             needsDisplay = true
         }
     }
+    /// Crop presentation (same scheme as TonedImagePaneNSView): the session
+    /// bitmap stays full-canvas, but the displayed coordinate space is the
+    /// crop — nil shows the whole canvas. Strokes and tiles keep full-image
+    /// coordinates; only drawing shifts, rotates, and clips.
+    var cropRect: CGRect? {
+        didSet { if cropRect != oldValue { needsDisplay = true } }
+    }
+    var cropAngle: Double = 0 {
+        didSet { if cropAngle != oldValue { needsDisplay = true } }
+    }
+    /// The displayed (pan/zoom) coordinate space: the crop when one is set.
+    private var displaySize: CGSize {
+        cropRect?.size ?? session?.nominalSize ?? .zero
+    }
     /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
     /// re-invoked through the AnyView wrapping when only the viewport changes.
     var viewport: ViewportState? {
@@ -1444,8 +1525,8 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
     /// Redraw fully only when the viewport actually moved (cursor-move renders
     /// must not repaint the canvas).
     func viewportDidUpdate() {
-        guard let session, let viewport else { return }
-        let scale = viewport.effectiveScale(imageSize: session.nominalSize, viewSize: bounds.size)
+        guard session != nil, let viewport else { return }
+        let scale = viewport.effectiveScale(imageSize: displaySize, viewSize: bounds.size)
         if scale != lastScale || viewport.offset != lastOffset {
             lastScale = scale
             lastOffset = viewport.offset
@@ -1454,17 +1535,36 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
     }
 
     private func invalidate(imageRect: CGRect) {
-        guard let session, let viewport else { return }
-        let imageSize = session.nominalSize
-        let scale = viewport.effectiveScale(imageSize: imageSize, viewSize: bounds.size)
-        let originX = bounds.width / 2 - (viewport.offset.width + imageSize.width / 2) * scale
-        let originY = bounds.height / 2 - (viewport.offset.height + imageSize.height / 2) * scale
-        let viewRect = CGRect(x: originX + imageRect.minX * scale,
-                              y: originY + imageRect.minY * scale,
+        guard session != nil, let viewport else { return }
+        let display = displaySize
+        let scale = viewport.effectiveScale(imageSize: display, viewSize: bounds.size)
+        let origin = CGPoint(
+            x: bounds.width / 2
+                - (viewport.offset.width + display.width / 2 + (cropRect?.minX ?? 0)) * scale,
+            y: bounds.height / 2
+                - (viewport.offset.height + display.height / 2 + (cropRect?.minY ?? 0)) * scale)
+        var viewRect = CGRect(x: origin.x + imageRect.minX * scale,
+                              y: origin.y + imageRect.minY * scale,
                               width: imageRect.width * scale,
                               height: imageRect.height * scale)
-            .insetBy(dx: -2, dy: -2)
-        setNeedsDisplay(viewRect.intersection(bounds))
+        if cropAngle != 0 {
+            // The bitmap is drawn rotated about the crop center's view
+            // position — dirty rects must cover the rotated placement.
+            viewRect = viewRect.applying(rotationAboutCropCenter(scale: scale))
+        }
+        setNeedsDisplay(viewRect.insetBy(dx: -2, dy: -2).intersection(bounds))
+    }
+
+    /// View-space rotation the draw pass applies to the bitmap (identity
+    /// when no rotated crop is shown). CGRect.applying takes the bounding
+    /// box, which is exactly what dirty rects need.
+    private func rotationAboutCropCenter(scale: CGFloat) -> CGAffineTransform {
+        guard let viewport, cropAngle != 0 else { return .identity }
+        let cx = bounds.width / 2 - viewport.offset.width * scale
+        let cy = bounds.height / 2 - viewport.offset.height * scale
+        return CGAffineTransform(translationX: cx, y: cy)
+            .rotated(by: -CGFloat(cropAngle) * .pi / 180)
+            .translatedBy(x: -cx, y: -cy)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1473,9 +1573,15 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
         ctx.fill(dirtyRect)
         guard let session, let viewport else { return }
         let imageSize = session.nominalSize
-        let scale = viewport.effectiveScale(imageSize: imageSize, viewSize: bounds.size)
-        let originX = bounds.width / 2 - (viewport.offset.width + imageSize.width / 2) * scale
-        let originY = bounds.height / 2 - (viewport.offset.height + imageSize.height / 2) * scale
+        let display = displaySize
+        let scale = viewport.effectiveScale(imageSize: display, viewSize: bounds.size)
+        // View position of the bitmap's pixel (0,0) in the displayed
+        // (possibly cropped) coordinate space — same math as
+        // TonedImagePaneNSView so the panes never drift apart.
+        let originX = bounds.width / 2
+            - (viewport.offset.width + display.width / 2 + (cropRect?.minX ?? 0)) * scale
+        let originY = bounds.height / 2
+            - (viewport.offset.height + display.height / 2 + (cropRect?.minY ?? 0)) * scale
         ctx.interpolationQuality = scale >= 2 ? .none : .low
         let drawImage: ((CGImage?) -> Void) -> Void = self.showDepth
             ? session.withDepthDisplayCGImage
@@ -1483,6 +1589,20 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
         drawImage { cg in
             guard let cg else { return }
             ctx.saveGState()
+            if cropRect != nil {
+                // Clip to the displayed crop region: the bitmap extends past
+                // it (and rotated spill would render "whole image, tilted").
+                ctx.clip(to: CGRect(
+                    x: bounds.width / 2
+                        - (viewport.offset.width + display.width / 2) * scale,
+                    y: bounds.height / 2
+                        - (viewport.offset.height + display.height / 2) * scale,
+                    width: display.width * scale,
+                    height: display.height * scale))
+                if cropAngle != 0 {
+                    ctx.concatenate(rotationAboutCropCenter(scale: scale))
+                }
+            }
             // draw(_:in:) is bottom-up; re-flip within our flipped coordinates.
             ctx.translateBy(x: 0, y: bounds.height)
             ctx.scaleBy(x: 1, y: -1)
@@ -1501,6 +1621,8 @@ struct RetouchCanvas: NSViewRepresentable {
     let viewport: ViewportState
     var tone = ToneSettings()
     var showDepth = false
+    var cropRect: CGRect? = nil
+    var cropAngle: Double = 0
 
     func makeNSView(context: Context) -> RetouchCanvasNSView {
         let view = RetouchCanvasNSView()
@@ -1509,6 +1631,8 @@ struct RetouchCanvas: NSViewRepresentable {
         view.viewport = viewport
         view.attach(session: session)
         view.showDepth = showDepth
+        view.cropRect = cropRect
+        view.cropAngle = cropAngle
         // The depth map is a data visualization — never tone it.
         view.applyTone(showDepth ? ToneSettings() : tone)
         return view
@@ -1518,6 +1642,8 @@ struct RetouchCanvas: NSViewRepresentable {
         view.viewport = viewport
         view.attach(session: session)
         view.showDepth = showDepth
+        view.cropRect = cropRect
+        view.cropAngle = cropAngle
         view.applyTone(showDepth ? ToneSettings() : tone)
         view.viewportDidUpdate()
     }
@@ -1525,8 +1651,11 @@ struct RetouchCanvas: NSViewRepresentable {
 
 struct RetouchOverlay: NSViewRepresentable {
     let viewport: ViewportState
+    /// Displayed (crop-space) size — the shared pan/zoom coordinate space.
     let imageSize: CGSize
     let session: RetouchSession
+    var cropOrigin: CGPoint = .zero
+    var cropAngle: Double = 0
 
     func makeNSView(context: Context) -> RetouchEventView {
         let view = RetouchEventView()
@@ -1548,6 +1677,8 @@ struct RetouchOverlay: NSViewRepresentable {
     func updateNSView(_ view: RetouchEventView, context: Context) {
         view.viewport = viewport
         view.imageSize = imageSize
+        view.cropOrigin = cropOrigin
+        view.cropAngle = cropAngle
         if view.bounds.size != .zero {
             viewport.lastPaneSize = view.bounds.size
         }

@@ -142,5 +142,96 @@ final class RetouchJourneyTests: XCTestCase {
                 1.0, "reverted depth should match the fusion's")
             mode.radioButtons["Result"].click()
         }
+
+        // Crop-then-retouch: the retouch panes must present the crop (not
+        // the whole canvas) with strokes still landing under the brush. The
+        // crop is the top-left quadrant, so a stroke dragged across the
+        // pane's CENTER lands inside the crop only if the pane shows crop
+        // space — under the old full-canvas presentation the same drag
+        // painted the canvas center, outside the crop, and the cropped
+        // export wouldn't change.
+        try cropRetouchStep(app, name: "axis-aligned", angle: nil)
+        try cropRetouchStep(app, name: "rotated", angle: 12)
+        try sendCommand(["action": "set-crop"])  // clear for whoever runs next
+    }
+
+    /// Set a top-left-quadrant crop (optionally rotated), retouch a stroke
+    /// through the pane center, and verify the cropped DEPTH export changed.
+    /// Depth, not the result image: strokes co-paint the source's frame
+    /// index into the depth plane, so after cycling the source a couple of
+    /// frames the stamp differs from the fused depth no matter what the
+    /// pixels look like — the result image can legitimately not change
+    /// when the stamped frame is sharp exactly where the stroke lands.
+    /// The crop is positioned so a pane-center stroke lands inside it only
+    /// when the panes present crop space (full-canvas center falls outside).
+    private func cropRetouchStep(_ app: XCUIApplication, name: String,
+                                 angle: Double?) throws {
+        try XCTContext.runActivity(named: "crop-then-retouch (\(name))") { _ in
+            var crop = ["action": "set-crop",
+                        "x": "0", "y": "0", "w": "220", "h": "160"]
+            if let angle { crop["angle"] = String(angle) }
+            try sendCommand(crop)
+            let mode = app.radioGroups["output.mode"]
+            mode.radioButtons["Depth"].click()
+            let base = try exportAndInspect("crop-\(name)-depth-base.tif")
+            XCTAssertEqual(base.width, 220, "export should have the crop's width")
+            XCTAssertEqual(base.height, 160, "export should have the crop's height")
+
+            app.buttons["retouch.start"].click()
+            XCTAssertTrue(app.buttons["retouch.done"].waitForExistence(timeout: 15))
+            app.activate()
+            let window = app.windows.firstMatch
+            let revert = app.buttons["retouch.revert-all"]
+            var attempts = 0
+            while !revert.isEnabled && attempts < 10 {
+                let start = window.coordinate(withNormalizedOffset:
+                    CGVector(dx: 0.75, dy: 0.45 + 0.01 * Double(attempts)))
+                let end = window.coordinate(withNormalizedOffset:
+                    CGVector(dx: 0.85, dy: 0.55))
+                start.click(forDuration: 0.2, thenDragTo: end)
+                _ = waitFor(timeout: 2) { revert.isEnabled }
+                attempts += 1
+            }
+            XCTAssertTrue(revert.isEnabled,
+                          "no stroke registered after \(attempts) attempts")
+
+            // Move the source off whatever frame matches the local depth
+            // (the first stroke focused the event view, so arrows cycle),
+            // then stroke again and require the depth stamp to show up in
+            // the cropped export. Retry: the cycled source loads async and
+            // strokes are no-ops until it lands.
+            app.typeKey(.downArrow, modifierFlags: [])
+            app.typeKey(.downArrow, modifierFlags: [])
+            var depthMoved = false
+            for attempt in 0..<5 where !depthMoved {
+                let start = window.coordinate(withNormalizedOffset:
+                    CGVector(dx: 0.76, dy: 0.42 + 0.01 * Double(attempt)))
+                let end = window.coordinate(withNormalizedOffset:
+                    CGVector(dx: 0.88, dy: 0.58))
+                start.click(forDuration: 0.2, thenDragTo: end)
+                let edited = try exportAndInspect("crop-\(name)-depth-edited.tif")
+                XCTAssertEqual(edited.width, 220)
+                XCTAssertEqual(edited.height, 160)
+                depthMoved = try pixelDiff(
+                    Fixtures.out.appendingPathComponent("crop-\(name)-depth-base.tif"),
+                    Fixtures.out.appendingPathComponent("crop-\(name)-depth-edited.tif")) > 1.0
+            }
+            XCTAssertTrue(depthMoved,
+                          "a pane-center stroke should change the cropped depth export "
+                          + "— it lands outside the crop if the panes show full canvas")
+
+            // Clean up for the next step: revert the strokes, leave retouch.
+            var clicks = 0
+            while revert.isEnabled && clicks < 4 {
+                app.activate()
+                revert.click()
+                _ = waitFor(timeout: 2) { !revert.isEnabled }
+                clicks += 1
+            }
+            XCTAssertFalse(revert.isEnabled, "revert failed in crop step")
+            mode.radioButtons["Result"].click()
+            app.buttons["retouch.done"].click()
+            XCTAssertTrue(app.buttons["retouch.start"].waitForExistence(timeout: 10))
+        }
     }
 }

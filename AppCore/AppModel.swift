@@ -265,6 +265,11 @@ final class AppModel: ObservableObject {
     private var stageTimerStart = Date()
     @Published var progressive: CGImage?
     @Published var progressiveNominalSize: CGSize?
+    /// True while `progressive` holds a data visualization — the aligner's
+    /// gradient-magnitude image or the depth map forming — rather than the
+    /// render accumulating. Only render-stage previews are image pixels;
+    /// the panes must not tone anything else.
+    @Published private(set) var progressiveIsData = false
     @Published var processingSource: CGImage?
     @Published var processingSourceLabel: String?
     @Published var processingSourceNominalSize: CGSize?
@@ -1031,6 +1036,7 @@ final class AppModel: ObservableObject {
 
     private func installRestored(_ restored: [RestoredStack], selectedIndex: Int?,
                                  access: (roots: [URL], accessed: [URL], remap: [String: String])) {
+        projectGeneration += 1  // fresh context — sidebar scroll resets
         stopScopedAccess()
         scopedAccessURLs = access.accessed
         var newStacks = [Stack]()
@@ -1355,9 +1361,11 @@ final class AppModel: ObservableObject {
     /// The crop the panes should render right now: nil while editing (the
     /// whole canvas must be visible to drag handles on) or when no valid
     /// crop is set. Bounds-checked against the current result so a stale
-    /// rect from a re-fused canvas can't shear the display.
+    /// rect from a re-fused canvas can't shear the display. Retouch shows
+    /// it too — strokes still land in full-image coordinates; only the
+    /// presentation is cropped.
     var displayCrop: CGRect? {
-        guard !cropMode, !phase.isRunning, !retouchMode, let result else { return nil }
+        guard !cropMode, !phase.isRunning, let result else { return nil }
         return Self.validCrop(cropRect, width: result.width, height: result.height)
     }
 
@@ -1742,7 +1750,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Bumped whenever the whole project context is replaced (new project,
+    /// close, open). The sidebar keys its settings form off this so scroll
+    /// position resets to the top instead of surviving into an unrelated
+    /// project.
+    @Published private(set) var projectGeneration = 0
+
     private func resetForNewProject() {
+        projectGeneration += 1
         // Cached alignments must die with the project: a re-opened stack
         // should register fresh, not silently reuse transforms from a
         // previous session's load. (Project restore re-seeds the cache from
@@ -2196,6 +2211,7 @@ final class AppModel: ObservableObject {
         stageETA = nil
         stageTimerStage = nil
         progressive = nil
+        progressiveIsData = false
         progressiveNominalSize = nil
         processingSource = nil
         processingSourceLabel = nil
@@ -2226,6 +2242,11 @@ final class AppModel: ObservableObject {
         // transforms/crop; a new fuse can change both.
         inputCache = [:]
         inputCacheOrder = []
+        // Snapshot NOW, not at completion: the user can move sliders while
+        // the fusion runs, and the result must record the settings it was
+        // actually fused with — not whatever the UI shows when it finishes
+        // (that marked the result "current" at settings it never used).
+        let settingsInUse = currentFuseSettings()
         var config = StackPipeline.Configuration()
         config.align = alignFrames
         config.preferGPU = useGPU
@@ -2303,6 +2324,7 @@ final class AppModel: ObservableObject {
                                                                       update.fraction))
                         if let preview {
                             self.progressive = preview
+                            self.progressiveIsData = update.stage != .render
                             if let nominal { self.progressiveNominalSize = nominal }
                         }
                         if let source {
@@ -2329,9 +2351,9 @@ final class AppModel: ObservableObject {
                     self.resultDepth = output.depth
                     self.resultSharpness = output.sharpness
                     self.resultGains = output.gains
-                    // Snapshot what this result was fused with (staleness
-                    // tracking for the Fuse buttons).
-                    self.fusedSettings = self.currentFuseSettings()
+                    // What this result was fused with (staleness tracking
+                    // for the Fuse buttons) — the start-of-fuse snapshot.
+                    self.fusedSettings = settingsInUse
                     self.depthResult = output.depthMap
                     self.outputPreview = resultCG
                     self.depthPreview = depthCG
