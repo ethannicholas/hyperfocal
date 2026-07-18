@@ -102,12 +102,12 @@ Next, in rough order (each independently landable):
 1. **Display currency past the skeleton.** The bridge serves a ≤1600px
    toned preview copy per change; the plan's zero-copy tiled pane (custom
    textured QQuickItem, dirty rects, full-res zoom) replaces
-   QQuickPaintedItem + full-image copies. Depth/data images must render
-   untoned like the native panes (bridge currently serves result preview
-   only).
-2. **Mirror the sidebar**: fusion sliders (share the `hf_` naming with
-   the UITest set-slider ids), stack list with per-frame include
-   checkboxes, output mode toggle, batch fuse.
+   QQuickPaintedItem + full-image copies. (Depth already serves untoned —
+   the pixels-only tone rule is in the bridge's display path.)
+2. **Sidebar remainder**: multi-stack tree + batch fuse ("Fuse N
+   Stacks"), input pane alongside the output pane, crop presentation.
+   The single-stack sidebar (sliders via the shared UITest id namespace,
+   frame checkboxes, Result/Depth toggle) is in.
 3. **Settings isolation** (shared `org.hyperfocal.settings` suite —
    per-call restore is a stopgap; the shell needs its own store, Phase 3
    glue on the plan).
