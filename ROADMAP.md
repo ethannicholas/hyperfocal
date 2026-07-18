@@ -24,9 +24,10 @@ evidence in `Docs/research/2026-07-17-windows-linux-port-evaluation.md`).
 Summary: Mac keeps the native app untouched; Windows/Linux share one Qt
 shell that also builds on macOS as a dev/validation target; shared Swift
 core (`HyperfocalKit` + extracted `AppCore`) everywhere; CIRAW stays on
-Mac with LibRaw elsewhere; OpenCV replaces Vision registration on all
-platforms if it validates. Work the phases in order; each item below is
-independently landable and keeps all existing gates green.
+Mac with LibRaw elsewhere; registration is Vision on macOS and OpenCV on
+Linux (decided 2026-07-18 — see plan decision 2). Work the phases in
+order; each item below is independently landable and keeps all existing
+gates green.
 
 ### Phase 1: portable engine + CLI on Linux
 
@@ -51,26 +52,24 @@ libgif-dev` for the later rocking backend).
 
 Residuals to close (each independently landable; keep macOS green):
 
-1. **Object-scene registration gap → the Phase 1.5 A/B.** Linux registration is
-   OpenCV SIFT + RANSAC. The plane scene matches/exceeds Vision, but the object
-   scene lags ~5 dB (35.9 vs 41.3): high-contrast subject edges punish
-   sub-pixel residuals and SIFT features cluster on the lit subject. ECC
-   refinement was tried and **reverted** — dense intensity alignment drifts
-   across the defocus change between focus levels. Resolve as the A/B below.
-
-2. **RAW + EXIF on real frames.** `hf_decode_raw` (LibRaw, output ProPhoto→P3
+1. **RAW + EXIF on real frames.** `hf_decode_raw` (LibRaw, output ProPhoto→P3
    via lcms2) and the exiv2 EXIF reads compile but are unexercised by the synth
    gate (TIFF, no EXIF). Verify against a real NEF stack; refine the RAW color
    mapping (the ProPhoto-output first cut) and surface the as-shot neutral
    (LibRaw `cam_mul`/`pre_mul`) that DNG export's WB un-bake reads — currently
    Apple-only, so Linux DNG declares a generic neutral.
 
-3. **SIFT performance on big images.** Registration runs SIFT on full-res
-   gradient images; on 45 MP stacks that is slow (unbounded features + O(n²)
-   match). Bound it (downscale-for-registration or a feature cap) without
-   losing the plane-gate precision.
+2. **SIFT performance on big images (bound proven on macOS — port to Linux).**
+   Full-res SIFT on 45 MP frames needs ~7.5 GB and often finds no model. The
+   fix — register on a downscaled copy (longest side 2500 px) and map the
+   homography back via `S⁻¹·H·S` — is implemented and validated in the macOS
+   A/B path (`Aligner.registerOpenCV`/`boxDownscale`; it made the 60×43 MP
+   fluorite stack register cleanly, residuals matching Vision). Port the same
+   downscale wrapper to the Linux `register(GrayImage,GrayImage)` call site
+   (its `hf_register` call is currently unbounded); synth frames sit below the
+   bound so the plane gate is unaffected.
 
-4. **CI.** GitHub Actions Linux job: a container with the toolchain + the `-dev`
+3. **CI.** GitHub Actions Linux job: a container with the toolchain + the `-dev`
    packages above, `swift build -c release`, then synth→fuse→compare asserting
    PSNR ≈ the plane baseline.
 
@@ -78,19 +77,6 @@ Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
 capture-time EXIF *stamping* in `SynthStack` (ImageIO-only, for session-split
 tests).
-
-### Phase 1.5: OpenCV vs Vision registration gate
-
-The seam is off `CGImage` (a portable `GrayImage` now), and OpenCV
-`SIFT + findHomography(RANSAC)` is the Linux backend — mandatory there (no
-Vision). Interim Linux finding: SIFT matches/exceeds Vision on the synth
-**plane** (39.1 vs 38.7) but lags on the **object** scene (~5 dB); ECC dense
-refinement hurt and was dropped. The A/B is not settled — it still needs a Mac
-run (residual-score harness + synth PSNR + the fluorite mineral stack) to
-decide whether *macOS* also drops Vision, or keeps it while Linux uses OpenCV.
-Mind the convention: Vision reports bottom-left-origin warps (flip in
-`Aligner.convention`); OpenCV is already top-left, so the Linux path takes no
-flip. Record the outcome in `Docs/cross-platform-plan.md`.
 
 ## Engine performance
 

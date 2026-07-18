@@ -34,16 +34,25 @@ not per completed task.
 1. **RAW decode:** `CIRAWFilter` stays on macOS; LibRaw (+ lcms2 for
    Display-P3 float) on Windows/Linux. Accepted: per-platform render
    divergence; projects stay portable but re-render per-platform.
-2. **Registration:** build the OpenCV homography backend behind
-   `Aligner.register`'s seam and validate against Vision (residual
-   scoring harness + real stacks + synth gates). **If quality matches,
-   OpenCV becomes the registration engine on every platform, including
-   macOS.** Vision remains only if OpenCV measurably loses. Note: the
-   seam is currently `CGImage`-typed and Vision-backed, and both are
-   Apple-only — so on Linux OpenCV is *mandatory* (there is no Vision to
-   fall back to) and the seam must first move off `CGImage` to a
-   portable gray representation. The A/B is only about whether macOS
-   *also* drops Vision; Linux drops it regardless.
+2. **Registration:** **settled (2026-07-18) — Vision stays on macOS,
+   OpenCV (SIFT + RANSAC) is the Linux backend.** The seam moved off
+   `CGImage` to a portable `GrayImage`; the OpenCV backend was built and
+   A/B'd against Vision on macOS with decode/color/downscale held
+   identical, so the comparison isolates registration. Result: OpenCV was
+   parity-or-better on the synth plane (39.1 vs 38.7 dB) and on the real
+   fluorite stack (matching post-warp residuals, zero failures), but lost
+   ~5.6 dB on the synth *object* scene — an isolated high-contrast subject
+   on a black field, where SIFT features clump on the subject and skew the
+   global homography. By the pre-registered criterion ("Vision stays only
+   if OpenCV measurably loses") that object-scene regression keeps Vision
+   on macOS. On Linux OpenCV is used regardless — there is no Vision to
+   fall back to. Accepted: per-platform registration divergence, alongside
+   the RAW-decode divergence. The A/B harness stays in the tree
+   (`COpenCVRegister` + `HYPERFOCAL_REGISTER=opencv`, macOS-only, inert
+   unless OpenCV is installed and the env var is set) as the revalidation
+   vehicle if the object-scene gap is ever closed. Evidence:
+   `Docs/research/2026-07-17-windows-linux-port-evaluation.md` and the
+   Phase 1.5 commit.
 3. **GPU:** Windows/Linux ship CPU-only first (the CPU path is the
    reference implementation; 45 MP fusion is decode-bound). If profiling
    later justifies it: one wgpu/WGSL compute backend translated from the
@@ -99,12 +108,13 @@ no user-visible change.
   fusion as a real product and the permanent regression vehicle for the
   non-Mac stack.
 
-### Phase 1.5 — registration decision gate
+### Phase 1.5 — registration decision gate ✔ decided 2026-07-18
 
-OpenCV backend behind `Aligner.register`; A/B against Vision (residual
-scores, synth PSNR, the fluorite mineral stack eyeballed). Outcome:
-adopt everywhere, or keep Vision on Mac and OpenCV elsewhere with the
-divergence documented next to the RAW-decode divergence.
+Done. OpenCV backend built behind `Aligner.register` and A/B'd against
+Vision on macOS (registration isolated: shared decode/color/downscale).
+**Outcome: Vision on Mac, OpenCV on Linux** — see decision 2 above for the
+evidence (plane/fluorite parity; ~5.6 dB object-scene regression is the
+deciding loss). Divergence documented next to the RAW-decode divergence.
 
 ### Phase 2 — C-ABI bridge + Qt shell walking skeleton (on macOS)
 
