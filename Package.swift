@@ -82,15 +82,19 @@ extraTargets.append(
                   "AppCore/DialogService.swift"]
     )
 )
-// Phase 1.5 registration A/B: if OpenCV is installed (e.g. `brew install
-// opencv`), compile a small OpenCV-only registration target so the fusion
-// pipeline can run OpenCV registration on macOS and be compared against Vision
-// on identical frames (Docs/cross-platform-plan.md decision 2). Absent OpenCV,
-// macOS builds Vision-only and this is a no-op — CI and clean Macs are
-// unaffected. Selected at runtime via HYPERFOCAL_REGISTER=opencv (see Aligner).
-// Homebrew ships OpenCV 5 (module `opencv5`); Linux/older installs use
-// `opencv4`. Take whichever pkg-config knows.
-if let cvPkg = ["opencv5", "opencv4"].first(where: pkgExists) {
+// Phase 1.5 registration A/B (Docs/cross-platform-plan.md decision 2):
+// HYPERFOCAL_OPENCV_AB=1 at build time compiles a small OpenCV-only
+// registration target so the fusion pipeline can run OpenCV registration on
+// macOS and be compared against Vision on identical frames; selected at
+// runtime via HYPERFOCAL_REGISTER=opencv (see Aligner). Explicitly opt-in,
+// never auto-detected: with Homebrew OpenCV merely installed, auto-linking
+// put its ad-hoc-signed dylibs into HyperfocalKit and thus the *app*, whose
+// library validation rightly refuses them (different Team IDs) — dyld killed
+// the app at launch. The A/B is a CLI-only affair; the app must always build
+// Vision-only. Homebrew ships OpenCV 5 (module `opencv5`); Linux/older
+// installs use `opencv4`. Take whichever pkg-config knows.
+if ProcessInfo.processInfo.environment["HYPERFOCAL_OPENCV_AB"] == "1",
+   let cvPkg = ["opencv5", "opencv4"].first(where: pkgExists) {
     extraTargets.append(
         .target(
             name: "COpenCVRegister",

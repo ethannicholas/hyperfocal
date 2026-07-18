@@ -48,9 +48,14 @@ not per completed task.
    on macOS. On Linux OpenCV is used regardless — there is no Vision to
    fall back to. Accepted: per-platform registration divergence, alongside
    the RAW-decode divergence. The A/B harness stays in the tree
-   (`COpenCVRegister` + `HYPERFOCAL_REGISTER=opencv`, macOS-only, inert
-   unless OpenCV is installed and the env var is set) as the revalidation
-   vehicle if the object-scene gap is ever closed. Evidence:
+   (`COpenCVRegister`, macOS-only; build the CLI with
+   `HYPERFOCAL_OPENCV_AB=1 swift build`, then run with
+   `HYPERFOCAL_REGISTER=opencv`) as the revalidation vehicle if the
+   object-scene gap is ever closed. The build-time flag is a deliberate
+   opt-in: auto-detecting an installed Homebrew OpenCV linked its
+   ad-hoc-signed dylibs into the app, whose library validation kills the
+   process at launch (different Team IDs) — the app must always build
+   Vision-only. Evidence:
    `Docs/research/2026-07-17-windows-linux-port-evaluation.md` and the
    Phase 1.5 commit.
 3. **GPU:** Windows/Linux ship CPU-only first (the CPU path is the
