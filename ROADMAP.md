@@ -128,36 +128,38 @@ each independently landable:
    bridge-ready via hf_load_stack); unsaved-work quit gate through the
    dialog seam; drag-drop of folders onto the window; empty-state
    hints in panes and stack list.
-3. **Export flows**: format/color-space options UI (needs a format
+2. **Export flows**: format/color-space options UI (needs a format
    enumeration or hardcoded list matching AppModel.ExportFormat),
    Export Depth label swap, export-all-fused, export-aligned-frames,
    rocking-animation export (+ strength; Linux needs the FFmpeg/giflib
    backend first) — all but the format param need bridge calls.
-4. **Crop editing overlay**: drag handles/move/rotate, aspect-ratio
+3. **Crop editing overlay**: drag handles/move/rotate, aspect-ratio
    picker, orientation swap, modal accept/cancel (C/X/return/esc) —
    replaces the numeric stand-in; bridge-ready (hf_set_crop).
-5. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
+4. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
    ⌘0): PaneItem-side only, no bridge needed.
-6. **Settings window**: order-by-capture, align, normalize-exposure,
+5. **Settings window**: order-by-capture, align, normalize-exposure,
    GPU, disk-cache toggles — each needs a bridge get/set.
-7. **Noise-floor live depth preview** on slider drag (begin/end bridge
+6. **Noise-floor live depth preview** on slider drag (begin/end bridge
    calls mirroring beginNoiseFloorPreview/end).
-8. **Retouch in the Qt shell** — the largest piece: full session
+7. **Retouch in the Qt shell** — the largest piece: full session
    surface over the bridge (enter/exit, brush size/softness, source
    kind picker + frame cycling + auto-pick, strokes with the
    image-space dirty rects, PMax build/cancel/progress, revert,
    stroke undo), a paint-canvas item, and dirty-rect tile invalidation
    in the pane (deferred item below). Sidebar completeness (tone/
-   fusion resets, cancel, badges, include-all/none, counts) landed
-   2026-07-19.
-9. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+   fusion resets, cancel, badges, include-all/none, counts) and
+   undo/redo (hf_undo/redo/titles + the hf_tone_editing drag bracket —
+   tone sets outside a bracket are silent to undo; Qt sliders bracket
+   via pressed state; StandardKey shortcuts) landed 2026-07-19.
+8. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
 Then, deferred until their prerequisites exist:
 
 - **Dirty-rect tile invalidation** once a partial-update producer exists
-  (retouch strokes in the Qt shell, item 8): today any epoch bump drops
+  (retouch strokes in the Qt shell, item 7): today any epoch bump drops
   every tile, which is right for wholesale changes (progressive
   updates, new fuse) and wasteful only for localized ones — build it
   with the feature that needs it.
