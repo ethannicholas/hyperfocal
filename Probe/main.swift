@@ -1,4 +1,8 @@
 import AppKit
+// White-box regression harness: reaches model internals by design, so the
+// module is imported @testable (AppCore builds with -enable-testing) —
+// probe needs must never force AppCore internals public.
+@testable import AppCore
 import HyperfocalKit
 import simd
 

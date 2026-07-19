@@ -5,14 +5,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BRIDGE_DIR="$PWD/QtShell/build/bridge"
+# The bridge is a SwiftPM dynamic-library product (over the AppCore
+# module) — the same build carries to Linux, where there is no Xcode.
+BRIDGE_DIR="$PWD/.build/debug"
 
-echo "== building HyperfocalBridge.dylib"
-(cd App && xcodegen generate >/dev/null)
-xcodebuild -project App/Hyperfocal.xcodeproj -scheme HyperfocalBridge \
-    -configuration Debug -destination 'platform=macOS' \
-    CONFIGURATION_BUILD_DIR="$BRIDGE_DIR" build \
-    | grep -E "error:|warning:|BUILD" | grep -v "warning: Run script" || true
+echo "== building libHyperfocalBridge (SwiftPM)"
+swift build --product HyperfocalBridge
 
 echo "== configuring + building Qt shell"
 cmake -S QtShell -B QtShell/build -DHYPERFOCAL_BRIDGE_DIR="$BRIDGE_DIR" \

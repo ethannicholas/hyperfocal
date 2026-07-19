@@ -97,30 +97,30 @@ private func logFusion(_ line: String) {
 }
 
 @MainActor
-final class AppModel: ObservableObject {
+public final class AppModel: ObservableObject {
 
-    enum Phase: Equatable {
+    public enum Phase: Equatable {
         case empty
         case loaded
         case running
         case done
         case failed(String)
 
-        var isRunning: Bool { self == .running }
+        public var isRunning: Bool { self == .running }
     }
 
-    enum OutputMode: String, CaseIterable {
+    public enum OutputMode: String, CaseIterable {
         case result = "Result"
         case depth = "Depth"
     }
 
-    enum ExportFormat: String, CaseIterable, Identifiable {
+    public enum ExportFormat: String, CaseIterable, Identifiable {
         case tiff = "TIFF (16-bit)"
         case dng = "DNG (raw)"
         case png = "PNG (16-bit)"
         case jpeg = "JPEG"
 
-        var id: String { rawValue }
+        public var id: String { rawValue }
 
         var fileExtension: String {
             switch self {
@@ -137,7 +137,7 @@ final class AppModel: ObservableObject {
         case displayP3 = "Display P3"
         case prophoto = "ProPhoto RGB"
 
-        var id: String { rawValue }
+        public var id: String { rawValue }
 
         var cgColorSpace: CGColorSpace? {
             switch self {
@@ -148,10 +148,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    @Published var phase: Phase = .empty
-    @Published var frames: [URL] = []
-    @Published var included: Set<URL> = []
-    @Published var selection: Set<URL> = []
+    @Published public var phase: Phase = .empty
+    @Published public var frames: [URL] = []
+    @Published public var included: Set<URL> = []
+    @Published public var selection: Set<URL> = []
     /// Frames the last fuse flagged as bad, with the reason ("4.1× darker than
     /// the stack") — shown as a warning badge in the Stack list. Excluded
     /// frames stay listed with their checkbox cleared, so opting back in is
@@ -166,17 +166,17 @@ final class AppModel: ObservableObject {
     // the *selected* stack (so the whole single-stack pipeline — fuse,
     // retouch, preview — operates unchanged); `selectStack` stashes the
     // mirrors into the outgoing Stack and installs the incoming one.
-    @Published private(set) var stacks: [Stack] = []
-    @Published var selectedStackID: UUID?
+    @Published public private(set) var stacks: [Stack] = []
+    @Published public var selectedStackID: UUID?
     @Published var expandedStacks: Set<UUID> = []
     var selectedStack: Stack? { stacks.first { $0.id == selectedStackID } }
 
-    enum StackStatus {
+    public enum StackStatus {
         case unfused, fusing, fused, failed(String)
     }
 
     // Queue ("Fuse Enabled Stacks") progress prefix, e.g. "Stack 2 of 5 · ".
-    @Published var batchStatus: String?
+    @Published public var batchStatus: String?
     private var batchMode = false
     /// Probe overrides: answer the burst-split question ((directory name,
     /// burst count) → load as separate stacks?); receive queue/export
@@ -216,14 +216,14 @@ final class AppModel: ObservableObject {
     // The fusion sliders are per-project creative controls, deliberately
     // not persisted: with the defaults dialed in, every new project starts
     // from them (the set-and-forget switches below stay persisted).
-    @Published var sharpnessSigma = defaultSharpnessSigma
-    @Published var noiseFloor: Double = AppModel.defaultNoiseFloor {
+    @Published public var sharpnessSigma = defaultSharpnessSigma
+    @Published public var noiseFloor: Double = AppModel.defaultNoiseFloor {
         didSet {
             if noiseFloorPreviewActive { updateNoiseFloorPreview() }
         }
     }
-    @Published var medianRadius = defaultMedianRadius
-    @Published var blendRadius = defaultBlendRadius
+    @Published public var medianRadius = defaultMedianRadius
+    @Published public var blendRadius = defaultBlendRadius
     @Published var normalizeExposure: Bool {
         didSet { Self.settings.set(normalizeExposure, forKey: "normalizeExposure") }
     }
@@ -258,34 +258,34 @@ final class AppModel: ObservableObject {
     }
 
     // Progress
-    @Published var stageText = ""
-    @Published var stageFraction = 0.0
+    @Published public var stageText = ""
+    @Published public var stageFraction = 0.0
     // Remaining-time estimate for the current stage, extrapolated from its
     // fraction. Stage-scoped on purpose: stages have wildly different
     // per-unit costs, so a whole-fuse extrapolation would swing hardest
     // exactly when it's most visible (the long depth/render stages).
-    @Published var stageETA: String?
+    @Published public var stageETA: String?
     private var stageTimerStage: FusionProgress.Stage?
     private var stageTimerStart = Date()
-    @Published var progressive: CGImage?
+    @Published public var progressive: CGImage?
     @Published var progressiveNominalSize: CGSize?
     /// True while `progressive` holds a data visualization — the aligner's
     /// gradient-magnitude image or the depth map forming — rather than the
     /// render accumulating. Only render-stage previews are image pixels;
     /// the panes must not tone anything else.
-    @Published private(set) var progressiveIsData = false
-    @Published var processingSource: CGImage?
+    @Published public private(set) var progressiveIsData = false
+    @Published public var processingSource: CGImage?
     @Published var processingSourceLabel: String?
     @Published var processingSourceNominalSize: CGSize?
 
     // Results & previews
-    @Published var outputPreview: CGImage?
-    @Published var depthPreview: CGImage?
-    @Published var inputPreview: CGImage?
+    @Published public var outputPreview: CGImage?
+    @Published public var depthPreview: CGImage?
+    @Published public var inputPreview: CGImage?
     @Published var inputPreviewURL: URL?
     /// The preview is warped into the fused canvas (alignment transforms
     /// existed when it was decoded) rather than the raw file.
-    @Published var inputPreviewAligned = false
+    @Published public var inputPreviewAligned = false
     @Published var inputPreviewLoading = false
     /// Why the selected frame couldn't be shown (missing file, decode failure).
     /// Without this the pane falls back to the "select a frame" hint, which is
@@ -294,13 +294,13 @@ final class AppModel: ObservableObject {
     /// True pixel dimensions of the input preview (the preview CGImage may be
     /// a reduced-resolution bitmap stretched to this size).
     @Published var inputPixelSize: CGSize?
-    @Published var outputMode: OutputMode = .result
+    @Published public var outputMode: OutputMode = .result
     /// Lightroom-style tone adjustments (per stack, saved in projects):
     /// live on every preview — panes and retouch canvas — and baked into
     /// TIFF/PNG/JPEG exports at full float precision before quantization.
     /// Linear DNG ignores them by design: that format hands unmodified
     /// linear data to a real raw developer.
-    @Published var tone = ToneSettings() {
+    @Published public var tone = ToneSettings() {
         didSet {
             guard oldValue != tone else { return }
             if !installingStack { hasUnsavedWork = true }
@@ -309,14 +309,14 @@ final class AppModel: ObservableObject {
     /// Non-destructive output crop for the selected stack, in result-canvas
     /// pixels (nil = full canvas). Applies to every export, the animation,
     /// and the panes; saved per stack in the project.
-    @Published var cropRect: CGRect? {
+    @Published public var cropRect: CGRect? {
         didSet {
             guard oldValue != cropRect else { return }
             if !installingStack { hasUnsavedWork = true }
         }
     }
     /// Crop rotation in degrees about the rect's center (0 = axis-aligned).
-    @Published var cropAngle: Double = 0 {
+    @Published public var cropAngle: Double = 0 {
         didSet {
             guard oldValue != cropAngle else { return }
             if !installingStack { hasUnsavedWork = true }
@@ -405,7 +405,7 @@ final class AppModel: ObservableObject {
         didSet { Self.settings.set(animationFPS.rawValue, forKey: "animationFPS") }
     }
 
-    @Published var exportFormat: ExportFormat {
+    @Published public var exportFormat: ExportFormat {
         didSet { Self.settings.set(exportFormat.rawValue, forKey: "exportFormat") }
     }
     @Published var exportColorSpace: ExportColorSpace {
@@ -484,7 +484,7 @@ final class AppModel: ObservableObject {
     private var grantedRoots: [URL] = []
     private var scopedAccessURLs: [URL] = []
 
-    init() {
+    public init() {
         let d = Self.settings
         animationStrength = d.string(forKey: "animationStrength")
             .flatMap { AnimationStrength(rawValue: $0) } ?? .medium
@@ -714,7 +714,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func selectStack(_ id: UUID) {
+    public func selectStack(_ id: UUID) {
         guard id != selectedStackID, !phase.isRunning,
               let target = stacks.first(where: { $0.id == id }) else { return }
         if let current = selectedStack { stash(into: current) }
@@ -724,7 +724,7 @@ final class AppModel: ObservableObject {
 
     /// Live status for the tree's glyphs: the selected stack reads the
     /// mirrors (its Stack object is stale until stashed).
-    func status(of stack: Stack) -> StackStatus {
+    public func status(of stack: Stack) -> StackStatus {
         if stack.id == selectedStackID {
             if phase.isRunning { return .fusing }
             if result != nil { return .fused }
@@ -736,7 +736,7 @@ final class AppModel: ObservableObject {
         return .unfused
     }
 
-    func setStackEnabled(_ id: UUID, to value: Bool) {
+    public func setStackEnabled(_ id: UUID, to value: Bool) {
         guard let stack = stacks.first(where: { $0.id == id }) else { return }
         objectWillChange.send()
         stack.enabled = value
@@ -819,7 +819,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Stacks the queue button would fuse: enabled and out of date.
-    var pendingStackCount: Int {
+    public var pendingStackCount: Int {
         stacks.filter { $0.enabled && needsRefuse($0) }.count
     }
 
@@ -885,7 +885,7 @@ final class AppModel: ObservableObject {
     /// wires MacDialogService at launch. Nil (probe, unwired tests) resolves
     /// every interaction as "cancelled"; the per-prompt test overrides below
     /// short-circuit before it either way.
-    var dialogs: DialogService?
+    public var dialogs: DialogService?
 
     /// Testability hook: when set, confirmation alerts are answered by the
     /// closure (keyed on the message) instead of blocking on a modal — the
@@ -1256,7 +1256,7 @@ final class AppModel: ObservableObject {
         blendRadius = Self.defaultBlendRadius
     }
 
-    var canFuse: Bool {
+    public var canFuse: Bool {
         includedFrames.count >= 2 && !phase.isRunning
             && (selectedStack?.enabled ?? true)
             && (selectedStack.map { needsRefuse($0) } ?? true)
@@ -1311,7 +1311,7 @@ final class AppModel: ObservableObject {
     }
 
     /// The rotation the panes should apply alongside displayCrop.
-    var displayCropAngle: Double { displayCrop != nil ? cropAngle : 0 }
+    public var displayCropAngle: Double { displayCrop != nil ? cropAngle : 0 }
 
     /// X key / the orientation button: swap the crop between landscape and
     /// portrait. Locked aspects flip via cropPortrait (whose didSet
@@ -1368,7 +1368,7 @@ final class AppModel: ObservableObject {
     /// rect from a re-fused canvas can't shear the display. Retouch shows
     /// it too — strokes still land in full-image coordinates; only the
     /// presentation is cropped.
-    var displayCrop: CGRect? {
+    public var displayCrop: CGRect? {
         guard !cropMode, !phase.isRunning, let result else { return nil }
         return Self.validCrop(cropRect, width: result.width, height: result.height)
     }
@@ -1561,7 +1561,7 @@ final class AppModel: ObservableObject {
     /// rather than replacing the project, so they never discard work and
     /// never need to warn. A dropped project file is the exception — that
     /// means "open this project", which replaces and therefore confirms.
-    func addStacks(urls: [URL]) {
+    public func addStacks(urls: [URL]) {
         guard !phase.isRunning else { return }
         if urls.contains(where: {
             $0.pathExtension.lowercased() == ProjectStore.fileExtension
@@ -1820,7 +1820,7 @@ final class AppModel: ObservableObject {
     /// parallel stacks don't pay). Re-fusing one stack is what Fuse Stack is
     /// for. Bad frames are excluded silently — an unattended queue must keep
     /// moving. Cancel stops the whole queue.
-    func fuseEnabledStacks() {
+    public func fuseEnabledStacks() {
         guard !phase.isRunning else { return }
         if let current = selectedStack { stash(into: current) }
         let pending = stacks.filter { $0.enabled && needsRefuse($0) }
@@ -2065,7 +2065,7 @@ final class AppModel: ObservableObject {
     /// Checkbox semantics: toggling a row that's part of a multi-selection
     /// applies the row's new state to every selected row. Frames of
     /// non-selected stacks toggle directly on their Stack.
-    func setIncluded(_ url: URL, to value: Bool) {
+    public func setIncluded(_ url: URL, to value: Bool) {
         if !frames.contains(url),
            let owner = stacks.first(where: { $0.frames.contains(url) }) {
             objectWillChange.send()
@@ -2116,7 +2116,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - Input preview
 
-    func selectionChanged() {
+    public func selectionChanged() {
         guard let url = frames.first(where: { selection.contains($0) }) ?? selection.first else {
             return  // keep showing the last frame rather than blanking the pane
         }
@@ -2204,7 +2204,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - Fusion
 
-    func fuse() {
+    public func fuse() {
         guard canFuse else { return }
         // Before any state changes: a cancelled preflight must leave the
         // current result and phase untouched.
@@ -2763,7 +2763,7 @@ final class AppModel: ObservableObject {
     /// current format/color-space/tone/output-mode state. Callable directly
     /// (UITestSupport's command channel).
     @discardableResult
-    func writeExport(to url: URL) -> Bool {
+    public func writeExport(to url: URL) -> Bool {
         if outputMode == .depth { mergeRetouchDepth() }
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
         guard let raw = outputMode == .depth ? depthResult : baseImage else { return false }

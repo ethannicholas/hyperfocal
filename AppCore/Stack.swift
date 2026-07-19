@@ -50,14 +50,14 @@ struct FuseSettings: Equatable, Codable {
 /// AppModel methods, which republish. For non-selected stacks these fields
 /// hold the stashed state the tree rows read.
 @MainActor
-final class Stack: Identifiable {
-    let id = UUID()
-    var name: String
-    var frames: [URL]
+public final class Stack: Identifiable {
+    public let id = UUID()
+    public var name: String
+    public var frames: [URL]
     var included: Set<URL>
     /// Stack checkbox: excluded from "Fuse Enabled Stacks" and shown dimmed.
     /// Does not touch the per-frame checkboxes.
-    var enabled = true
+    public var enabled = true
 
     // Fusion output; `result == nil` means unfused.
     var result: ImageBuffer?

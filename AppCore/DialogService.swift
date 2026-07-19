@@ -13,7 +13,7 @@ import Foundation
 /// resolves as "cancelled" (confirms false, choosers nil, notices dropped) —
 /// the safe answer for a frontend that can't ask.
 @MainActor
-protocol DialogService: AnyObject {
+public protocol DialogService: AnyObject {
 
     /// Two-button modal choice. True = the user chose `confirmTitle`
     /// (always the first/default button; `cancelTitle` is the second button,

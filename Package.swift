@@ -58,6 +58,7 @@ let dngPlatformDefine: CXXSetting = .define("qWinOS", to: "1")
 // non-Apple platforms (appended below).
 var hyperfocalKitDeps: [Target.Dependency] = ["CDNGSDK"]
 var extraTargets: [Target] = []
+var extraProducts: [Product] = []
 
 // HyperfocalKit's own build settings, extended per-platform below.
 var kitSwiftSettings: [SwiftSetting] = [
@@ -68,19 +69,45 @@ var kitSwiftSettings: [SwiftSetting] = [
 ]
 
 #if os(macOS)
-// The shared model layer (AppCore/) compiled headless — the same files the app
-// target compiles (App/project.yml references them by path). AppKit-backed, so
-// macOS only; the Linux gate is the CLI synth→fuse→compare path instead.
+// The shared model layer as a real module (cross-platform-plan 0d): the
+// probe, the Qt bridge, and (eventually) the Linux shell consume it as a
+// dependency. The Mac app still compiles the same files directly into its
+// target (App/project.yml path reference) — no module boundary there.
+// -enable-testing in every configuration so the probe's @testable import
+// works: the probe is a white-box regression harness, and its deep reach
+// into model internals must not force those internals public — the public
+// surface is defined by real shell clients (the bridge).
+// AppKit-backed today, so macOS only; the Linux gate is the CLI
+// synth→fuse→compare path until the portability pass lands.
+extraTargets.append(
+    .target(
+        name: "AppCore",
+        dependencies: ["HyperfocalKit"],
+        path: "AppCore",
+        swiftSettings: [.unsafeFlags(["-enable-testing"])]
+    )
+)
 extraTargets.append(
     .executableTarget(
         name: "retouch-probe",
-        dependencies: ["HyperfocalKit"],
-        path: ".",
-        sources: ["Probe/main.swift", "AppCore/AppModel.swift",
-                  "AppCore/Stack.swift", "AppCore/ProjectStore.swift",
-                  "AppCore/RetouchSession.swift",
-                  "AppCore/DialogService.swift"]
+        dependencies: ["AppCore", "HyperfocalKit"],
+        path: "Probe"
     )
+)
+// C-ABI bridge the Qt shell drives (cross-platform-plan Phase 2): a
+// SwiftPM dynamic library so the same product definition carries to
+// Linux (no Xcode there). A development artifact for the Qt shell —
+// never shipped with the Mac app.
+extraTargets.append(
+    .target(
+        name: "HyperfocalBridge",
+        dependencies: ["AppCore", "HyperfocalKit"],
+        path: "Bridge"
+    )
+)
+extraProducts.append(
+    .library(name: "HyperfocalBridge", type: .dynamic,
+             targets: ["HyperfocalBridge"])
 )
 // Phase 1.5 registration A/B (Docs/cross-platform-plan.md decision 2):
 // HYPERFOCAL_OPENCV_AB=1 at build time compiles a small OpenCV-only
@@ -199,7 +226,7 @@ let package = Package(
     products: [
         .library(name: "HyperfocalKit", targets: ["HyperfocalKit"]),
         .executable(name: "hyperfocal-cli", targets: ["hyperfocal-cli"]),
-    ],
+    ] + extraProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
     ],

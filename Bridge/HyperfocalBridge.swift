@@ -22,6 +22,7 @@
 import Foundation
 import CoreGraphics
 import Combine
+import AppCore
 import HyperfocalKit
 
 /// All bridge state, main-actor confined (the contract pins callers to the

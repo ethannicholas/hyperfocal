@@ -80,11 +80,15 @@ tests).
 
 ### Phase 2: C-ABI bridge + Qt shell
 
-The walking skeleton is landed on macOS: `Bridge/HyperfocalBridge.swift`
-(an XcodeGen dylib target — SwiftPM can't share the AppCore sources with
-the probe until AppCore is a real module, plan 0d) exports the `hf_*`
-surface in `QtShell/hyperfocal_bridge.h`; `QtShell/` is the Qt 6 shell
-(build: `QtShell/build.sh`, needs Homebrew qtbase/qtdeclarative/
+The shell is landed on macOS: AppCore is a real SwiftPM module (plan
+0d structure; the Mac app still compiles the same sources directly —
+no module boundary there), the probe consumes it via `@testable
+import` (white-box harness; its reach never forces internals public),
+and `Bridge/HyperfocalBridge.swift` is a SwiftPM dynamic-library
+product over it whose public-API needs define AppCore's public
+surface. The bridge exports the `hf_*` surface in
+`QtShell/hyperfocal_bridge.h`; `QtShell/` is the Qt 6 shell (build:
+`QtShell/build.sh`, needs Homebrew qtbase/qtdeclarative/
 qtshadertools + cmake ≥ 3.22). `hyperfocal-qt --selftest <stack> <out.tif> [shot.png]` self-drives
 open → fuse → tone → export (result + depth) → window grab and exits
 nonzero on failure — the seed of the Qt journey harness. Env hooks:
@@ -134,15 +138,12 @@ Next, in rough order (each independently landable):
      below is already portable, Phase 1 proved it), and
      `#if canImport` partitioning of the SwiftUI/UTType touches. Most
      of this is macOS-verifiable against the existing gates (probe,
-     UI suite, Qt selftest matrix) before Linux ever runs it.
-   - *Bridge build story.* macOS builds the bridge as an XcodeGen
-     dylib target because SwiftPM can't share the AppCore sources
-     with retouch-probe until AppCore is a real module (plan 0d);
-     Linux has no Xcode. Make AppCore a real SwiftPM target and the
-     bridge a SwiftPM dynamic-library product; teach
-     `QtShell/CMakeLists.txt` the `.so` name (it hardcodes
-     `HyperfocalBridge.dylib`, `BUILD_RPATH`, `MACOSX_BUNDLE`) and
-     `QtShell/build.sh` the non-xcodebuild path.
+     UI suite, Qt selftest matrix) before Linux ever runs it. The
+     build topology is already in place: AppCore is a SwiftPM module
+     and the bridge a SwiftPM dynamic-library product (CMake finds
+     libHyperfocalBridge per-platform); what remains is moving the
+     AppCore/bridge targets out of the `#if os(macOS)` block in
+     Package.swift once they compile portably.
    - *Main-queue pumping.* DispatchQueue.main drains under Qt's loop
      on macOS via CFRunLoop; Linux needs an explicit pump (Qt timer
      or glib hook) — the prototype's known deferred question.

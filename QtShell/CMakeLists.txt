@@ -1,11 +1,10 @@
-# Qt shell walking skeleton (cross-platform-plan Phase 2). macOS dev build:
+# Qt shell (cross-platform-plan Phase 2). Dev build:
 #
-#   QtShell/build.sh          # builds the bridge dylib, configures, builds, runs nothing
+#   QtShell/build.sh          # builds the bridge (SwiftPM), configures, builds
 #
 # or by hand:
-#   xcodebuild -project App/Hyperfocal.xcodeproj -scheme HyperfocalBridge \
-#       -configuration Debug CONFIGURATION_BUILD_DIR=$PWD/QtShell/build/bridge build
-#   cmake -S QtShell -B QtShell/build -DHYPERFOCAL_BRIDGE_DIR=$PWD/QtShell/build/bridge
+#   swift build --product HyperfocalBridge
+#   cmake -S QtShell -B QtShell/build -DHYPERFOCAL_BRIDGE_DIR=$PWD/.build/debug
 #   cmake --build QtShell/build
 #
 # Qt via Homebrew (qtbase/qtdeclarative): CMAKE_PREFIX_PATH=/opt/homebrew
@@ -20,9 +19,15 @@ find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Widgets ShaderTools)
 qt_standard_project_setup(REQUIRES 6.5)
 
 set(HYPERFOCAL_BRIDGE_DIR "" CACHE PATH
-    "Directory containing HyperfocalBridge.dylib (see header comment)")
+    "Directory containing the SwiftPM-built bridge library (see QtShell/build.sh)")
 if(NOT HYPERFOCAL_BRIDGE_DIR)
-    message(FATAL_ERROR "Pass -DHYPERFOCAL_BRIDGE_DIR=<dir with HyperfocalBridge.dylib> (see QtShell/build.sh)")
+    message(FATAL_ERROR "Pass -DHYPERFOCAL_BRIDGE_DIR=<dir with libHyperfocalBridge> (see QtShell/build.sh)")
+endif()
+# SwiftPM names the product libHyperfocalBridge.dylib / .so per platform.
+find_library(HYPERFOCAL_BRIDGE_LIB HyperfocalBridge
+             PATHS "${HYPERFOCAL_BRIDGE_DIR}" NO_DEFAULT_PATH)
+if(NOT HYPERFOCAL_BRIDGE_LIB)
+    message(FATAL_ERROR "libHyperfocalBridge not found in ${HYPERFOCAL_BRIDGE_DIR}")
 endif()
 
 qt_add_executable(hyperfocal-qt main.cpp)
@@ -44,7 +49,7 @@ qt_add_shaders(hyperfocal-qt "hyperfocal-shaders"
 target_include_directories(hyperfocal-qt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hyperfocal-qt PRIVATE
     Qt6::Quick Qt6::QuickControls2 Qt6::Widgets
-    "${HYPERFOCAL_BRIDGE_DIR}/HyperfocalBridge.dylib")
+    "${HYPERFOCAL_BRIDGE_LIB}")
 set_target_properties(hyperfocal-qt PROPERTIES
     BUILD_RPATH "${HYPERFOCAL_BRIDGE_DIR}"
     MACOSX_BUNDLE FALSE)
