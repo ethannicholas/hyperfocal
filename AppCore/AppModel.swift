@@ -310,7 +310,7 @@ public final class AppModel: ObservableObject {
     private var stageTimerStage: FusionProgress.Stage?
     private var stageTimerStart = Date()
     @Published public var progressive: PlatformImage?
-    @Published var progressiveNominalSize: CGSize?
+    @Published public var progressiveNominalSize: CGSize?
     /// True while `progressive` holds a data visualization — the aligner's
     /// gradient-magnitude image or the depth map forming — rather than the
     /// render accumulating. Only render-stage previews are image pixels;
@@ -318,7 +318,7 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var progressiveIsData = false
     @Published public var processingSource: PlatformImage?
     @Published public var processingSourceLabel: String?
-    @Published var processingSourceNominalSize: CGSize?
+    @Published public var processingSourceNominalSize: CGSize?
 
     // Results & previews
     @Published public var outputPreview: PlatformImage?
@@ -2133,7 +2133,7 @@ public final class AppModel: ObservableObject {
         return CGSize(width: result.width, height: result.height)
     }
 
-    var inputNominalSize: CGSize? { inputPixelSize }
+    public var inputNominalSize: CGSize? { inputPixelSize }
 
     // MARK: - Inclusion
 

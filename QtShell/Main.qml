@@ -337,17 +337,35 @@ ApplicationWindow {
         readonly property Item contentArea: contentAreaItem
         spacing: 0
 
-        // Title strip ABOVE the image, the native PreviewPane header;
-        // always present so the two panes' image areas stay aligned.
-        Label {
+        // Header bar ABOVE the image, the native PreviewPane header:
+        // left-aligned title plus a slot for pane controls (the output
+        // pane's mode picker reparents here); always present so the two
+        // panes' image areas stay aligned.
+        readonly property Item headerArea: headerSlot
+        Rectangle {
             Layout.fillWidth: true
-            text: toned.title
-            color: "#b5b5b5"
-            font.pixelSize: 12
-            padding: 5
-            horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideMiddle
-            background: Rectangle { color: "#242424" }
+            implicitHeight: Math.max(26, headerSlot.implicitHeight + 4)
+            color: "#242424"
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 4
+                spacing: 6
+                Label {
+                    Layout.fillWidth: true
+                    text: toned.title
+                    color: "#b5b5b5"
+                    font.pixelSize: 12
+                    horizontalAlignment: Text.AlignLeft
+                    elide: Text.ElideMiddle
+                }
+                Item {
+                    id: headerSlot
+                    implicitWidth: childrenRect.width
+                    implicitHeight: childrenRect.height
+                    Layout.alignment: Qt.AlignVCenter
+                }
+            }
         }
         Item {
             id: contentAreaItem
@@ -837,32 +855,6 @@ ApplicationWindow {
                 }
                 Item { Layout.fillWidth: true }
             }
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 6
-                visible: !Shell.cropMode
-                Item { Layout.fillWidth: true }
-                // Segmented picker, like the native output.mode control.
-                Row {
-                    spacing: 1
-                    Button {
-                        text: "Result"
-                        checkable: true
-                        autoExclusive: true
-                        checked: !Shell.depthMode
-                        onClicked: Shell.depthMode = false
-                        implicitWidth: 80
-                    }
-                    Button {
-                        text: "Depth"
-                        checkable: true
-                        autoExclusive: true
-                        checked: Shell.depthMode
-                        onClicked: Shell.depthMode = true
-                        implicitWidth: 80
-                    }
-                }
-            }
 
             RowLayout {
                 Layout.fillWidth: true
@@ -904,6 +896,32 @@ ApplicationWindow {
                         : Shell.canFuse ? "Press “Fuse Stack”" : "No output yet"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    // Segmented mode picker in the pane header, the
+                    // native output.mode placement.
+                    Row {
+                        parent: outputPane.headerArea
+                        spacing: 1
+                        Button {
+                            text: "Result"
+                            checkable: true
+                            autoExclusive: true
+                            checked: !Shell.depthMode
+                            onClicked: Shell.depthMode = false
+                            implicitWidth: 64
+                            implicitHeight: 22
+                            font.pixelSize: 11
+                        }
+                        Button {
+                            text: "Depth"
+                            checkable: true
+                            autoExclusive: true
+                            checked: Shell.depthMode
+                            onClicked: Shell.depthMode = true
+                            implicitWidth: 64
+                            implicitHeight: 22
+                            font.pixelSize: 11
+                        }
+                    }
                     CropOverlay {
                         parent: outputPane.contentArea
                         anchors.fill: parent

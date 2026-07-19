@@ -278,6 +278,11 @@ int hf_display_epoch(void);
 int hf_display_tile(int32_t level, int32_t x, int32_t y,
                     int32_t w, int32_t h, uint8_t *rgba, size_t cap);
 int hf_display_is_data(void);
+// Nominal canvas sizes — the viewport coordinate space. Differ from
+// the pixel sizes only mid-fuse (progressives render smaller than the
+// final canvas); mapping through nominal keeps pan/zoom stable.
+int hf_display_nominal(int32_t *w, int32_t *h);
+int hf_input_nominal(int32_t *w, int32_t *h);
 // The tone curve as `size` 16-bit grayscale entries (per-channel-
 // separable — one shared ramp is the entire color cube).
 int hf_tone_lut(uint16_t *out, int size);

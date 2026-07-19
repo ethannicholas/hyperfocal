@@ -71,7 +71,13 @@ private enum Bridge {
     /// transforms exist). Toned by the pane like the output.
     static func inputImage() -> PlatformImage? {
         guard let model else { return nil }
-        if model.phase.isRunning { return model.processingSource }
+        // The cycling processing source only takes over once it EXISTS —
+        // until the first processed frame lands, the fuse keeps showing
+        // the selected frame (the native showProcessingSource rule; the
+        // preview must not flash away on Fuse).
+        if model.phase.isRunning, let processing = model.processingSource {
+            return processing
+        }
         return model.inputPreview
     }
 
@@ -1491,6 +1497,47 @@ public func hf_input_title(_ buffer: UnsafeMutablePointer<CChar>?,
 public func hf_input_loading() -> Int32 {
     MainActor.assumeIsolated {
         Bridge.model?.inputPreviewLoading == true ? 1 : 0
+    }
+}
+
+/// The display's NOMINAL canvas size — the coordinate space the pane's
+/// viewport lives in. Differs from hf_display_size only mid-fuse, when
+/// progressive previews render smaller than the final canvas: mapping
+/// tiles into nominal space keeps the user's pan/zoom stable across
+/// the fuse (the native panes' sourceCanvas behavior).
+@_cdecl("hf_display_nominal")
+public func hf_display_nominal(_ w: UnsafeMutablePointer<Int32>?,
+                               _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
+    MainActor.assumeIsolated {
+        if let model = Bridge.model, model.phase.isRunning,
+           let nominal = model.progressiveNominalSize {
+            w?.pointee = Int32(nominal.width)
+            h?.pointee = Int32(nominal.height)
+            return 1
+        }
+        return hf_display_size(w, h)
+    }
+}
+
+/// The input pane's nominal canvas, likewise (processing-source nominal
+/// mid-fuse, the input preview's own nominal otherwise).
+@_cdecl("hf_input_nominal")
+public func hf_input_nominal(_ w: UnsafeMutablePointer<Int32>?,
+                             _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return hf_input_size(w, h) }
+        if model.phase.isRunning, model.processingSource != nil,
+           let nominal = model.processingSourceNominalSize {
+            w?.pointee = Int32(nominal.width)
+            h?.pointee = Int32(nominal.height)
+            return 1
+        }
+        if let nominal = model.inputNominalSize {
+            w?.pointee = Int32(nominal.width)
+            h?.pointee = Int32(nominal.height)
+            return 1
+        }
+        return hf_input_size(w, h)
     }
 }
 

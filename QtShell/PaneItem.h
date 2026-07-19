@@ -102,6 +102,7 @@ private:
                    uint8_t *rgba, size_t cap) const;
     int sourceCrop(double *x, double *y, double *w, double *h,
                    double *angle) const;
+    int sourceNominal(int32_t *w, int32_t *h) const;
 
     // The presented viewport: the crop rect when one is active, else the
     // whole image. The image→item transform factors as viewportMatrix
@@ -112,7 +113,8 @@ private:
     QRectF viewportRect() const;
     QMatrix4x4 viewportMatrix() const;
     QMatrix4x4 rotationMatrix() const;
-    QMatrix4x4 contentMatrix() const;    // viewportMatrix * rotationMatrix
+    QMatrix4x4 imageToNominal() const;   // tiles (image px) → nominal
+    QMatrix4x4 contentMatrix() const;    // viewport * rotation * toNominal
 
     // Cursor-anchored zoom shared by wheel and pinch.
     void zoomAnchored(double factor, QPointF pos);
@@ -125,6 +127,10 @@ private:
     PaneItem *sync_ = nullptr;
 
     int imgW_ = 0, imgH_ = 0;
+    // Nominal canvas the viewport lives in (== image size except
+    // mid-fuse, when progressives render smaller): tiles scale into
+    // nominal space so pan/zoom holds steady across a fuse.
+    int nomW_ = 0, nomH_ = 0;
     int epoch_ = -1;
     QRectF crop_;       // active crop in image px; empty = full image
     double cropAngle_ = 0;

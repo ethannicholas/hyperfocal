@@ -60,8 +60,12 @@ int PaneItem::sourceCrop(double *x, double *y, double *w, double *h,
                   : hf_display_crop(x, y, w, h, angle);
 }
 
+int PaneItem::sourceNominal(int32_t *w, int32_t *h) const {
+    return input_ ? hf_input_nominal(w, h) : hf_display_nominal(w, h);
+}
+
 QRectF PaneItem::viewportRect() const {
-    return crop_.isEmpty() ? QRectF(0, 0, imgW_, imgH_) : crop_;
+    return crop_.isEmpty() ? QRectF(0, 0, nomW_, nomH_) : crop_;
 }
 
 QMatrix4x4 PaneItem::viewportMatrix() const {
@@ -88,8 +92,17 @@ QMatrix4x4 PaneItem::rotationMatrix() const {
     return m;
 }
 
+QMatrix4x4 PaneItem::imageToNominal() const {
+    // Tiles live in image pixels; this lifts them into nominal canvas
+    // space (identity except mid-fuse).
+    QMatrix4x4 m;
+    if (imgW_ > 0 && imgH_ > 0 && (nomW_ != imgW_ || nomH_ != imgH_))
+        m.scale(double(nomW_) / imgW_, double(nomH_) / imgH_);
+    return m;
+}
+
 QMatrix4x4 PaneItem::contentMatrix() const {
-    return viewportMatrix() * rotationMatrix();
+    return viewportMatrix() * rotationMatrix() * imageToNominal();
 }
 
 void PaneItem::pushViewport() {
@@ -117,6 +130,15 @@ QPointF PaneItem::mapFromCanvas(QPointF image) const {
 void PaneItem::refresh() {
     int32_t w = 0, h = 0;
     sourceSize(&w, &h);
+    int32_t nw = 0, nh = 0;
+    sourceNominal(&nw, &nh);
+    if (nw <= 0) { nw = w; nh = h; }
+    if (nw != nomW_ || nh != nomH_) {
+        nomW_ = nw;
+        nomH_ = nh;
+        clampOffset();
+        schedule();
+    }
     const int epoch = sourceEpoch();
     double cx = 0, cy = 0, cw = 0, ch = 0, cangle = 0;
     sourceCrop(&cx, &cy, &cw, &ch, &cangle);
@@ -318,7 +340,7 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         contentNode_ = new QSGTransformNode;
         clipNode_->appendChildNode(contentNode_);
     }
-    contentNode_->setMatrix(rotationMatrix());
+    contentNode_->setMatrix(rotationMatrix() * imageToNominal());
 
     auto *win = window();
     auto makeNode = [&](const Tile &tile) {
