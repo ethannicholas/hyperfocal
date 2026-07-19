@@ -146,6 +146,19 @@ public enum StackPipeline {
                 try source.frame(at: $0)
             }
         }
+        #elseif HYPERFOCAL_HAVE_WGPU
+        if configuration.preferGPU, WgpuEngine.shared != nil {
+            output = try WgpuDMap.fuseWithDepth(source: source, options: configuration.fusion,
+                                                log: log, progress: progress,
+                                                cancellation: cancellation)
+        } else {
+            output = try DMapFusion.fuseWithDepth(frameCount: source.count,
+                                                  options: configuration.fusion, log: log,
+                                                  progress: progress,
+                                                  cancellation: cancellation) {
+                try source.frame(at: $0)
+            }
+        }
         #else
         output = try DMapFusion.fuseWithDepth(frameCount: source.count,
                                               options: configuration.fusion, log: log,

@@ -591,18 +591,11 @@ public enum WgpuParity {
         return c.minPSNR
     }
 
-    /// End-to-end orchestration parity: `WgpuPyramid` vs the CPU pyramid on
-    /// a small synthetic stack — both upload modes (plain, and warped with an
-    /// identity frame to hit the device-side copy path) plus the per-frame
-    /// preview collapse. The bar is the pyramid fusion bar (≥ 60 dB, not the
-    /// 90 dB kernel floor): the running-max selection amplifies fast-math
-    /// near-ties into coefficient flips, so agreement is bounded by tie
-    /// density, not arithmetic precision.
-    public static func runFusion(log: @escaping (String) -> Void = { print($0) }) throws -> Double {
-        let w = 240, h = 180, frameCount = 4
-
-        // A focus stack in miniature: fine detail everywhere, each frame
-        // sharp in its own vertical strip and defocused elsewhere.
+    /// A focus stack in miniature: fine detail everywhere, each frame sharp
+    /// in its own vertical strip and defocused elsewhere. Deterministic —
+    /// shared by the pyramid and dmap end-to-end checks.
+    private static func synthStack(width w: Int, height h: Int,
+                                   frameCount: Int) -> [ImageBuffer] {
         var base = ImageBuffer(width: w, height: h)
         base.pixels.withUnsafeMutableBufferPointer { p in
             for y in 0..<h { for x in 0..<w {
@@ -620,7 +613,7 @@ public enum WgpuParity {
         let blurred = Filters.convolveSeparableRGBA(
             base, kernel: Filters.gaussianKernel(sigma: 2.5))
         let stripW = Float(w) / Float(frameCount)
-        let frames = (0..<frameCount).map { fi -> ImageBuffer in
+        return (0..<frameCount).map { fi -> ImageBuffer in
             var img = ImageBuffer(width: w, height: h)
             let lo = Float(fi) * stripW, hi = Float(fi + 1) * stripW
             img.pixels.withUnsafeMutableBufferPointer { p in
@@ -641,6 +634,33 @@ public enum WgpuParity {
             }
             return img
         }
+    }
+
+    /// The warp-mode transforms for the end-to-end checks: small
+    /// similarities, with the middle frame identity so the device-side copy
+    /// path gets exercised too.
+    private static func synthTransforms(width w: Int, height h: Int,
+                                        frameCount: Int) -> [simd_float3x3] {
+        (0..<frameCount).map { i -> simd_float3x3 in
+            if i == frameCount / 2 { return matrix_identity_float3x3 }
+            return Warp.similarity(scale: 1 + Float(i) * 0.004,
+                                   rotation: Float(i) * 0.003 - 0.004,
+                                   translation: SIMD2<Float>(Float(i) * 0.8 - 1.0,
+                                                             0.6 - Float(i) * 0.5),
+                                   center: SIMD2<Float>(Float(w) / 2, Float(h) / 2))
+        }
+    }
+
+    /// End-to-end orchestration parity: `WgpuPyramid` vs the CPU pyramid on
+    /// a small synthetic stack — both upload modes (plain, and warped with an
+    /// identity frame to hit the device-side copy path) plus the per-frame
+    /// preview collapse. The bar is the pyramid fusion bar (≥ 60 dB, not the
+    /// 90 dB kernel floor): the running-max selection amplifies fast-math
+    /// near-ties into coefficient flips, so agreement is bounded by tie
+    /// density, not arithmetic precision.
+    public static func runFusion(log: @escaping (String) -> Void = { print($0) }) throws -> Double {
+        let w = 240, h = 180, frameCount = 4
+        let frames = synthStack(width: w, height: h, frameCount: frameCount)
 
         var minPSNR = Double.infinity
         func check(_ name: String, _ a: ImageBuffer, _ b: ImageBuffer, margin: Int) {
@@ -669,19 +689,62 @@ public enum WgpuParity {
 
         // Warp mode: small similarities applied on-device, the middle frame
         // identity (device-side copy instead of a warp dispatch).
-        let transforms = (0..<frameCount).map { i -> simd_float3x3 in
-            if i == frameCount / 2 { return matrix_identity_float3x3 }
-            return Warp.similarity(scale: 1 + Float(i) * 0.004,
-                                   rotation: Float(i) * 0.003 - 0.004,
-                                   translation: SIMD2<Float>(Float(i) * 0.8 - 1.0,
-                                                             0.6 - Float(i) * 0.5),
-                                   center: SIMD2<Float>(Float(w) / 2, Float(h) / 2))
-        }
-        let warp = PyramidWarp(transforms: transforms)
+        let warp = PyramidWarp(transforms: synthTransforms(width: w, height: h,
+                                                           frameCount: frameCount))
         let gpuWarp = try WgpuPyramid.fuse(frameCount: frameCount, warp: warp) { frames[$0] }
         let cpuWarp = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
                                              warp: warp) { frames[$0] }
         check("pyramid_warp", cpuWarp, gpuWarp, margin: 16)
+        return minPSNR
+    }
+
+    /// End-to-end DMap parity: `WgpuDMap` vs the CPU `DMapFusion` on a small
+    /// `SynthStack` plane scene in a temp dir — the dmap path streams from
+    /// URLs, so the prefetcher and the frame spill run for real, and the
+    /// warped variant covers the mid-frame exposure-mean readback (flicker
+    /// keeps the exposure gains non-unity). The bar is ≥ 90 dB (the Metal
+    /// DMap's bar — nothing here amplifies fast-math ties), which needs a
+    /// realistic stack: the pyramid checks' strip frames give dmap's 4-bin
+    /// argmax broad flat energy curves whose dense near-ties flip whole frame
+    /// indices on fp noise. The plane scene's smooth depth gradient is the
+    /// regime the regularizer is stable in (and the file-level synth gate
+    /// measures). Depth-map agreement is reported but the gate is the fused
+    /// image: depth drives the render, so a depth regression shows there.
+    public static func runDMap(log: @escaping (String) -> Void = { print($0) }) throws -> Double {
+        let w = 360, h = 240, frameCount = 9  // SynthStack forces an odd count
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "hyperfocal-wgpu-dmap-\(ProcessInfo.processInfo.processIdentifier)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let synthOpts = SynthStack.Options(width: w, height: h, frames: frameCount,
+                                           maxBlur: 6, breathing: 0, jitter: 0,
+                                           flicker: 0.1, scene: .plane)
+        let (_, urls) = try SynthStack.generate(options: synthOpts, outDir: dir,
+                                                frameExtension: "tif")
+
+        var minPSNR = Double.infinity
+        let variants: [(String, [simd_float3x3]?)] = [
+            ("dmap_plain", nil),
+            ("dmap_warp", synthTransforms(width: w, height: h, frameCount: frameCount)),
+        ]
+        for (name, transforms) in variants {
+            let source = StackSource(urls: urls, transforms: transforms)
+            var progressCalls = 0
+            let gpu = try WgpuDMap.fuseWithDepth(source: source,
+                                                 progress: { _ in progressCalls += 1 })
+            let cpu = try DMapFusion.fuseWithDepth(frameCount: frameCount) {
+                try source.frame(at: $0)
+            }
+            let psnr = Double(Metrics.psnr(cpu.image, gpu.image, margin: 16))
+            let depthPSNR = Double(Metrics.psnr(cpu.depthMap, gpu.depthMap, margin: 16))
+            log(String(format: "%@: %@ (depth %@)", name,
+                       psnr.isInfinite ? "inf dB" : String(format: "%.1f dB", psnr),
+                       depthPSNR.isInfinite ? "inf dB" : String(format: "%.1f dB", depthPSNR)))
+            minPSNR = min(minPSNR, psnr)
+            guard progressCalls > 0 else {
+                throw StackError.metal("wgpu dmap emitted no progress")
+            }
+        }
         return minPSNR
     }
 }

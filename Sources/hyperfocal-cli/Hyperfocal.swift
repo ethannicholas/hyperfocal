@@ -42,6 +42,9 @@ struct DebugWgpu: ParsableCommand {
     @Option(help: "Fail below this minimum CPU↔GPU fusion PSNR in dB.")
     var fusionFloor: Double = 60
 
+    @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB.")
+    var dmapFloor: Double = 90
+
     func run() throws {
         let minPSNR = try WgpuParity.run()
         print(String(format: "minimum: %.1f dB (floor %.1f)", minPSNR, floor))
@@ -55,6 +58,12 @@ struct DebugWgpu: ParsableCommand {
             throw StackError.metal("wgpu fusion parity below floor")
         }
         print("wgpu fusion: ALL PASS")
+        let dmapMin = try WgpuParity.runDMap()
+        print(String(format: "dmap minimum: %.1f dB (floor %.1f)", dmapMin, dmapFloor))
+        if dmapMin < dmapFloor {
+            throw StackError.metal("wgpu dmap parity below floor")
+        }
+        print("wgpu dmap: ALL PASS")
     }
 }
 #endif
@@ -135,8 +144,7 @@ struct FusionOptions: ParsableArguments {
         case .cpu: return false
         }
         #elseif HYPERFOCAL_HAVE_WGPU
-        // wgpu backend (Windows/Linux): only the pyramid path runs on it so
-        // far — DMap ignores this and fuses on the CPU until GPUDMap's port.
+        // wgpu backend (Windows/Linux): both fusion paths run on it.
         switch engine {
         case .auto: return WgpuEngine.shared != nil
         case .gpu:
@@ -304,6 +312,17 @@ struct Fuse: ParsableCommand {
                 if useGPU {
                     print("engine: GPU (\(MetalEngine.shared!.device.name))")
                     out = try GPUDMap.fuseWithDepth(source: source, options: opts, log: log)
+                } else {
+                    print("engine: CPU")
+                    out = try DMapFusion.fuseWithDepth(frameCount: source.count, options: opts,
+                                                       log: log) {
+                        try source.frame(at: $0)
+                    }
+                }
+                #elseif HYPERFOCAL_HAVE_WGPU
+                if useGPU {
+                    print("engine: GPU (\(WgpuEngine.shared!.adapterSummary))")
+                    out = try WgpuDMap.fuseWithDepth(source: source, options: opts, log: log)
                 } else {
                     print("engine: CPU")
                     out = try DMapFusion.fuseWithDepth(frameCount: source.count, options: opts,

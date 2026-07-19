@@ -216,26 +216,29 @@ the engine requires the adapter's real limits at device creation (the
 spec default is 8) and callers without spill data bind 1-float
 dummies.
 
-Pyramid fusion runs on it (2026-07-19): `WgpuPyramid` mirrors
-GPUPyramid's streaming orchestration through `WgpuEngine.Batch` (one
+Both fusion paths run on it (2026-07-19). `WgpuPyramid` and `WgpuDMap`
+mirror the Metal orchestrations through `WgpuEngine.Batch` (one
 command-buffer submit per frame; per-dispatch bind groups; uniforms via
 queue-ordered `wgpuQueueWriteBuffer`, which also makes Metal's
 ping-pong upload buffers unnecessary — writes staged during the
-previous frame's GPU work apply in queue order). Wired into
-`PyramidFusion`'s preferGPU seam and the CLI's `--engine` resolution
-(auto → wgpu when the opt-in build has an adapter). Gated two ways:
-`debug-wgpu` now also runs `WgpuParity.runFusion` (CPU↔GPU pyramid on a
-synthetic in-memory stack, plain + warped modes and the preview
-collapse; floor 60 dB, measuring 139–145 dB on WARP), and the
-file-level synth gate measured 97.6 dB aligned / 102.4 dB no-align.
-Remaining, in order:
+previous frame's GPU work apply in queue order). GPUDMap's mid-frame
+CPU dependency (exposure gain measured on the *warped* frame between
+the warp and argmax dispatches) costs a readback here — it shares the
+download with the frame spill, and unwarped frames skip it entirely.
+Wired into `PyramidFusion`'s preferGPU seam, `StackPipeline`'s dmap
+seam, and the CLI's `--engine` resolution — preferGPU is effectively ON
+for Windows/Linux wgpu builds (auto → wgpu when an adapter exists).
+Gates, all green on WARP: `debug-wgpu` runs kernels (floor 90, min
+129.6 dB), `runFusion` (pyramid, floor 60: 139–145 dB, preview collapse
+bit-identical), and `runDMap` (SynthStack plane scene in a temp dir,
+spill + prefetch + flickered exposure gains live, floor 90: 116–132 dB;
+the check needs a realistic stack — strip-scene frames give dmap's
+argmax dense near-ties that flip whole frame indices on fp noise).
+File-level: pmax 97.6/102.4 dB CPU↔GPU, dmap 121.4 dB (depth 105.7);
+ci-gate needed no recalibration — GPU-path ground-truth PSNR matches
+the CPU baselines to two decimals (39.11 dmap / 38.66 pmax). Remaining:
 
-1. **Port GPUDMap** the same way (≥ 90 dB bar) — the harder port: the
-   exposure gain is measured from the *warped* frame mid-frame
-   (`meanLuminance` between the warp and argmax command buffers), a
-   genuine CPU dependency the pyramid path doesn't have. Then flip
-   `preferGPU` on for Windows/Linux and calibrate ci-gate.
-2. Decide packaging: wgpu-native ships as a prebuilt DLL/so — vendor per
+1. Decide packaging: wgpu-native ships as a prebuilt DLL/so — vendor per
    platform, or fetch in CI like Qt/vcpkg (deployment story joins the
    CLI-DLL residual above).
 
