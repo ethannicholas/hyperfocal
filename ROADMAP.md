@@ -101,6 +101,14 @@ rect center, clip between the pan/zoom and rotation transforms;
 hf_set_crop is the UITest set-crop seam; the selftest proves epoch
 stability and the 400×300 export through the 5° sampler).
 
+Shell signal granularity is load-bearing for responsiveness: the
+facade caches and diffs per bridge callback, emitting tick (panes,
+which self-guard by pixel epoch), progressChanged, framesChanged /
+stacksChanged (only when list content really moved), and changed()
+only when the remaining-scalar fingerprint moved — a single coarse
+signal made every fusion progress tick rebuild both sidebar ListViews
+and froze the UI.
+
 The shell keeps its own settings store (`HYPERFOCAL_SETTINGS_SUITE`,
 set to `org.hyperfocal.qtshell-settings` in main.cpp before any hf_*
 call) — nothing bleeds between the shells' persisted state.

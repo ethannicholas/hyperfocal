@@ -51,11 +51,11 @@ void shellNotify(const char *message, const char *informative, int warning,
 }
 
 void bridgeChanged(void *) {
-    // Fires on the main thread; queue the signal so QML never re-enters a
-    // half-applied model turn.
+    // Fires on the main thread; queue the refresh so QML never re-enters
+    // a half-applied model turn.
     refreshLut();
     if (liveShell) {
-        QMetaObject::invokeMethod(liveShell, &Shell::changed,
+        QMetaObject::invokeMethod(liveShell, &Shell::refreshFromBridge,
                                   Qt::QueuedConnection);
     }
 }
@@ -67,6 +67,70 @@ Shell::Shell(QObject *parent) : QObject(parent) {
     liveShell = this;
     hf_set_changed_callback(bridgeChanged, nullptr);
     hf_set_dialog_callbacks(shellConfirm, shellNotify, nullptr);
+    refreshFromBridge();
+}
+
+void Shell::refreshFromBridge() {
+    emit tick();
+    const bool running = hf_is_running() != 0;
+    const double fraction = hf_stage_fraction();
+    QString stage;
+    {
+        char buffer[256];
+        const int n = hf_stage_text(buffer, sizeof buffer);
+        stage = QString::fromUtf8(buffer, n);
+    }
+    if (running != cachedRunning_ || fraction != cachedFraction_
+        || stage != cachedStage_) {
+        cachedRunning_ = running;
+        cachedFraction_ = fraction;
+        cachedStage_ = stage;
+        emit progressChanged();
+    }
+    QVariantList frames = buildFrames();
+    const int selectedFrame = hf_selected_frame();
+    if (frames != cachedFrames_ || selectedFrame != cachedSelectedFrame_) {
+        cachedFrames_ = std::move(frames);
+        cachedSelectedFrame_ = selectedFrame;
+        emit framesChanged();
+    }
+    QVariantList stacks = buildStacks();
+    const int selectedStack = hf_stack_selected();
+    const int pending = hf_pending_stack_count();
+    const bool fuseable = hf_can_fuse() != 0;
+    if (stacks != cachedStacks_ || selectedStack != cachedSelectedStack_
+        || pending != cachedPending_ || fuseable != cachedCanFuse_) {
+        cachedStacks_ = std::move(stacks);
+        cachedSelectedStack_ = selectedStack;
+        cachedPending_ = pending;
+        cachedCanFuse_ = fuseable;
+        emit stacksChanged();
+    }
+    QVariantList print = fingerprint();
+    if (print != cachedFingerprint_) {
+        cachedFingerprint_ = std::move(print);
+        emit changed();
+    }
+}
+
+/// Everything on the coarse changed() signal, gathered for the diff —
+/// cheap scalar reads, so one pass per callback costs little while
+/// sparing every binding re-evaluation on progress ticks.
+QVariantList Shell::fingerprint() const {
+    return {exposure(), depthMode(), displayIsData(), hasInput(),
+            inputLoading(), inputTitle(), displayCrop(), displayCropAngle(),
+            toneNeutral(), fusionDefault(), hasDisplay(), projectPath(),
+            hasUnsavedWork(), canUndo(), canRedo(), undoTitle(), redoTitle(),
+            lutEpoch(),
+            slider(QStringLiteral("fusion.slider.sharpness")),
+            slider(QStringLiteral("fusion.slider.noise-floor")),
+            slider(QStringLiteral("fusion.slider.median-radius")),
+            slider(QStringLiteral("fusion.slider.blend-radius")),
+            slider(QStringLiteral("tone.slider.contrast")),
+            slider(QStringLiteral("tone.slider.highlights")),
+            slider(QStringLiteral("tone.slider.shadows")),
+            slider(QStringLiteral("tone.slider.whites")),
+            slider(QStringLiteral("tone.slider.blacks"))};
 }
 
 Shell::~Shell() {
@@ -137,8 +201,9 @@ void Shell::setDepthMode(bool depth) {
     if (depth != (hf_output_depth() != 0)) hf_set_output_depth(depth ? 1 : 0);
 }
 
-QVariantList Shell::stacks() const {
-    // Rebuilt wholesale per change signal, like frames() — dev-shell scale.
+QVariantList Shell::stacks() const { return cachedStacks_; }
+
+QVariantList Shell::buildStacks() const {
     QVariantList list;
     const int count = hf_stack_count();
     list.reserve(count);
@@ -217,9 +282,9 @@ void Shell::setAllFramesIncluded(bool included) {
         hf_set_frame_included(i, included ? 1 : 0);
 }
 
-QVariantList Shell::frames() const {
-    // Rebuilt wholesale per change signal — fine at dev-shell scale; the
-    // production shell gets a QAbstractListModel over the same calls.
+QVariantList Shell::frames() const { return cachedFrames_; }
+
+QVariantList Shell::buildFrames() const {
     QVariantList list;
     const int count = hf_frame_count();
     list.reserve(count);

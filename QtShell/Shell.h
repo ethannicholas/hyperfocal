@@ -16,21 +16,28 @@ class Shell : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
-    Q_PROPERTY(bool canFuse READ canFuse NOTIFY changed)
-    Q_PROPERTY(bool isRunning READ isRunning NOTIFY changed)
-    Q_PROPERTY(double stageFraction READ stageFraction NOTIFY changed)
-    Q_PROPERTY(QString stageText READ stageText NOTIFY changed)
+    // Signal granularity is load-bearing for responsiveness: fusion
+    // progress ticks many times a second, and a single coarse changed()
+    // made every tick re-evaluate every binding — including the frames/
+    // stacks lists, whose delegates rebuilt wholesale each time. The
+    // lists are cached and diffed (framesChanged/stacksChanged fire only
+    // on real change), progress scalars ride progressChanged, and
+    // changed() fires only when the remaining fingerprint moves.
+    Q_PROPERTY(bool canFuse READ canFuse NOTIFY stacksChanged)
+    Q_PROPERTY(bool isRunning READ isRunning NOTIFY progressChanged)
+    Q_PROPERTY(double stageFraction READ stageFraction NOTIFY progressChanged)
+    Q_PROPERTY(QString stageText READ stageText NOTIFY progressChanged)
     Q_PROPERTY(double exposure READ exposure WRITE setExposure NOTIFY changed)
     Q_PROPERTY(bool depthMode READ depthMode WRITE setDepthMode NOTIFY changed)
-    Q_PROPERTY(QVariantList stacks READ stacks NOTIFY changed)
-    Q_PROPERTY(int selectedStack READ selectedStack NOTIFY changed)
-    Q_PROPERTY(int pendingStackCount READ pendingStackCount NOTIFY changed)
-    Q_PROPERTY(QVariantList frames READ frames NOTIFY changed)
+    Q_PROPERTY(QVariantList stacks READ stacks NOTIFY stacksChanged)
+    Q_PROPERTY(int selectedStack READ selectedStack NOTIFY stacksChanged)
+    Q_PROPERTY(int pendingStackCount READ pendingStackCount NOTIFY stacksChanged)
+    Q_PROPERTY(QVariantList frames READ frames NOTIFY framesChanged)
     Q_PROPERTY(bool displayIsData READ displayIsData NOTIFY changed)
     Q_PROPERTY(bool hasInput READ hasInput NOTIFY changed)
     Q_PROPERTY(bool inputLoading READ inputLoading NOTIFY changed)
     Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
-    Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY changed)
+    Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY framesChanged)
     Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
     Q_PROPERTY(double displayCropAngle READ displayCropAngle NOTIFY changed)
     Q_PROPERTY(bool toneNeutral READ toneNeutral NOTIFY changed)
@@ -121,7 +128,35 @@ public:
     QString redoTitle() const;
 
 signals:
+    /// Every bridge callback (panes listen and self-guard by epoch).
+    void tick();
+    /// Fusion progress scalars moved (fraction/text/isRunning).
+    void progressChanged();
+    /// The frame list (or frame selection) actually changed.
+    void framesChanged();
+    /// The stack list (selection, statuses, pending count) actually changed.
+    void stacksChanged();
+    /// Anything else (tone, crop, project, undo state, …) moved.
     void changed();
+
+public:
+    /// One pass per bridge callback (queued to the next turn): rebuild
+    /// the cached lists, diff, and emit only the granular signals whose
+    /// data moved.
+    void refreshFromBridge();
+
+private:
+    QVariantList buildStacks() const;
+    QVariantList buildFrames() const;
+    QVariantList fingerprint() const;
+
+    QVariantList cachedStacks_, cachedFrames_, cachedFingerprint_;
+    double cachedFraction_ = -1;
+    QString cachedStage_;
+    bool cachedRunning_ = false;
+    int cachedSelectedStack_ = -1, cachedSelectedFrame_ = -1;
+    int cachedPending_ = 0;
+    bool cachedCanFuse_ = false;
 };
 
 #endif // SHELL_H

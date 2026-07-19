@@ -155,7 +155,9 @@ ApplicationWindow {
 
     Connections {
         target: Shell
-        function onChanged() {
+        // Every bridge callback; the panes self-guard by pixel epoch, so
+        // ticks that moved nothing visible cost two integer reads.
+        function onTick() {
             outputPane.item.refresh()
             inputPane.item.refresh()
         }
