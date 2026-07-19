@@ -273,6 +273,17 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 shell->setCrop(0, 0, 0, 0, 0);
                 state->cropOK = state->cropOK
                     && shell->displayCrop().isEmpty();
+                // Crop-mode session: begin initializes to the full
+                // canvas and hides displayCrop; accepting the untouched
+                // full-canvas rect folds back to "no crop".
+                state->cropOK = state->cropOK
+                    && shell->beginCrop() && shell->cropMode()
+                    && shell->editCrop()
+                        == QRectF(0, 0, shell->displayWidth(),
+                                  shell->displayHeight())
+                    && shell->displayCrop().isEmpty()
+                    && shell->acceptCrop() && !shell->cropMode()
+                    && shell->displayCrop().isEmpty();
                 // Undo journey: the tone edit above guarantees history;
                 // undo all the way and the model must land back neutral
                 // (exposure 0), then one redo must take.

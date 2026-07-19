@@ -35,7 +35,7 @@ qt_add_executable(hyperfocal-qt main.cpp)
 qt_add_qml_module(hyperfocal-qt
     URI Hyperfocal
     VERSION 1.0
-    QML_FILES Main.qml
+    QML_FILES Main.qml CropOverlay.qml
     SOURCES Shell.h Shell.cpp PaneItem.h PaneItem.cpp LutImageProvider.h
 )
 

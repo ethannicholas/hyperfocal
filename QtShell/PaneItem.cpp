@@ -104,6 +104,16 @@ void PaneItem::adoptViewport(double zoom, QPointF offset) {
     schedule();
 }
 
+QPointF PaneItem::mapToCanvas(QPointF pane) const {
+    bool invertible = false;
+    const QMatrix4x4 inverse = viewportMatrix().inverted(&invertible);
+    return invertible ? inverse.map(pane) : pane;
+}
+
+QPointF PaneItem::mapFromCanvas(QPointF image) const {
+    return viewportMatrix().map(image);
+}
+
 void PaneItem::refresh() {
     int32_t w = 0, h = 0;
     sourceSize(&w, &h);

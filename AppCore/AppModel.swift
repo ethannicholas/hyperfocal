@@ -1341,12 +1341,12 @@ public final class AppModel: ObservableObject {
     /// Crop-rectangle editing mode: the panes show the full canvas with the
     /// CropOverlay on the output pane; everywhere else they show only the
     /// crop.
-    @Published var cropMode = false
+    @Published public var cropMode = false
 
-    var canCrop: Bool { result != nil && phase == .done && !retouchMode }
+    public var canCrop: Bool { result != nil && phase == .done && !retouchMode }
 
     /// Fixed aspect-ratio constraint while editing the crop.
-    enum CropAspect: String, CaseIterable {
+    public enum CropAspect: String, CaseIterable {
         case original = "Original"
         case custom = "Custom"
         case square = "1:1"
@@ -1369,15 +1369,15 @@ public final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var cropAspect: CropAspect = .custom {
+    @Published public var cropAspect: CropAspect = .custom {
         didSet { reshapeCropToAspect() }
     }
     /// Portrait orientation for the locked aspect (the X key toggles).
-    @Published var cropPortrait = false {
+    @Published public var cropPortrait = false {
         didSet { reshapeCropToAspect() }
     }
     /// The active width/height constraint, orientation applied.
-    var cropAspectRatio: CGFloat? {
+    public var cropAspectRatio: CGFloat? {
         guard let result else { return nil }
         guard let base = cropAspect.baseRatio(
                 canvas: CGSize(width: result.width, height: result.height)),
@@ -1392,7 +1392,7 @@ public final class AppModel: ObservableObject {
     /// portrait. Locked aspects flip via cropPortrait (whose didSet
     /// reshapes); Custom transposes the rect's own dimensions about its
     /// center. Either way the result is shrunk/recentered to fit.
-    func toggleCropOrientation() {
+    public func toggleCropOrientation() {
         guard cropMode else { return }
         cropPortrait.toggle()
         if cropAspectRatio == nil, let r = cropRect {
@@ -1541,7 +1541,7 @@ public final class AppModel: ObservableObject {
     private var cropBackup: CGRect?
     private var cropAngleBackup: Double = 0
 
-    func beginCrop() {
+    public func beginCrop() {
         guard canCrop, !cropMode else { return }
         cropBackup = cropRect
         cropAngleBackup = cropAngle
@@ -1555,7 +1555,7 @@ public final class AppModel: ObservableObject {
         viewport.reset()  // fit the full canvas the handles live on
     }
 
-    func acceptCrop() {
+    public func acceptCrop() {
         guard cropMode else { return }
         // Dragging the rect out to the whole canvas means "no crop".
         if cropAngle == 0, let result,
@@ -1572,7 +1572,7 @@ public final class AppModel: ObservableObject {
         viewport.reset()
     }
 
-    func cancelCrop() {
+    public func cancelCrop() {
         guard cropMode else { return }
         cropRect = cropBackup
         cropAngle = cropAngleBackup

@@ -126,7 +126,8 @@ QVariantList Shell::fingerprint() const {
             toneNeutral(), fusionDefault(), hasDisplay(), projectPath(),
             hasUnsavedWork(), canUndo(), canRedo(), undoTitle(), redoTitle(),
             lutEpoch(), exportFormat(), exportColorSpace(),
-            animationStrength(),
+            animationStrength(), cropMode(), canCrop(), cropAspect(),
+            cropAspectRatio(), cropPortrait(), editCrop(), editCropAngle(),
             slider(QStringLiteral("fusion.slider.sharpness")),
             slider(QStringLiteral("fusion.slider.noise-floor")),
             slider(QStringLiteral("fusion.slider.median-radius")),
@@ -183,6 +184,36 @@ void Shell::selectFrame(int index) { hf_select_frame(index); }
 
 void Shell::setCrop(double x, double y, double w, double h, double angle) {
     hf_set_crop(x, y, w, h, angle);
+}
+
+bool Shell::cropMode() const { return hf_crop_mode() != 0; }
+bool Shell::canCrop() const { return hf_can_crop() != 0; }
+bool Shell::beginCrop() { return hf_begin_crop() != 0; }
+bool Shell::acceptCrop() { return hf_accept_crop() != 0; }
+bool Shell::cancelCrop() { return hf_cancel_crop() != 0; }
+bool Shell::toggleCropOrientation() { return hf_toggle_crop_orientation() != 0; }
+double Shell::cropAspectRatio() const { return hf_crop_aspect_ratio(); }
+bool Shell::cropPortrait() const { return hf_crop_portrait() != 0; }
+
+QString Shell::cropAspect() const {
+    char buffer[64];
+    return QString::fromUtf8(buffer, hf_crop_aspect(buffer, sizeof buffer));
+}
+
+void Shell::setCropAspect(const QString &name) {
+    hf_set_crop_aspect(name.toUtf8().constData());
+}
+
+QRectF Shell::editCrop() const {
+    double x = 0, y = 0, w = 0, h = 0, angle = 0;
+    if (!hf_edit_crop(&x, &y, &w, &h, &angle)) return QRectF();
+    return QRectF(x, y, w, h);
+}
+
+double Shell::editCropAngle() const {
+    double x = 0, y = 0, w = 0, h = 0, angle = 0;
+    hf_edit_crop(&x, &y, &w, &h, &angle);
+    return angle;
 }
 
 QRectF Shell::displayCrop() const {

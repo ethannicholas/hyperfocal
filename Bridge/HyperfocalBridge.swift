@@ -299,6 +299,116 @@ public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) 
     }
 }
 
+// MARK: Crop editing mode
+
+/// The transactional crop-edit session, mirrored from the native
+/// overlay: begin snapshots for cancel and initializes the rect to the
+/// full canvas when none is set; accept folds "full canvas, no angle"
+/// back to no-crop and records the undo edit; cancel restores the
+/// snapshot. While the mode is active hf_display_crop reports none (the
+/// panes must show the whole canvas under the handles) — the overlay
+/// reads the live rect through hf_edit_crop instead.
+@_cdecl("hf_crop_mode")
+public func hf_crop_mode() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.cropMode == true ? 1 : 0 }
+}
+
+@_cdecl("hf_can_crop")
+public func hf_can_crop() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.canCrop == true ? 1 : 0 }
+}
+
+@_cdecl("hf_begin_crop")
+public func hf_begin_crop() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.canCrop, !model.cropMode else { return 0 }
+        model.beginCrop()
+        return 1
+    }
+}
+
+@_cdecl("hf_accept_crop")
+public func hf_accept_crop() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.cropMode else { return 0 }
+        model.acceptCrop()
+        return 1
+    }
+}
+
+@_cdecl("hf_cancel_crop")
+public func hf_cancel_crop() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.cropMode else { return 0 }
+        model.cancelCrop()
+        return 1
+    }
+}
+
+/// The live editing rect/angle, un-gated by crop mode (raw
+/// cropRect/cropAngle) — what the overlay renders, including after
+/// model-side reshapes (aspect change, orientation swap). 1 when a
+/// rect exists.
+@_cdecl("hf_edit_crop")
+public func hf_edit_crop(_ x: UnsafeMutablePointer<Double>?,
+                         _ y: UnsafeMutablePointer<Double>?,
+                         _ w: UnsafeMutablePointer<Double>?,
+                         _ h: UnsafeMutablePointer<Double>?,
+                         _ angle: UnsafeMutablePointer<Double>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else {
+            return fillCrop(nil, 0, x, y, w, h, angle)
+        }
+        return fillCrop(model.cropRect, model.cropAngle, x, y, w, h, angle)
+    }
+}
+
+/// Aspect lock by native label (Original/Custom/1:1/3:2/5:4/4:3/16:9);
+/// setting it reshapes the rect area-preservingly, like the native
+/// picker. hf_crop_aspect_ratio reports the active w/h constraint
+/// (0 = freeform) the overlay enforces mid-resize; hf_crop_portrait +
+/// hf_toggle_crop_orientation are the X-key orientation swap.
+@_cdecl("hf_crop_aspect")
+public func hf_crop_aspect(_ buffer: UnsafeMutablePointer<CChar>?,
+                           _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.cropAspect.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_crop_aspect")
+public func hf_set_crop_aspect(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let aspect = AppModel.CropAspect(rawValue: string) else { return 0 }
+        model.cropAspect = aspect
+        return 1
+    }
+}
+
+@_cdecl("hf_crop_aspect_ratio")
+public func hf_crop_aspect_ratio() -> Double {
+    MainActor.assumeIsolated {
+        Bridge.model?.cropAspectRatio.map(Double.init) ?? 0
+    }
+}
+
+@_cdecl("hf_crop_portrait")
+public func hf_crop_portrait() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.cropPortrait == true ? 1 : 0 }
+}
+
+@_cdecl("hf_toggle_crop_orientation")
+public func hf_toggle_crop_orientation() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.cropMode else { return 0 }
+        model.toggleCropOrientation()
+        return 1
+    }
+}
+
 // MARK: Export flows
 
 /// Persisted export options (the shell's own settings suite), addressed

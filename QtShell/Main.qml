@@ -191,6 +191,28 @@ ApplicationWindow {
         enabled: Shell.canRedo
         onActivated: Shell.redo()
     }
+    // The native crop keys: C enters, X swaps orientation, Return
+    // accepts, Esc cancels.
+    Shortcut {
+        sequence: "C"
+        enabled: Shell.canCrop && !Shell.cropMode
+        onActivated: Shell.beginCrop()
+    }
+    Shortcut {
+        sequence: "X"
+        enabled: Shell.cropMode
+        onActivated: Shell.toggleCropOrientation()
+    }
+    Shortcut {
+        sequence: "Return"
+        enabled: Shell.cropMode
+        onActivated: Shell.acceptCrop()
+    }
+    Shortcut {
+        sequence: "Esc"
+        enabled: Shell.cropMode
+        onActivated: Shell.cancelCrop()
+    }
 
     FolderDialog {
         id: openDialog
@@ -603,64 +625,19 @@ ApplicationWindow {
             }
 
             Label { text: "Crop"; color: "#d5d5d5"; font.bold: true }
-            // Numeric stand-in for the native drag overlay (result-canvas
-            // px + degrees) — enough to exercise the presentation and
-            // export until the Qt shell grows real handles.
-            GridLayout {
-                columns: 4
-                columnSpacing: 6
+            Button {
                 Layout.fillWidth: true
-                component CropField: TextField {
-                    Layout.fillWidth: true
-                    font.pixelSize: 12
-                    validator: DoubleValidator {}
-                }
-                CropField { id: cropX; placeholderText: "x" }
-                CropField { id: cropY; placeholderText: "y" }
-                CropField { id: cropW; placeholderText: "w" }
-                CropField { id: cropH; placeholderText: "h" }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-                Label { text: "Angle"; color: "#b5b5b5"; font.pixelSize: 12 }
-                Slider {
-                    id: cropAngle
-                    from: -45; to: 45; value: 0
-                    Layout.fillWidth: true
-                }
-                Label {
-                    text: cropAngle.value.toFixed(1) + "°"
-                    color: "#8a8a8a"
-                    font.pixelSize: 12
-                    font.family: "Menlo"
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-                Button {
-                    text: "Apply Crop"
-                    Layout.fillWidth: true
-                    enabled: !Shell.isRunning
-                    onClicked: Shell.setCrop(Number(cropX.text), Number(cropY.text),
-                                             Number(cropW.text), Number(cropH.text),
-                                             cropAngle.value)
-                }
-                Button {
-                    text: "Clear"
-                    enabled: !Shell.isRunning
-                    onClicked: Shell.setCrop(0, 0, 0, 0, 0)
-                }
+                text: "Crop… (C)"
+                enabled: Shell.canCrop && !Shell.cropMode
+                onClicked: Shell.beginCrop()
             }
             Label {
                 Layout.fillWidth: true
                 visible: Shell.displayCrop.width > 0
-                text: "Presenting " + Shell.displayCrop.width + "×"
-                      + Shell.displayCrop.height + " @ ("
-                      + Shell.displayCrop.x + ", " + Shell.displayCrop.y + ")"
+                text: "Cropped to " + Shell.displayCrop.width + "×"
+                      + Shell.displayCrop.height
                       + (Shell.displayCropAngle !== 0
-                         ? ", " + Shell.displayCropAngle + "°" : "")
+                         ? ", " + Shell.displayCropAngle.toFixed(1) + "°" : "")
                 color: "#8a8a8a"
                 font.pixelSize: 11
                 elide: Text.ElideRight
@@ -683,9 +660,40 @@ ApplicationWindow {
             Layout.fillHeight: true
             spacing: 0
 
+            // Crop-mode controls, the native CropControls bar.
             RowLayout {
                 Layout.fillWidth: true
                 Layout.margins: 6
+                visible: Shell.cropMode
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Label { text: "Aspect:"; color: "#b5b5b5" }
+                ComboBox {
+                    model: ["Original", "Custom", "1:1", "3:2", "5:4",
+                            "4:3", "16:9"]
+                    currentIndex: Math.max(0, model.indexOf(Shell.cropAspect))
+                    onActivated: Shell.cropAspect = currentText
+                    Layout.preferredWidth: 120
+                }
+                Button {
+                    text: Shell.cropPortrait ? "Portrait" : "Landscape"
+                    onClicked: Shell.toggleCropOrientation()
+                }
+                Button {
+                    text: "Cancel"
+                    onClicked: Shell.cancelCrop()
+                }
+                Button {
+                    text: "Done"
+                    highlighted: true
+                    onClicked: Shell.acceptCrop()
+                }
+                Item { Layout.fillWidth: true }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 6
+                visible: !Shell.cropMode
                 Item { Layout.fillWidth: true }
                 ButtonGroup { id: modeGroup }
                 RadioButton {
@@ -736,6 +744,11 @@ ApplicationWindow {
                         : Shell.canFuse ? "Press “Fuse Stack”" : "No output yet"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    CropOverlay {
+                        anchors.fill: parent
+                        pane: outputPane.item
+                        visible: Shell.cropMode
+                    }
                 }
             }
         }

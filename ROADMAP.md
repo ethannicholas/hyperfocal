@@ -130,16 +130,13 @@ functional but rough; inventory taken 2026-07-19 against
 ContentView/HyperfocalAppMain/SettingsView). In rough priority order,
 each independently landable:
 
-1. **Crop editing overlay**: drag handles/move/rotate, aspect-ratio
-   picker, orientation swap, modal accept/cancel (C/X/return/esc) —
-   replaces the numeric stand-in; bridge-ready (hf_set_crop).
-2. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
+1. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
    ⌘0): PaneItem-side only, no bridge needed.
-3. **Settings window**: order-by-capture, align, normalize-exposure,
+2. **Settings window**: order-by-capture, align, normalize-exposure,
    GPU, disk-cache toggles — each needs a bridge get/set.
-4. **Noise-floor live depth preview** on slider drag (begin/end bridge
+3. **Noise-floor live depth preview** on slider drag (begin/end bridge
    calls mirroring beginNoiseFloorPreview/end).
-5. **Retouch in the Qt shell** — the largest piece: full session
+4. **Retouch in the Qt shell** — the largest piece: full session
    surface over the bridge (enter/exit, brush size/softness, source
    kind picker + frame cycling + auto-pick, strokes with the
    image-space dirty rects, PMax build/cancel/progress, revert,
@@ -168,15 +165,26 @@ each independently landable:
    Depth label swap, and async export-all / export-aligned / rocking
    animation (started by hf_export_all/aligned/animation, summaries
    through the notice seam; Linux animation still needs the
-   FFmpeg/giflib backend from the Phase 1 deferred list).
-6. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+   FFmpeg/giflib backend from the Phase 1 deferred list). The crop
+   overlay landed 2026-07-19: a transactional crop-mode session over
+   the bridge (hf_begin/accept/cancel_crop, hf_edit_crop for the live
+   un-gated rect, aspect/orientation by native label — geometry
+   authority stays in the model), with the QML overlay
+   (QtShell/CropOverlay.qml) porting the native drag math verbatim:
+   move with interior-rounded bbox clamping, anchored resize with
+   aspect lock and 32px min, unwrapped rotation with 20-step bisection
+   to the containment stop, corner-containment as the universal gate;
+   C/X/Return/Esc keys and the aspect/orientation controls bar mirror
+   the native CropControls. The selftest walks the session
+   (begin→full-canvas init→accept folds to no-crop).
+5. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
 Then, deferred until their prerequisites exist:
 
 - **Dirty-rect tile invalidation** once a partial-update producer exists
-  (retouch strokes in the Qt shell, item 5): today any epoch bump drops
+  (retouch strokes in the Qt shell, item 4): today any epoch bump drops
   every tile, which is right for wholesale changes (progressive
   updates, new fuse) and wasteful only for localized ones — build it
   with the feature that needs it.

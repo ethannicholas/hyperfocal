@@ -63,6 +63,28 @@ double hf_stage_fraction(void);
 // UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
 int hf_stage_text(char *buf, int cap);
 
+// Crop editing mode — the transactional session behind the overlay.
+// begin snapshots for cancel (initializing the rect to the full canvas
+// when none); accept folds full-canvas/no-angle back to "no crop" and
+// records the undo edit; cancel restores. While active,
+// hf_display_crop reports none (panes show the whole canvas under the
+// handles); read the live rect via hf_edit_crop and push candidates
+// with hf_set_crop. Aspect by native label (Original/Custom/1:1/3:2/
+// 5:4/4:3/16:9) reshapes area-preservingly; hf_crop_aspect_ratio is
+// the active w/h lock (0 = freeform); orientation is the X-key swap.
+int hf_crop_mode(void);
+int hf_can_crop(void);
+int hf_begin_crop(void);
+int hf_accept_crop(void);
+int hf_cancel_crop(void);
+int hf_edit_crop(double *x, double *y, double *w, double *h,
+                 double *angle);
+int hf_crop_aspect(char *buf, int cap);             // returns bytes
+int hf_set_crop_aspect(const char *name);
+double hf_crop_aspect_ratio(void);
+int hf_crop_portrait(void);
+int hf_toggle_crop_orientation(void);
+
 // Export flows. Options are persisted in the shell's own suite and
 // addressed by the native UI names (ExportFormat / ExportColorSpace /
 // AnimationStrength raw values: "TIFF (16-bit)" "DNG (raw)"

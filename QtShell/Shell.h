@@ -39,6 +39,11 @@ class Shell : public QObject {
     Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY framesChanged)
     Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
+    Q_PROPERTY(bool cropMode READ cropMode NOTIFY changed)
+    Q_PROPERTY(bool canCrop READ canCrop NOTIFY changed)
+    Q_PROPERTY(QString cropAspect READ cropAspect WRITE setCropAspect NOTIFY changed)
+    Q_PROPERTY(double cropAspectRatio READ cropAspectRatio NOTIFY changed)
+    Q_PROPERTY(bool cropPortrait READ cropPortrait NOTIFY changed)
     Q_PROPERTY(double displayCropAngle READ displayCropAngle NOTIFY changed)
     Q_PROPERTY(int fusedStackCount READ fusedStackCount NOTIFY stacksChanged)
     Q_PROPERTY(bool canExportAligned READ canExportAligned NOTIFY stacksChanged)
@@ -106,6 +111,19 @@ public:
     /// w/h <= 0 clears). displayCrop is empty when none presents.
     Q_INVOKABLE void setCrop(double x, double y, double w, double h,
                              double angle);
+    bool cropMode() const;
+    bool canCrop() const;
+    QString cropAspect() const;
+    void setCropAspect(const QString &name);
+    double cropAspectRatio() const;
+    bool cropPortrait() const;
+    Q_INVOKABLE bool beginCrop();
+    Q_INVOKABLE bool acceptCrop();
+    Q_INVOKABLE bool cancelCrop();
+    Q_INVOKABLE bool toggleCropOrientation();
+    /// The live editing rect (raw cropRect, un-gated by crop mode).
+    Q_INVOKABLE QRectF editCrop() const;
+    Q_INVOKABLE double editCropAngle() const;
     QRectF displayCrop() const;
     double displayCropAngle() const;
     Q_INVOKABLE bool selectStack(int index);

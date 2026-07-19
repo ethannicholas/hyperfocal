@@ -43,6 +43,12 @@ public:
     // drops every tile iff the pixels actually changed.
     Q_INVOKABLE void refresh();
 
+    // Screen↔canvas mapping for overlays (the crop overlay's drag math
+    // runs in canvas pixels): the pan/zoom part only — overlays draw
+    // their own rotation.
+    Q_INVOKABLE QPointF mapToCanvas(QPointF pane) const;
+    Q_INVOKABLE QPointF mapFromCanvas(QPointF image) const;
+
     // Center-anchored programmatic zoom (fit-relative, clamped like the
     // wheel) — the selftest's zoom-cycle journey drives this.
     Q_INVOKABLE void setZoom(double zoom);
