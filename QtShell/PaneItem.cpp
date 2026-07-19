@@ -144,6 +144,19 @@ void PaneItem::refresh() {
 void PaneItem::schedule() {
     polish();
     update();
+    emit viewportChanged();
+}
+
+void PaneItem::zoomBy(double factor) { setZoom(zoom_ * factor); }
+
+void PaneItem::setAbsoluteScale(double scale) {
+    const double fitTo = fitScale();
+    if (fitTo > 0) setZoom(scale / fitTo);
+}
+
+void PaneItem::fit() {
+    offset_ = QPointF();
+    setZoom(1);
 }
 
 void PaneItem::setZoom(double zoom) {

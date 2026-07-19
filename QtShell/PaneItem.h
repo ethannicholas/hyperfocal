@@ -30,6 +30,9 @@ class PaneItem : public QQuickItem {
     // one ViewportState across input/output): pan/zoom here is pushed
     // there, one-way per gesture, so comparing panes stays aligned.
     Q_PROPERTY(PaneItem *syncPane READ syncPane WRITE setSyncPane)
+    // On-screen scale in image pixels per pane point (1 = 1:1) — the
+    // zoom bar's currency, following every viewport change.
+    Q_PROPERTY(double displayScale READ displayScale NOTIFY viewportChanged)
 
 public:
     explicit PaneItem(QQuickItem *parent = nullptr);
@@ -52,6 +55,15 @@ public:
     // Center-anchored programmatic zoom (fit-relative, clamped like the
     // wheel) — the selftest's zoom-cycle journey drives this.
     Q_INVOKABLE void setZoom(double zoom);
+    // The zoom bar's verbs: multiply the current zoom, jump to an
+    // absolute image scale (1 = 1:1), or refit (zoom 1, centered).
+    Q_INVOKABLE void zoomBy(double factor);
+    Q_INVOKABLE void setAbsoluteScale(double scale);
+    Q_INVOKABLE void fit();
+    double displayScale() const { return fitScale() * zoom_; }
+
+signals:
+    void viewportChanged();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *) override;

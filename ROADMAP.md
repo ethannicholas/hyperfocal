@@ -130,13 +130,11 @@ functional but rough; inventory taken 2026-07-19 against
 ContentView/HyperfocalAppMain/SettingsView). In rough priority order,
 each independently landable:
 
-1. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
-   ⌘0): PaneItem-side only, no bridge needed.
-2. **Settings window**: order-by-capture, align, normalize-exposure,
+1. **Settings window**: order-by-capture, align, normalize-exposure,
    GPU, disk-cache toggles — each needs a bridge get/set.
-3. **Noise-floor live depth preview** on slider drag (begin/end bridge
+2. **Noise-floor live depth preview** on slider drag (begin/end bridge
    calls mirroring beginNoiseFloorPreview/end).
-4. **Retouch in the Qt shell** — the largest piece: full session
+3. **Retouch in the Qt shell** — the largest piece: full session
    surface over the bridge (enter/exit, brush size/softness, source
    kind picker + frame cycling + auto-pick, strokes with the
    image-space dirty rects, PMax build/cancel/progress, revert,
@@ -176,8 +174,12 @@ each independently landable:
    to the containment stop, corner-containment as the universal gate;
    C/X/Return/Esc keys and the aspect/orientation controls bar mirror
    the native CropControls. The selftest walks the session
-   (begin→full-canvas init→accept folds to no-crop).
-5. **Crop-overlay polish** (from Ethan's 2026-07-19 review; not
+   (begin→full-canvas init→accept folds to no-crop). The zoom bar
+   landed 2026-07-19: −/%/+ cluster with a Fit + fixed-levels menu by
+   the mode picker, ⌘+/⌘−/⌘0 shortcuts, PaneItem
+   zoomBy/setAbsoluteScale/fit + displayScale on a viewportChanged
+   signal, acting on the shared two-pane viewport.
+4. **Crop-overlay polish** (from Ethan's 2026-07-19 review; not
    urgent): proper rotation cursors matching the native macOS
    sector-oriented rotate cursors (Qt has no built-in rotate cursor —
    needs custom cursor images quantized to the 8 sectors like
@@ -185,7 +187,7 @@ each independently landable:
    shortcut (C for crop, X for orientation, …) should also exist as a
    menu item so the keys are learnable from the menus, not just
    documentation.
-6. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+5. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
@@ -217,7 +219,7 @@ reviewers stop discovering them by surprise):
 Then, deferred until their prerequisites exist:
 
 - **Dirty-rect tile invalidation** once a partial-update producer exists
-  (retouch strokes in the Qt shell, item 4): today any epoch bump drops
+  (retouch strokes in the Qt shell, item 3): today any epoch bump drops
   every tile, which is right for wholesale changes (progressive
   updates, new fuse) and wasteful only for localized ones — build it
   with the feature that needs it.
