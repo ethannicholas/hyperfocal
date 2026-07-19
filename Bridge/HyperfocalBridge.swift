@@ -21,7 +21,6 @@
 
 import Foundation
 import CoreGraphics
-import Combine
 import AppCore
 import HyperfocalKit
 
@@ -30,7 +29,7 @@ import HyperfocalKit
 @MainActor
 private enum Bridge {
     static var model: AppModel?
-    static var changeSink: AnyCancellable?
+    static var changeToken: AnyObject?    // AppModel.addChangeObserver
     static var changedCallback: (@convention(c) (UnsafeMutableRawPointer?) -> Void)?
     static var changedContext: UnsafeMutableRawPointer?
     static var dialogs: BridgeDialogs?
@@ -184,7 +183,7 @@ public func hf_init() -> Int32 {
         guard Bridge.model == nil else { return 1 }
         let model = AppModel()
         Bridge.model = model
-        Bridge.changeSink = model.objectWillChange.sink { _ in
+        Bridge.changeToken = model.addChangeObserver {
             MainActor.assumeIsolated { Bridge.scheduleNotify() }
         }
         return 1

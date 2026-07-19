@@ -887,6 +887,17 @@ public final class AppModel: ObservableObject {
     /// short-circuit before it either way.
     public var dialogs: DialogService?
 
+    /// Change-notification seam for non-Combine clients (the C-ABI
+    /// bridge): `observer` fires on the main thread for every model
+    /// mutation, exactly like objectWillChange — values may not have
+    /// landed yet, so clients coalesce and re-read on the next turn.
+    /// Combine stays an implementation detail of AppCore behind this
+    /// method; the Linux port swaps the mechanism here without touching
+    /// clients. Release the returned token to stop observing.
+    public func addChangeObserver(_ observer: @escaping () -> Void) -> AnyObject {
+        objectWillChange.sink { _ in observer() }
+    }
+
     /// Testability hook: when set, confirmation alerts are answered by the
     /// closure (keyed on the message) instead of blocking on a modal — the
     /// probe exercises close/replace flows headlessly through this.
