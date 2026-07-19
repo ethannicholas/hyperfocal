@@ -132,14 +132,14 @@ enum UITestSupport {
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("org.hyperfocal.uitest.command"),
             object: nil, queue: .main) { [weak model] note in
-            guard let json = note.object as? String,
-                  let data = json.data(using: .utf8),
-                  let command = (try? JSONSerialization.jsonObject(with: data))
-                      as? [String: String] else {
-                log.error("uitest command unparseable: \(String(describing: note.object), privacy: .public)")
-                return
-            }
             MainActor.assumeIsolated {
+                guard let json = note.object as? String,
+                      let data = json.data(using: .utf8),
+                      let command = (try? JSONSerialization.jsonObject(with: data))
+                          as? [String: String] else {
+                    log.error("uitest command unparseable: \(String(describing: note.object), privacy: .public)")
+                    return
+                }
                 guard let model else { return }
                 handle(command, model: model)
             }

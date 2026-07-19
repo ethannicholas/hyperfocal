@@ -609,7 +609,7 @@ public enum GPUDMap {
         let factor = DMapFusion.sharpnessDownsample
 
         let concBuf = try engine.makeBuffer(floats: max(concentration.count, 1))
-        concentration.withUnsafeBufferPointer {
+        _ = concentration.withUnsafeBufferPointer {
             memcpy(concBuf.contents(), $0.baseAddress!, concentration.count * 4)
         }
         var confParams = ConfidenceParams(width: UInt32(width),
@@ -689,10 +689,10 @@ public enum GPUDMap {
             let gridCount = coeff.gridWidth * coeff.gridHeight
             let aBuf = try engine.makeBuffer(floats: gridCount)
             let bBuf = try engine.makeBuffer(floats: gridCount)
-            coeff.a.withUnsafeBufferPointer {
+            _ = coeff.a.withUnsafeBufferPointer {
                 memcpy(aBuf.contents(), $0.baseAddress!, gridCount * 4)
             }
-            coeff.b.withUnsafeBufferPointer {
+            _ = coeff.b.withUnsafeBufferPointer {
                 memcpy(bBuf.contents(), $0.baseAddress!, gridCount * 4)
             }
             let spillDBuf = try engine.makeBuffer(floats: gridCount)
@@ -700,10 +700,10 @@ public enum GPUDMap {
             memset(spillDBuf.contents(), 0, gridCount * 4)
             memset(spillSBuf.contents(), 0, gridCount * 4)
             if coeff.spillDepth.count == gridCount, coeff.spillStrength.count == gridCount {
-                coeff.spillDepth.withUnsafeBufferPointer {
+                _ = coeff.spillDepth.withUnsafeBufferPointer {
                     memcpy(spillDBuf.contents(), $0.baseAddress!, gridCount * 4)
                 }
-                coeff.spillStrength.withUnsafeBufferPointer {
+                _ = coeff.spillStrength.withUnsafeBufferPointer {
                     memcpy(spillSBuf.contents(), $0.baseAddress!, gridCount * 4)
                 }
             }

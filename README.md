@@ -76,7 +76,7 @@ result every time.
 ## Get Hyperfocal
 
 If you'd prefer to skip the build process and the hassle of keeping it up to
-date (and give the author a small tip in the process), Hyperfocal is available
+date (and help fund its development in the process), Hyperfocal is available
 from the [Mac App Store](https://apps.apple.com/us/app/hyperfocal-focus-stacker/id6789574802).
 
 ### Building on macOS
@@ -95,11 +95,6 @@ Then run from Xcode. You will need to change the signing certificate to your
 own or to "Sign to Run Locally".
 
 ### Building on Linux
-
-The Linux port is under active development. The engine and the
-command-line tool build and pass the same regression gates as on macOS;
-the desktop app is a Qt shell that already runs but isn't a finished
-product yet (some editing features are still macOS-only).
 
 To install the prerequisite libraries on Ubuntu:
 
@@ -121,11 +116,6 @@ QtShell/build.sh --run
 ```
 
 ### Building on Windows
-
-The Windows port shares the Linux architecture (LibRaw/OpenCV imaging
-stack behind the same C shim, desktop app as the Qt shell). The engine,
-the command-line tool, and the Qt shell all build and pass the same
-regression gates and selftest journeys as on Linux.
 
 Prerequisites (installable via winget except vcpkg and Qt):
 
@@ -167,8 +157,11 @@ swift build -c release
 QtShell\build.ps1 -Run        # build and launch the desktop app
 ```
 
-New to focus stacking? Take a look at the
-[tutorial](https://ethannicholas.com/hyperfocal/tutorial.html).
+### Getting Started
+
+Once you've gotten Hyperfocal running, take a look at the
+[tutorial](https://ethannicholas.com/hyperfocal/tutorial.html) for a
+walkthrough of its basic features.
 
 ## How it works
 

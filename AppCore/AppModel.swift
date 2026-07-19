@@ -2768,6 +2768,11 @@ public final class AppModel: ObservableObject {
         return bounded
     }
 
+    /// Pointer smuggling for DispatchQueue.concurrentPerform: the rows
+    /// written are disjoint per iteration, so sharing the buffers across
+    /// the @Sendable closures is safe — the types just can't say so.
+    private struct UnsafeSendableBox<T>: @unchecked Sendable { let value: T }
+
     nonisolated static func cropped(_ image: ImageBuffer, to crop: CGRect?,
                                     angle: Double = 0) -> ImageBuffer {
         guard let r = validCrop(crop, width: image.width, height: image.height) else {
@@ -2787,9 +2792,12 @@ public final class AppModel: ObservableObject {
         let cosA = cos(rad), sinA = sin(rad)
         let x0f = Float(r.minX), y0f = Float(r.minY)
         var out = ImageBuffer(width: w, height: h)
-        image.pixels.withUnsafeBufferPointer { src in
-            out.pixels.withUnsafeMutableBufferPointer { dst in
+        image.pixels.withUnsafeBufferPointer { srcRaw in
+            out.pixels.withUnsafeMutableBufferPointer { dstRaw in
+                let srcBox = UnsafeSendableBox(value: srcRaw)
+                let dstBox = UnsafeSendableBox(value: dstRaw)
                 DispatchQueue.concurrentPerform(iterations: h) { v in
+                    let src = srcBox.value, dst = dstBox.value
                     let dy = y0f + Float(v) + 0.5 - cy
                     for u in 0..<w {
                         let dx = x0f + Float(u) + 0.5 - cx
@@ -2831,9 +2839,12 @@ public final class AppModel: ObservableObject {
         let rad = Float(angle) * .pi / 180
         let cosA = cos(rad), sinA = sin(rad)
         var out = [Float](repeating: 0, count: w * h)
-        depth.withUnsafeBufferPointer { src in
-            out.withUnsafeMutableBufferPointer { dst in
+        depth.withUnsafeBufferPointer { srcRaw in
+            out.withUnsafeMutableBufferPointer { dstRaw in
+                let srcBox = UnsafeSendableBox(value: srcRaw)
+                let dstBox = UnsafeSendableBox(value: dstRaw)
                 DispatchQueue.concurrentPerform(iterations: h) { v in
+                    let src = srcBox.value, dst = dstBox.value
                     let dy = Float(y0 + v) + 0.5 - cy
                     for u in 0..<w {
                         let dx = Float(x0 + u) + 0.5 - cx

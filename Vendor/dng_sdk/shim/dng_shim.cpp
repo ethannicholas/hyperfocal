@@ -72,7 +72,7 @@ extern "C" int hyperfocal_write_linear_dng(const uint16_t *rgb,
 		buffer.fArea      = bounds;
 		buffer.fPlane     = 0;
 		buffer.fPlanes    = 3;
-		buffer.fRowStep   = intptr_t (width) * 3;
+		buffer.fRowStep   = width * 3;
 		buffer.fColStep   = 3;
 		buffer.fPlaneStep = 1;
 		buffer.fPixelType = ttShort;
@@ -240,7 +240,7 @@ extern "C" int hyperfocal_write_linear_dng(const uint16_t *rgb,
 			buffer.fArea      = previewBounds;
 			buffer.fPlane     = 0;
 			buffer.fPlanes    = 3;
-			buffer.fRowStep   = intptr_t (previewWidth) * 3;
+			buffer.fRowStep   = previewWidth * 3;
 			buffer.fColStep   = 3;
 			buffer.fPlaneStep = 1;
 			buffer.fPixelType = ttByte;

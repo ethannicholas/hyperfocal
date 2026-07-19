@@ -82,6 +82,9 @@ targets:
         DEVELOPMENT_TEAM: Y3GFBT2WQ2
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: YES
+        # No App Intents here; skip the metadata pass (it warns about
+        # the missing AppIntents.framework on every build otherwise).
+        LM_SKIP_METADATA_EXTRACTION: YES
     info:
       path: Info.plist
       properties:
