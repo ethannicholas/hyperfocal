@@ -36,8 +36,11 @@ struct DebugWgpu: ParsableCommand {
         commandName: "debug-wgpu",
         abstract: "Run kernel-level CPU vs wgpu parity checks (build-time opt-in).")
 
-    @Option(help: "Fail below this minimum PSNR in dB.")
+    @Option(help: "Fail below this minimum kernel PSNR in dB.")
     var floor: Double = 90
+
+    @Option(help: "Fail below this minimum CPU↔GPU fusion PSNR in dB.")
+    var fusionFloor: Double = 60
 
     func run() throws {
         let minPSNR = try WgpuParity.run()
@@ -46,6 +49,12 @@ struct DebugWgpu: ParsableCommand {
             throw StackError.metal("wgpu parity below floor")
         }
         print("wgpu parity: ALL PASS")
+        let fusionMin = try WgpuParity.runFusion()
+        print(String(format: "fusion minimum: %.1f dB (floor %.1f)", fusionMin, fusionFloor))
+        if fusionMin < fusionFloor {
+            throw StackError.metal("wgpu fusion parity below floor")
+        }
+        print("wgpu fusion: ALL PASS")
     }
 }
 #endif
@@ -121,6 +130,18 @@ struct FusionOptions: ParsableArguments {
         case .gpu:
             guard MetalEngine.shared != nil else {
                 throw ValidationError("no Metal device available")
+            }
+            return true
+        case .cpu: return false
+        }
+        #elseif HYPERFOCAL_HAVE_WGPU
+        // wgpu backend (Windows/Linux): only the pyramid path runs on it so
+        // far — DMap ignores this and fuses on the CPU until GPUDMap's port.
+        switch engine {
+        case .auto: return WgpuEngine.shared != nil
+        case .gpu:
+            guard WgpuEngine.shared != nil else {
+                throw ValidationError("no wgpu adapter available")
             }
             return true
         case .cpu: return false

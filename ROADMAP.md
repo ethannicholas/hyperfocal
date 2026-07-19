@@ -214,16 +214,28 @@ in `run`'s order (storage 0..n-1, uniforms last, padded to 16-byte
 multiples); guided_apply_blend needs 9 storage buffers, which is why
 the engine requires the adapter's real limits at device creation (the
 spec default is 8) and callers without spill data bind 1-float
-dummies. Remaining, in order:
+dummies.
 
-1. **Port GPUPyramid's orchestration** (the smaller of the two) onto
-   WgpuEngine — needs batched encoding (one submit per frame, not per
-   dispatch) and ping-pong uploads to match the Metal path's overlap;
-   wire into `PyramidFusion`'s preferGPU seam and gate with the CPU↔GPU
-   fusion comparison (≥ 60 dB, the Metal pyramid's bar).
-2. **Port GPUDMap** the same way (≥ 90 dB bar), then flip `preferGPU`
-   on for Windows/Linux and calibrate ci-gate.
-3. Decide packaging: wgpu-native ships as a prebuilt DLL/so — vendor per
+Pyramid fusion runs on it (2026-07-19): `WgpuPyramid` mirrors
+GPUPyramid's streaming orchestration through `WgpuEngine.Batch` (one
+command-buffer submit per frame; per-dispatch bind groups; uniforms via
+queue-ordered `wgpuQueueWriteBuffer`, which also makes Metal's
+ping-pong upload buffers unnecessary — writes staged during the
+previous frame's GPU work apply in queue order). Wired into
+`PyramidFusion`'s preferGPU seam and the CLI's `--engine` resolution
+(auto → wgpu when the opt-in build has an adapter). Gated two ways:
+`debug-wgpu` now also runs `WgpuParity.runFusion` (CPU↔GPU pyramid on a
+synthetic in-memory stack, plain + warped modes and the preview
+collapse; floor 60 dB, measuring 139–145 dB on WARP), and the
+file-level synth gate measured 97.6 dB aligned / 102.4 dB no-align.
+Remaining, in order:
+
+1. **Port GPUDMap** the same way (≥ 90 dB bar) — the harder port: the
+   exposure gain is measured from the *warped* frame mid-frame
+   (`meanLuminance` between the warp and argmax command buffers), a
+   genuine CPU dependency the pyramid path doesn't have. Then flip
+   `preferGPU` on for Windows/Linux and calibrate ci-gate.
+2. Decide packaging: wgpu-native ships as a prebuilt DLL/so — vendor per
    platform, or fetch in CI like Qt/vcpkg (deployment story joins the
    CLI-DLL residual above).
 

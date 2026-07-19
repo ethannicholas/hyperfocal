@@ -152,6 +152,18 @@ public enum PyramidFusion {
             }
         }
         #endif
+        #if HYPERFOCAL_HAVE_WGPU
+        if preferGPU, WgpuEngine.shared != nil {
+            do {
+                return try WgpuPyramid.fuse(frameCount: frameCount, warp: warp,
+                                            log: log, progress: progress,
+                                            cancellation: cancellation,
+                                            decodeWorkers: decodeWorkers, frame: frame)
+            } catch let error as StackError {
+                log?("wgpu pyramid failed (\(error)); falling back to CPU")
+            }
+        }
+        #endif
         var levels = 0
         var fused: [ImageBuffer]? = nil
         // Winner energy per band-pass level, updated as frames stream through.

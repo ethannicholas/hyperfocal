@@ -156,18 +156,21 @@ public final class WgpuEngine {
         wgpuQueueWriteBuffer(queue, buffer.raw, 0, src, byteCount)
     }
 
-    /// Copy a buffer back to host memory: staging copy + map + poll-to-done.
-    func download(_ buffer: Buffer, into dst: UnsafeMutableRawPointer) throws {
+    /// Copy the first `byteCount` bytes (default: all) of a buffer back to
+    /// host memory: staging copy + map + poll-to-done.
+    func download(_ buffer: Buffer, into dst: UnsafeMutableRawPointer,
+                  byteCount: Int? = nil) throws {
+        let count = byteCount ?? buffer.byteCount
         var desc = WGPUBufferDescriptor()
         desc.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst
-        desc.size = UInt64(buffer.byteCount)
+        desc.size = UInt64(count)
         guard let staging = wgpuDeviceCreateBuffer(device, &desc) else {
             throw StackError.metal("cannot allocate wgpu staging buffer")
         }
         defer { wgpuBufferRelease(staging) }
         let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
         wgpuCommandEncoderCopyBufferToBuffer(encoder, buffer.raw, 0, staging, 0,
-                                             UInt64(buffer.byteCount))
+                                             UInt64(count))
         var cmd = wgpuCommandEncoderFinish(encoder, nil)
         wgpuQueueSubmit(queue, 1, &cmd)
         wgpuCommandBufferRelease(cmd!)
@@ -183,7 +186,7 @@ public final class WgpuEngine {
         }
         try withUnsafeMutablePointer(to: &mapped) { p in
             cb.userdata1 = UnsafeMutableRawPointer(p)
-            _ = wgpuBufferMapAsync(staging, WGPUMapMode_Read, 0, buffer.byteCount, cb)
+            _ = wgpuBufferMapAsync(staging, WGPUMapMode_Read, 0, count, cb)
             var spins = 0
             while !p.pointee {
                 _ = wgpuDevicePoll(device, WGPUBool(1), nil)
@@ -191,79 +194,171 @@ public final class WgpuEngine {
                 if spins > 1_000_000 { throw StackError.metal("wgpu map timeout") }
             }
         }
-        guard let src = wgpuBufferGetConstMappedRange(staging, 0, buffer.byteCount) else {
+        guard let src = wgpuBufferGetConstMappedRange(staging, 0, count) else {
             throw StackError.metal("wgpu map returned no range")
         }
-        dst.copyMemory(from: src, byteCount: buffer.byteCount)
+        dst.copyMemory(from: src, byteCount: count)
         wgpuBufferUnmap(staging)
     }
 
     // MARK: - Dispatch
 
-    /// One kernel dispatch: bind group from the buffer list (bindings 0..n in
-    /// order, uniforms — if any — as the last binding), submit, wait. The
-    /// WGSL kernels declare their bindings in exactly this order.
-    func run(_ kernelName: String, buffers: [Buffer],
-             uniforms: [UInt8]? = nil, gridW: Int, gridH: Int = 1) throws {
-        let pipeline = try pipeline(kernelName)
+    /// Blocks until every submitted command buffer has finished executing.
+    func waitIdle() {
+        while wgpuDevicePoll(device, WGPUBool(1), nil) == WGPUBool(0) {}
+    }
 
-        var uniformBuf: WGPUBuffer? = nil
-        if let uniforms {
-            var desc = WGPUBufferDescriptor()
-            desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst
-            desc.size = UInt64(uniforms.count)
-            uniformBuf = wgpuDeviceCreateBuffer(device, &desc)
-            uniforms.withUnsafeBytes {
-                wgpuQueueWriteBuffer(queue, uniformBuf, 0, $0.baseAddress!, $0.count)
+    /// Many kernel dispatches (and device-side copies) encoded into one
+    /// command buffer and submitted together — submit-per-dispatch costs a
+    /// queue round-trip per kernel, which dominates at per-frame orchestration
+    /// dispatch counts (WgpuPyramid encodes ~5 per pyramid level).
+    ///
+    /// Uniform data rides on `wgpuQueueWriteBuffer`, which is queue-ordered:
+    /// writes staged before `submit()` are applied before the submitted
+    /// commands execute, and writes staged *after* a submit are applied after
+    /// that submit's commands finish. The latter is what lets callers stage
+    /// the next frame's upload while the previous frame is still on the GPU
+    /// without the Metal path's ping-pong buffers.
+    final class Batch {
+        private let engine: WgpuEngine
+        private let encoder: WGPUCommandEncoder
+        private var pass: WGPUComputePassEncoder? = nil
+        // Bind groups and uniform buffers referenced by the not-yet-submitted
+        // encoder: wgpu-core takes ownership of in-flight resources only at
+        // submit, so hold our references until then.
+        private var bindGroups: [WGPUBindGroup] = []
+        private var uniformBufs: [WGPUBuffer] = []
+        private var submitted = false
+
+        fileprivate init(engine: WgpuEngine) throws {
+            guard let encoder = wgpuDeviceCreateCommandEncoder(engine.device, nil) else {
+                throw StackError.metal("cannot create wgpu command encoder")
+            }
+            self.engine = engine
+            self.encoder = encoder
+        }
+
+        deinit {
+            // Abandoned (error-path) batch: drop everything unsubmitted.
+            if !submitted {
+                if let p = pass {
+                    wgpuComputePassEncoderEnd(p)
+                    wgpuComputePassEncoderRelease(p)
+                }
+                wgpuCommandEncoderRelease(encoder)
+                for bg in bindGroups { wgpuBindGroupRelease(bg) }
+                for u in uniformBufs { wgpuBufferRelease(u) }
             }
         }
-        defer { if let u = uniformBuf { wgpuBufferRelease(u) } }
 
-        var entries: [WGPUBindGroupEntry] = []
-        for (i, b) in buffers.enumerated() {
-            var e = WGPUBindGroupEntry()
-            e.binding = UInt32(i)
-            e.buffer = b.raw
-            e.size = UInt64(b.byteCount)
-            entries.append(e)
-        }
-        if let u = uniformBuf, let uniforms {
-            var e = WGPUBindGroupEntry()
-            e.binding = UInt32(buffers.count)
-            e.buffer = u
-            e.size = UInt64(uniforms.count)
-            entries.append(e)
-        }
-        var bgDesc = WGPUBindGroupDescriptor()
-        bgDesc.layout = wgpuComputePipelineGetBindGroupLayout(pipeline, 0)
-        bgDesc.entryCount = entries.count
-        let bindGroup = entries.withUnsafeBufferPointer { p -> WGPUBindGroup? in
-            bgDesc.entries = p.baseAddress
-            return wgpuDeviceCreateBindGroup(device, &bgDesc)
-        }
-        guard let bindGroup else { throw StackError.metal("wgpu bind group failed") }
-        defer { wgpuBindGroupRelease(bindGroup) }
+        /// Encode one dispatch: bind group from the buffer list (bindings
+        /// 0..n in order, uniforms — if any — as the last binding). The WGSL
+        /// kernels declare their bindings in exactly this order. Workgroup
+        /// size is 16x16 for 2D kernels, 256 for 1D — matches the
+        /// @workgroup_size in the WGSL below.
+        func dispatch(_ kernelName: String, buffers: [Buffer],
+                      uniforms: [UInt8]? = nil, gridW: Int, gridH: Int = 1) throws {
+            precondition(!submitted, "wgpu batch already submitted")
+            let pipeline = try engine.pipeline(kernelName)
 
-        let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
-        let pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
-        wgpuComputePassEncoderSetPipeline(pass, pipeline)
-        wgpuComputePassEncoderSetBindGroup(pass, 0, bindGroup, 0, nil)
-        // Workgroup size is 16x16 for 2D kernels, 256 for 1D — matches the
-        // @workgroup_size in the WGSL below.
-        if gridH > 1 {
-            wgpuComputePassEncoderDispatchWorkgroups(
-                pass, UInt32((gridW + 15) / 16), UInt32((gridH + 15) / 16), 1)
-        } else {
-            wgpuComputePassEncoderDispatchWorkgroups(
-                pass, UInt32((gridW + 255) / 256), 1, 1)
+            var entries: [WGPUBindGroupEntry] = []
+            for (i, b) in buffers.enumerated() {
+                var e = WGPUBindGroupEntry()
+                e.binding = UInt32(i)
+                e.buffer = b.raw
+                e.size = UInt64(b.byteCount)
+                entries.append(e)
+            }
+            if let uniforms {
+                var desc = WGPUBufferDescriptor()
+                desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst
+                desc.size = UInt64(uniforms.count)
+                guard let u = wgpuDeviceCreateBuffer(engine.device, &desc) else {
+                    throw StackError.metal("cannot allocate wgpu uniform buffer")
+                }
+                uniforms.withUnsafeBytes {
+                    wgpuQueueWriteBuffer(engine.queue, u, 0, $0.baseAddress!, $0.count)
+                }
+                uniformBufs.append(u)
+                var e = WGPUBindGroupEntry()
+                e.binding = UInt32(buffers.count)
+                e.buffer = u
+                e.size = UInt64(uniforms.count)
+                entries.append(e)
+            }
+            var bgDesc = WGPUBindGroupDescriptor()
+            bgDesc.layout = wgpuComputePipelineGetBindGroupLayout(pipeline, 0)
+            bgDesc.entryCount = entries.count
+            let bindGroup = entries.withUnsafeBufferPointer { p -> WGPUBindGroup? in
+                bgDesc.entries = p.baseAddress
+                return wgpuDeviceCreateBindGroup(engine.device, &bgDesc)
+            }
+            guard let bindGroup else { throw StackError.metal("wgpu bind group failed") }
+            bindGroups.append(bindGroup)
+
+            if pass == nil {
+                pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
+            }
+            wgpuComputePassEncoderSetPipeline(pass, pipeline)
+            wgpuComputePassEncoderSetBindGroup(pass, 0, bindGroup, 0, nil)
+            if gridH > 1 {
+                wgpuComputePassEncoderDispatchWorkgroups(
+                    pass, UInt32((gridW + 15) / 16), UInt32((gridH + 15) / 16), 1)
+            } else {
+                wgpuComputePassEncoderDispatchWorkgroups(
+                    pass, UInt32((gridW + 255) / 256), 1, 1)
+            }
         }
-        wgpuComputePassEncoderEnd(pass)
-        wgpuComputePassEncoderRelease(pass)
-        var cmd = wgpuCommandEncoderFinish(encoder, nil)
-        wgpuQueueSubmit(queue, 1, &cmd)
-        wgpuCommandBufferRelease(cmd!)
-        wgpuCommandEncoderRelease(encoder)
-        while wgpuDevicePoll(device, WGPUBool(1), nil) == WGPUBool(0) {}
+
+        /// Device-side buffer copy (the Metal path's blit). Copies encode at
+        /// the encoder level, so this ends the open compute pass; the next
+        /// dispatch begins a fresh one.
+        func copy(from src: Buffer, to dst: Buffer, byteCount: Int) {
+            precondition(!submitted, "wgpu batch already submitted")
+            if let p = pass {
+                wgpuComputePassEncoderEnd(p)
+                wgpuComputePassEncoderRelease(p)
+                pass = nil
+            }
+            wgpuCommandEncoderCopyBufferToBuffer(encoder, src.raw, 0, dst.raw, 0,
+                                                 UInt64(byteCount))
+        }
+
+        /// Submit everything encoded so far as one command buffer. Returns
+        /// without waiting — pair with `waitIdle` (or a `download`, whose map
+        /// wait is queue-ordered behind this work) when the results are
+        /// needed.
+        func submit() {
+            precondition(!submitted, "wgpu batch already submitted")
+            submitted = true
+            if let p = pass {
+                wgpuComputePassEncoderEnd(p)
+                wgpuComputePassEncoderRelease(p)
+                pass = nil
+            }
+            var cmd = wgpuCommandEncoderFinish(encoder, nil)
+            wgpuQueueSubmit(engine.queue, 1, &cmd)
+            wgpuCommandBufferRelease(cmd!)
+            wgpuCommandEncoderRelease(encoder)
+            for bg in bindGroups { wgpuBindGroupRelease(bg) }
+            bindGroups = []
+            for u in uniformBufs { wgpuBufferRelease(u) }
+            uniformBufs = []
+        }
+    }
+
+    func makeBatch() throws -> Batch { try Batch(engine: self) }
+
+    /// One kernel dispatch: single-dispatch batch, submit, wait. Convenience
+    /// for the parity harness and one-off kernels; per-frame orchestration
+    /// encodes whole frames through `Batch` directly.
+    func run(_ kernelName: String, buffers: [Buffer],
+             uniforms: [UInt8]? = nil, gridW: Int, gridH: Int = 1) throws {
+        let batch = try makeBatch()
+        try batch.dispatch(kernelName, buffers: buffers, uniforms: uniforms,
+                           gridW: gridW, gridH: gridH)
+        batch.submit()
+        waitIdle()
     }
 
     // MARK: - Kernels (WGSL)

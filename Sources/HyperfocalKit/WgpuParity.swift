@@ -590,5 +590,99 @@ public enum WgpuParity {
 
         return c.minPSNR
     }
+
+    /// End-to-end orchestration parity: `WgpuPyramid` vs the CPU pyramid on
+    /// a small synthetic stack — both upload modes (plain, and warped with an
+    /// identity frame to hit the device-side copy path) plus the per-frame
+    /// preview collapse. The bar is the pyramid fusion bar (≥ 60 dB, not the
+    /// 90 dB kernel floor): the running-max selection amplifies fast-math
+    /// near-ties into coefficient flips, so agreement is bounded by tie
+    /// density, not arithmetic precision.
+    public static func runFusion(log: @escaping (String) -> Void = { print($0) }) throws -> Double {
+        let w = 240, h = 180, frameCount = 4
+
+        // A focus stack in miniature: fine detail everywhere, each frame
+        // sharp in its own vertical strip and defocused elsewhere.
+        var base = ImageBuffer(width: w, height: h)
+        base.pixels.withUnsafeMutableBufferPointer { p in
+            for y in 0..<h { for x in 0..<w {
+                let fx = Float(x), fy = Float(y)
+                let detail = sin(fx * 1.05 + fy * 0.30) * sin(fy * 0.95 - fx * 0.20)
+                let i = (y * w + x) * 4
+                for c in 0..<3 {
+                    let coarse = 0.15 * sin(fx * 0.020 + Float(c) * 1.7)
+                               + 0.15 * sin(fy * 0.017 - Float(c) * 0.9)
+                    p[i + c] = min(max(0.5 + coarse + 0.18 * detail, 0), 1)
+                }
+                p[i + 3] = 1
+            } }
+        }
+        let blurred = Filters.convolveSeparableRGBA(
+            base, kernel: Filters.gaussianKernel(sigma: 2.5))
+        let stripW = Float(w) / Float(frameCount)
+        let frames = (0..<frameCount).map { fi -> ImageBuffer in
+            var img = ImageBuffer(width: w, height: h)
+            let lo = Float(fi) * stripW, hi = Float(fi + 1) * stripW
+            img.pixels.withUnsafeMutableBufferPointer { p in
+                base.pixels.withUnsafeBufferPointer { sharp in
+                    blurred.pixels.withUnsafeBufferPointer { soft in
+                        for y in 0..<h { for x in 0..<w {
+                            // 1 inside the strip, fading to 0 over 6 px outside.
+                            let out = max(lo - Float(x), Float(x) + 1 - hi)
+                            let m = min(max(1 - out / 6, 0), 1)
+                            let i = (y * w + x) * 4
+                            for c in 0..<3 {
+                                p[i + c] = m * sharp[i + c] + (1 - m) * soft[i + c]
+                            }
+                            p[i + 3] = 1
+                        } }
+                    }
+                }
+            }
+            return img
+        }
+
+        var minPSNR = Double.infinity
+        func check(_ name: String, _ a: ImageBuffer, _ b: ImageBuffer, margin: Int) {
+            let psnr = Double(Metrics.psnr(a, b, margin: margin))
+            log(String(format: "%@: %@", name,
+                       psnr.isInfinite ? "inf dB" : String(format: "%.1f dB", psnr)))
+            minPSNR = min(minPSNR, psnr)
+        }
+
+        // Plain mode: the upload lands directly in the pyramid's level 0.
+        var previews = 0
+        var lastPreview: ImageBuffer? = nil
+        let gpuPlain = try WgpuPyramid.fuse(frameCount: frameCount,
+                                            progress: { _, img in
+                                                if let img { previews += 1; lastPreview = img }
+                                            }) { frames[$0] }
+        let cpuPlain = try PyramidFusion.fuse(frameCount: frameCount,
+                                              preferGPU: false) { frames[$0] }
+        check("pyramid_plain", cpuPlain, gpuPlain, margin: 8)
+        guard previews == frameCount, let lastPreview else {
+            throw StackError.metal("wgpu pyramid emitted \(previews)/\(frameCount) previews")
+        }
+        // The last frame's preview collapse and the final collapse run the
+        // same dispatches over the same finished pyramid.
+        check("pyramid_preview", lastPreview, gpuPlain, margin: 0)
+
+        // Warp mode: small similarities applied on-device, the middle frame
+        // identity (device-side copy instead of a warp dispatch).
+        let transforms = (0..<frameCount).map { i -> simd_float3x3 in
+            if i == frameCount / 2 { return matrix_identity_float3x3 }
+            return Warp.similarity(scale: 1 + Float(i) * 0.004,
+                                   rotation: Float(i) * 0.003 - 0.004,
+                                   translation: SIMD2<Float>(Float(i) * 0.8 - 1.0,
+                                                             0.6 - Float(i) * 0.5),
+                                   center: SIMD2<Float>(Float(w) / 2, Float(h) / 2))
+        }
+        let warp = PyramidWarp(transforms: transforms)
+        let gpuWarp = try WgpuPyramid.fuse(frameCount: frameCount, warp: warp) { frames[$0] }
+        let cpuWarp = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
+                                             warp: warp) { frames[$0] }
+        check("pyramid_warp", cpuWarp, gpuWarp, margin: 16)
+        return minPSNR
+    }
 }
 #endif // HYPERFOCAL_HAVE_WGPU
