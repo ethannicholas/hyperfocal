@@ -398,11 +398,14 @@ ApplicationWindow {
             to: parent.to
             value: Shell.slider(parent.sliderId)
             onMoved: Shell.setSlider(parent.sliderId, value)
-            // Tone drags record one undo entry per drag (the native
-            // onEditingChanged bracket); fusion sliders aren't undoable.
+            // Tone drags record one undo entry per drag; the noise
+            // floor shows its live depth preview while held (both are
+            // the native onEditingChanged brackets).
             onPressedChanged: {
                 if (parent.sliderId.startsWith("tone."))
                     Shell.toneEditing(pressed)
+                else if (parent.sliderId === "fusion.slider.noise-floor")
+                    Shell.noiseFloorEditing(pressed)
             }
             // Re-read on model changes (reset, project load).
             Connections {

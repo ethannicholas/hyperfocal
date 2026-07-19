@@ -179,6 +179,7 @@ public:
     QString projectPath() const;
     bool hasUnsavedWork() const;
     Q_INVOKABLE void toneEditing(bool editing);
+    Q_INVOKABLE void noiseFloorEditing(bool editing);
     Q_INVOKABLE bool undo();
     Q_INVOKABLE bool redo();
     bool canUndo() const;

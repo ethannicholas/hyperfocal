@@ -143,6 +143,12 @@ int hf_has_unsaved_work(void);
 int hf_close_stack(void);
 int hf_close_project(void);
 
+// Noise-floor drag bracket: editing=1 switches the display to a live
+// depth-map preview that follows hf_set_slider moves (data
+// visualization — no tone LUT; epoch bumps per re-render); 0 restores
+// the normal display.
+void hf_noise_floor_editing(int editing);
+
 // Tone drag bracket: editing=1 at drag start, 0 at drag end records
 // ONE undoable edit for the whole drag (mirrors the native sliders'
 // onEditingChanged). Tone sets outside a bracket are silent to undo.

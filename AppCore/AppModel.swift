@@ -481,7 +481,7 @@ public final class AppModel: ObservableObject {
     // harmless; blotchy fill basins or halos standing off edges are what the
     // slider is there to fix. (The old preview blacked out sub-floor pixels,
     // which read as "problem here" even when the fill would be fine.)
-    @Published var noiseFloorPreview: PlatformImage?
+    @Published public var noiseFloorPreview: PlatformImage?
     private var noiseFloorPreviewData:
         (energyMax: [Float], argmax: [Float], concentration: [Float],
          planes: [[Float]], guide: [Float], width: Int, height: Int,
@@ -2532,7 +2532,7 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Noise floor preview
 
-    func beginNoiseFloorPreview() {
+    public func beginNoiseFloorPreview() {
         guard phase == .done, let sharpness = resultSharpness, let result,
               !sharpness.planes.isEmpty else { return }
         noiseFloorPreviewActive = true
@@ -2588,7 +2588,7 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    func endNoiseFloorPreview() {
+    public func endNoiseFloorPreview() {
         noiseFloorPreviewActive = false
         noiseFloorPreviewGeneration.bump()  // drop + abort any in-flight compute
         noiseFloorPreviewPending = false

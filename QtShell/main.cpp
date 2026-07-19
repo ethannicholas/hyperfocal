@@ -36,7 +36,7 @@ struct SelfTest {
     bool exclusionOK = false, batchOK = false, cropOK = false;
     bool toneKeptPixels = false, depthBumpedPixels = false, fullRes = false;
     bool inputOK = false, zoomOK = true;
-    bool undoOK = false, projectOK = false;
+    bool undoOK = false, projectOK = false, previewOK = false;
     QString projectFile;
     QString expectedInput;    // selected frame's name
     int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
@@ -294,9 +294,24 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->undoOK = state->undoOK && !shell->canUndo()
                     && shell->slider(QStringLiteral("tone.slider.exposure")) == 0.0
                     && shell->canRedo() && shell->redo();
+                // Noise-floor preview: while the bracket holds, the
+                // display must become a data visualization (the live
+                // depth preview builds async — stage 5 waits it out).
+                shell->noiseFloorEditing(true);
+                shell->setSlider(QStringLiteral("fusion.slider.noise-floor"),
+                                 shell->slider(QStringLiteral(
+                                     "fusion.slider.noise-floor")) + 0.05);
+                advance(5);
+                return;
+            case 5: {   // noise-floor preview lands (async build)
+                const bool isData = shell->displayIsData();
+                if (!isData && ++state->stageTicks < 40) return;
+                shell->noiseFloorEditing(false);
+                // End restores the normal (non-data) display synchronously.
+                state->previewOK = isData && !shell->displayIsData();
                 // Project round-trip: save must clear the dirty flag and
                 // set the path; reopening the file must restore a fused
-                // stack (stage 5 waits out the load).
+                // stack (stage 6 waits out the load).
                 state->projectFile = state->outPath + ".hyperfocal";
                 state->projectOK =
                     shell->saveProject(QUrl::fromLocalFile(state->projectFile))
@@ -304,9 +319,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     && shell->projectPath() == state->projectFile;
                 if (state->projectOK)
                     shell->openStack(QUrl::fromLocalFile(state->projectFile));
-                advance(5);
+                advance(6);
                 return;
-            case 5: {   // reload settles: a stack is back, still fused
+            }
+            case 6: {   // reload settles: a stack is back, still fused
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const QVariantList stacks = shell->stacks();
                 const bool reloaded = stacks.size() >= 1
@@ -320,10 +336,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->projectOK = state->projectOK
                     && shell->confirmNewProject()
                     && shell->newProject(QUrl::fromLocalFile(state->stackDir));
-                advance(6);
+                advance(7);
                 return;
             }
-            case 6: {   // new-project load settles: exactly one stack
+            case 7: {   // new-project load settles: exactly one stack
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const bool replaced = shell->stacks().size() == 1;
                 if (!replaced && ++state->stageTicks < 40) return;
@@ -352,6 +368,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!state->zoomOK) { QCoreApplication::exit(14); return; }
             if (!state->undoOK) { QCoreApplication::exit(15); return; }
             if (!state->projectOK) { QCoreApplication::exit(16); return; }
+            if (!state->previewOK) { QCoreApplication::exit(17); return; }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the

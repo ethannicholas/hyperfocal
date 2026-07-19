@@ -94,6 +94,7 @@ private enum Bridge {
     /// rule the native pane follows.
     static func displayImage() -> PlatformImage? {
         guard let model else { return nil }
+        if let preview = model.noiseFloorPreview { return preview }
         if model.phase.isRunning { return model.progressive }
         if model.outputMode == .depth { return model.depthPreview }
         return model.outputPreview
@@ -104,6 +105,7 @@ private enum Bridge {
     /// these, the same pixels-only rule the native pane follows.
     static func displayIsData() -> Bool {
         guard let model else { return false }
+        if model.noiseFloorPreview != nil { return true }
         if model.phase.isRunning { return model.progressiveIsData }
         return model.outputMode == .depth
     }
@@ -754,6 +756,19 @@ public func hf_close_project() -> Int32 {
 // MARK: Undo/redo of model edits (tone, crop, frame inclusion — the
 // native ⌘Z family; retouch strokes keep their own undo, reached
 // through the same entry points once retouch mode exists here)
+
+/// Noise-floor drag bracket, mirroring the native slider's
+/// onEditingChanged: begin switches the display to a live depth-map
+/// preview that re-renders as hf_set_slider moves the floor (the pixel
+/// epoch bumps per re-render — the pane follows for free); end drops
+/// back to the normal display priority.
+@_cdecl("hf_noise_floor_editing")
+public func hf_noise_floor_editing(_ editing: Int32) {
+    MainActor.assumeIsolated {
+        if editing != 0 { Bridge.model?.beginNoiseFloorPreview() }
+        else { Bridge.model?.endNoiseFloorPreview() }
+    }
+}
 
 /// Tone drag bracket, mirroring the native sliders' onEditingChanged:
 /// editing=1 snapshots a baseline, editing=0 records ONE undoable tone

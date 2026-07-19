@@ -516,6 +516,10 @@ bool Shell::hasUnsavedWork() const { return hf_has_unsaved_work() != 0; }
 
 void Shell::toneEditing(bool editing) { hf_tone_editing(editing ? 1 : 0); }
 
+void Shell::noiseFloorEditing(bool editing) {
+    hf_noise_floor_editing(editing ? 1 : 0);
+}
+
 bool Shell::undo() { return hf_undo() != 0; }
 bool Shell::redo() { return hf_redo() != 0; }
 bool Shell::canUndo() const { return hf_can_undo() != 0; }
