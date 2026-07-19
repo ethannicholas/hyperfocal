@@ -80,6 +80,10 @@ var kitSwiftSettings: [SwiftSetting] = [
 var appCoreDeps: [Target.Dependency] = ["HyperfocalKit"]
 #if !os(macOS)
 appCoreDeps.append(.product(name: "OpenCombine", package: "OpenCombine"))
+// `import zlib` is an Apple-SDK module; elsewhere ProjectStore's crc32 comes
+// from a minimal system-library shim over <zlib.h>.
+appCoreDeps.append("CZlib")
+extraTargets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
 #endif
 extraTargets.append(
     .target(

@@ -1,6 +1,12 @@
 import Foundation
+#if canImport(simd)
 import simd
+#endif
+#if canImport(zlib)
 import zlib
+#else
+import CZlib
+#endif
 import HyperfocalKit
 
 /// Serializes a project to a single zip file (Name.hyperfocal): a JSON

@@ -543,7 +543,11 @@ public final class AppModel: ObservableObject {
         exportColorSpace = d.string(forKey: "exportColorSpace")
             .flatMap { ExportColorSpace(rawValue: $0) } ?? .srgb
         alignFrames = d.object(forKey: "alignFrames") as? Bool ?? true
+        #if canImport(Metal)
         useGPU = (d.object(forKey: "useGPU") as? Bool ?? true) && MetalEngine.shared != nil
+        #else
+        useGPU = false
+        #endif
         fusionDiskCache = d.object(forKey: "fusionDiskCache") as? Bool ?? true
         for legacy in ["sharpnessSigma", "noiseFloor", "medianRadius",
                        "blendRadius", "slabDeepStacks"] {

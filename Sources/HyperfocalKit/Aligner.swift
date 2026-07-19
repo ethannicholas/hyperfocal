@@ -490,6 +490,48 @@ public enum Aligner {
 
     // MARK: - Platform primitives (decode-adjacent: downscale, register, preview)
 
+    /// Longest side (px) SIFT registration runs at. Full-res SIFT on a 45 MP
+    /// frame needs many GB and often finds no robust model; registering on a
+    /// downscaled copy and mapping the homography back is the "downscale-for-
+    /// registration" bound (validated on macOS via the Phase 1.5 A/B; applied
+    /// on every OpenCV path). Synth frames (≤900 px) sit below this, so the
+    /// synth gates are unaffected.
+    static let openCVRegisterMaxSide = 2500
+
+    /// Area-average downscale of an 8-bit gray plane by `scale` (0<scale<1) —
+    /// enough to feed SIFT; not the fusion sampler.
+    static func boxDownscale(_ img: GrayImage, scale: Float) -> GrayImage {
+        let w = img.width, h = img.height
+        let pw = max(1, Int((Float(w) * scale).rounded())), ph = max(1, Int((Float(h) * scale).rounded()))
+        var bytes = [UInt8](repeating: 0, count: pw * ph)
+        img.pixels.withUnsafeBufferPointer { src in
+            bytes.withUnsafeMutableBufferPointer { dst in
+                DispatchQueue.concurrentPerform(iterations: ph) { y in
+                    let y0 = y * h / ph, y1 = max(y0 + 1, (y + 1) * h / ph)
+                    for x in 0..<pw {
+                        let x0 = x * w / pw, x1 = max(x0 + 1, (x + 1) * w / pw)
+                        var acc = 0, cnt = 0
+                        for yy in y0..<min(y1, h) {
+                            for xx in x0..<min(x1, w) { acc += Int(src[yy * w + xx]); cnt += 1 }
+                        }
+                        dst[y * pw + x] = UInt8(acc / max(cnt, 1))
+                    }
+                }
+            }
+        }
+        return GrayImage(width: pw, height: ph, pixels: bytes)
+    }
+
+    /// H was fit in downscaled coords (p_small = s·p_full). Map back to
+    /// full-res: H_full = S⁻¹ · H_small · S, with S = diag(s, s, 1).
+    static func upscaleHomography(_ hs: simd_float3x3, scale s: Float) -> simd_float3x3 {
+        let S = simd_float3x3(rows: [
+            SIMD3<Float>(s, 0, 0), SIMD3<Float>(0, s, 0), SIMD3<Float>(0, 0, 1)])
+        let sInv = simd_float3x3(rows: [
+            SIMD3<Float>(1 / s, 0, 0), SIMD3<Float>(0, 1 / s, 0), SIMD3<Float>(0, 0, 1)])
+        return sInv * hs * S
+    }
+
 #if canImport(Vision)
 
     /// Registers `moving` onto `fixed` and returns a homography mapping
@@ -524,13 +566,6 @@ public enum Aligner {
     static let useOpenCVRegistration: Bool =
         ProcessInfo.processInfo.environment["HYPERFOCAL_REGISTER"]?.lowercased() == "opencv"
 
-    /// Longest side (px) SIFT registration runs at. Full-res SIFT on a 45 MP
-    /// frame needs many GB and often finds no robust model; registering on a
-    /// downscaled copy and mapping the homography back is the "downscale-for-
-    /// registration" bound from ROADMAP residual #3. Synth frames (≤900 px) sit
-    /// below this, so the synth A/B is unaffected.
-    static let openCVRegisterMaxSide = 2500
-
     /// OpenCV SIFT + RANSAC homography on the portable gray planes — the Linux
     /// backend (`register(GrayImage,GrayImage)` under `#else`) plus the residual-#3
     /// downscale bound. OpenCV is already top-left / y-down, so no Vision-style
@@ -558,38 +593,7 @@ public enum Aligner {
             SIMD3<Float>(h[6], h[7], h[8]),
         ])
         guard scale < 1 else { return hs }
-        // H was fit in downscaled coords (p_small = s·p_full). Map back to
-        // full-res: H_full = S⁻¹ · H_small · S, with S = diag(s, s, 1).
-        let s = scale
-        let S = simd_float3x3(rows: [
-            SIMD3<Float>(s, 0, 0), SIMD3<Float>(0, s, 0), SIMD3<Float>(0, 0, 1)])
-        let sInv = simd_float3x3(rows: [
-            SIMD3<Float>(1 / s, 0, 0), SIMD3<Float>(0, 1 / s, 0), SIMD3<Float>(0, 0, 1)])
-        return sInv * hs * S
-    }
-
-    /// Area-average downscale of an 8-bit gray plane by `scale` (0<scale<1) —
-    /// enough to feed SIFT; not the fusion sampler.
-    static func boxDownscale(_ img: GrayImage, scale: Float) -> GrayImage {
-        let w = img.width, h = img.height
-        let pw = max(1, Int((Float(w) * scale).rounded())), ph = max(1, Int((Float(h) * scale).rounded()))
-        var bytes = [UInt8](repeating: 0, count: pw * ph)
-        img.pixels.withUnsafeBufferPointer { src in
-            bytes.withUnsafeMutableBufferPointer { dst in
-                DispatchQueue.concurrentPerform(iterations: ph) { y in
-                    let y0 = y * h / ph, y1 = max(y0 + 1, (y + 1) * h / ph)
-                    for x in 0..<pw {
-                        let x0 = x * w / pw, x1 = max(x0 + 1, (x + 1) * w / pw)
-                        var acc = 0, cnt = 0
-                        for yy in y0..<min(y1, h) {
-                            for xx in x0..<min(x1, w) { acc += Int(src[yy * w + xx]); cnt += 1 }
-                        }
-                        dst[y * pw + x] = UInt8(acc / max(cnt, 1))
-                    }
-                }
-            }
-        }
-        return GrayImage(width: pw, height: ph, pixels: bytes)
+        return upscaleHomography(hs, scale: scale)
     }
 #endif
 
@@ -645,21 +649,32 @@ public enum Aligner {
     static func register(moving: GrayImage, fixed: GrayImage) throws -> simd_float3x3 {
         precondition(moving.width == fixed.width && moving.height == fixed.height,
                      "OpenCV registration expects same-sized gray frames")
+        // Bound SIFT's input (openCVRegisterMaxSide) and map the homography
+        // back — same downscale-for-registration wrapper the macOS A/B path
+        // validated; full-res SIFT on 45 MP frames needs ~7.5 GB and often
+        // finds no model.
+        let longest = max(moving.width, moving.height)
+        let scale: Float = longest > openCVRegisterMaxSide
+            ? Float(openCVRegisterMaxSide) / Float(longest) : 1
+        let sm = scale < 1 ? boxDownscale(moving, scale: scale) : moving
+        let sf = scale < 1 ? boxDownscale(fixed, scale: scale) : fixed
         var h = [Float](repeating: 0, count: 9)
-        let status = fixed.pixels.withUnsafeBufferPointer { f in
-            moving.pixels.withUnsafeBufferPointer { m in
-                hf_register(CInt(fixed.width), CInt(fixed.height),
+        let status = sf.pixels.withUnsafeBufferPointer { f in
+            sm.pixels.withUnsafeBufferPointer { m in
+                hf_register(CInt(sf.width), CInt(sf.height),
                             f.baseAddress, m.baseAddress, &h)
             }
         }
         guard status == hf_ok else { throw AlignError.registrationFailed(0) }
         // OpenCV already works top-left / y-down, matching our convention — no
         // flip (unlike Vision's bottom-left warp).
-        return simd_float3x3(rows: [
+        let hs = simd_float3x3(rows: [
             SIMD3<Float>(h[0], h[1], h[2]),
             SIMD3<Float>(h[3], h[4], h[5]),
             SIMD3<Float>(h[6], h[7], h[8]),
         ])
+        guard scale < 1 else { return hs }
+        return upscaleHomography(hs, scale: scale)
     }
 
     static func grayStats(_ img: GrayImage, factor: Int = 4) -> GrayStats {

@@ -35,6 +35,14 @@ public struct Float3x3: Equatable {
         self.r0 = r0; self.r1 = r1; self.r2 = r2
     }
 
+    /// Matches `simd_float3x3.init(columns:)`: the tuple supplies the three
+    /// columns (used by ProjectStore's transform deserialization).
+    public init(columns: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)) {
+        r0 = SIMD3<Float>(columns.0.x, columns.1.x, columns.2.x)
+        r1 = SIMD3<Float>(columns.0.y, columns.1.y, columns.2.y)
+        r2 = SIMD3<Float>(columns.0.z, columns.1.z, columns.2.z)
+    }
+
     public static let identity = Float3x3(
         SIMD3<Float>(1, 0, 0),
         SIMD3<Float>(0, 1, 0),

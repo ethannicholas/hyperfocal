@@ -11,7 +11,9 @@ import OpenCombine
 import os
 #endif
 import HyperfocalKit
+#if canImport(simd)
 import simd
+#endif
 
 /// A retouching session over a fused result: a mutable working copy of the
 /// output that brush strokes paint into, sourcing pixels from *aligned* input
