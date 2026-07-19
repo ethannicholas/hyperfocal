@@ -30,6 +30,8 @@ class Shell : public QObject {
     Q_PROPERTY(bool hasInput READ hasInput NOTIFY changed)
     Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY changed)
+    Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
+    Q_PROPERTY(double displayCropAngle READ displayCropAngle NOTIFY changed)
     Q_PROPERTY(int lutEpoch READ lutEpoch NOTIFY changed)
 
 public:
@@ -78,8 +80,8 @@ public:
     /// w/h <= 0 clears). displayCrop is empty when none presents.
     Q_INVOKABLE void setCrop(double x, double y, double w, double h,
                              double angle);
-    Q_INVOKABLE QRectF displayCrop() const;
-    Q_INVOKABLE double displayCropAngle() const;
+    QRectF displayCrop() const;
+    double displayCropAngle() const;
     Q_INVOKABLE bool selectStack(int index);
     Q_INVOKABLE void setStackEnabled(int index, bool enabled);
     Q_INVOKABLE bool fuseEnabledStacks();

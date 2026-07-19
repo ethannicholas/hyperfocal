@@ -131,12 +131,21 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        // Sidebar
-        ColumnLayout {
+        // Sidebar — scrolls when its sections outgrow the window.
+        ScrollView {
+            id: sidebarScroll
             Layout.preferredWidth: 280
             Layout.maximumWidth: 280
             Layout.fillHeight: true
-            Layout.margins: 10
+            contentWidth: availableWidth
+            clip: true
+            padding: 10
+
+        ColumnLayout {
+            width: sidebarScroll.availableWidth
+            // Stretch to the viewport when content fits, so the Export
+            // button stays pinned to the bottom.
+            height: Math.max(implicitHeight, sidebarScroll.availableHeight)
             spacing: 10
 
             Button {
@@ -289,6 +298,70 @@ ApplicationWindow {
                 label: "Contrast"; from: -1; to: 1
             }
 
+            Label { text: "Crop"; color: "#d5d5d5"; font.bold: true }
+            // Numeric stand-in for the native drag overlay (result-canvas
+            // px + degrees) — enough to exercise the presentation and
+            // export until the Qt shell grows real handles.
+            GridLayout {
+                columns: 4
+                columnSpacing: 6
+                Layout.fillWidth: true
+                component CropField: TextField {
+                    Layout.fillWidth: true
+                    font.pixelSize: 12
+                    validator: DoubleValidator {}
+                }
+                CropField { id: cropX; placeholderText: "x" }
+                CropField { id: cropY; placeholderText: "y" }
+                CropField { id: cropW; placeholderText: "w" }
+                CropField { id: cropH; placeholderText: "h" }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: "Angle"; color: "#b5b5b5"; font.pixelSize: 12 }
+                Slider {
+                    id: cropAngle
+                    from: -45; to: 45; value: 0
+                    Layout.fillWidth: true
+                }
+                Label {
+                    text: cropAngle.value.toFixed(1) + "°"
+                    color: "#8a8a8a"
+                    font.pixelSize: 12
+                    font.family: "Menlo"
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Button {
+                    text: "Apply Crop"
+                    Layout.fillWidth: true
+                    enabled: !Shell.isRunning
+                    onClicked: Shell.setCrop(Number(cropX.text), Number(cropY.text),
+                                             Number(cropW.text), Number(cropH.text),
+                                             cropAngle.value)
+                }
+                Button {
+                    text: "Clear"
+                    enabled: !Shell.isRunning
+                    onClicked: Shell.setCrop(0, 0, 0, 0, 0)
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: Shell.displayCrop.width > 0
+                text: "Presenting " + Shell.displayCrop.width + "×"
+                      + Shell.displayCrop.height + " @ ("
+                      + Shell.displayCrop.x + ", " + Shell.displayCrop.y + ")"
+                      + (Shell.displayCropAngle !== 0
+                         ? ", " + Shell.displayCropAngle + "°" : "")
+                color: "#8a8a8a"
+                font.pixelSize: 11
+                elide: Text.ElideRight
+            }
+
             Item { Layout.fillHeight: true }
 
             Button {
@@ -297,6 +370,7 @@ ApplicationWindow {
                 enabled: !Shell.isRunning
                 onClicked: exportDialog.open()
             }
+        }
         }
 
         // Preview side
