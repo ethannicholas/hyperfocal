@@ -869,13 +869,15 @@ ApplicationWindow {
                     }
                 }
                 ToolButton {
-                    text: "−"
-                    font.pixelSize: 14
+                    icon.name: "zoom-out"
+                    icon.width: 16
+                    icon.height: 16
                     onClicked: outputPane.item.zoomBy(1 / 1.25)
                 }
                 ToolButton {
-                    text: "+"
-                    font.pixelSize: 14
+                    icon.name: "zoom-in"
+                    icon.width: 16
+                    icon.height: 16
                     onClicked: outputPane.item.zoomBy(1.25)
                 }
                 Item { Layout.fillWidth: true }
