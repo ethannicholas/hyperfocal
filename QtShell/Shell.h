@@ -6,6 +6,7 @@
 #define SHELL_H
 
 #include <QByteArray>
+#include <QStringList>
 #include <QObject>
 #include <QRectF>
 #include <QUrl>
@@ -30,6 +31,8 @@ class Shell : public QObject {
     Q_PROPERTY(QString stageEta READ stageEta NOTIFY progressChanged)
     Q_PROPERTY(double exposure READ exposure WRITE setExposure NOTIFY changed)
     Q_PROPERTY(bool depthMode READ depthMode WRITE setDepthMode NOTIFY changed)
+    Q_PROPERTY(QStringList collapsedSections READ collapsedSections
+               NOTIFY changed)
     Q_PROPERTY(QVariantList stacks READ stacks NOTIFY stacksChanged)
     Q_PROPERTY(int selectedStack READ selectedStack NOTIFY stacksChanged)
     Q_PROPERTY(int pendingStackCount READ pendingStackCount NOTIFY stacksChanged)
@@ -151,6 +154,8 @@ public:
     Q_INVOKABLE void retouchStrokeMove(double x0, double y0,
                                        double x1, double y1);
     Q_INVOKABLE void retouchStrokeEnd();
+    QStringList collapsedSections() const;
+    Q_INVOKABLE void toggleSection(const QString &name);
     Q_INVOKABLE void retouchHover(double x, double y);
     Q_INVOKABLE void retouchHoverClear();
     Q_INVOKABLE QPointF cursorScreenPos() const;

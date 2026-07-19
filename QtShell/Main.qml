@@ -509,6 +509,36 @@ ApplicationWindow {
         }
     }
 
+    // Native sectionHeader: chevron + title as one toggle for the
+    // model-persisted collapse state; trailing children (Reset, All/
+    // None…) stay outside the toggle's effect but inside the row.
+    component SectionHeader: RowLayout {
+        id: header
+        required property string title
+        required property string section
+        property string subtitle: ""
+        default property alias trailing: trailingRow.data
+        readonly property bool collapsed:
+            Shell.collapsedSections.indexOf(section) >= 0
+        Layout.fillWidth: true
+        spacing: 6
+        Text {
+            text: header.collapsed ? "\u25b8" : "\u25be"
+            color: "#9a9a9a"
+            font.pixelSize: 11
+        }
+        Label { text: header.title; color: "#d5d5d5"; font.bold: true }
+        Label {
+            text: header.subtitle
+            visible: header.subtitle !== ""
+            color: "#8a8a8a"
+            font.pixelSize: 11
+        }
+        Item { Layout.fillWidth: true; implicitHeight: 1 }
+        RowLayout { id: trailingRow; spacing: 6 }
+        TapHandler { onTapped: Shell.toggleSection(header.section) }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -671,23 +701,18 @@ ApplicationWindow {
                 }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-                Label { text: "Stack"; color: "#d5d5d5"; font.bold: true }
-                Label {
-                    // "N of M" included count, the native stack.count.
-                    text: {
-                        var n = 0
-                        for (var i = 0; i < Shell.frames.length; ++i)
-                            if (Shell.frames[i].included) ++n
-                        return n + " of " + Shell.frames.length
-                    }
-                    visible: Shell.frames.length > 0
-                    color: "#8a8a8a"
-                    font.pixelSize: 11
+            SectionHeader {
+                id: stackHeader
+                title: "Stack"
+                section: "stack"
+                // "N of M" included count, the native stack.count.
+                subtitle: {
+                    if (Shell.frames.length === 0) return ""
+                    var n = 0
+                    for (var i = 0; i < Shell.frames.length; ++i)
+                        if (Shell.frames[i].included) ++n
+                    return n + " of " + Shell.frames.length
                 }
-                Item { Layout.fillWidth: true }
                 Button {
                     text: "All"
                     visible: frameList.count > 0
@@ -710,6 +735,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
+                         && !stackHeader.collapsed
                 text: "Drop a folder of frames here, or:"
                 color: "#8a8a8a"
                 font.pixelSize: 12
@@ -718,6 +744,7 @@ ApplicationWindow {
             Button {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
+                         && !stackHeader.collapsed
                 text: "Open Folder…"
                 enabled: !Shell.isRunning
                 onClicked: openDialog.open()
@@ -726,7 +753,7 @@ ApplicationWindow {
                 id: frameList
                 // Single-stack projects list frames flat; with several
                 // stacks the tree's nested rows take over, like native.
-                visible: stackList.count <= 1
+                visible: stackList.count <= 1 && !stackHeader.collapsed
                 Layout.fillWidth: true
                 Layout.preferredHeight: visible
                     ? Math.min(300, contentHeight) : 0
@@ -767,10 +794,10 @@ ApplicationWindow {
                 }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Label { text: "Fusion"; color: "#d5d5d5"; font.bold: true }
-                Item { Layout.fillWidth: true }
+            SectionHeader {
+                id: fusionHeader
+                title: "Fusion"
+                section: "fusion"
                 Button {
                     text: "Reset"
                     visible: !Shell.fusionDefault
@@ -781,6 +808,7 @@ ApplicationWindow {
                 }
             }
             SidebarCard {
+                visible: !fusionHeader.collapsed
                 SidebarSlider {
                     sliderId: "fusion.slider.sharpness"
                     label: "Sharpness σ"; from: 1; to: 16; format: "%1 px"
@@ -817,10 +845,10 @@ ApplicationWindow {
                 }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Label { text: "Tone"; color: "#d5d5d5"; font.bold: true }
-                Item { Layout.fillWidth: true }
+            SectionHeader {
+                id: toneHeader
+                title: "Tone"
+                section: "tone"
                 Button {
                     text: "Reset"
                     visible: !Shell.toneNeutral
@@ -830,6 +858,7 @@ ApplicationWindow {
                 }
             }
             SidebarCard {
+                visible: !toneHeader.collapsed
                 SidebarSlider {
                     sliderId: "tone.slider.exposure"
                     label: "Exposure"; from: -5; to: 5; format: "%1 EV"
@@ -856,8 +885,13 @@ ApplicationWindow {
                 }
             }
 
-            Label { text: "Edit"; color: "#d5d5d5"; font.bold: true }
+            SectionHeader {
+                id: editHeader
+                title: "Edit"
+                section: "retouch"
+            }
             SidebarCard {
+                visible: !editHeader.collapsed
                 Button {
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
@@ -1001,7 +1035,13 @@ ApplicationWindow {
 
             Item { Layout.fillHeight: true }
 
+            SectionHeader {
+                id: exportHeader
+                title: "Export"
+                section: "export"
+            }
             SidebarCard {
+                visible: !exportHeader.collapsed
                 Button {
                     Layout.fillWidth: true
                     text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"

@@ -137,7 +137,7 @@ QVariantList Shell::fingerprint() const {
             retouchMode(), canRetouch(), retouchHasEdits(),
             retouchSourceKind(), retouchSourceName(),
             retouchSourceLoading(), retouchSourceError(),
-            retouchSourceStatus(),
+            retouchSourceStatus(), collapsedSections(),
             cropAspectRatio(), cropPortrait(), editCrop(), editCropAngle(),
             slider(QStringLiteral("fusion.slider.sharpness")),
             slider(QStringLiteral("fusion.slider.noise-floor")),
@@ -300,6 +300,17 @@ void Shell::retouchStrokeMove(double x0, double y0, double x1, double y1) {
     hf_retouch_stroke_move(x0, y0, x1, y1);
 }
 void Shell::retouchStrokeEnd() { hf_retouch_stroke_end(); }
+QStringList Shell::collapsedSections() const {
+    static const char *const names[] =
+        {"stack", "fusion", "tone", "retouch", "export"};
+    QStringList out;
+    for (const char *n : names)
+        if (hf_section_collapsed(n)) out << QString::fromLatin1(n);
+    return out;
+}
+void Shell::toggleSection(const QString &name) {
+    hf_toggle_section(name.toUtf8().constData());
+}
 void Shell::retouchHover(double x, double y) { hf_retouch_hover(x, y); }
 void Shell::retouchHoverClear() { hf_retouch_hover_clear(); }
 QPointF Shell::cursorScreenPos() const { return QCursor::pos(); }

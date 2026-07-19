@@ -91,6 +91,10 @@ int hf_edit_crop(double *x, double *y, double *w, double *h,
                  double *angle);
 int hf_crop_aspect(char *buf, int cap);             // returns bytes
 int hf_set_crop_aspect(const char *name);
+// Sidebar section collapse (names: stack/fusion/tone/retouch/export);
+// persisted by the model with the other UI preferences.
+int hf_section_collapsed(const char *name);
+int hf_toggle_section(const char *name);
 double hf_crop_aspect_ratio(void);
 int hf_crop_portrait(void);
 int hf_toggle_crop_orientation(void);

@@ -246,6 +246,7 @@ struct ContentView: View {
             .accessibilityValue(model.isCollapsed(section) ? "collapsed" : "expanded")
             trailing()
         }
+        .padding(.bottom, model.isCollapsed(section) ? 12 : 0)
     }
 
     private func sectionHeader(_ title: String,

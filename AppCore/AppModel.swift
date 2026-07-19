@@ -277,7 +277,7 @@ public final class AppModel: ObservableObject {
     }
     /// Sidebar sections the user has collapsed — persisted like the other
     /// set-and-forget UI preferences.
-    enum SidebarSection: String, CaseIterable {
+    public enum SidebarSection: String, CaseIterable, Sendable {
         case stack, fusion, tone, retouch, export
     }
     @Published var collapsedSections: Set<SidebarSection> {
@@ -287,11 +287,11 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    func isCollapsed(_ section: SidebarSection) -> Bool {
+    public func isCollapsed(_ section: SidebarSection) -> Bool {
         collapsedSections.contains(section)
     }
 
-    func toggleSection(_ section: SidebarSection) {
+    public func toggleSection(_ section: SidebarSection) {
         if collapsedSections.contains(section) {
             collapsedSections.remove(section)
         } else {

@@ -440,6 +440,30 @@ public func hf_crop_aspect(_ buffer: UnsafeMutablePointer<CChar>?,
     }
 }
 
+/// Sidebar section collapse — chrome state, but model-owned (persisted
+/// with the other set-and-forget preferences) so both shells share it.
+/// Names are AppModel.SidebarSection rawValues.
+@_cdecl("hf_section_collapsed")
+public func hf_section_collapsed(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let section = AppModel.SidebarSection(rawValue: string) else { return 0 }
+        return model.isCollapsed(section) ? 1 : 0
+    }
+}
+
+@_cdecl("hf_toggle_section")
+public func hf_toggle_section(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let section = AppModel.SidebarSection(rawValue: string) else { return 0 }
+        model.toggleSection(section)
+        return 1
+    }
+}
+
 @_cdecl("hf_set_crop_aspect")
 public func hf_set_crop_aspect(_ name: UnsafePointer<CChar>?) -> Int32 {
     guard let name, let string = String(validatingUTF8: name) else { return 0 }

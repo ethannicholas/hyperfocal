@@ -296,6 +296,22 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     && shell->displayCrop().isEmpty()
                     && shell->acceptCrop() && !shell->cropMode()
                     && shell->displayCrop().isEmpty();
+                // Sidebar collapse round-trip: model-owned state (the
+                // shared settings suite may carry any starting value, so
+                // assert the flip and the restore, not absolutes) — and
+                // it must ride the changed() fingerprint for QML.
+                {
+                    const bool was =
+                        shell->collapsedSections().contains(QStringLiteral("tone"));
+                    shell->toggleSection(QStringLiteral("tone"));
+                    state->cropOK = state->cropOK
+                        && shell->collapsedSections().contains(QStringLiteral("tone"))
+                            != was;
+                    shell->toggleSection(QStringLiteral("tone"));
+                    state->cropOK = state->cropOK
+                        && shell->collapsedSections().contains(QStringLiteral("tone"))
+                            == was;
+                }
                 // Undo journey: the tone edit above guarantees history;
                 // undo all the way and the model must land back neutral
                 // (exposure 0), then one redo must take.
