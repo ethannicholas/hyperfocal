@@ -38,6 +38,7 @@ struct SelfTest {
     bool toneKeptPixels = false, depthBumpedPixels = false, fullRes = false;
     bool inputOK = false, zoomOK = true;
     bool undoOK = false, projectOK = false, previewOK = false;
+    bool retouchOK = false;
     QString projectFile;
     QString expectedInput;    // selected frame's name
     int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
@@ -310,9 +311,47 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 shell->noiseFloorEditing(false);
                 // End restores the normal (non-data) display synchronously.
                 state->previewOK = isData && !shell->displayIsData();
+                // Retouch journey: enter (async source decode — stage 6
+                // waits for canPaint).
+                state->retouchOK = shell->enterRetouch()
+                    && shell->retouchMode();
+                advance(6);
+                return;
+            }
+            case 6: {   // retouch source decodes, then a stroke round-trip
+                if (!shell->retouchCanPaint() && ++state->stageTicks < 40) {
+                    // hover keeps the auto-pick target current while the
+                    // decode lands
+                    shell->retouchHover(shell->displayWidth() / 2.0,
+                                        shell->displayHeight() / 2.0);
+                    return;
+                }
+                const bool paintable = shell->retouchCanPaint();
+                // A short diagonal stroke through the center must mark
+                // edits, bump the display epoch through the dirty-rect
+                // channel, and scope undo to strokes; undo takes the
+                // stroke back (edits stay marked), Revert All clears,
+                // and Done exits the mode.
+                const double rcx = shell->displayWidth() / 2.0;
+                const double rcy = shell->displayHeight() / 2.0;
+                const int epochBefore = shell->displayEpoch();
+                shell->retouchStrokeBegin(rcx - 40, rcy - 40);
+                shell->retouchStrokeMove(rcx - 40, rcy - 40,
+                                         rcx + 40, rcy + 40);
+                shell->retouchStrokeEnd();
+                state->retouchOK = state->retouchOK && paintable
+                    && shell->retouchHasEdits()
+                    && shell->displayEpoch() != epochBefore
+                    && shell->undoTitle() == QStringLiteral("Undo Stroke")
+                    && shell->undo()
+                    && shell->retouchHasEdits()
+                    && shell->revertRetouch()
+                    && !shell->retouchHasEdits()
+                    && shell->exitRetouch()
+                    && !shell->retouchMode();
                 // Project round-trip: save must clear the dirty flag and
                 // set the path; reopening the file must restore a fused
-                // stack (stage 6 waits out the load). Compare paths with
+                // stack (stage 7 waits out the load). Compare paths with
                 // forward slashes: the bridge echoes them that way, while a
                 // Windows runner passes the out path with backslashes.
                 state->projectFile = state->outPath + ".hyperfocal";
@@ -323,10 +362,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                         == QDir::fromNativeSeparators(state->projectFile);
                 if (state->projectOK)
                     shell->openStack(QUrl::fromLocalFile(state->projectFile));
-                advance(6);
+                advance(7);
                 return;
             }
-            case 6: {   // reload settles: a stack is back, still fused
+            case 7: {   // reload settles: a stack is back, still fused
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const QVariantList stacks = shell->stacks();
                 const bool reloaded = stacks.size() >= 1
@@ -340,10 +379,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->projectOK = state->projectOK
                     && shell->confirmNewProject()
                     && shell->newProject(QUrl::fromLocalFile(state->stackDir));
-                advance(7);
+                advance(8);
                 return;
             }
-            case 7: {   // new-project load settles: exactly one stack
+            case 8: {   // new-project load settles: exactly one stack
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const bool replaced = shell->stacks().size() == 1;
                 if (!replaced && ++state->stageTicks < 40) return;
@@ -373,6 +412,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!state->undoOK) { QCoreApplication::exit(15); return; }
             if (!state->projectOK) { QCoreApplication::exit(16); return; }
             if (!state->previewOK) { QCoreApplication::exit(17); return; }
+            if (!state->retouchOK) { QCoreApplication::exit(18); return; }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the

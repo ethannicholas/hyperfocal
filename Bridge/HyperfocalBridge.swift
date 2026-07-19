@@ -46,8 +46,35 @@ private enum Bridge {
     static var displayEpoch: Int32 = 0
     static var lastInputImage: PlatformImage?
     static var inputEpoch: Int32 = 0
+    /// Retouch display currency: identity is meaningless for the
+    /// session's zero-copy images, so strokes bump the epoch through
+    /// the dirty subscription and accumulate a union rect the pane
+    /// reads via hf_display_dirty to invalidate only touched tiles.
+    static var retouchDirty: CGRect?
+    static var lastSourceDisplay: PlatformImage?
+    static var sourceDisplayEpoch: Int32 = 0
+
+    static func retouchDisplayDirtied(_ rect: CGRect) {
+        retouchDirty = retouchDirty?.union(rect) ?? rect
+        displayEpoch &+= 1
+        scheduleNotify()
+    }
+
+    static func currentSourceDisplayEpoch() -> Int32 {
+        let image = model?.retouch?.sourceDisplay
+        if image !== lastSourceDisplay {
+            lastSourceDisplay = image
+            sourceDisplayEpoch &+= 1
+        }
+        return sourceDisplayEpoch
+    }
 
     static func currentDisplayEpoch() -> Int32 {
+        // While retouching, the display serves per-call zero-copy
+        // wrappers over the session's live bytes — identity can't drive
+        // the epoch, so stroke dirt (retouchDisplayDirtied) and the
+        // mode/depth toggles bump it explicitly instead.
+        if model?.retouchMode == true { return displayEpoch }
         let image = displayImage()
         if image !== lastDisplayImage {
             lastDisplayImage = image
@@ -502,6 +529,295 @@ public func hf_gpu_available() -> Int32 {
     #endif
 }
 
+// MARK: Retouch (the session lives in AppCore; the shell forwards
+// events in full-image pixels and draws served tiles)
+
+@_cdecl("hf_retouch_mode")
+public func hf_retouch_mode() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.retouchMode == true ? 1 : 0 }
+}
+
+@_cdecl("hf_can_retouch")
+public func hf_can_retouch() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return model.phase == .done && model.result != nil
+            && !model.cropMode ? 1 : 0
+    }
+}
+
+/// Enter retouch (builds or resumes the session) and attach the dirty
+/// subscription that keeps the pane's tiles current per stroke.
+@_cdecl("hf_enter_retouch")
+public func hf_enter_retouch() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.retouchMode else { return 0 }
+        model.enterRetouch()
+        guard let session = model.retouch else { return 0 }
+        session.onDisplayDirty = { rect in
+            MainActor.assumeIsolated { Bridge.retouchDisplayDirtied(rect) }
+        }
+        Bridge.retouchDisplayDirtied(
+            CGRect(origin: .zero, size: session.nominalSize))
+        return 1
+    }
+}
+
+/// Done Retouching — commits the preview rebuild + depth merge in the
+/// model; the session persists for "Continue Retouching".
+@_cdecl("hf_exit_retouch")
+public func hf_exit_retouch() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.retouchMode else { return 0 }
+        model.exitRetouch()
+        Bridge.retouchDirty = nil
+        // Back to identity-driven epochs: force a mismatch so the pane
+        // refetches the rebuilt output preview.
+        Bridge.lastDisplayImage = nil
+        Bridge.displayEpoch &+= 1
+        return 1
+    }
+}
+
+@_cdecl("hf_retouch_has_edits")
+public func hf_retouch_has_edits() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.hasEdits == true ? 1 : 0 }
+}
+
+/// Revert All — restores the pristine fusion, clears stroke undo.
+@_cdecl("hf_revert_retouch")
+public func hf_revert_retouch() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.retouch?.hasEdits == true else { return 0 }
+        model.resetRetouch()
+        return 1
+    }
+}
+
+/// The union of image-space rects dirtied since the last call (strokes,
+/// undo tiles, revert), cleared on read — pairs with the epoch bump so
+/// the pane can evict only intersecting tiles. 0 when clean.
+@_cdecl("hf_display_dirty")
+public func hf_display_dirty(_ x: UnsafeMutablePointer<Int32>?,
+                             _ y: UnsafeMutablePointer<Int32>?,
+                             _ w: UnsafeMutablePointer<Int32>?,
+                             _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let rect = Bridge.retouchDirty else { return 0 }
+        Bridge.retouchDirty = nil
+        let integral = rect.integral
+        x?.pointee = Int32(integral.minX)
+        y?.pointee = Int32(integral.minY)
+        w?.pointee = Int32(integral.width)
+        h?.pointee = Int32(integral.height)
+        return 1
+    }
+}
+
+// Strokes and hover, in full-image pixels (the shell maps pane→canvas
+// through PaneItem and passes both segment endpoints so the stamp
+// spacing math stays in the session).
+@_cdecl("hf_retouch_stroke_begin")
+public func hf_retouch_stroke_begin(_ x: Double, _ y: Double) {
+    MainActor.assumeIsolated {
+        Bridge.model?.retouch?.beginStroke(at: CGPoint(x: x, y: y))
+    }
+}
+
+@_cdecl("hf_retouch_stroke_move")
+public func hf_retouch_stroke_move(_ x0: Double, _ y0: Double,
+                                   _ x1: Double, _ y1: Double) {
+    MainActor.assumeIsolated {
+        Bridge.model?.retouch?.continueStroke(from: CGPoint(x: x0, y: y0),
+                                              to: CGPoint(x: x1, y: y1))
+    }
+}
+
+@_cdecl("hf_retouch_stroke_end")
+public func hf_retouch_stroke_end() {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.endStroke() }
+}
+
+@_cdecl("hf_retouch_hover")
+public func hf_retouch_hover(_ x: Double, _ y: Double) {
+    MainActor.assumeIsolated {
+        Bridge.model?.retouch?.cursor = CGPoint(x: x, y: y)
+    }
+}
+
+@_cdecl("hf_retouch_hover_clear")
+public func hf_retouch_hover_clear() {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.cursor = nil }
+}
+
+/// Brush-circle state for the overlay: drawn only while a stroke would
+/// actually paint (the native canPaint rule).
+@_cdecl("hf_retouch_can_paint")
+public func hf_retouch_can_paint() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.canPaint == true ? 1 : 0 }
+}
+
+@_cdecl("hf_retouch_cursor")
+public func hf_retouch_cursor(_ x: UnsafeMutablePointer<Double>?,
+                              _ y: UnsafeMutablePointer<Double>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let cursor = Bridge.model?.retouch?.cursor else { return 0 }
+        x?.pointee = cursor.x
+        y?.pointee = cursor.y
+        return 1
+    }
+}
+
+@_cdecl("hf_retouch_brush_radius")
+public func hf_retouch_brush_radius() -> Double {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.brushRadius ?? 0 }
+}
+
+/// Multiplicative brush resize (⌥-scroll and the [ ] keys).
+@_cdecl("hf_retouch_adjust_brush")
+public func hf_retouch_adjust_brush(_ factor: Double) {
+    MainActor.assumeIsolated {
+        Bridge.model?.retouch?.adjustBrushRadius(by: factor)
+    }
+}
+
+// Sources: kind radio (0 frame, 1 pmax, 2 result), cycling, the
+// sharpest-under-cursor auto-pick, and the PMax build's status/cancel.
+@_cdecl("hf_retouch_source_kind")
+public func hf_retouch_source_kind() -> Int32 {
+    MainActor.assumeIsolated {
+        switch Bridge.model?.retouch?.sourceKind {
+        case .pmax: return 1
+        case .result: return 2
+        default: return 0
+        }
+    }
+}
+
+@_cdecl("hf_set_retouch_source_kind")
+public func hf_set_retouch_source_kind(_ kind: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let session = Bridge.model?.retouch else { return 0 }
+        session.selectKind(kind == 1 ? .pmax : kind == 2 ? .result : .frame)
+        return 1
+    }
+}
+
+@_cdecl("hf_retouch_cycle_source")
+public func hf_retouch_cycle_source(_ delta: Int32) {
+    MainActor.assumeIsolated {
+        Bridge.model?.retouch?.cycleSource(by: Int(delta))
+    }
+}
+
+@_cdecl("hf_retouch_auto_pick")
+public func hf_retouch_auto_pick() {
+    MainActor.assumeIsolated {
+        guard let session = Bridge.model?.retouch,
+              let cursor = session.cursor else { return }
+        session.autoPickSource(at: cursor)
+    }
+}
+
+@_cdecl("hf_retouch_toggle_pmax")
+public func hf_retouch_toggle_pmax() {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.togglePMaxLayer() }
+}
+
+@_cdecl("hf_retouch_toggle_result")
+public func hf_retouch_toggle_result() {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.toggleResultLayer() }
+}
+
+@_cdecl("hf_retouch_source_name")
+public func hf_retouch_source_name(_ buffer: UnsafeMutablePointer<CChar>?,
+                                   _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let session = Bridge.model?.retouch else { return 0 }
+        return fillUTF8(session.sourceName, buffer, cap)
+    }
+}
+
+@_cdecl("hf_retouch_source_loading")
+public func hf_retouch_source_loading() -> Int32 {
+    MainActor.assumeIsolated {
+        Bridge.model?.retouch?.sourceLoading == true ? 1 : 0
+    }
+}
+
+@_cdecl("hf_retouch_source_error")
+public func hf_retouch_source_error(_ buffer: UnsafeMutablePointer<CChar>?,
+                                    _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let error = Bridge.model?.retouch?.sourceError else { return 0 }
+        return fillUTF8(error, buffer, cap)
+    }
+}
+
+@_cdecl("hf_retouch_source_status")
+public func hf_retouch_source_status(_ buffer: UnsafeMutablePointer<CChar>?,
+                                     _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let status = Bridge.model?.retouch?.sourceStatus else { return 0 }
+        return fillUTF8(status, buffer, cap)
+    }
+}
+
+@_cdecl("hf_retouch_cancel_pmax")
+public func hf_retouch_cancel_pmax() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let session = Bridge.model?.retouch else { return 0 }
+        session.cancelPMaxBuild()
+        return 1
+    }
+}
+
+// The retouch SOURCE pane's pixel surface, mirroring hf_input_*: the
+// selected frame slice / PMax (low-res while forming) / eraser preview.
+@_cdecl("hf_retouch_source_size")
+public func hf_retouch_source_size(_ w: UnsafeMutablePointer<Int32>?,
+                                   _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let image = Bridge.model?.retouch?.sourceDisplay else {
+            w?.pointee = 0
+            h?.pointee = 0
+            return 0
+        }
+        w?.pointee = Int32(image.width)
+        h?.pointee = Int32(image.height)
+        return 1
+    }
+}
+
+@_cdecl("hf_retouch_source_epoch")
+public func hf_retouch_source_epoch() -> Int32 {
+    MainActor.assumeIsolated { Bridge.currentSourceDisplayEpoch() }
+}
+
+@_cdecl("hf_retouch_source_tile")
+public func hf_retouch_source_tile(_ level: Int32, _ x: Int32, _ y: Int32,
+                                   _ w: Int32, _ h: Int32,
+                                   _ rgba: UnsafeMutableRawPointer?,
+                                   _ cap: Int) -> Int32 {
+    MainActor.assumeIsolated {
+        tileCopy(Bridge.model?.retouch?.sourceDisplay,
+                 level, x, y, w, h, rgba, cap)
+    }
+}
+
+/// The source pane's nominal canvas — the session canvas, so low-res
+/// PMax forming previews map into the same viewport as the frames.
+@_cdecl("hf_retouch_source_nominal")
+public func hf_retouch_source_nominal(_ w: UnsafeMutablePointer<Int32>?,
+                                      _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let session = Bridge.model?.retouch else { return 0 }
+        w?.pointee = Int32(session.nominalSize.width)
+        h?.pointee = Int32(session.nominalSize.height)
+        return 1
+    }
+}
+
 // MARK: Export flows
 
 /// Persisted export options (the shell's own settings suite), addressed
@@ -927,6 +1243,12 @@ private func sliderBinding(_ id: String, model: AppModel)
         return ({ model.tone.whites }, { model.tone.whites = $0 })
     case "tone.slider.blacks":
         return ({ model.tone.blacks }, { model.tone.blacks = $0 })
+    case "retouch.slider.brush-size":
+        return ({ model.retouch?.brushRadius ?? 0 },
+                { model.retouch?.brushRadius = $0 })
+    case "retouch.slider.softness":
+        return ({ model.retouch?.brushSoftness ?? 0 },
+                { model.retouch?.brushSoftness = $0 })
     default:
         return nil
     }
@@ -958,7 +1280,15 @@ public func hf_slider(_ id: UnsafePointer<CChar>?) -> Double {
 @_cdecl("hf_set_output_depth")
 public func hf_set_output_depth(_ depth: Int32) {
     MainActor.assumeIsolated {
-        Bridge.model?.outputMode = depth != 0 ? .depth : .result
+        guard let model = Bridge.model else { return }
+        let changed = (model.outputMode == .depth) != (depth != 0)
+        model.outputMode = depth != 0 ? .depth : .result
+        // In retouch the epoch is manual (identity can't see the
+        // result↔depth swap of zero-copy wrappers).
+        if changed, model.retouchMode {
+            Bridge.retouchDisplayDirtied(
+                CGRect(origin: .zero, size: model.retouch?.nominalSize ?? .zero))
+        }
     }
 }
 
@@ -1247,6 +1577,12 @@ public func hf_fuse_enabled_stacks() -> Int32 {
 public func hf_display_size(_ w: UnsafeMutablePointer<Int32>?,
                             _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
     MainActor.assumeIsolated {
+        if let model = Bridge.model, model.retouchMode,
+           let session = model.retouch {
+            w?.pointee = Int32(session.nominalSize.width)
+            h?.pointee = Int32(session.nominalSize.height)
+            return 1
+        }
         guard let image = Bridge.displayImage() else {
             w?.pointee = 0
             h?.pointee = 0
@@ -1280,7 +1616,21 @@ public func hf_display_tile(_ level: Int32, _ x: Int32, _ y: Int32,
                             _ w: Int32, _ h: Int32,
                             _ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
     MainActor.assumeIsolated {
-        tileCopy(Bridge.displayImage(), level, x, y, w, h, rgba, cap)
+        // Retouch serves the session's live bytes through the scoped
+        // zero-copy accessors — no pixel copy beyond the tile itself,
+        // and the synchronous main-thread call keeps the wrap sound.
+        if let model = Bridge.model, model.retouchMode,
+           let session = model.retouch {
+            if model.outputMode == .depth {
+                return session.withDepthDisplayCGImage {
+                    tileCopy($0, level, x, y, w, h, rgba, cap)
+                }
+            }
+            return session.withDisplayCGImage {
+                tileCopy($0, level, x, y, w, h, rgba, cap)
+            }
+        }
+        return tileCopy(Bridge.displayImage(), level, x, y, w, h, rgba, cap)
     }
 }
 

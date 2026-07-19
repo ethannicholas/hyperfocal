@@ -461,8 +461,8 @@ public final class AppModel: ObservableObject {
     private let alignmentCache = AlignmentCache()
 
     // Retouching
-    @Published var retouchMode = false
-    @Published var retouch: RetouchSession?
+    @Published public var retouchMode = false
+    @Published public var retouch: RetouchSession?
     private(set) var resultDepth: [Float] = []
     private(set) var resultSharpness: FrameSharpness?
     // Exposure gains the fusion applied; retouch sources must match them.
@@ -1300,7 +1300,7 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    private(set) var result: ImageBuffer?
+    public private(set) var result: ImageBuffer?
     private(set) var depthResult: ImageBuffer?
     private var inputCache: [URL: (image: PlatformImage, pixelSize: CGSize, aligned: Bool)] = [:]
     private var inputCacheOrder: [URL] = []
@@ -2654,7 +2654,7 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Retouching
 
-    func enterRetouch() {
+    public func enterRetouch() {
         guard let result, phase == .done, !resultDepth.isEmpty else { return }
         if retouch == nil {
             // Rebuild the exact source configuration the fusion used (same
@@ -2688,7 +2688,7 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    func exitRetouch() {
+    public func exitRetouch() {
         retouchMode = false
         // Reflect the edits in the normal output view (and export).
         if let session = retouch, session.hasEdits,
@@ -2718,7 +2718,7 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    func resetRetouch() {
+    public func resetRetouch() {
         guard let result else { return }
         retouch?.resetAll(to: result)
     }

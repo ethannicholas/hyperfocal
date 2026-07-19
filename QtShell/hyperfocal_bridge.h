@@ -103,6 +103,55 @@ int hf_bool_setting(const char *id);
 int hf_set_bool_setting(const char *id, int value);
 int hf_gpu_available(void);
 
+// Retouch: the session (pixels, strokes, undo tiles, depth co-paint,
+// sources) lives entirely in AppCore; the shell forwards events in
+// FULL-IMAGE pixels and draws served tiles. While hf_retouch_mode,
+// the hf_display_* surface serves the session's live working image
+// (or its depth view in depth mode — data, untoned); strokes bump
+// hf_display_epoch and accumulate a union dirty rect the pane reads
+// via hf_display_dirty (cleared on read) to evict only touched tiles.
+// Undo reuses hf_undo/hf_redo, which mode-scope to strokes ("Undo
+// Stroke"). Brush sliders ride the hf_set_slider namespace
+// ("retouch.slider.brush-size", "retouch.slider.softness").
+int hf_retouch_mode(void);
+int hf_can_retouch(void);
+int hf_enter_retouch(void);
+int hf_exit_retouch(void);
+int hf_retouch_has_edits(void);
+int hf_revert_retouch(void);
+int hf_display_dirty(int32_t *x, int32_t *y, int32_t *w, int32_t *h);
+void hf_retouch_stroke_begin(double x, double y);
+void hf_retouch_stroke_move(double x0, double y0, double x1, double y1);
+void hf_retouch_stroke_end(void);
+void hf_retouch_hover(double x, double y);
+void hf_retouch_hover_clear(void);
+int hf_retouch_can_paint(void);
+int hf_retouch_cursor(double *x, double *y);
+double hf_retouch_brush_radius(void);
+void hf_retouch_adjust_brush(double factor);
+// Source kinds: 0 frame slice, 1 PMax layer, 2 original result
+// (eraser). Cycling clamps to frames; auto-pick uses the sharpness
+// oracle under the hover cursor; PMax builds on demand (status text
+// carries "…N%", cancel only while building).
+int hf_retouch_source_kind(void);
+int hf_set_retouch_source_kind(int kind);
+void hf_retouch_cycle_source(int delta);
+void hf_retouch_auto_pick(void);
+void hf_retouch_toggle_pmax(void);
+void hf_retouch_toggle_result(void);
+int hf_retouch_source_name(char *buf, int cap);     // returns bytes
+int hf_retouch_source_loading(void);
+int hf_retouch_source_error(char *buf, int cap);    // returns bytes
+int hf_retouch_source_status(char *buf, int cap);   // returns bytes
+int hf_retouch_cancel_pmax(void);
+// The source pane's pixel surface (mirrors hf_input_*).
+int hf_retouch_source_size(int32_t *w, int32_t *h);
+int hf_retouch_source_epoch(void);
+int hf_retouch_source_tile(int32_t level, int32_t x, int32_t y,
+                           int32_t w, int32_t h, uint8_t *rgba,
+                           size_t cap);
+int hf_retouch_source_nominal(int32_t *w, int32_t *h);
+
 // Export flows. Options are persisted in the shell's own suite and
 // addressed by the native UI names (ExportFormat / ExportColorSpace /
 // AnimationStrength raw values: "TIFF (16-bit)" "DNG (raw)"

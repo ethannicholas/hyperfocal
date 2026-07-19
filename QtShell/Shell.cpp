@@ -133,6 +133,10 @@ QVariantList Shell::fingerprint() const {
             hasUnsavedWork(), canUndo(), canRedo(), undoTitle(), redoTitle(),
             lutEpoch(), exportFormat(), exportColorSpace(),
             animationStrength(), cropMode(), canCrop(), cropAspect(),
+            retouchMode(), canRetouch(), retouchHasEdits(),
+            retouchSourceKind(), retouchSourceName(),
+            retouchSourceLoading(), retouchSourceError(),
+            retouchSourceStatus(),
             cropAspectRatio(), cropPortrait(), editCrop(), editCropAngle(),
             slider(QStringLiteral("fusion.slider.sharpness")),
             slider(QStringLiteral("fusion.slider.noise-floor")),
@@ -279,6 +283,66 @@ void Shell::setCrop(double x, double y, double w, double h, double angle) {
 }
 
 bool Shell::cropMode() const { return hf_crop_mode() != 0; }
+
+bool Shell::retouchMode() const { return hf_retouch_mode() != 0; }
+bool Shell::canRetouch() const { return hf_can_retouch() != 0; }
+bool Shell::retouchHasEdits() const { return hf_retouch_has_edits() != 0; }
+int Shell::retouchSourceKind() const { return hf_retouch_source_kind(); }
+void Shell::setRetouchSourceKind(int kind) { hf_set_retouch_source_kind(kind); }
+bool Shell::enterRetouch() { return hf_enter_retouch() != 0; }
+bool Shell::exitRetouch() { return hf_exit_retouch() != 0; }
+bool Shell::revertRetouch() { return hf_revert_retouch() != 0; }
+void Shell::retouchStrokeBegin(double x, double y) {
+    hf_retouch_stroke_begin(x, y);
+}
+void Shell::retouchStrokeMove(double x0, double y0, double x1, double y1) {
+    hf_retouch_stroke_move(x0, y0, x1, y1);
+}
+void Shell::retouchStrokeEnd() { hf_retouch_stroke_end(); }
+void Shell::retouchHover(double x, double y) { hf_retouch_hover(x, y); }
+void Shell::retouchHoverClear() { hf_retouch_hover_clear(); }
+bool Shell::retouchCanPaint() const { return hf_retouch_can_paint() != 0; }
+
+bool Shell::retouchCursorValid() const {
+    double x = 0, y = 0;
+    return hf_retouch_cursor(&x, &y) != 0;
+}
+
+QPointF Shell::retouchCursor() const {
+    double x = 0, y = 0;
+    hf_retouch_cursor(&x, &y);
+    return QPointF(x, y);
+}
+
+double Shell::retouchBrushRadius() const { return hf_retouch_brush_radius(); }
+void Shell::retouchAdjustBrush(double factor) { hf_retouch_adjust_brush(factor); }
+void Shell::retouchCycleSource(int delta) { hf_retouch_cycle_source(delta); }
+void Shell::retouchAutoPick() { hf_retouch_auto_pick(); }
+void Shell::retouchTogglePmax() { hf_retouch_toggle_pmax(); }
+void Shell::retouchToggleResult() { hf_retouch_toggle_result(); }
+void Shell::retouchCancelPmax() { hf_retouch_cancel_pmax(); }
+
+QString Shell::retouchSourceName() const {
+    char buffer[512];
+    return QString::fromUtf8(buffer,
+                             hf_retouch_source_name(buffer, sizeof buffer));
+}
+
+bool Shell::retouchSourceLoading() const {
+    return hf_retouch_source_loading() != 0;
+}
+
+QString Shell::retouchSourceError() const {
+    char buffer[512];
+    return QString::fromUtf8(buffer,
+                             hf_retouch_source_error(buffer, sizeof buffer));
+}
+
+QString Shell::retouchSourceStatus() const {
+    char buffer[256];
+    return QString::fromUtf8(buffer,
+                             hf_retouch_source_status(buffer, sizeof buffer));
+}
 bool Shell::canCrop() const { return hf_can_crop() != 0; }
 bool Shell::beginCrop() { return hf_begin_crop() != 0; }
 bool Shell::acceptCrop() { return hf_accept_crop() != 0; }

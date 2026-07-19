@@ -40,16 +40,27 @@ void PaneItem::componentComplete() {
     refresh();
 }
 
+void PaneItem::setRetouchSource(bool retouch) {
+    if (retouch == retouchSource_) return;
+    retouchSource_ = retouch;
+    epoch_ = -1;    // force a full reset — the epoch counters differ
+    refresh();
+}
+
 int PaneItem::sourceSize(int32_t *w, int32_t *h) const {
+    if (retouchSource_) return hf_retouch_source_size(w, h);
     return input_ ? hf_input_size(w, h) : hf_display_size(w, h);
 }
 
 int PaneItem::sourceEpoch() const {
+    if (retouchSource_) return hf_retouch_source_epoch();
     return input_ ? hf_input_epoch() : hf_display_epoch();
 }
 
 int PaneItem::sourceTile(int level, int x, int y, int w, int h,
                          uint8_t *rgba, size_t cap) const {
+    if (retouchSource_)
+        return hf_retouch_source_tile(level, x, y, w, h, rgba, cap);
     return input_ ? hf_input_tile(level, x, y, w, h, rgba, cap)
                   : hf_display_tile(level, x, y, w, h, rgba, cap);
 }
@@ -61,6 +72,7 @@ int PaneItem::sourceCrop(double *x, double *y, double *w, double *h,
 }
 
 int PaneItem::sourceNominal(int32_t *w, int32_t *h) const {
+    if (retouchSource_) return hf_retouch_source_nominal(w, h);
     return input_ ? hf_input_nominal(w, h) : hf_display_nominal(w, h);
 }
 
@@ -127,6 +139,16 @@ QPointF PaneItem::mapFromCanvas(QPointF image) const {
     return viewportMatrix().map(image);
 }
 
+QPointF PaneItem::mapToImage(QPointF pane) const {
+    bool invertible = false;
+    const QMatrix4x4 inverse = contentMatrix().inverted(&invertible);
+    return invertible ? inverse.map(pane) : pane;
+}
+
+QPointF PaneItem::mapFromImage(QPointF image) const {
+    return contentMatrix().map(image);
+}
+
 void PaneItem::refresh() {
     int32_t w = 0, h = 0;
     sourceSize(&w, &h);
@@ -140,6 +162,29 @@ void PaneItem::refresh() {
         schedule();
     }
     const int epoch = sourceEpoch();
+    // Retouch strokes: epoch moved but the size didn't, and the bridge
+    // has a dirty rect — evict only intersecting tiles instead of
+    // resetting the whole cache (the 45 MP full-rebuild trap the native
+    // canvas also avoids). The coarse base is refetched on a debounce
+    // so zoomed-out views converge without per-stroke 1024px copies.
+    if (!input_ && !retouchSource_ && epoch != epoch_
+        && w == imgW_ && h == imgH_ && imgW_ > 0) {
+        int32_t dx = 0, dy = 0, dw = 0, dh = 0;
+        if (hf_display_dirty(&dx, &dy, &dw, &dh)) {
+            epoch_ = epoch;
+            const QRectF dirty(dx, dy, dw, dh);
+            for (auto it = tiles_.begin(); it != tiles_.end();) {
+                if (it.value().rect.intersects(dirty)) it = tiles_.erase(it);
+                else ++it;
+            }
+            if (++dirtSinceBase_ >= 12) {
+                dirtSinceBase_ = 0;
+                base_ = Tile();
+            }
+            schedule();
+            return;
+        }
+    }
     double cx = 0, cy = 0, cw = 0, ch = 0, cangle = 0;
     sourceCrop(&cx, &cy, &cw, &ch, &cangle);
     const QRectF crop(cx, cy, cw, ch);

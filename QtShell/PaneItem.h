@@ -26,6 +26,9 @@ class PaneItem : public QQuickItem {
     // Which bridge surface this pane shows: the output display (default)
     // or the input pane (hf_input_*). Set once at creation.
     Q_PROPERTY(bool input READ isInput WRITE setInput)
+    // Reroutes an input pane to the retouch source surface while the
+    // mode is active (hf_retouch_source_*).
+    Q_PROPERTY(bool retouchSource READ isRetouchSource WRITE setRetouchSource)
     // Buddy pane sharing this pane's viewport (the native shells share
     // one ViewportState across input/output): pan/zoom here is pushed
     // there, one-way per gesture, so comparing panes stays aligned.
@@ -42,6 +45,8 @@ public:
 
     bool isInput() const { return input_; }
     void setInput(bool input) { input_ = input; }
+    bool isRetouchSource() const { return retouchSource_; }
+    void setRetouchSource(bool retouch);
     PaneItem *syncPane() const { return sync_; }
     void setSyncPane(PaneItem *pane) { sync_ = pane; }
 
@@ -54,6 +59,9 @@ public:
     // their own rotation.
     Q_INVOKABLE QPointF mapToCanvas(QPointF pane) const;
     Q_INVOKABLE QPointF mapFromCanvas(QPointF image) const;
+    // Full transform incl. crop rotation — stroke coordinates.
+    Q_INVOKABLE QPointF mapToImage(QPointF pane) const;
+    Q_INVOKABLE QPointF mapFromImage(QPointF image) const;
 
     // Center-anchored programmatic zoom (fit-relative, clamped like the
     // wheel) — the selftest's zoom-cycle journey drives this.
@@ -124,7 +132,10 @@ private:
     void adoptViewport(double zoom, QPointF offset);
 
     bool input_ = false;
+    bool retouchSource_ = false;
     PaneItem *sync_ = nullptr;
+    // Debounce for coarse-base refetches while stroke dirt streams in.
+    int dirtSinceBase_ = 0;
 
     int imgW_ = 0, imgH_ = 0;
     // Nominal canvas the viewport lives in (== image size except

@@ -41,6 +41,14 @@ class Shell : public QObject {
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY framesChanged)
     Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
     Q_PROPERTY(bool cropMode READ cropMode NOTIFY changed)
+    Q_PROPERTY(bool retouchMode READ retouchMode NOTIFY changed)
+    Q_PROPERTY(bool canRetouch READ canRetouch NOTIFY changed)
+    Q_PROPERTY(bool retouchHasEdits READ retouchHasEdits NOTIFY changed)
+    Q_PROPERTY(int retouchSourceKind READ retouchSourceKind WRITE setRetouchSourceKind NOTIFY changed)
+    Q_PROPERTY(QString retouchSourceName READ retouchSourceName NOTIFY changed)
+    Q_PROPERTY(bool retouchSourceLoading READ retouchSourceLoading NOTIFY changed)
+    Q_PROPERTY(QString retouchSourceError READ retouchSourceError NOTIFY changed)
+    Q_PROPERTY(QString retouchSourceStatus READ retouchSourceStatus NOTIFY changed)
     Q_PROPERTY(bool canCrop READ canCrop NOTIFY changed)
     Q_PROPERTY(QString cropAspect READ cropAspect WRITE setCropAspect NOTIFY changed)
     Q_PROPERTY(double cropAspectRatio READ cropAspectRatio NOTIFY changed)
@@ -127,6 +135,34 @@ public:
     void setCropAspect(const QString &name);
     double cropAspectRatio() const;
     bool cropPortrait() const;
+    bool retouchMode() const;
+    bool canRetouch() const;
+    bool retouchHasEdits() const;
+    int retouchSourceKind() const;
+    void setRetouchSourceKind(int kind);
+    QString retouchSourceName() const;
+    bool retouchSourceLoading() const;
+    QString retouchSourceError() const;
+    QString retouchSourceStatus() const;
+    Q_INVOKABLE bool enterRetouch();
+    Q_INVOKABLE bool exitRetouch();
+    Q_INVOKABLE bool revertRetouch();
+    Q_INVOKABLE void retouchStrokeBegin(double x, double y);
+    Q_INVOKABLE void retouchStrokeMove(double x0, double y0,
+                                       double x1, double y1);
+    Q_INVOKABLE void retouchStrokeEnd();
+    Q_INVOKABLE void retouchHover(double x, double y);
+    Q_INVOKABLE void retouchHoverClear();
+    Q_INVOKABLE bool retouchCanPaint() const;
+    Q_INVOKABLE bool retouchCursorValid() const;
+    Q_INVOKABLE QPointF retouchCursor() const;
+    Q_INVOKABLE double retouchBrushRadius() const;
+    Q_INVOKABLE void retouchAdjustBrush(double factor);
+    Q_INVOKABLE void retouchCycleSource(int delta);
+    Q_INVOKABLE void retouchAutoPick();
+    Q_INVOKABLE void retouchTogglePmax();
+    Q_INVOKABLE void retouchToggleResult();
+    Q_INVOKABLE void retouchCancelPmax();
     Q_INVOKABLE bool beginCrop();
     Q_INVOKABLE bool acceptCrop();
     Q_INVOKABLE bool cancelCrop();

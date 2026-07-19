@@ -21,17 +21,17 @@ import simd
 /// regularized depth plane doubles as an instant "sharpest frame here" oracle
 /// for the space-key auto-pick.
 @MainActor
-final class RetouchSession: ObservableObject {
+public final class RetouchSession: ObservableObject {
 
     let urls: [URL]                 // the frame list the fusion ran on, in order
     let width: Int
     let height: Int
-    var nominalSize: CGSize { CGSize(width: width, height: height) }
+    public var nominalSize: CGSize { CGSize(width: width, height: height) }
 
     private static let log = Logger(subsystem: "org.hyperfocal", category: "retouch")
 
     @Published private(set) var sourceIndex: Int
-    @Published private(set) var sourceDisplay: PlatformImage? {
+    @Published public private(set) var sourceDisplay: PlatformImage? {
         didSet {
             // Tripwire for the low-res-pane bug family: with a *frame*
             // selected, the pane must never show fewer pixels than the
@@ -50,20 +50,20 @@ final class RetouchSession: ObservableObject {
                 """)
         }
     }
-    @Published private(set) var sourceLoading = false
-    @Published private(set) var sourceError: String?
+    @Published public private(set) var sourceLoading = false
+    @Published public private(set) var sourceError: String?
     /// Long-build status for the loading overlay ("Building PMax layer… 40%").
-    @Published private(set) var sourceStatus: String?
+    @Published public private(set) var sourceStatus: String?
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
-    @Published private(set) var hasEdits = false
-    @Published var cursor: CGPoint?          // hover location, image coords
-    @Published var brushRadius: Double = 32  // image px
+    @Published public private(set) var hasEdits = false
+    @Published public var cursor: CGPoint?          // hover location, image coords
+    @Published public var brushRadius: Double = 32  // image px
     /// The one range every brush-size control shares (the slider, ⌥-scroll,
     /// and the [ ] keys all move `brushRadius`) — a single constant so they
     /// can't drift apart again.
     static let brushRadiusRange: ClosedRange<Double> = 1...800
-    @Published var brushSoftness: Double = 0.2
+    @Published public var brushSoftness: Double = 0.2
     /// True from a mouse-down that found no source pixels (still loading)
     /// until its mouse-up: that drag never paints, so the brush circle stays
     /// hidden for its whole duration even if the load lands mid-drag.
@@ -72,7 +72,7 @@ final class RetouchSession: ObservableObject {
     /// Whether a stroke would actually paint right now. The panes only show
     /// the brush circle when it's honest — a circle over a still-loading
     /// source (or during a dead drag) promises painting that can't happen.
-    var canPaint: Bool { sourceFloat != nil && !deadDrag }
+    public var canPaint: Bool { sourceFloat != nil && !deadDrag }
 
     private(set) var working: ImageBuffer
     /// The depth plane, co-painted by strokes: painting from frame N writes
@@ -100,7 +100,7 @@ final class RetouchSession: ObservableObject {
     /// The canvas view registers here; strokes report the image-space rect they
     /// touched so only that region repaints (NOT a full-frame image rebuild —
     /// that was unusably slow at 45 MP).
-    var onDisplayDirty: ((CGRect) -> Void)?
+    public var onDisplayDirty: ((CGRect) -> Void)?
     /// Fired when the source frame changes (arrows / space / programmatic), so
     /// the app can keep the Stack list selection in sync.
     var onSourceChanged: ((Int) -> Void)?
@@ -135,24 +135,24 @@ final class RetouchSession: ObservableObject {
     private let originalResult: ImageBuffer
     private var resultImageCache: PlatformImage?
 
-    var sourceName: String {
+    public var sourceName: String {
         isPMaxSource ? "PMax blend layer"
             : isResultSource ? "Original result (eraser)"
             : "\(urls[sourceIndex].lastPathComponent) (aligned)"
     }
 
     /// The three kinds of brush source, for the "Retouch from" radio group.
-    enum SourceKind: Hashable {
+    public enum SourceKind: Hashable {
         case frame   // an aligned source slice (↑/↓ picks which)
         case pmax    // the PMax blend layer
         case result  // the original fused result (eraser)
     }
 
-    var sourceKind: SourceKind {
+    public var sourceKind: SourceKind {
         isPMaxSource ? .pmax : isResultSource ? .result : .frame
     }
 
-    func selectKind(_ kind: SourceKind) {
+    public func selectKind(_ kind: SourceKind) {
         switch kind {
         case .frame: selectSource(lastFrameSourceIndex)
         case .pmax: selectSource(pmaxIndex)
@@ -165,7 +165,7 @@ final class RetouchSession: ObservableObject {
     /// The layer never arrives, so keeping the PMax selection would strand an
     /// empty pane. selectSource does the actual teardown (cancels the token,
     /// supersedes the load generation).
-    func cancelPMaxBuild() {
+    public func cancelPMaxBuild() {
         guard isPMaxSource, sourceLoading else { return }
         selectSource(lastFrameSourceIndex)
     }
@@ -228,7 +228,7 @@ final class RetouchSession: ObservableObject {
 
     /// Zero-copy image over the live display bytes, valid within `body`
     /// only. Off Apple platforms there is no retouch pane yet — nil.
-    func withDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
+    public func withDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
         #if !canImport(CoreGraphics)
         return body(nil)
         #else
@@ -254,7 +254,7 @@ final class RetouchSession: ObservableObject {
 
     /// Zero-copy grayscale image over the live depth-view bytes, valid
     /// within `body` only. Off Apple platforms: nil (no retouch pane).
-    func withDepthDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
+    public func withDepthDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
         #if !canImport(CoreGraphics)
         return body(nil)
         #else
@@ -282,7 +282,7 @@ final class RetouchSession: ObservableObject {
         Self.makeImage(from: displayPixels, width: width, height: height)
     }
 
-    func adjustBrushRadius(by factor: Double) {
+    public func adjustBrushRadius(by factor: Double) {
         brushRadius = min(max(brushRadius * factor, Self.brushRadiusRange.lowerBound),
                           Self.brushRadiusRange.upperBound)
     }
@@ -364,7 +364,7 @@ final class RetouchSession: ObservableObject {
     }
 
 
-    func cycleSource(by delta: Int) {
+    public func cycleSource(by delta: Int) {
         if sourceIndex >= urls.count {
             selectSource(lastFrameSourceIndex)  // arrows leave the blend/eraser layers
         } else {
@@ -372,11 +372,11 @@ final class RetouchSession: ObservableObject {
         }
     }
 
-    func togglePMaxLayer() {
+    public func togglePMaxLayer() {
         selectSource(isPMaxSource ? lastFrameSourceIndex : pmaxIndex)
     }
 
-    func toggleResultLayer() {
+    public func toggleResultLayer() {
         selectSource(isResultSource ? lastFrameSourceIndex : resultIndex)
     }
 
@@ -481,7 +481,7 @@ final class RetouchSession: ObservableObject {
     /// to the sharpest — the raw pre-regularization measurement, independent of
     /// what the fusion decided (retouching happens exactly where that decision
     /// was wrong, so consulting it would be circular).
-    func autoPickSource(at point: CGPoint) {
+    public func autoPickSource(at point: CGPoint) {
         if let sharpness {
             let scores = sharpness.regionScores(centerX: point.x, centerY: point.y,
                                                 radius: brushRadius)
@@ -550,7 +550,7 @@ final class RetouchSession: ObservableObject {
 
     // MARK: - Painting
 
-    func beginStroke(at point: CGPoint) {
+    public func beginStroke(at point: CGPoint) {
         guard sourceFloat != nil else {
             deadDrag = true
             return
@@ -560,7 +560,7 @@ final class RetouchSession: ObservableObject {
         stamp(at: point)
     }
 
-    func continueStroke(from p0: CGPoint, to p1: CGPoint) {
+    public func continueStroke(from p0: CGPoint, to p1: CGPoint) {
         guard strokeActive, sourceFloat != nil else { return }
         let distance = hypot(p1.x - p0.x, p1.y - p0.y)
         let spacing = max(1, brushRadius / 3)
@@ -571,7 +571,7 @@ final class RetouchSession: ObservableObject {
         }
     }
 
-    func endStroke() {
+    public func endStroke() {
         deadDrag = false
         guard strokeActive else { return }
         strokeActive = false

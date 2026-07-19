@@ -226,6 +226,50 @@ ApplicationWindow {
         sequence: "Ctrl+0"
         onActivated: outputPane.item.fit()
     }
+    // The native retouch keys: ↑/↓ cycle the source, space picks the
+    // sharpest frame under the cursor, p/r toggle the PMax/eraser
+    // layers, [ ] resize the brush; r starts retouching outside the
+    // mode.
+    Shortcut {
+        sequence: "R"
+        enabled: Shell.canRetouch && !Shell.retouchMode
+        onActivated: Shell.enterRetouch()
+    }
+    Shortcut {
+        sequence: "Up"
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchCycleSource(-1)
+    }
+    Shortcut {
+        sequence: "Down"
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchCycleSource(1)
+    }
+    Shortcut {
+        sequence: "Space"
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchAutoPick()
+    }
+    Shortcut {
+        sequence: "P"
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchTogglePmax()
+    }
+    Shortcut {
+        sequence: "R"
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchToggleResult()
+    }
+    Shortcut {
+        sequence: "["
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchAdjustBrush(1 / 1.15)
+    }
+    Shortcut {
+        sequence: "]"
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchAdjustBrush(1.15)
+    }
     // The native crop keys: C enters, X swaps orientation, Return
     // accepts, Esc cancels.
     Shortcut {
@@ -789,6 +833,73 @@ ApplicationWindow {
                 label: "Blacks"; from: -100; to: 100; decimals: 0
             }
 
+            Label { text: "Retouch"; color: "#d5d5d5"; font.bold: true }
+            Button {
+                Layout.fillWidth: true
+                visible: !Shell.retouchMode
+                text: Shell.retouchHasEdits ? "Continue Retouching"
+                                            : "Start Retouching"
+                enabled: Shell.canRetouch
+                onClicked: Shell.enterRetouch()
+            }
+            SidebarSlider {
+                visible: Shell.retouchMode
+                sliderId: "retouch.slider.brush-size"
+                label: "Brush size"; from: 1; to: 800; decimals: 0
+                format: "%1 px"
+            }
+            SidebarSlider {
+                visible: Shell.retouchMode
+                sliderId: "retouch.slider.softness"
+                label: "Softness"; from: 0; to: 1
+            }
+            ColumnLayout {
+                visible: Shell.retouchMode
+                Layout.fillWidth: true
+                spacing: 2
+                Label {
+                    text: "Retouch from"
+                    color: "#b5b5b5"
+                    font.pixelSize: 12
+                }
+                RadioButton {
+                    text: "Source Image"
+                    checked: Shell.retouchSourceKind === 0
+                    onClicked: Shell.retouchSourceKind = 0
+                }
+                RadioButton {
+                    text: "PMax Result"
+                    checked: Shell.retouchSourceKind === 1
+                    onClicked: Shell.retouchSourceKind = 1
+                }
+                RadioButton {
+                    text: "Original Result (erase)"
+                    checked: Shell.retouchSourceKind === 2
+                    onClicked: Shell.retouchSourceKind = 2
+                }
+            }
+            Button {
+                Layout.fillWidth: true
+                visible: Shell.retouchMode && Shell.retouchSourceKind === 1
+                         && Shell.retouchSourceLoading
+                text: "Cancel PMax Build"
+                onClicked: Shell.retouchCancelPmax()
+            }
+            Button {
+                Layout.fillWidth: true
+                visible: Shell.retouchMode
+                enabled: Shell.retouchHasEdits
+                text: "Revert All"
+                onClicked: Shell.revertRetouch()
+            }
+            Button {
+                Layout.fillWidth: true
+                visible: Shell.retouchMode
+                highlighted: true
+                text: "Done Retouching"
+                onClicked: Shell.exitRetouch()
+            }
+
             Label { text: "Crop"; color: "#d5d5d5"; font.bold: true }
             Button {
                 Layout.fillWidth: true
@@ -878,19 +989,49 @@ ApplicationWindow {
                     // Equal split regardless of title length (implicit
                     // widths must not skew the layout).
                     Layout.preferredWidth: 1
-                    title: Shell.inputTitle !== "" ? Shell.inputTitle
-                                                   : "Input"
+                    title: Shell.retouchMode
+                        ? "Source: " + Shell.retouchSourceName
+                          + "   ↑/↓ cycle · space picks sharpest"
+                        : Shell.inputTitle !== "" ? Shell.inputTitle
+                                                  : "Input"
                     hint: Shell.hasInput ? ""
                         : Shell.frames.length === 0
                             ? "Open a stack to begin"
                             : "Select a frame in the Stack list"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    // While retouching, this pane shows the SOURCE layer
+                    // (frame slice / PMax / eraser preview).
+                    Binding {
+                        target: inputPane.item
+                        property: "retouchSource"
+                        value: Shell.retouchMode
+                    }
+                    Label {
+                        parent: inputPane.contentArea
+                        anchors.centerIn: parent
+                        visible: Shell.retouchMode
+                            && (Shell.retouchSourceLoading
+                                || Shell.retouchSourceError !== "")
+                        text: Shell.retouchSourceError !== ""
+                            ? Shell.retouchSourceError
+                            : Shell.retouchSourceStatus !== ""
+                                ? Shell.retouchSourceStatus
+                                : "Loading source…"
+                        color: "#b5b5b5"
+                        font.pixelSize: 13
+                        padding: 8
+                        background: Rectangle { color: "#c0282828"; radius: 6 }
+                    }
                 }
                 TonedPane {
                     id: outputPane
                     Layout.preferredWidth: 1
-                    title: "Output"
+                    title: Shell.retouchMode
+                        ? (Shell.depthMode
+                           ? "Retouched Depth"
+                           : "Retouched Output — drag to paint from source")
+                        : "Output"
                     dataDisplay: Shell.displayIsData
                     hint: Shell.hasDisplay ? ""
                         : Shell.canFuse ? "Press “Fuse Stack”" : "No output yet"
@@ -927,6 +1068,12 @@ ApplicationWindow {
                         anchors.fill: parent
                         pane: outputPane.item
                         visible: Shell.cropMode
+                    }
+                    RetouchOverlay {
+                        parent: outputPane.contentArea
+                        anchors.fill: parent
+                        pane: outputPane.item
+                        visible: Shell.retouchMode
                     }
                     // The native progress overlay: bar + stage + ETA +
                     // Cancel in a rounded card over the output pane.
