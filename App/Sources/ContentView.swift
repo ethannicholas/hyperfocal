@@ -702,6 +702,8 @@ struct RetouchControls: View {
     let onReset: () -> Void
 
     var body: some View {
+        Text("Retouching")
+            .font(.headline)
         LabeledSlider(
             label: "Brush size", id: "retouch.slider.brush-size", value: $session.brushRadius,
             range: RetouchSession.brushRadiusRange,

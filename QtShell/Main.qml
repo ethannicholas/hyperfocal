@@ -836,18 +836,65 @@ ApplicationWindow {
             Label { text: "Edit"; color: "#d5d5d5"; font.bold: true }
             Button {
                 Layout.fillWidth: true
-                visible: !Shell.retouchMode
+                visible: !Shell.retouchMode && !Shell.cropMode
                 text: "Crop…"
-                enabled: Shell.canCrop && !Shell.cropMode
+                enabled: Shell.canCrop
                 onClicked: Shell.beginCrop()
             }
             Button {
                 Layout.fillWidth: true
-                visible: !Shell.retouchMode
+                visible: !Shell.retouchMode && !Shell.cropMode
                 text: Shell.retouchHasEdits ? "Continue Retouching"
                                             : "Start Retouching"
                 enabled: Shell.canRetouch
                 onClicked: Shell.enterRetouch()
+            }
+
+            // Crop-mode controls replace the Edit buttons, under a
+            // "Crop" sub-header — the native CropControls placement.
+            Label {
+                visible: Shell.cropMode
+                text: "Crop"; color: "#d5d5d5"; font.bold: true
+            }
+            RowLayout {
+                visible: Shell.cropMode
+                Layout.fillWidth: true
+                Label { text: "Aspect Ratio"; color: "#b5b5b5" }
+                ComboBox {
+                    Layout.fillWidth: true
+                    model: ["Original", "Custom", "1:1", "3:2", "5:4",
+                            "4:3", "16:9"]
+                    currentIndex: Math.max(0, model.indexOf(Shell.cropAspect))
+                    onActivated: Shell.cropAspect = currentText
+                }
+            }
+            Button {
+                Layout.fillWidth: true
+                visible: Shell.cropMode
+                text: Shell.cropPortrait ? "Portrait" : "Landscape"
+                onClicked: Shell.toggleCropOrientation()
+                ToolTip.visible: hovered
+                ToolTip.text: "Swap the crop between landscape and portrait (X)."
+            }
+            RowLayout {
+                visible: Shell.cropMode
+                Layout.fillWidth: true
+                Button {
+                    Layout.fillWidth: true
+                    highlighted: true
+                    text: "Accept"
+                    onClicked: Shell.acceptCrop()
+                }
+                Button {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: Shell.cancelCrop()
+                }
+            }
+
+            Label {
+                visible: Shell.retouchMode
+                text: "Retouching"; color: "#d5d5d5"; font.bold: true
             }
             SidebarSlider {
                 visible: Shell.retouchMode
@@ -935,37 +982,6 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 0
-
-            // Crop-mode controls, the native CropControls bar.
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 6
-                visible: Shell.cropMode
-                spacing: 8
-                Item { Layout.fillWidth: true }
-                Label { text: "Aspect:"; color: "#b5b5b5" }
-                ComboBox {
-                    model: ["Original", "Custom", "1:1", "3:2", "5:4",
-                            "4:3", "16:9"]
-                    currentIndex: Math.max(0, model.indexOf(Shell.cropAspect))
-                    onActivated: Shell.cropAspect = currentText
-                    Layout.preferredWidth: 120
-                }
-                Button {
-                    text: Shell.cropPortrait ? "Portrait" : "Landscape"
-                    onClicked: Shell.toggleCropOrientation()
-                }
-                Button {
-                    text: "Cancel"
-                    onClicked: Shell.cancelCrop()
-                }
-                Button {
-                    text: "Done"
-                    highlighted: true
-                    onClicked: Shell.acceptCrop()
-                }
-                Item { Layout.fillWidth: true }
-            }
 
             RowLayout {
                 Layout.fillWidth: true
