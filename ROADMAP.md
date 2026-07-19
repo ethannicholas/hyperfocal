@@ -213,6 +213,16 @@ reviewers stop discovering them by surprise):
   "Drop a folder…" empty-state hint (only the panes hint).
 - Batch-fuse and bulk-export summaries arrive as notice dialogs — the
   native queueSummaryPresenter styling differs.
+- The Result / Depth picker is radio buttons instead of the segmented
+  buttons on native.
+- The "Are you sure you want to quit?" panel is smaller (no icon, tiny
+  margins) and much less visible than the native equivalent.
+- On native, the "Open Folder..." button (along with its hint text)
+  only shows up when no stack is open, and it's under the Stack label.
+  On Qt, there's just a persistent "Open Stack..." button *above* the
+  Stack label, regardless of whether a stack is open and with no hint
+  text.
+- The Qt app does not have an icon.
 
 Then, deferred until their prerequisites exist:
 

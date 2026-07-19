@@ -378,6 +378,20 @@ ApplicationWindow {
             contentWidth: availableWidth
             clip: true
             padding: 10
+            // macOS-style transient scrollbar: visible only while the
+            // content moves or the bar is dragged, fading out after —
+            // never a persistent overlay covering sidebar content.
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ScrollBar.vertical: ScrollBar {
+                parent: sidebarScroll
+                x: sidebarScroll.width - width
+                y: sidebarScroll.topPadding
+                height: sidebarScroll.availableHeight
+                policy: ScrollBar.AsNeeded
+                opacity: active ? 0.8 : 0
+                visible: opacity > 0
+                Behavior on opacity { NumberAnimation { duration: 200 } }
+            }
 
         ColumnLayout {
             width: sidebarScroll.availableWidth
