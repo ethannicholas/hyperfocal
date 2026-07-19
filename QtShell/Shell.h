@@ -91,6 +91,8 @@ public:
     int lutEpoch() const;
 
     Q_INVOKABLE bool openStack(const QUrl &folder);
+    Q_INVOKABLE bool confirmNewProject();
+    Q_INVOKABLE bool newProject(const QUrl &folder);
     Q_INVOKABLE bool fuse();
     Q_INVOKABLE bool exportTo(const QUrl &file);
     /// The current 16-bit tone ramp (4096 entries) for the LUT provider.

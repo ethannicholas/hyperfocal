@@ -63,6 +63,14 @@ double hf_stage_fraction(void);
 // UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
 int hf_stage_text(char *buf, int cap);
 
+// New Project: hf_confirm_new_project runs the discard-unsaved-work
+// confirm (ask BEFORE the folder picker, like native; trivially 1 when
+// nothing to lose), then hf_new_project REPLACES the stacks with the
+// chosen folder — the only replacing folder load (hf_load_stack stays
+// drop/add).
+int hf_confirm_new_project(void);
+int hf_new_project(const char *path);
+
 // Crop editing mode — the transactional session behind the overlay.
 // begin snapshots for cancel (initializing the rect to the full canvas
 // when none); accept folds full-canvas/no-angle back to "no crop" and

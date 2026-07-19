@@ -313,6 +313,20 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                            .toInt() == 2;
                 if (!reloaded && ++state->stageTicks < 40) return;
                 state->projectOK = state->projectOK && reloaded;
+                // New Project must REPLACE the stacks (hf_load_stack
+                // keeps drop/add semantics) — in the batch variant this
+                // collapses the reloaded two stacks back to one.
+                state->projectOK = state->projectOK
+                    && shell->confirmNewProject()
+                    && shell->newProject(QUrl::fromLocalFile(state->stackDir));
+                advance(6);
+                return;
+            }
+            case 6: {   // new-project load settles: exactly one stack
+                if (shell->isRunning()) { state->stageTicks = 0; return; }
+                const bool replaced = shell->stacks().size() == 1;
+                if (!replaced && ++state->stageTicks < 40) return;
+                state->projectOK = state->projectOK && replaced;
                 break;
             }
             default:

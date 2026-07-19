@@ -189,6 +189,31 @@ each independently landable:
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
+**Known deviations & placeholders** in already-built Qt features —
+the running list of "works, but not the native way" (new
+simplifications must be added here the moment they're made, so
+reviewers stop discovering them by surprise):
+
+- Animation export: the save dialog's mp4/gif filter choice does NOT
+  drive the written format — the persisted animationFormat setting
+  does, so a mismatched extension writes the other container. Native
+  keeps them in sync via its accessory (which also offers
+  format/duration/fps/path pickers the Qt dialog lacks).
+- Input pane title reads a static "Input" mid-fuse instead of the
+  native cycling processing-source label (hf_input_title's running
+  branch is a stub).
+- Progress lives in the sidebar, not overlaid on the output pane, and
+  the ETA rides inside the stage text rather than its own label.
+- The multi-stack tree is flat: frames listed for the selected stack
+  only — no per-stack disclosure rows, no persisted stack-section
+  collapse, no dimming of disabled stacks' rows.
+- Confirms/notices are Qt message boxes (idiomatic on Linux; visibly
+  non-native chrome on macOS).
+- Save As suggests no default filename; the stack list has no
+  "Drop a folder…" empty-state hint (only the panes hint).
+- Batch-fuse and bulk-export summaries arrive as notice dialogs — the
+  native queueSummaryPresenter styling differs.
+
 Then, deferred until their prerequisites exist:
 
 - **Dirty-rect tile invalidation** once a partial-update producer exists

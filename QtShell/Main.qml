@@ -39,7 +39,12 @@ ApplicationWindow {
             Action {
                 text: "New Project…"
                 shortcut: StandardKey.New
-                onTriggered: openDialog.open()
+                // Confirm before the picker, like native; the chosen
+                // folder REPLACES the project (Add Stack Folder adds).
+                onTriggered: {
+                    if (Shell.confirmNewProject())
+                        newProjectDialog.open()
+                }
             }
             Action {
                 text: "Open Project…"
@@ -218,6 +223,12 @@ ApplicationWindow {
         id: openDialog
         title: "Choose a stack folder"
         onAccepted: Shell.openStack(selectedFolder)
+    }
+
+    FolderDialog {
+        id: newProjectDialog
+        title: "Choose a stack: a folder of frames"
+        onAccepted: Shell.newProject(selectedFolder)
     }
 
     FolderDialog {

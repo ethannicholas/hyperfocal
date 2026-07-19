@@ -299,6 +299,33 @@ public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) 
     }
 }
 
+/// The discard-unsaved-work confirm ahead of New Project's folder
+/// chooser (the native flow asks BEFORE the picker; passes trivially
+/// when there is nothing to lose). 1 = proceed.
+@_cdecl("hf_confirm_new_project")
+public func hf_confirm_new_project() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.phase.isRunning else { return 0 }
+        return model.confirmDiscardingUnsavedWork(
+            message: "Start a new project?",
+            confirmTitle: "New Project") ? 1 : 0
+    }
+}
+
+/// Start a new project from a frames folder, REPLACING the current
+/// stacks — the native ingest path. hf_load_stack keeps its drop/add
+/// semantics; this is the only replacing folder load. The caller runs
+/// hf_confirm_new_project first.
+@_cdecl("hf_new_project")
+public func hf_new_project(_ path: UnsafePointer<CChar>?) -> Int32 {
+    guard let path, let string = String(validatingUTF8: path) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.phase.isRunning else { return 0 }
+        model.ingest(urls: [URL(fileURLWithPath: string)])
+        return 1
+    }
+}
+
 // MARK: Crop editing mode
 
 /// The transactional crop-edit session, mirrored from the native

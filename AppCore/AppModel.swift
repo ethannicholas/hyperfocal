@@ -936,7 +936,7 @@ public final class AppModel: ObservableObject {
     /// The quit gate's sibling for in-app actions that replace the current
     /// project: fused results and retouch edits can't be recomputed, so
     /// anything that discards them asks first. True means proceed.
-    func confirmDiscardingUnsavedWork(message: String, confirmTitle: String) -> Bool {
+    public func confirmDiscardingUnsavedWork(message: String, confirmTitle: String) -> Bool {
         guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return true }
         return runConfirmAlert(message: message,
                                informative: "Any unsaved work will be lost.",
@@ -1628,7 +1628,7 @@ public final class AppModel: ObservableObject {
         loadStacks(from: urls, replacing: false)
     }
 
-    func ingest(urls: [URL]) {
+    public func ingest(urls: [URL]) {
         loadStacks(from: urls, replacing: true)
     }
 

@@ -490,6 +490,12 @@ bool Shell::openStack(const QUrl &folder) {
     return hf_load_stack(folder.toLocalFile().toUtf8().constData()) != 0;
 }
 
+bool Shell::confirmNewProject() { return hf_confirm_new_project() != 0; }
+
+bool Shell::newProject(const QUrl &folder) {
+    return hf_new_project(folder.toLocalFile().toUtf8().constData()) != 0;
+}
+
 bool Shell::fuse() { return hf_fuse() != 0; }
 
 bool Shell::exportTo(const QUrl &file) {
