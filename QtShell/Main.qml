@@ -779,35 +779,6 @@ ApplicationWindow {
                 Layout.margins: 6
                 visible: !Shell.cropMode
                 Item { Layout.fillWidth: true }
-                // Zoom bar: − / current % menu / + , the native
-                // zoom.menu / zoom.in / zoom.out cluster.
-                Button {
-                    text: "−"
-                    implicitWidth: 32
-                    onClicked: outputPane.item.zoomBy(1 / 1.25)
-                }
-                Button {
-                    id: zoomMenuButton
-                    implicitWidth: 72
-                    text: Math.round(outputPane.item.displayScale * 100) + "%"
-                    onClicked: zoomMenu.open()
-                    Menu {
-                        id: zoomMenu
-                        y: zoomMenuButton.height
-                        MenuItem { text: "Fit"; onTriggered: outputPane.item.fit() }
-                        MenuItem { text: "25%"; onTriggered: outputPane.item.setAbsoluteScale(0.25) }
-                        MenuItem { text: "50%"; onTriggered: outputPane.item.setAbsoluteScale(0.5) }
-                        MenuItem { text: "100%"; onTriggered: outputPane.item.setAbsoluteScale(1) }
-                        MenuItem { text: "200%"; onTriggered: outputPane.item.setAbsoluteScale(2) }
-                        MenuItem { text: "400%"; onTriggered: outputPane.item.setAbsoluteScale(4) }
-                    }
-                }
-                Button {
-                    text: "+"
-                    implicitWidth: 32
-                    onClicked: outputPane.item.zoomBy(1.25)
-                }
-                Item { width: 16; height: 1 }
                 // Segmented picker, like the native output.mode control.
                 Row {
                     spacing: 1
@@ -870,6 +841,44 @@ ApplicationWindow {
                         visible: Shell.cropMode
                     }
                 }
+            }
+
+            // Zoom bar along the bottom, native placement and order:
+            // Zoom: [Fit/N% ⌵] [−] [+], flat so it reads as a toolbar.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 6
+                Item { Layout.fillWidth: true }
+                Label { text: "Zoom:"; color: "#b5b5b5"; font.pixelSize: 12 }
+                ToolButton {
+                    id: zoomMenuButton
+                    text: (outputPane.item.fitted ? "Fit"
+                          : Math.round(outputPane.item.displayScale * 100)
+                            + "%") + "  ⌵"
+                    font.pixelSize: 12
+                    onClicked: zoomMenu.open()
+                    Menu {
+                        id: zoomMenu
+                        y: -implicitHeight - 4
+                        MenuItem { text: "Fit"; onTriggered: outputPane.item.fit() }
+                        MenuItem { text: "25%"; onTriggered: outputPane.item.setAbsoluteScale(0.25) }
+                        MenuItem { text: "50%"; onTriggered: outputPane.item.setAbsoluteScale(0.5) }
+                        MenuItem { text: "100%"; onTriggered: outputPane.item.setAbsoluteScale(1) }
+                        MenuItem { text: "200%"; onTriggered: outputPane.item.setAbsoluteScale(2) }
+                        MenuItem { text: "400%"; onTriggered: outputPane.item.setAbsoluteScale(4) }
+                    }
+                }
+                ToolButton {
+                    text: "−"
+                    font.pixelSize: 14
+                    onClicked: outputPane.item.zoomBy(1 / 1.25)
+                }
+                ToolButton {
+                    text: "+"
+                    font.pixelSize: 14
+                    onClicked: outputPane.item.zoomBy(1.25)
+                }
+                Item { Layout.fillWidth: true }
             }
         }
     }

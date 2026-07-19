@@ -33,6 +33,9 @@ class PaneItem : public QQuickItem {
     // On-screen scale in image pixels per pane point (1 = 1:1) — the
     // zoom bar's currency, following every viewport change.
     Q_PROPERTY(double displayScale READ displayScale NOTIFY viewportChanged)
+    // Fit is a MODE (zoom 1, centered — it re-fits on resize); the zoom
+    // bar reads "Fit" while it holds, a percentage once zoomed/panned.
+    Q_PROPERTY(bool fitted READ fitted NOTIFY viewportChanged)
 
 public:
     explicit PaneItem(QQuickItem *parent = nullptr);
@@ -61,6 +64,7 @@ public:
     Q_INVOKABLE void setAbsoluteScale(double scale);
     Q_INVOKABLE void fit();
     double displayScale() const { return fitScale() * zoom_; }
+    bool fitted() const { return zoom_ == 1.0 && offset_.isNull(); }
 
 signals:
     void viewportChanged();
