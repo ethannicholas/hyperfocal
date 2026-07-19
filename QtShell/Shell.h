@@ -153,6 +153,7 @@ public:
     Q_INVOKABLE void retouchStrokeEnd();
     Q_INVOKABLE void retouchHover(double x, double y);
     Q_INVOKABLE void retouchHoverClear();
+    Q_INVOKABLE QPointF cursorScreenPos() const;
     Q_INVOKABLE bool retouchCanPaint() const;
     Q_INVOKABLE bool retouchCursorValid() const;
     Q_INVOKABLE QPointF retouchCursor() const;

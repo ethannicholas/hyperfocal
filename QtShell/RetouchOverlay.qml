@@ -21,7 +21,28 @@ Item {
     }
     onVisibleChanged: if (!visible) Shell.retouchHoverClear()
 
+    Connections {
+        target: overlay.pane
+        function onViewportChanged() {
+            // A two-finger pan slides the image under a stationary
+            // mouse, so the stored image-space hover point is no longer
+            // the pixel under the cursor. Re-derive it from the cursor's
+            // screen position — the circle stays under the mouse and the
+            // session targets what's actually beneath it (native rule).
+            if (!overlay.visible) return
+            var g = Shell.cursorScreenPos()
+            var local = overlay.mapFromGlobal(g.x, g.y)
+            if (!overlay.contains(local)) return
+            var p = pane.mapToImage(local)
+            Shell.retouchHover(p.x, p.y)
+            if (mouse.pressed)
+                overlay.lastPoint = p
+            circle.sync()
+        }
+    }
+
     MouseArea {
+        id: mouse
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton

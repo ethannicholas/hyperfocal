@@ -6,6 +6,7 @@
 #include "hyperfocal_bridge.h"
 
 #include <QComboBox>
+#include <QCursor>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QLabel>
@@ -301,6 +302,7 @@ void Shell::retouchStrokeMove(double x0, double y0, double x1, double y1) {
 void Shell::retouchStrokeEnd() { hf_retouch_stroke_end(); }
 void Shell::retouchHover(double x, double y) { hf_retouch_hover(x, y); }
 void Shell::retouchHoverClear() { hf_retouch_hover_clear(); }
+QPointF Shell::cursorScreenPos() const { return QCursor::pos(); }
 bool Shell::retouchCanPaint() const { return hf_retouch_can_paint() != 0; }
 
 bool Shell::retouchCursorValid() const {
