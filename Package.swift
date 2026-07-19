@@ -68,7 +68,6 @@ var kitSwiftSettings: [SwiftSetting] = [
     .unsafeFlags(["-O"], .when(configuration: .debug)),
 ]
 
-#if os(macOS)
 // The shared model layer as a real module (cross-platform-plan 0d): the
 // probe, the Qt bridge, and (eventually) the Linux shell consume it as a
 // dependency. The Mac app still compiles the same files directly into its
@@ -77,27 +76,23 @@ var kitSwiftSettings: [SwiftSetting] = [
 // works: the probe is a white-box regression harness, and its deep reach
 // into model internals must not force those internals public — the public
 // surface is defined by real shell clients (the bridge).
-// AppKit-backed today, so macOS only; the Linux gate is the CLI
-// synth→fuse→compare path until the portability pass lands.
+// Off Apple, ObservableObject/@Published come from OpenCombine.
+var appCoreDeps: [Target.Dependency] = ["HyperfocalKit"]
+#if !os(macOS)
+appCoreDeps.append(.product(name: "OpenCombine", package: "OpenCombine"))
+#endif
 extraTargets.append(
     .target(
         name: "AppCore",
-        dependencies: ["HyperfocalKit"],
+        dependencies: appCoreDeps,
         path: "AppCore",
         swiftSettings: [.unsafeFlags(["-enable-testing"])]
     )
 )
-extraTargets.append(
-    .executableTarget(
-        name: "retouch-probe",
-        dependencies: ["AppCore", "HyperfocalKit"],
-        path: "Probe"
-    )
-)
 // C-ABI bridge the Qt shell drives (cross-platform-plan Phase 2): a
-// SwiftPM dynamic library so the same product definition carries to
-// Linux (no Xcode there). A development artifact for the Qt shell —
-// never shipped with the Mac app.
+// SwiftPM dynamic library so one product definition serves macOS and
+// Linux. A development artifact for the Qt shell — never shipped with
+// the Mac app.
 extraTargets.append(
     .target(
         name: "HyperfocalBridge",
@@ -108,6 +103,17 @@ extraTargets.append(
 extraProducts.append(
     .library(name: "HyperfocalBridge", type: .dynamic,
              targets: ["HyperfocalBridge"])
+)
+
+#if os(macOS)
+// The probe drives AppKit-side checks too (pasteboards, CG parity) —
+// macOS only; the Linux gate is the CLI synth→fuse→compare path.
+extraTargets.append(
+    .executableTarget(
+        name: "retouch-probe",
+        dependencies: ["AppCore", "HyperfocalKit"],
+        path: "Probe"
+    )
 )
 // Phase 1.5 registration A/B (Docs/cross-platform-plan.md decision 2):
 // HYPERFOCAL_OPENCV_AB=1 at build time compiles a small OpenCV-only
@@ -227,9 +233,17 @@ let package = Package(
         .library(name: "HyperfocalKit", targets: ["HyperfocalKit"]),
         .executable(name: "hyperfocal-cli", targets: ["hyperfocal-cli"]),
     ] + extraProducts,
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
-    ],
+    dependencies: {
+        var deps: [Package.Dependency] = [
+            .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+        ]
+        #if !os(macOS)
+        // ObservableObject/@Published for AppCore off Apple platforms.
+        deps.append(.package(url: "https://github.com/OpenCombine/OpenCombine.git",
+                             from: "0.14.0"))
+        #endif
+        return deps
+    }(),
     targets: targets,
     cxxLanguageStandard: .cxx17
 )

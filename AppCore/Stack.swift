@@ -1,5 +1,7 @@
-import AppKit
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 import HyperfocalKit
 
 /// The fusion-relevant parameters a result was produced with, snapshotted at
@@ -79,8 +81,8 @@ public final class Stack: Identifiable {
     /// Crop rotation in degrees, applied about the rect's center.
     var cropAngle: Double = 0
     var frameIssues: [URL: String] = [:]
-    var outputPreview: CGImage?
-    var depthPreview: CGImage?
+    var outputPreview: PlatformImage?
+    var depthPreview: PlatformImage?
     /// The last fuse of this stack failed with this message.
     var failureMessage: String?
 

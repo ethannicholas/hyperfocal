@@ -20,7 +20,9 @@
 // the Qt shell mirrors the native app.
 
 import Foundation
+#if canImport(CoreGraphics)
 import CoreGraphics
+#endif
 import AppCore
 import HyperfocalKit
 
@@ -39,9 +41,9 @@ private enum Bridge {
     /// Identity of the last image each epoch saw — an epoch bumps only
     /// when its source returns a different CGImage, so tone drags
     /// (LUT-shader-only) and slider edits never invalidate pane tiles.
-    static var lastDisplayImage: CGImage?
+    static var lastDisplayImage: PlatformImage?
     static var displayEpoch: Int32 = 0
-    static var lastInputImage: CGImage?
+    static var lastInputImage: PlatformImage?
     static var inputEpoch: Int32 = 0
 
     static func currentDisplayEpoch() -> Int32 {
@@ -66,7 +68,7 @@ private enum Bridge {
     /// processing source mid-fuse, else the selected frame's preview
     /// (decoded raw, or warped into the fused canvas once alignment
     /// transforms exist). Toned by the pane like the output.
-    static func inputImage() -> CGImage? {
+    static func inputImage() -> PlatformImage? {
         guard let model else { return nil }
         if model.phase.isRunning { return model.processingSource }
         return model.inputPreview
@@ -89,7 +91,7 @@ private enum Bridge {
     /// depth/gradient stages, the depth map) are served exactly as
     /// computed — tone applies to image pixels only, the same content
     /// rule the native pane follows.
-    static func displayImage() -> CGImage? {
+    static func displayImage() -> PlatformImage? {
         guard let model else { return nil }
         if model.phase.isRunning { return model.progressive }
         if model.outputMode == .depth { return model.depthPreview }
@@ -568,7 +570,7 @@ public func hf_display_tile(_ level: Int32, _ x: Int32, _ y: Int32,
 
 /// The shared tile-copy body behind hf_display_tile/hf_input_tile.
 @MainActor
-private func tileCopy(_ image: CGImage?, _ level: Int32, _ x: Int32, _ y: Int32,
+private func tileCopy(_ image: PlatformImage?, _ level: Int32, _ x: Int32, _ y: Int32,
                       _ w: Int32, _ h: Int32,
                       _ rgba: UnsafeMutableRawPointer?, _ cap: Int) -> Int32 {
     guard let rgba, let image, level >= 0, level < 16, x >= 0, y >= 0,
@@ -578,6 +580,25 @@ private func tileCopy(_ image: CGImage?, _ level: Int32, _ x: Int32, _ y: Int32,
     let levelH = (image.height + (1 << shift) - 1) >> shift
     guard Int(x) + Int(w) <= levelW, Int(y) + Int(h) <= levelH else { return 0 }
     let srcX = Int(x) << shift, srcY = Int(y) << shift
+    #if !canImport(CoreGraphics)
+    // Nearest subsample straight out of the 8-bit buffer.
+    let out = rgba.assumingMemoryBound(to: UInt8.self)
+    image.rgba.withUnsafeBufferPointer { src in
+        for row in 0..<Int(h) {
+            let sy = min(srcY + (row << shift), image.height - 1)
+            for col in 0..<Int(w) {
+                let sx = min(srcX + (col << shift), image.width - 1)
+                let si = (sy * image.width + sx) * 4
+                let di = (row * Int(w) + col) * 4
+                out[di] = src[si]
+                out[di + 1] = src[si + 1]
+                out[di + 2] = src[si + 2]
+                out[di + 3] = 255
+            }
+        }
+    }
+    return 1
+    #else
     let srcW = min(Int(w) << shift, image.width - srcX)
     let srcH = min(Int(h) << shift, image.height - srcY)
     guard let tile = image.cropping(
@@ -591,6 +612,7 @@ private func tileCopy(_ image: CGImage?, _ level: Int32, _ x: Int32, _ y: Int32,
     ctx.interpolationQuality = .none
     ctx.draw(tile, in: CGRect(x: 0, y: 0, width: Int(w), height: Int(h)))
     return 1
+    #endif
 }
 
 // MARK: Input pane (selected frame / processing source)

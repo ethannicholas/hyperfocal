@@ -123,27 +123,23 @@ call) — nothing bleeds between the shells' persisted state.
 
 Next, in rough order (each independently landable):
 
-1. **Qt shell on Linux — bring-up.** The shell + selftest matrix runs
-   only on macOS today; the blockers, in dependency order:
-   - *AppCore portability (the load-bearing chunk).* `AppModel.swift`
-     imports SwiftUI, Combine, CoreGraphics, and
-     UniformTypeIdentifiers with **no** `canImport` guards; the
-     published image currency (`outputPreview`, `progressive`,
-     `depthPreview`, `inputPreview`, `processingSource`) is `CGImage`;
-     the bridge subscribes `objectWillChange` (Combine) and serves
-     tiles via `CGImage.cropping` + `CGContext` draws. Needed: the
-     plan's 0d observation seam (or OpenCombine), a portable image
-     handle for published previews (ImageBuffer-backed, with the
-     CGImage path kept behind `canImport(CoreGraphics)` — the engine
-     below is already portable, Phase 1 proved it), and
-     `#if canImport` partitioning of the SwiftUI/UTType touches. Most
-     of this is macOS-verifiable against the existing gates (probe,
-     UI suite, Qt selftest matrix) before Linux ever runs it. The
-     build topology is already in place: AppCore is a SwiftPM module
-     and the bridge a SwiftPM dynamic-library product (CMake finds
-     libHyperfocalBridge per-platform); what remains is moving the
-     AppCore/bridge targets out of the `#if os(macOS)` block in
-     Package.swift once they compile portably.
+1. **Qt shell on Linux — bring-up.** The macOS-verifiable prep is
+   done: AppCore is a SwiftPM module with the bridge a dynamic-library
+   product (CMake finds libHyperfocalBridge per-platform), imports are
+   partitioned (no SwiftUI/AppKit/UTType; CoreGraphics/Combine/os
+   behind canImport with OpenCombine + a stderr Logger stand-in
+   off-Apple), the published image currency is `PlatformImage`
+   (CGImage on Apple; an 8-bit RGBA class elsewhere, produced through
+   the one `Preview.image(from:)` seam), sandbox bookmarks are
+   macOS-gated (plain paths elsewhere), and the bridge's tile copy has
+   a direct byte-subsample path off CoreGraphics. Remaining, in
+   order — the `#else` branches have never met a Linux compiler, so
+   expect a fix-up pass:
+   - *First Linux build.* `swift build --product HyperfocalBridge` on
+     the Ubuntu box; shake out the blind branches (OpenCombine's
+     @Published/@MainActor fit is the likeliest friction; also
+     Foundation gaps like `.itemReplacementDirectory` in
+     ProjectStore).
    - *Main-queue pumping.* DispatchQueue.main drains under Qt's loop
      on macOS via CFRunLoop; Linux needs an explicit pump (Qt timer
      or glib hook) — the prototype's known deferred question.

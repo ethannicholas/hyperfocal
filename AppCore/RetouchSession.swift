@@ -1,7 +1,17 @@
-import SwiftUI
+import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+#if canImport(Combine)
+import Combine
+#else
+import OpenCombine
+#endif
+#if canImport(os)
+import os
+#endif
 import HyperfocalKit
 import simd
-import os
 
 /// A retouching session over a fused result: a mutable working copy of the
 /// output that brush strokes paint into, sourcing pixels from *aligned* input
@@ -19,7 +29,7 @@ final class RetouchSession: ObservableObject {
     private static let log = Logger(subsystem: "org.hyperfocal", category: "retouch")
 
     @Published private(set) var sourceIndex: Int
-    @Published private(set) var sourceDisplay: CGImage? {
+    @Published private(set) var sourceDisplay: PlatformImage? {
         didSet {
             // Tripwire for the low-res-pane bug family: with a *frame*
             // selected, the pane must never show fewer pixels than the
@@ -101,7 +111,7 @@ final class RetouchSession: ObservableObject {
     // paintable while its pane preview still renders, so `sourceLoading`
     // alone can't drive the brush circle).
     @Published private(set) var sourceFloat: ImageBuffer?
-    private var sourceCache: [Int: (buffer: ImageBuffer, image: CGImage)] = [:]
+    private var sourceCache: [Int: (buffer: ImageBuffer, image: PlatformImage)] = [:]
     private var sourceCacheOrder: [Int] = []
     private var sourceLoadGeneration = 0
 
@@ -110,7 +120,7 @@ final class RetouchSession: ObservableObject {
     // (crossing bristles, crystals) and a single depth per pixel is wrong.
     var pmaxIndex: Int { urls.count }
     var isPMaxSource: Bool { sourceIndex == pmaxIndex }
-    private var pmaxCache: (buffer: ImageBuffer, image: CGImage)?
+    private var pmaxCache: (buffer: ImageBuffer, image: PlatformImage)?
     private var pmaxBuildCancel: CancellationToken?
     private var lastFrameSourceIndex = 0
 
@@ -121,7 +131,7 @@ final class RetouchSession: ObservableObject {
     var resultIndex: Int { urls.count + 1 }
     var isResultSource: Bool { sourceIndex == resultIndex }
     private let originalResult: ImageBuffer
-    private var resultImageCache: CGImage?
+    private var resultImageCache: PlatformImage?
 
     var sourceName: String {
         isPMaxSource ? "PMax blend layer"
@@ -214,8 +224,12 @@ final class RetouchSession: ObservableObject {
 
     // MARK: - Display access
 
-    /// Zero-copy CGImage over the live display bytes, valid within `body` only.
-    func withDisplayCGImage<R>(_ body: (CGImage?) -> R) -> R {
+    /// Zero-copy image over the live display bytes, valid within `body`
+    /// only. Off Apple platforms there is no retouch pane yet — nil.
+    func withDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
+        #if !canImport(CoreGraphics)
+        return body(nil)
+        #else
         let w = width, h = height
         return displayPixels.withUnsafeMutableBytes { raw -> R in
             guard let base = raw.baseAddress,
@@ -233,11 +247,15 @@ final class RetouchSession: ObservableObject {
             }
             return body(cg)
         }
+        #endif
     }
 
-    /// Zero-copy grayscale CGImage over the live depth-view bytes, valid
-    /// within `body` only.
-    func withDepthDisplayCGImage<R>(_ body: (CGImage?) -> R) -> R {
+    /// Zero-copy grayscale image over the live depth-view bytes, valid
+    /// within `body` only. Off Apple platforms: nil (no retouch pane).
+    func withDepthDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
+        #if !canImport(CoreGraphics)
+        return body(nil)
+        #else
         let w = width, h = height
         return depthDisplayPixels.withUnsafeMutableBytes { raw -> R in
             guard let base = raw.baseAddress,
@@ -254,10 +272,11 @@ final class RetouchSession: ObservableObject {
             }
             return body(cg)
         }
+        #endif
     }
 
     /// One-off full snapshot (used when leaving retouch mode).
-    func makeSnapshotImage() -> CGImage? {
+    func makeSnapshotImage() -> PlatformImage? {
         Self.makeImage(from: displayPixels, width: width, height: height)
     }
 
@@ -311,7 +330,7 @@ final class RetouchSession: ObservableObject {
         let (source, localIndex) = (stackSource, clamped)
         let url = urls[clamped]
         Task.detached(priority: .userInitiated) { [weak self] in
-            let loaded: (buffer: ImageBuffer, image: CGImage)?
+            let loaded: (buffer: ImageBuffer, image: PlatformImage)?
             do {
                 loaded = try Self.loadAligned(index: localIndex, from: source)
             } catch {
@@ -387,7 +406,7 @@ final class RetouchSession: ObservableObject {
         let cancel = CancellationToken()
         pmaxBuildCancel = cancel
         Task.detached(priority: .userInitiated) { [weak self] in
-            let loaded: (buffer: ImageBuffer, image: CGImage)?
+            let loaded: (buffer: ImageBuffer, image: PlatformImage)?
             do {
                 let fusedImage = try PyramidFusion.fuse(source: source,
                                                         progress: { fraction, preview in
@@ -395,14 +414,14 @@ final class RetouchSession: ObservableObject {
                     // emits low-res collapses; CPU sends none). Converted
                     // off-main — these arrive from the fusion thread.
                     let image = preview
-                        .flatMap { try? ImageFile.cgImage8(from: $0) }
+                        .flatMap { try? Preview.image(from: $0) }
                     Task { @MainActor [weak self] in
                         guard let self, generation == self.sourceLoadGeneration else { return }
                         self.sourceStatus = "Building PMax layer… \(Int(fraction * 100))%"
                         if let image { self.sourceDisplay = image }
                     }
                 }, cancellation: cancel)
-                loaded = (fusedImage, try ImageFile.cgImage8(from: fusedImage))
+                loaded = (fusedImage, try Preview.image(from: fusedImage))
             } catch {
                 loaded = nil
                 if !(error is CancellationError) {
@@ -444,7 +463,7 @@ final class RetouchSession: ObservableObject {
         let generation = sourceLoadGeneration
         let buffer = originalResult
         Task.detached(priority: .userInitiated) { [weak self] in
-            let image = try? ImageFile.cgImage8(from: buffer)
+            let image = try? Preview.image(from: buffer)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 if let image { self.resultImageCache = image }
@@ -495,7 +514,7 @@ final class RetouchSession: ObservableObject {
         }
     }
 
-    private func cacheSource(_ loaded: (buffer: ImageBuffer, image: CGImage), at index: Int) {
+    private func cacheSource(_ loaded: (buffer: ImageBuffer, image: PlatformImage), at index: Int) {
         guard sourceCache[index] == nil else { return }
         sourceCache[index] = loaded
         sourceCacheOrder.append(index)
@@ -522,9 +541,9 @@ final class RetouchSession: ObservableObject {
     }
 
     nonisolated private static func loadAligned(index: Int, from source: StackSource)
-        throws -> (buffer: ImageBuffer, image: CGImage) {
+        throws -> (buffer: ImageBuffer, image: PlatformImage) {
         let buffer = try source.frame(at: index)
-        return (buffer, try ImageFile.cgImage8(from: buffer))
+        return (buffer, try Preview.image(from: buffer))
     }
 
     // MARK: - Painting
@@ -828,7 +847,10 @@ final class RetouchSession: ObservableObject {
     }
 
     nonisolated private static func makeImage(from bytes: [UInt8],
-                                              width: Int, height: Int) -> CGImage? {
+                                              width: Int, height: Int) -> PlatformImage? {
+        #if !canImport(CoreGraphics)
+        return PlatformImage(width: width, height: height, rgba: bytes)
+        #else
         let space = ImageFile.workingSpace
         let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
         return bytes.withUnsafeBytes { ptr -> CGImage? in
@@ -838,5 +860,6 @@ final class RetouchSession: ObservableObject {
                                       space: space, bitmapInfo: info.rawValue) else { return nil }
             return ctx.makeImage()
         }
+        #endif
     }
 }

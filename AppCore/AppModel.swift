@@ -1,7 +1,20 @@
-import SwiftUI
-import HyperfocalKit
-import UniformTypeIdentifiers
+// Portability: AppCore must compile on Linux (cross-platform plan) — no
+// SwiftUI/AppKit here, CoreGraphics only behind canImport (the CGRect/
+// CGSize geometry types come from Foundation everywhere), and Combine
+// swaps for OpenCombine off-Apple.
+import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+#if canImport(Combine)
+import Combine
+#else
+import OpenCombine
+#endif
+#if canImport(os)
 import os
+#endif
+import HyperfocalKit
 
 /// Shared zoom/pan state for the synced preview panes. Offsets are in image
 /// pixels (input and output share dimensions), so both panes track exactly.
@@ -139,6 +152,7 @@ public final class AppModel: ObservableObject {
 
         public var id: String { rawValue }
 
+        #if canImport(CoreGraphics)
         var cgColorSpace: CGColorSpace? {
             switch self {
             case .srgb: return CGColorSpace(name: CGColorSpace.sRGB)
@@ -146,6 +160,34 @@ public final class AppModel: ObservableObject {
             case .prophoto: return CGColorSpace(name: CGColorSpace.rommrgb)
             }
         }
+        #endif
+
+        /// Portable export-space token for the non-Apple encode path
+        /// (lcms2); nil keeps the Display-P3 working space — the CLI's
+        /// ColorSpaceChoice pattern.
+        var portableName: String? {
+            switch self {
+            case .srgb: return "srgb"
+            case .displayP3: return nil
+            case .prophoto: return "prophoto"
+            }
+        }
+    }
+
+    /// Bridges the per-platform ImageFile.save signature (CGColorSpace on
+    /// Apple, a portable space name elsewhere) — the CLI's saveFused
+    /// pattern. Takes the enum (Sendable) so detached export tasks can
+    /// carry it without touching the model.
+    nonisolated static func saveImage(_ image: ImageBuffer, to url: URL,
+                                      sourceFrame: URL?,
+                                      colorSpace: ExportColorSpace) throws {
+        #if canImport(CoreGraphics)
+        try ImageFile.save(image, to: url, sourceFrame: sourceFrame,
+                           colorSpace: colorSpace.cgColorSpace)
+        #else
+        try ImageFile.save(image, to: url, sourceFrame: sourceFrame,
+                           colorSpaceName: colorSpace.portableName)
+        #endif
     }
 
     @Published public var phase: Phase = .empty
@@ -267,21 +309,21 @@ public final class AppModel: ObservableObject {
     @Published public var stageETA: String?
     private var stageTimerStage: FusionProgress.Stage?
     private var stageTimerStart = Date()
-    @Published public var progressive: CGImage?
+    @Published public var progressive: PlatformImage?
     @Published var progressiveNominalSize: CGSize?
     /// True while `progressive` holds a data visualization — the aligner's
     /// gradient-magnitude image or the depth map forming — rather than the
     /// render accumulating. Only render-stage previews are image pixels;
     /// the panes must not tone anything else.
     @Published public private(set) var progressiveIsData = false
-    @Published public var processingSource: CGImage?
+    @Published public var processingSource: PlatformImage?
     @Published var processingSourceLabel: String?
     @Published var processingSourceNominalSize: CGSize?
 
     // Results & previews
-    @Published public var outputPreview: CGImage?
-    @Published public var depthPreview: CGImage?
-    @Published public var inputPreview: CGImage?
+    @Published public var outputPreview: PlatformImage?
+    @Published public var depthPreview: PlatformImage?
+    @Published public var inputPreview: PlatformImage?
     @Published var inputPreviewURL: URL?
     /// The preview is warped into the fused canvas (alignment transforms
     /// existed when it was decoded) rather than the raw file.
@@ -436,7 +478,7 @@ public final class AppModel: ObservableObject {
     // harmless; blotchy fill basins or halos standing off edges are what the
     // slider is there to fix. (The old preview blacked out sub-floor pixels,
     // which read as "problem here" even when the fill would be fine.)
-    @Published var noiseFloorPreview: CGImage?
+    @Published var noiseFloorPreview: PlatformImage?
     private var noiseFloorPreviewData:
         (energyMax: [Float], argmax: [Float], concentration: [Float],
          planes: [[Float]], guide: [Float], width: Int, height: Int,
@@ -539,6 +581,11 @@ public final class AppModel: ObservableObject {
     /// no bookmarks can't reach its frames after relaunch, which is worth
     /// diagnosing, not swallowing.
     private func currentBookmarks() -> [String: Data]? {
+        #if !os(macOS)
+        // No sandbox off macOS: projects carry plain paths, and loads
+        // resolve them directly (plan Phase 3's "plain-path bookmarks").
+        return nil
+        #else
         var bookmarks = [String: Data]()
         let allFrames = Set(stacks.flatMap(\.frames)).union(frames)
         Self.bookmarkLog.notice("save: \(self.grantedRoots.count) granted root(s)")
@@ -580,10 +627,13 @@ public final class AppModel: ObservableObject {
             }
         }
         return bookmarks.isEmpty ? nil : bookmarks
+        #endif
     }
 
     private func stopScopedAccess() {
+        #if os(macOS)
         for url in scopedAccessURLs { url.stopAccessingSecurityScopedResource() }
+        #endif
         scopedAccessURLs = []
     }
 
@@ -593,6 +643,10 @@ public final class AppModel: ObservableObject {
     /// the next save re-creates bookmarks from the resolved roots.
     nonisolated private static func resolveScopedAccess(_ bookmarks: [String: Data]?)
         -> (roots: [URL], accessed: [URL], remap: [String: String]) {
+        #if !os(macOS)
+        // Plain paths resolve directly without grants off macOS.
+        return ([], [], [:])
+        #else
         guard let bookmarks else { return ([], [], [:]) }
         var roots = [URL](), accessed = [URL](), remap = [String: String]()
         for (path, data) in bookmarks {
@@ -606,6 +660,7 @@ public final class AppModel: ObservableObject {
             if url.path != path { remap[path] = url.path }
         }
         return (roots, accessed, remap)
+        #endif
     }
 
     nonisolated private static func remappedURL(_ url: URL,
@@ -932,12 +987,14 @@ public final class AppModel: ObservableObject {
             confirmTitle: "Fuse Anyway")
     }
 
-    func confirmTermination() -> NSApplication.TerminateReply {
-        guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return .terminateNow }
+    /// Quit-time confirm; true = terminate. Bool (not AppKit's
+    /// TerminateReply) so AppCore stays toolkit-neutral — the app maps
+    /// it at the delegate edge.
+    func confirmTermination() -> Bool {
+        guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return true }
         return runConfirmAlert(message: "Are you sure you want to quit?",
                                informative: "Unsaved data will be lost.",
                                confirmTitle: "Quit")
-            ? .terminateNow : .terminateCancel
     }
 
     /// File > Save: writes straight back to the project's file; a
@@ -999,8 +1056,8 @@ public final class AppModel: ObservableObject {
 
     private struct RestoredStack {
         let payload: ProjectStore.StackPayload
-        let outputCG: CGImage?
-        let depthCG: CGImage?
+        let outputCG: PlatformImage?
+        let depthCG: PlatformImage?
         let depthImage: ImageBuffer?
     }
 
@@ -1014,16 +1071,16 @@ public final class AppModel: ObservableObject {
                 let project = try ProjectStore.read(from: url)
                 var restored = [RestoredStack]()
                 for payload in project.stacks {
-                    var outputCG: CGImage? = nil
-                    var depthCG: CGImage? = nil
+                    var outputCG: PlatformImage? = nil
+                    var depthCG: PlatformImage? = nil
                     var depthImage: ImageBuffer? = nil
                     if let result = payload.result {
-                        outputCG = try ImageFile.cgImage8(from: payload.working ?? result)
+                        outputCG = try Preview.image(from: payload.working ?? result)
                         let image = DMapFusion.depthImage(
                             from: payload.depth, width: result.width, height: result.height,
                             frameCount: max(payload.includedURLs.count, 2))
                         depthImage = image
-                        depthCG = try ImageFile.cgImage8(from: image)
+                        depthCG = try Preview.image(from: image)
                     }
                     restored.append(RestoredStack(payload: payload, outputCG: outputCG,
                                                   depthCG: depthCG, depthImage: depthImage))
@@ -1238,7 +1295,7 @@ public final class AppModel: ObservableObject {
 
     private(set) var result: ImageBuffer?
     private(set) var depthResult: ImageBuffer?
-    private var inputCache: [URL: (image: CGImage, pixelSize: CGSize, aligned: Bool)] = [:]
+    private var inputCache: [URL: (image: PlatformImage, pixelSize: CGSize, aligned: Bool)] = [:]
     private var inputCacheOrder: [URL] = []
     private var inputDecodeTask: Task<Void, Never>?
 
@@ -1899,7 +1956,7 @@ public final class AppModel: ObservableObject {
     func exportAllFused(to directory: URL) async -> String {
         if let current = selectedStack { stash(into: current) }
         let ext = exportFormat.fileExtension
-        let space = exportColorSpace.cgColorSpace
+        let space = exportColorSpace
         var lines = [String]()
         var count = 0
         for stack in stacks {
@@ -1915,7 +1972,7 @@ public final class AppModel: ObservableObject {
                 try await Task.detached(priority: .userInitiated) {
                     var toned = image
                     ToneCurve.apply(settings: tone, to: &toned)
-                    try ImageFile.save(toned, to: dest, sourceFrame: sourceFrame,
+                    try Self.saveImage(toned, to: dest, sourceFrame: sourceFrame,
                                        colorSpace: space)
                     if wantsSidecar {
                         try XMPSidecar.embed(tone: stackTone, inDNGAt: dest)
@@ -1975,7 +2032,7 @@ public final class AppModel: ObservableObject {
         }
         let targets = frames.filter { selection.contains($0) && alignedURLs.contains($0) }
         let ext = exportFormat.fileExtension
-        let space = exportColorSpace.cgColorSpace
+        let space = exportColorSpace
         let bakedTone = exportFormat == .dng ? ToneSettings() : tone
         let wantsSidecar = exportFormat == .dng && !tone.isNeutral
         let sidecarTone = tone
@@ -1993,7 +2050,7 @@ public final class AppModel: ObservableObject {
                     var image = Self.cropped(try source.frame(at: index), to: crop,
                                              angle: angle)
                     ToneCurve.apply(settings: bakedTone, to: &image)
-                    try ImageFile.save(image, to: dest, sourceFrame: url,
+                    try Self.saveImage(image, to: dest, sourceFrame: url,
                                        colorSpace: space)
                     if wantsSidecar {
                         try XMPSidecar.embed(tone: sidecarTone, inDNGAt: dest)
@@ -2175,7 +2232,7 @@ public final class AppModel: ObservableObject {
         inputDecodeTask?.cancel()
         inputPreviewLoading = true
         inputDecodeTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let decoded: (image: CGImage, pixelSize: CGSize)? = {
+            let decoded: (image: PlatformImage, pixelSize: CGSize)? = {
                 let buffer: ImageBuffer?
                 if let alignedIndex {
                     let source = StackPipeline.makeSource(urls: alignedURLs,
@@ -2185,7 +2242,7 @@ public final class AppModel: ObservableObject {
                     buffer = try? ImageFile.load(url: url)
                 }
                 guard let buffer,
-                      let cg = try? ImageFile.cgImage8(from: buffer) else { return nil }
+                      let cg = try? Preview.image(from: buffer) else { return nil }
                 return (cg, CGSize(width: buffer.width, height: buffer.height))
             }()
             let error: String? = decoded != nil ? nil
@@ -2305,9 +2362,9 @@ public final class AppModel: ObservableObject {
                                                           alignmentCache: cache,
                                                           log: logFusion,
                                                           progress: { update in
-                    func cgImage(_ buffer: ImageBuffer?) -> CGImage? {
+                    func cgImage(_ buffer: ImageBuffer?) -> PlatformImage? {
                         guard let buffer else { return nil }
-                        return try? ImageFile.cgImage8(from: buffer)
+                        return try? Preview.image(from: buffer)
                     }
                     let preview = cgImage(update.preview)
                     let nominal = update.previewFullWidth > 0
@@ -2350,8 +2407,8 @@ public final class AppModel: ObservableObject {
                     }
                 }, cancellation: cancellation)
                 let output = result.output
-                let resultCG = try ImageFile.cgImage8(from: output.image)
-                let depthCG = try ImageFile.cgImage8(from: output.depthMap)
+                let resultCG = try Preview.image(from: output.image)
+                let depthCG = try Preview.image(from: output.depthMap)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     // Flag bad frames and clear the checkboxes of excluded ones
@@ -2564,7 +2621,7 @@ public final class AppModel: ObservableObject {
             let image = DMapFusion.depthImage(from: depth, width: data.width,
                                               height: data.height,
                                               frameCount: data.frames)
-            let cg = try? ImageFile.cgImage8(from: image)
+            let cg = try? Preview.image(from: image)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.noiseFloorPreviewComputing = false
@@ -2649,7 +2706,7 @@ public final class AppModel: ObservableObject {
                                           height: session.height,
                                           frameCount: max(session.urls.count, 2))
         depthResult = image
-        if let cg = try? ImageFile.cgImage8(from: image) {
+        if let cg = try? Preview.image(from: image) {
             depthPreview = cg
         }
     }
@@ -2786,8 +2843,8 @@ public final class AppModel: ObservableObject {
             if outputMode != .depth, exportFormat != .dng {
                 ToneCurve.apply(settings: tone, to: &toned)
             }
-            try ImageFile.save(toned, to: url, sourceFrame: fuseURLs.first,
-                               colorSpace: exportColorSpace.cgColorSpace)
+            try Self.saveImage(toned, to: url, sourceFrame: fuseURLs.first,
+                               colorSpace: exportColorSpace)
             if outputMode != .depth, exportFormat == .dng, !tone.isNeutral {
                 // DNG stays linear; the tone rides along as embedded Camera
                 // Raw XMP, which Lightroom/ACR read as develop settings.

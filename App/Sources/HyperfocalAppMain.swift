@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return true }
                 return MainActor.assumeIsolated {
                     guard let model = self.model else { return true }
-                    guard model.confirmTermination() == .terminateNow else { return false }
+                    guard model.confirmTermination() else { return false }
                     self.closeApproved = true
                     // Terminate explicitly: relying on last-window-closed
                     // would leave a headless app if Settings happens to be
@@ -75,7 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if closeApproved { return .terminateNow }
-        return MainActor.assumeIsolated { model?.confirmTermination() ?? .terminateNow }
+        return MainActor.assumeIsolated {
+            model?.confirmTermination() ?? true
+        } ? .terminateNow : .terminateCancel
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
