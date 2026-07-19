@@ -182,9 +182,9 @@ in priority order:
    needs custom cursor images quantized to the 8 sectors like
    ContentView.swift:2093-2103); (Hotkey menu items landed
    2026-07-19: Edit carries Crop/Swap Orientation/Accept/Cancel.)
-2. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
-   section collapse, disabled-stack dimming, per-stack inline frame
-   disclosure in the multi-stack tree.
+2. **Chrome**: About panel (+ DNG SDK credits), Help link,
+   disabled-stack dimming, per-stack inline frame disclosure in the
+   multi-stack tree.
 
 **Known deviations & placeholders** in already-built Qt features —
 the running list of "works, but not the native way" (new
