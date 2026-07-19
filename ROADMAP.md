@@ -68,24 +68,29 @@ decode). Package.swift resolves the imaging libraries from
 analogue of the Linux pkg-config path); `FrameSpill` has a Win32
 positional-I/O backend (OVERLAPPED offsets, DELETE_ON_CLOSE).
 
+The Qt shell also runs on Windows (2026-07-19): `QtShell/build.ps1`
+builds it against an aqt-installed Qt 6.10.3 (msvc2022_arm64 cross kit —
+bundles its own x64 host tools; qtshadertools added with `--noarchives
+-m`), and the four-variant selftest matrix passes (base+EXPECT_DISPLAY
+889x590, EXPECT_EXCLUDED misfire, plain, STACK2 batch). The shell builds
+Release only: Qt's debug DLLs use the debug CRT, which the always
+release-CRT Swift runtime can't join — the C bridge boundary makes a
+debug bridge under the release shell the dev loop instead.
+
 Windows residuals to close (each independently landable):
 
-1. **Qt shell on Windows.** Qt 6 isn't installed on the Windows box and
-   `QtShell/build.sh` assumes brew/apt layouts; needs a Qt install
-   (aqtinstall or the Qt online installer, msvc arm64 kit) and a
-   Windows build recipe, then the four-variant selftest matrix.
-2. **Non-ASCII paths on Windows.** CImaging opens files with
+1. **Non-ASCII paths on Windows.** CImaging opens files with
    `fopen`/`TIFFOpen`/`LibRaw::open_file(char*)`, which Windows
    interprets in the ANSI codepage while Swift hands over UTF-8 —
    frames in folders with non-ASCII names will fail to open. Fix is
    either an app-manifest UTF-8 codepage opt-in or `_wfopen`-family
    conversions in the shim.
-3. **Windows CI runner** (plan Phase 1 names Windows CI): ci-gate.sh
+2. **Windows CI runner** (plan Phase 1 names Windows CI): ci-gate.sh
    already passes under Git Bash with the environment from
    `Scripts/windows-env.ps1`; needs a GitHub Actions windows job (or
    self-hosted arm64 runner) and possibly Windows-calibrated floors —
    the measured margins above the shared floors are currently ≥ 0.36 dB.
-4. **CLI DLL deployment.** The exe finds vcpkg's DLLs via PATH
+3. **CLI DLL deployment.** The exe finds vcpkg's DLLs via PATH
    (windows-env.ps1 prepends `installed\<triplet>\bin`); distributing
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.

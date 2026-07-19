@@ -30,6 +30,13 @@ if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
     }
 }
 
+if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+    $ninjaDir = Get-ChildItem "$env:LocalAppData\Microsoft\WinGet\Packages" `
+        -Filter 'Ninja-build.Ninja*' -Directory -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($ninjaDir) { $env:Path = "$($ninjaDir.FullName);" + $env:Path }
+}
+
 if (-not $env:VCPKG_ROOT) {
     # Conventional layout: vcpkg checked out beside this repo.
     $sibling = Join-Path (Split-Path $PSScriptRoot -Parent) '..\vcpkg'

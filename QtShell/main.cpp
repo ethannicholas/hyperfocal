@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QDir>
 #include <QIcon>
 #include <QImage>
 #include <QQmlApplicationEngine>
@@ -311,12 +312,15 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->previewOK = isData && !shell->displayIsData();
                 // Project round-trip: save must clear the dirty flag and
                 // set the path; reopening the file must restore a fused
-                // stack (stage 6 waits out the load).
+                // stack (stage 6 waits out the load). Compare paths with
+                // forward slashes: the bridge echoes them that way, while a
+                // Windows runner passes the out path with backslashes.
                 state->projectFile = state->outPath + ".hyperfocal";
                 state->projectOK =
                     shell->saveProject(QUrl::fromLocalFile(state->projectFile))
                     && !shell->hasUnsavedWork()
-                    && shell->projectPath() == state->projectFile;
+                    && QDir::fromNativeSeparators(shell->projectPath())
+                        == QDir::fromNativeSeparators(state->projectFile);
                 if (state->projectOK)
                     shell->openStack(QUrl::fromLocalFile(state->projectFile));
                 advance(6);

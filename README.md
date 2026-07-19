@@ -123,11 +123,11 @@ QtShell/build.sh --run
 ### Building on Windows
 
 The Windows port shares the Linux architecture (LibRaw/OpenCV imaging
-stack behind the same C shim). The engine and the command-line tool
-build and pass the same regression gates; the Qt shell hasn't been
-brought up on Windows yet.
+stack behind the same C shim, desktop app as the Qt shell). The engine,
+the command-line tool, and the Qt shell all build and pass the same
+regression gates and selftest journeys as on Linux.
 
-Prerequisites (installable via winget except vcpkg):
+Prerequisites (installable via winget except vcpkg and Qt):
 
 - **Visual Studio 2022 Build Tools** with the MSVC tools for your
   architecture and a Windows 11 SDK
@@ -136,6 +136,14 @@ Prerequisites (installable via winget except vcpkg):
 - **Swift toolchain** from [swift.org](https://www.swift.org/install/)
   (`winget install Swift.Toolchain`)
 - **CMake** and **Ninja**
+- **Qt 6** (qtbase, qtdeclarative, qtshadertools) for the desktop app —
+  easiest via [aqtinstall](https://github.com/miurahr/aqtinstall):
+  `pip install aqtinstall`, then e.g.
+  `aqt install-qt windows desktop 6.10.3 win64_msvc2022_arm64_cross_compiled
+  --noarchives -m qtshadertools --outputdir C:\Qt` after the base
+  install of the same kit (use `win64_msvc2022_64` on Intel machines);
+  point `QT_KIT` at the kit directory if it isn't
+  `C:\Qt\6.10.3\msvc2022_arm64`
 - **vcpkg**, checked out beside this repo (or point `VCPKG_ROOT` at it),
   with the imaging libraries installed — use `x64-windows` on Intel
   machines:
@@ -156,6 +164,7 @@ Then, in PowerShell:
 . Scripts\windows-env.ps1     # loads the Swift + MSVC + vcpkg environment
 swift build -c release
 .build\release\hyperfocal-cli --help
+QtShell\build.ps1 -Run        # build and launch the desktop app
 ```
 
 New to focus stacking? Take a look at the
