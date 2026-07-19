@@ -19,9 +19,35 @@ private let subcommandList: [ParsableCommand.Type] =
      DebugAlign.self, DebugChain.self,
      DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self]
 #else
-private let subcommandList: [ParsableCommand.Type] =
-    [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
-     DebugChain.self, DebugWarp.self, DebugDiff.self, DebugBoost.self]
+private let subcommandList: [ParsableCommand.Type] = {
+    var list: [ParsableCommand.Type] =
+        [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
+         DebugChain.self, DebugWarp.self, DebugDiff.self, DebugBoost.self]
+    #if HYPERFOCAL_HAVE_WGPU
+    list.append(DebugWgpu.self)
+    #endif
+    return list
+}()
+#endif
+
+#if HYPERFOCAL_HAVE_WGPU
+struct DebugWgpu: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "debug-wgpu",
+        abstract: "Run kernel-level CPU vs wgpu parity checks (build-time opt-in).")
+
+    @Option(help: "Fail below this minimum PSNR in dB.")
+    var floor: Double = 90
+
+    func run() throws {
+        let minPSNR = try WgpuParity.run()
+        print(String(format: "minimum: %.1f dB (floor %.1f)", minPSNR, floor))
+        if minPSNR < floor {
+            throw StackError.metal("wgpu parity below floor")
+        }
+        print("wgpu parity: ALL PASS")
+    }
+}
 #endif
 
 @main

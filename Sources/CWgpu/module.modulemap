@@ -1,0 +1,4 @@
+module CWgpu [system] {
+    header "shim.h"
+    export *
+}

@@ -43,6 +43,25 @@ func pkgExists(_ pkg: String) -> Bool {
     return proc.terminationStatus == 0
 }
 
+// Opt-in wgpu compute backend (cross-platform-plan Phase 4): build with
+// HYPERFOCAL_WGPU=1 and a wgpu-native prebuilt release at WGPU_ROOT
+// (default: a `wgpu-native` checkout beside this repo). Off Apple only —
+// macOS keeps Metal. Opt-in like the OpenCV A/B: the backend is under
+// construction and must not gate anyone's build. Every target that imports
+// HyperfocalKit rebuilds the CWgpu Clang module with its own flags, so the
+// include path rides on all of them (wgpuXcc).
+var wgpuEnabled = false
+var wgpuRoot = ""
+var wgpuXcc: [SwiftSetting] = []
+#if !os(macOS)
+if ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU"] == "1" {
+    wgpuEnabled = true
+    wgpuRoot = ProcessInfo.processInfo.environment["WGPU_ROOT"]
+        ?? FileManager.default.currentDirectoryPath + "/../wgpu-native"
+    wgpuXcc = [.unsafeFlags(["-Xcc", "-I\(wgpuRoot)/include"])]
+}
+#endif
+
 #if os(Windows)
 // vcpkg supplies every C library on Windows (no pkg-config; see
 // Docs/cross-platform-plan.md). The installed tree is resolved at
@@ -104,6 +123,7 @@ var appCoreSwiftSettings: [SwiftSetting] = [.unsafeFlags(["-enable-testing"])]
 appCoreSwiftSettings.append(.unsafeFlags(
     ["-Xcc", "-I\(vcpkgPrefix)\\include", "-L", "\(vcpkgPrefix)\\lib"]))
 #endif
+appCoreSwiftSettings.append(contentsOf: wgpuXcc)
 extraTargets.append(
     .target(
         name: "AppCore",
@@ -120,7 +140,8 @@ extraTargets.append(
     .target(
         name: "HyperfocalBridge",
         dependencies: ["AppCore", "HyperfocalKit"],
-        path: "Bridge"
+        path: "Bridge",
+        swiftSettings: wgpuXcc
     )
 )
 extraProducts.append(
@@ -245,6 +266,23 @@ dngCxxExtra = [.unsafeFlags(["-I", vcpkgPrefix + "\\include"])]
 dngLinkerSettings.insert(.unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]), at: 0)
 #endif
 
+var kitLinkerSettings: [LinkerSetting] = []
+var cliSwiftSettings: [SwiftSetting] = []
+if wgpuEnabled {
+    extraTargets.append(.systemLibrary(name: "CWgpu", path: "Sources/CWgpu"))
+    hyperfocalKitDeps.append("CWgpu")
+    kitSwiftSettings.append(.define("HYPERFOCAL_HAVE_WGPU"))
+    kitSwiftSettings.append(contentsOf: wgpuXcc)
+    cliSwiftSettings.append(.define("HYPERFOCAL_HAVE_WGPU"))
+    cliSwiftSettings.append(contentsOf: wgpuXcc)
+    kitLinkerSettings.append(.unsafeFlags(["-L\(wgpuRoot)/lib"]))
+    #if os(Windows)
+    kitLinkerSettings.append(.linkedLibrary("wgpu_native.dll"))
+    #else
+    kitLinkerSettings.append(.linkedLibrary("wgpu_native"))
+    #endif
+}
+
 var targets: [Target] = [
     .target(
         name: "CDNGSDK",
@@ -280,14 +318,16 @@ var targets: [Target] = [
     .target(
         name: "HyperfocalKit",
         dependencies: hyperfocalKitDeps,
-        swiftSettings: kitSwiftSettings
+        swiftSettings: kitSwiftSettings,
+        linkerSettings: kitLinkerSettings
     ),
     .executableTarget(
         name: "hyperfocal-cli",
         dependencies: [
             "HyperfocalKit",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
-        ]
+        ],
+        swiftSettings: cliSwiftSettings
     ),
 ]
 targets.append(contentsOf: extraTargets)
