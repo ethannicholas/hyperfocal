@@ -299,6 +299,67 @@ public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) 
     }
 }
 
+// MARK: Undo/redo of model edits (tone, crop, frame inclusion — the
+// native ⌘Z family; retouch strokes keep their own undo, reached
+// through the same entry points once retouch mode exists here)
+
+/// Tone drag bracket, mirroring the native sliders' onEditingChanged:
+/// editing=1 snapshots a baseline, editing=0 records ONE undoable tone
+/// edit for the whole drag (live hf_set_slider values in between are
+/// not individually recorded). Without the bracket, tone changes made
+/// through the bridge are silent to undo — call it around drags.
+@_cdecl("hf_tone_editing")
+public func hf_tone_editing(_ editing: Int32) {
+    MainActor.assumeIsolated { Bridge.model?.toneEditing(editing != 0) }
+}
+
+@_cdecl("hf_can_undo")
+public func hf_can_undo() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.canUndoEdit == true ? 1 : 0 }
+}
+
+@_cdecl("hf_can_redo")
+public func hf_can_redo() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.canRedoEdit == true ? 1 : 0 }
+}
+
+@_cdecl("hf_undo")
+public func hf_undo() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.canUndoEdit else { return 0 }
+        model.undoEdit()
+        return 1
+    }
+}
+
+@_cdecl("hf_redo")
+public func hf_redo() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.canRedoEdit else { return 0 }
+        model.redoEdit()
+        return 1
+    }
+}
+
+/// Mode-scoped menu titles ("Undo Tone Change", …). Returns bytes.
+@_cdecl("hf_undo_title")
+public func hf_undo_title(_ buffer: UnsafeMutablePointer<CChar>?,
+                          _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.undoMenuTitle, buffer, cap)
+    }
+}
+
+@_cdecl("hf_redo_title")
+public func hf_redo_title(_ buffer: UnsafeMutablePointer<CChar>?,
+                          _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.redoMenuTitle, buffer, cap)
+    }
+}
+
 /// Cancel the running fuse (or batch) — the progress overlay's Cancel
 /// button. 0 when nothing is running.
 @_cdecl("hf_cancel_fuse")

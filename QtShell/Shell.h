@@ -35,6 +35,10 @@ class Shell : public QObject {
     Q_PROPERTY(double displayCropAngle READ displayCropAngle NOTIFY changed)
     Q_PROPERTY(bool toneNeutral READ toneNeutral NOTIFY changed)
     Q_PROPERTY(bool fusionDefault READ fusionDefault NOTIFY changed)
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY changed)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY changed)
+    Q_PROPERTY(QString undoTitle READ undoTitle NOTIFY changed)
+    Q_PROPERTY(QString redoTitle READ redoTitle NOTIFY changed)
     Q_PROPERTY(int lutEpoch READ lutEpoch NOTIFY changed)
 
 public:
@@ -98,6 +102,13 @@ public:
     Q_INVOKABLE void setAllFramesIncluded(bool included);
     bool toneNeutral() const;
     bool fusionDefault() const;
+    Q_INVOKABLE void toneEditing(bool editing);
+    Q_INVOKABLE bool undo();
+    Q_INVOKABLE bool redo();
+    bool canUndo() const;
+    bool canRedo() const;
+    QString undoTitle() const;
+    QString redoTitle() const;
 
 signals:
     void changed();

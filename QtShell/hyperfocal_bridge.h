@@ -63,6 +63,20 @@ double hf_stage_fraction(void);
 // UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
 int hf_stage_text(char *buf, int cap);
 
+// Tone drag bracket: editing=1 at drag start, 0 at drag end records
+// ONE undoable edit for the whole drag (mirrors the native sliders'
+// onEditingChanged). Tone sets outside a bracket are silent to undo.
+void hf_tone_editing(int editing);
+
+// Undo/redo of model edits (tone, crop, frame inclusion — the native
+// ⌘Z family). Titles are mode-scoped ("Undo Tone Change"); bytes out.
+int hf_can_undo(void);
+int hf_can_redo(void);
+int hf_undo(void);
+int hf_redo(void);
+int hf_undo_title(char *buf, int cap);
+int hf_redo_title(char *buf, int cap);
+
 // Cancel the running fuse or batch (the progress Cancel button); 0
 // when nothing is running.
 int hf_cancel_fuse(void);

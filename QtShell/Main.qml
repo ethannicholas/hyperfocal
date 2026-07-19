@@ -33,6 +33,19 @@ ApplicationWindow {
         }
     }
 
+    // The native ⌘Z family (platform-correct sequences via StandardKey);
+    // menu entries with the mode-scoped titles arrive with the menu bar.
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: Shell.canUndo
+        onActivated: Shell.undo()
+    }
+    Shortcut {
+        sequences: [StandardKey.Redo]
+        enabled: Shell.canRedo
+        onActivated: Shell.redo()
+    }
+
     FolderDialog {
         id: openDialog
         title: "Choose a stack folder"
@@ -117,6 +130,12 @@ ApplicationWindow {
             to: parent.to
             value: Shell.slider(parent.sliderId)
             onMoved: Shell.setSlider(parent.sliderId, value)
+            // Tone drags record one undo entry per drag (the native
+            // onEditingChanged bracket); fusion sliders aren't undoable.
+            onPressedChanged: {
+                if (parent.sliderId.startsWith("tone."))
+                    Shell.toneEditing(pressed)
+            }
             // Re-read on model changes (reset, project load).
             Connections {
                 target: Shell

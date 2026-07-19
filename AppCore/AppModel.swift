@@ -1476,23 +1476,23 @@ public final class AppModel: ObservableObject {
     /// ⌘Z is mode-scoped: inside retouch it drives stroke undo (as ever);
     /// everywhere else it walks the model-edit history. Crop mode has its
     /// own transaction (⎋ cancels), so history stays out of its way.
-    var canUndoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !undoHistory.isEmpty }
-    var canRedoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !redoHistory.isEmpty }
-    var undoMenuTitle: String {
+    public var canUndoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !undoHistory.isEmpty }
+    public var canRedoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !redoHistory.isEmpty }
+    public var undoMenuTitle: String {
         retouchMode ? "Undo Stroke" : undoHistory.last.map { "Undo \($0.noun)" } ?? "Undo"
     }
-    var redoMenuTitle: String {
+    public var redoMenuTitle: String {
         retouchMode ? "Redo Stroke" : redoHistory.last.map { "Redo \($0.noun)" } ?? "Redo"
     }
 
-    func undoEdit() {
+    public func undoEdit() {
         if retouchMode { retouch?.undo(); return }
         guard !cropMode, let edit = undoHistory.popLast() else { return }
         redoHistory.append(edit)
         apply(edit, forward: false)
     }
 
-    func redoEdit() {
+    public func redoEdit() {
         if retouchMode { retouch?.redo(); return }
         guard !cropMode, let edit = redoHistory.popLast() else { return }
         undoHistory.append(edit)
@@ -1521,7 +1521,7 @@ public final class AppModel: ObservableObject {
     /// Tone slider gesture hooks (LabeledSlider's onEditingChanged): one
     /// undo step per drag, however many ticks it delivered.
     private var toneEditBaseline: ToneSettings?
-    func toneEditing(_ editing: Bool) {
+    public func toneEditing(_ editing: Bool) {
         if editing {
             toneEditBaseline = toneEditBaseline ?? tone
         } else if let from = toneEditBaseline {

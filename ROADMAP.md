@@ -122,10 +122,7 @@ functional but rough; inventory taken 2026-07-19 against
 ContentView/HyperfocalAppMain/SettingsView). In rough priority order,
 each independently landable:
 
-1. **Undo/redo of model edits** (⌘Z family): needs hf_undo/hf_redo +
-   can-undo/can-redo (+ the mode-scoped menu titles), wired to
-   shortcuts in the Qt shell.
-2. **Project lifecycle**: hf_save_project / save-as / close-stack /
+1. **Project lifecycle**: hf_save_project / save-as / close-stack /
    close-project / project-name / dirty-flag; Qt menu bar with the
    native shortcut set (New/Open/Add Stack Folder ⌘N/⌘O/⇧⌘N are
    bridge-ready via hf_load_stack); unsaved-work quit gate through the

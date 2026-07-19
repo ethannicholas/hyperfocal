@@ -83,7 +83,11 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         // Zero-copy currency: tone edits render through the LUT shader and
         // must NOT invalidate display pixels — the epoch may not move.
         const int epochBeforeTone = shell->displayEpoch();
+        // Bracketed like a slider drag, so the change records ONE
+        // undoable edit (the undo journey below unwinds it).
+        shell->toneEditing(true);
         shell->setExposure(0.5);  // tone reaches the preview + export
+        shell->toneEditing(false);
         state->toneKeptPixels = shell->displayEpoch() == epochBeforeTone;
         // Full-res currency: the display is the result itself, not a capped
         // preview (HFQT_EXPECT_DISPLAY=WxH from a runner that knows the
@@ -266,6 +270,16 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             }
             shell->setCrop(0, 0, 0, 0, 0);
             state->cropOK = state->cropOK && shell->displayCrop().isEmpty();
+            // Undo journey: the tone edit above guarantees history; undo
+            // all the way and the model must land back neutral (exposure
+            // 0), then one redo must take. Runs after the grab, so the
+            // shot shows the settled pre-undo UI.
+            bool undoOK = shell->canUndo();
+            for (int guard = 64; shell->canUndo() && guard > 0; --guard)
+                undoOK = shell->undo() && undoOK;
+            undoOK = undoOK && !shell->canUndo()
+                && shell->slider(QStringLiteral("tone.slider.exposure")) == 0.0
+                && shell->canRedo() && shell->redo();
             if (!state->exported) { QCoreApplication::exit(5); return; }
             if (!state->depthExported) { QCoreApplication::exit(6); return; }
             if (state->wasStale || !state->staleAfterEdit) {
@@ -282,6 +296,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!state->inputOK) { QCoreApplication::exit(12); return; }
             if (!state->cropOK) { QCoreApplication::exit(13); return; }
             if (!state->zoomOK) { QCoreApplication::exit(14); return; }
+            if (!undoOK) { QCoreApplication::exit(15); return; }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the

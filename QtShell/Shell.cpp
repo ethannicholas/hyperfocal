@@ -171,6 +171,25 @@ void Shell::setStackEnabled(int index, bool enabled) {
 bool Shell::fuseEnabledStacks() { return hf_fuse_enabled_stacks() != 0; }
 
 bool Shell::cancelFuse() { return hf_cancel_fuse() != 0; }
+
+void Shell::toneEditing(bool editing) { hf_tone_editing(editing ? 1 : 0); }
+
+bool Shell::undo() { return hf_undo() != 0; }
+bool Shell::redo() { return hf_redo() != 0; }
+bool Shell::canUndo() const { return hf_can_undo() != 0; }
+bool Shell::canRedo() const { return hf_can_redo() != 0; }
+
+QString Shell::undoTitle() const {
+    char buffer[256];
+    const int n = hf_undo_title(buffer, sizeof buffer);
+    return QString::fromUtf8(buffer, n);
+}
+
+QString Shell::redoTitle() const {
+    char buffer[256];
+    const int n = hf_redo_title(buffer, sizeof buffer);
+    return QString::fromUtf8(buffer, n);
+}
 void Shell::resetTone() { hf_reset_tone(); }
 void Shell::resetFusion() { hf_reset_fusion(); }
 bool Shell::toneNeutral() const { return hf_tone_is_neutral() != 0; }
