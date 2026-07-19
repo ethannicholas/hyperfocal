@@ -151,6 +151,8 @@ QVariantList Shell::stacks() const {
         row.insert(QStringLiteral("status"), hf_stack_status(i));
         n = hf_stack_failure(i, text, sizeof text);
         row.insert(QStringLiteral("failure"), QString::fromUtf8(text, n));
+        n = hf_stack_order_warning(i, text, sizeof text);
+        row.insert(QStringLiteral("orderWarning"), QString::fromUtf8(text, n));
         row.insert(QStringLiteral("frameCount"), hf_stack_frame_count(i));
         list.append(row);
     }
@@ -168,6 +170,18 @@ void Shell::setStackEnabled(int index, bool enabled) {
 
 bool Shell::fuseEnabledStacks() { return hf_fuse_enabled_stacks() != 0; }
 
+bool Shell::cancelFuse() { return hf_cancel_fuse() != 0; }
+void Shell::resetTone() { hf_reset_tone(); }
+void Shell::resetFusion() { hf_reset_fusion(); }
+bool Shell::toneNeutral() const { return hf_tone_is_neutral() != 0; }
+bool Shell::fusionDefault() const { return hf_fusion_is_default() != 0; }
+
+void Shell::setAllFramesIncluded(bool included) {
+    const int count = hf_frame_count();
+    for (int i = 0; i < count; ++i)
+        hf_set_frame_included(i, included ? 1 : 0);
+}
+
 QVariantList Shell::frames() const {
     // Rebuilt wholesale per change signal — fine at dev-shell scale; the
     // production shell gets a QAbstractListModel over the same calls.
@@ -176,10 +190,12 @@ QVariantList Shell::frames() const {
     list.reserve(count);
     char name[512];
     for (int i = 0; i < count; ++i) {
-        const int n = hf_frame_name(i, name, sizeof name);
+        int n = hf_frame_name(i, name, sizeof name);
         QVariantMap row;
         row.insert(QStringLiteral("name"), QString::fromUtf8(name, n));
         row.insert(QStringLiteral("included"), hf_frame_included(i) != 0);
+        n = hf_frame_issue(i, name, sizeof name);
+        row.insert(QStringLiteral("issue"), QString::fromUtf8(name, n));
         list.append(row);
     }
     return list;

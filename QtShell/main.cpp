@@ -149,8 +149,12 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         if (!expect.isEmpty()) {
             const int idx = expect.toInt();
             const QVariantList frames = shell->frames();
+            // The excluded frame must also carry its issue summary — the
+            // sidebar badge's data path.
             state->exclusionOK = idx < frames.size()
-                && !frames[idx].toMap().value(QStringLiteral("included")).toBool();
+                && !frames[idx].toMap().value(QStringLiteral("included")).toBool()
+                && !frames[idx].toMap().value(QStringLiteral("issue"))
+                        .toString().isEmpty();
         }
         // Select a frame: the input pane must follow (async decode — the
         // finish poll below waits for it, then grabs and exits).

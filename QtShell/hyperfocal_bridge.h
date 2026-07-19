@@ -63,8 +63,18 @@ double hf_stage_fraction(void);
 // UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
 int hf_stage_text(char *buf, int cap);
 
+// Cancel the running fuse or batch (the progress Cancel button); 0
+// when nothing is running.
+int hf_cancel_fuse(void);
+
 void hf_set_tone_exposure(double ev);
 double hf_tone_exposure(void);
+// Reset buttons + their visibility, mirroring the native tone.reset /
+// fusion.reset (shown only when something differs from defaults).
+int hf_tone_is_neutral(void);
+int hf_reset_tone(void);
+int hf_fusion_is_default(void);
+int hf_reset_fusion(void);
 
 // Sliders, addressed by the accessibility-identifier vocabulary the
 // native UITest command channel speaks (e.g. "fusion.slider.sharpness",
@@ -103,6 +113,10 @@ int hf_frame_count(void);
 int hf_frame_name(int index, char *buf, int cap);   // returns bytes
 int hf_frame_included(int index);
 int hf_set_frame_included(int index, int included);
+// Badges: a frame's fuse-time issue summary (misfire/misalignment) and
+// a stack's load-time frame-order warning. Return bytes; 0 = none.
+int hf_frame_issue(int index, char *buf, int cap);
+int hf_stack_order_warning(int index, char *buf, int cap);
 
 // Frame selection + the input pane. Selecting a frame (like clicking
 // its row) points the input pane at it; decoding is async — re-read on

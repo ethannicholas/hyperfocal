@@ -198,7 +198,7 @@ public final class AppModel: ObservableObject {
     /// the stack") — shown as a warning badge in the Stack list. Excluded
     /// frames stay listed with their checkbox cleared, so opting back in is
     /// just re-checking them.
-    @Published var frameIssues: [URL: String] = [:]
+    @Published public var frameIssues: [URL: String] = [:]
     /// Decides whether flagged frames get excluded (called off the main thread
     /// with display lines). Defaults to a blocking alert; the headless probe
     /// replaces it. Read once at fuse start.
@@ -1317,14 +1317,14 @@ public final class AppModel: ObservableObject {
     static let defaultMedianRadius = 20.0
     static let defaultBlendRadius = 1.0
 
-    var fusionSettingsAreDefault: Bool {
+    public var fusionSettingsAreDefault: Bool {
         sharpnessSigma == Self.defaultSharpnessSigma
             && noiseFloor == Self.defaultNoiseFloor
             && medianRadius == Self.defaultMedianRadius
             && blendRadius == Self.defaultBlendRadius
     }
 
-    func resetFusionSettings() {
+    public func resetFusionSettings() {
         sharpnessSigma = Self.defaultSharpnessSigma
         noiseFloor = Self.defaultNoiseFloor
         medianRadius = Self.defaultMedianRadius
@@ -1531,7 +1531,7 @@ public final class AppModel: ObservableObject {
     }
 
     /// The Tone section's Reset button — an edit like any drag.
-    func resetTone() {
+    public func resetTone() {
         guard !tone.isNeutral else { return }
         recordEdit(.tone(from: tone, to: ToneSettings()))
         tone = ToneSettings()
@@ -2646,7 +2646,7 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    func cancelFusion() {
+    public func cancelFusion() {
         fusionCancellation?.cancel()
         stageText = "Cancelling…"
         stageETA = nil

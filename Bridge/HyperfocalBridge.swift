@@ -299,6 +299,50 @@ public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) 
     }
 }
 
+/// Cancel the running fuse (or batch) — the progress overlay's Cancel
+/// button. 0 when nothing is running.
+@_cdecl("hf_cancel_fuse")
+public func hf_cancel_fuse() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.phase.isRunning else { return 0 }
+        model.cancelFusion()
+        return 1
+    }
+}
+
+/// Tone at its neutral defaults? (drives the Reset button's visibility,
+/// like the native tone.reset)
+@_cdecl("hf_tone_is_neutral")
+public func hf_tone_is_neutral() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.tone.isNeutral == true ? 1 : 0 }
+}
+
+@_cdecl("hf_reset_tone")
+public func hf_reset_tone() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        model.resetTone()
+        return 1
+    }
+}
+
+/// Fusion sliders at their defaults? (drives fusion.reset visibility)
+@_cdecl("hf_fusion_is_default")
+public func hf_fusion_is_default() -> Int32 {
+    MainActor.assumeIsolated {
+        Bridge.model?.fusionSettingsAreDefault == true ? 1 : 0
+    }
+}
+
+@_cdecl("hf_reset_fusion")
+public func hf_reset_fusion() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        model.resetFusionSettings()
+        return 1
+    }
+}
+
 @_cdecl("hf_set_tone_exposure")
 public func hf_set_tone_exposure(_ ev: Double) {
     MainActor.assumeIsolated { Bridge.model?.tone.exposure = ev }
@@ -417,6 +461,20 @@ public func hf_set_frame_included(_ index: Int32, _ included: Int32) -> Int32 {
     }
 }
 
+/// The frame's issue summary (misfire/misalignment, flagged at fuse
+/// time) — the native frame row's warning badge. Returns bytes; 0 when
+/// the frame has no issue.
+@_cdecl("hf_frame_issue")
+public func hf_frame_issue(_ index: Int32, _ buffer: UnsafeMutablePointer<CChar>?,
+                           _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.frames.indices.contains(Int(index)),
+              let issue = model.frameIssues[model.frames[Int(index)]] else { return 0 }
+        return fillUTF8(issue, buffer, cap)
+    }
+}
+
 // MARK: Stack list (native Stack-tree order) + batch fuse
 
 @_cdecl("hf_stack_count")
@@ -509,6 +567,22 @@ public func hf_stack_failure(_ index: Int32, _ buffer: UnsafeMutablePointer<CCha
 
 /// Frame count per stack row (the selected stack reads the live mirrors —
 /// its Stack object is stale until stashed).
+/// Load-time frame-order sanity warning (capture/name-order
+/// disagreement) — the native stack row's badge. Set at scan time on
+/// the Stack itself, so no selected-stack mirror is involved. Returns
+/// bytes; 0 when none.
+@_cdecl("hf_stack_order_warning")
+public func hf_stack_order_warning(_ index: Int32,
+                                   _ buffer: UnsafeMutablePointer<CChar>?,
+                                   _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)),
+              let warning = model.stacks[Int(index)].orderWarning else { return 0 }
+        return fillUTF8(warning, buffer, cap)
+    }
+}
+
 @_cdecl("hf_stack_frame_count")
 public func hf_stack_frame_count(_ index: Int32) -> Int32 {
     MainActor.assumeIsolated {

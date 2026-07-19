@@ -33,6 +33,8 @@ class Shell : public QObject {
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY changed)
     Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
     Q_PROPERTY(double displayCropAngle READ displayCropAngle NOTIFY changed)
+    Q_PROPERTY(bool toneNeutral READ toneNeutral NOTIFY changed)
+    Q_PROPERTY(bool fusionDefault READ fusionDefault NOTIFY changed)
     Q_PROPERTY(int lutEpoch READ lutEpoch NOTIFY changed)
 
 public:
@@ -89,6 +91,13 @@ public:
     Q_INVOKABLE bool selectStack(int index);
     Q_INVOKABLE void setStackEnabled(int index, bool enabled);
     Q_INVOKABLE bool fuseEnabledStacks();
+    Q_INVOKABLE bool cancelFuse();
+    Q_INVOKABLE void resetTone();
+    Q_INVOKABLE void resetFusion();
+    /// Set every frame's checkbox at once (Include All / None).
+    Q_INVOKABLE void setAllFramesIncluded(bool included);
+    bool toneNeutral() const;
+    bool fusionDefault() const;
 
 signals:
     void changed();

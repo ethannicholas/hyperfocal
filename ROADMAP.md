@@ -117,17 +117,53 @@ pixels must gate on `hf_input_loading` (the title names the new frame
 before the decode lands — the stale-pixel race only shows on slow
 machines).
 
-Next, in rough order (each independently landable):
+**UI parity with the native app** is the phase's current goal (Qt is
+functional but rough; inventory taken 2026-07-19 against
+ContentView/HyperfocalAppMain/SettingsView). In rough priority order,
+each independently landable:
 
-1. **Crop editing in the Qt shell** (the drag-handle overlay is
-   native-only; the bridge already speaks hf_set_crop, so this is a QML
-   overlay over the output pane feeding the same call — the sidebar's
-   numeric fields are the stand-in).
-2. **Dirty-rect tile invalidation** once a partial-update producer exists
-   (retouch strokes in the Qt shell): today any epoch bump drops every
-   tile, which is right for wholesale changes (progressive updates, new
-   fuse) and wasteful only for localized ones — build it with the
-   feature that needs it.
+1. **Undo/redo of model edits** (⌘Z family): needs hf_undo/hf_redo +
+   can-undo/can-redo (+ the mode-scoped menu titles), wired to
+   shortcuts in the Qt shell.
+2. **Project lifecycle**: hf_save_project / save-as / close-stack /
+   close-project / project-name / dirty-flag; Qt menu bar with the
+   native shortcut set (New/Open/Add Stack Folder ⌘N/⌘O/⇧⌘N are
+   bridge-ready via hf_load_stack); unsaved-work quit gate through the
+   dialog seam; drag-drop of folders onto the window; empty-state
+   hints in panes and stack list.
+3. **Export flows**: format/color-space options UI (needs a format
+   enumeration or hardcoded list matching AppModel.ExportFormat),
+   Export Depth label swap, export-all-fused, export-aligned-frames,
+   rocking-animation export (+ strength; Linux needs the FFmpeg/giflib
+   backend first) — all but the format param need bridge calls.
+4. **Crop editing overlay**: drag handles/move/rotate, aspect-ratio
+   picker, orientation swap, modal accept/cancel (C/X/return/esc) —
+   replaces the numeric stand-in; bridge-ready (hf_set_crop).
+5. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
+   ⌘0): PaneItem-side only, no bridge needed.
+6. **Settings window**: order-by-capture, align, normalize-exposure,
+   GPU, disk-cache toggles — each needs a bridge get/set.
+7. **Noise-floor live depth preview** on slider drag (begin/end bridge
+   calls mirroring beginNoiseFloorPreview/end).
+8. **Retouch in the Qt shell** — the largest piece: full session
+   surface over the bridge (enter/exit, brush size/softness, source
+   kind picker + frame cycling + auto-pick, strokes with the
+   image-space dirty rects, PMax build/cancel/progress, revert,
+   stroke undo), a paint-canvas item, and dirty-rect tile invalidation
+   in the pane (deferred item below). Sidebar completeness (tone/
+   fusion resets, cancel, badges, include-all/none, counts) landed
+   2026-07-19.
+9. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+   section collapse, disabled-stack dimming, per-stack inline frame
+   disclosure in the multi-stack tree.
+
+Then, deferred until their prerequisites exist:
+
+- **Dirty-rect tile invalidation** once a partial-update producer exists
+  (retouch strokes in the Qt shell, item 8): today any epoch bump drops
+  every tile, which is right for wholesale changes (progressive
+  updates, new fuse) and wasteful only for localized ones — build it
+  with the feature that needs it.
 
 ## Engine performance
 

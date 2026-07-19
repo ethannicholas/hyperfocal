@@ -96,6 +96,7 @@ ApplicationWindow {
         required property real from
         required property real to
         property string format: "%1"
+        property int decimals: 2
         spacing: 2
         Layout.fillWidth: true
         RowLayout {
@@ -103,7 +104,7 @@ ApplicationWindow {
             Label { text: label; color: "#b5b5b5"; font.pixelSize: 12 }
             Item { Layout.fillWidth: true }
             Label {
-                text: format.arg(control.value.toFixed(2))
+                text: format.arg(control.value.toFixed(decimals))
                 color: "#8a8a8a"
                 font.pixelSize: 12
                 font.family: "Menlo"
@@ -194,6 +195,15 @@ ApplicationWindow {
                         }
                     }
                     Label {
+                        // Load-time frame-order warning badge.
+                        text: "△"
+                        visible: modelData.orderWarning !== ""
+                        color: "#e0c04a"
+                        ToolTip.visible: orderHover.hovered
+                        ToolTip.text: modelData.orderWarning
+                        HoverHandler { id: orderHover }
+                    }
+                    Label {
                         // The native tree's status glyph, textified:
                         // fusing / fused / failed (hover = message).
                         text: modelData.status === 1 ? "…"
@@ -212,7 +222,40 @@ ApplicationWindow {
                 }
             }
 
-            Label { text: "Stack"; color: "#d5d5d5"; font.bold: true }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: "Stack"; color: "#d5d5d5"; font.bold: true }
+                Label {
+                    // "N of M" included count, the native stack.count.
+                    text: {
+                        var n = 0
+                        for (var i = 0; i < Shell.frames.length; ++i)
+                            if (Shell.frames[i].included) ++n
+                        return n + " of " + Shell.frames.length
+                    }
+                    visible: Shell.frames.length > 0
+                    color: "#8a8a8a"
+                    font.pixelSize: 11
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "All"
+                    visible: frameList.count > 0
+                    enabled: !Shell.isRunning
+                    flat: true
+                    font.pixelSize: 11
+                    onClicked: Shell.setAllFramesIncluded(true)
+                }
+                Button {
+                    text: "None"
+                    visible: frameList.count > 0
+                    enabled: !Shell.isRunning
+                    flat: true
+                    font.pixelSize: 11
+                    onClicked: Shell.setAllFramesIncluded(false)
+                }
+            }
             ListView {
                 id: frameList
                 Layout.fillWidth: true
@@ -236,10 +279,31 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         TapHandler { onTapped: Shell.selectFrame(index) }
                     }
+                    Label {
+                        // Fuse-time issue badge (misfire/misalignment).
+                        text: "⚠"
+                        visible: modelData.issue !== ""
+                        color: "#e0c04a"
+                        ToolTip.visible: issueHover.hovered
+                        ToolTip.text: modelData.issue
+                        HoverHandler { id: issueHover }
+                    }
                 }
             }
 
-            Label { text: "Fusion"; color: "#d5d5d5"; font.bold: true }
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "Fusion"; color: "#d5d5d5"; font.bold: true }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Reset"
+                    visible: !Shell.fusionDefault
+                    enabled: !Shell.isRunning
+                    flat: true
+                    font.pixelSize: 11
+                    onClicked: Shell.resetFusion()
+                }
+            }
             SidebarSlider {
                 sliderId: "fusion.slider.sharpness"
                 label: "Sharpness σ"; from: 1; to: 16; format: "%1 px"
@@ -274,10 +338,19 @@ ApplicationWindow {
                 enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
                 onClicked: Shell.fuseEnabledStacks()
             }
-            ProgressBar {
+            RowLayout {
                 Layout.fillWidth: true
                 visible: Shell.isRunning
-                value: Shell.stageFraction
+                spacing: 6
+                ProgressBar {
+                    Layout.fillWidth: true
+                    value: Shell.stageFraction
+                }
+                Button {
+                    text: "Cancel"
+                    font.pixelSize: 11
+                    onClicked: Shell.cancelFuse()
+                }
             }
             Label {
                 Layout.fillWidth: true
@@ -288,14 +361,41 @@ ApplicationWindow {
                 elide: Text.ElideRight
             }
 
-            Label { text: "Tone"; color: "#d5d5d5"; font.bold: true }
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "Tone"; color: "#d5d5d5"; font.bold: true }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Reset"
+                    visible: !Shell.toneNeutral
+                    flat: true
+                    font.pixelSize: 11
+                    onClicked: Shell.resetTone()
+                }
+            }
             SidebarSlider {
                 sliderId: "tone.slider.exposure"
                 label: "Exposure"; from: -5; to: 5; format: "%1 EV"
             }
             SidebarSlider {
                 sliderId: "tone.slider.contrast"
-                label: "Contrast"; from: -1; to: 1
+                label: "Contrast"; from: -100; to: 100; decimals: 0
+            }
+            SidebarSlider {
+                sliderId: "tone.slider.highlights"
+                label: "Highlights"; from: -100; to: 100; decimals: 0
+            }
+            SidebarSlider {
+                sliderId: "tone.slider.shadows"
+                label: "Shadows"; from: -100; to: 100; decimals: 0
+            }
+            SidebarSlider {
+                sliderId: "tone.slider.whites"
+                label: "Whites"; from: -100; to: 100; decimals: 0
+            }
+            SidebarSlider {
+                sliderId: "tone.slider.blacks"
+                label: "Blacks"; from: -100; to: 100; decimals: 0
             }
 
             Label { text: "Crop"; color: "#d5d5d5"; font.bold: true }

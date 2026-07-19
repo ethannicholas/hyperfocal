@@ -70,7 +70,7 @@ public final class Stack: Identifiable {
     // Load-time frame-order sanity warning (capture/name order disagreement
     // or missing capture times) — see AppModel.orderWarning. Persisted with
     // the project so the badge survives reopen.
-    var orderWarning: String?
+    public var orderWarning: String?
     var fuseURLs: [URL] = []
     var fusedSettings: FuseSettings?
     /// Tone adjustments (preview + display-referred exports); per stack.
