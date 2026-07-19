@@ -3,6 +3,8 @@ import Foundation
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif os(Windows)
+import WinSDK
 #endif
 
 /// Spills per-frame planes to a temp file during one fusion pass so a later
@@ -22,7 +24,11 @@ import Glibc
 /// 16 KiB-aligned and the fd is F_NOCACHE: written once, read once, the
 /// traffic shouldn't churn the unified buffer cache.
 public final class FrameSpill {
+    #if os(Windows)
+    private let handle: HANDLE
+    #else
     private let fd: Int32
+    #endif
     private let frameBytes: Int
     private let slotBytes: Int
 
@@ -54,6 +60,15 @@ public final class FrameSpill {
                 .volumeAvailableCapacityForImportantUsage else {
             return nil
         }
+        #elseif os(Windows)
+        // Bytes available to this caller (quota-aware), same figure the spill
+        // has to fit inside.
+        var free = ULARGE_INTEGER()
+        let ok = FileManager.default.temporaryDirectory.path.withCString(encodedAs: UTF16.self) {
+            GetDiskFreeSpaceExW($0, &free, nil, nil)
+        }
+        guard ok else { return nil }
+        let capacity = Int64(free.QuadPart)
         #else
         // Linux has no "important usage" capacity; statvfs on the temp volume
         // reports the blocks available to an unprivileged writer, which is the
@@ -82,6 +97,23 @@ public final class FrameSpill {
         }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("hyperfocal-spill-\(UUID().uuidString).bin")
+        #if os(Windows)
+        // DELETE_ON_CLOSE is the Win32 spelling of the unlink-after-create
+        // pattern: the file exists only as this handle, and the kernel
+        // reclaims it on close or process death. TEMPORARY hints the cache
+        // that the data never needs to survive.
+        let h = url.path.withCString(encodedAs: UTF16.self) {
+            CreateFileW($0, GENERIC_READ | DWORD(GENERIC_WRITE), 0, nil,
+                        DWORD(CREATE_NEW),
+                        DWORD(FILE_ATTRIBUTE_TEMPORARY) | DWORD(FILE_FLAG_DELETE_ON_CLOSE),
+                        nil)
+        }
+        guard let h, h != INVALID_HANDLE_VALUE else {
+            log?("frame spill unavailable: CreateFileW failed (error \(GetLastError()))")
+            return nil
+        }
+        handle = h
+        #else
         fd = open(url.path, O_RDWR | O_CREAT | O_EXCL, 0o600)
         guard fd >= 0 else {
             log?("frame spill unavailable: open failed (errno \(errno))")
@@ -95,12 +127,56 @@ public final class FrameSpill {
         // page cache so its multi-GB traffic doesn't evict the working set.
         _ = posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)
         #endif
+        #endif
     }
 
     deinit {
+        #if os(Windows)
+        CloseHandle(handle)
+        #else
         close(fd)
+        #endif
     }
 
+    #if os(Windows)
+    // Positional I/O on Windows: a synchronous handle plus an OVERLAPPED
+    // offset is the pwrite/pread equivalent — no shared file pointer, so
+    // concurrent slot writes stay safe.
+    private func overlapped(at offset: UInt64) -> OVERLAPPED {
+        var ov = OVERLAPPED()
+        ov.Offset = DWORD(truncatingIfNeeded: offset)
+        ov.OffsetHigh = DWORD(truncatingIfNeeded: offset >> 32)
+        return ov
+    }
+
+    func write(frame: Int, from ptr: UnsafeRawPointer) throws {
+        var done = 0
+        while done < frameBytes {
+            var ov = overlapped(at: UInt64(frame * slotBytes + done))
+            var n: DWORD = 0
+            guard WriteFile(handle, ptr + done, DWORD(frameBytes - done), &n, &ov),
+                  n > 0 else {
+                throw StackError.io("spill write failed (error \(GetLastError()))")
+            }
+            done += Int(n)
+        }
+    }
+
+    func read(frame: Int, into ptr: UnsafeMutableRawPointer) throws {
+        var done = 0
+        while done < frameBytes {
+            var ov = overlapped(at: UInt64(frame * slotBytes + done))
+            var n: DWORD = 0
+            guard ReadFile(handle, ptr + done, DWORD(frameBytes - done), &n, &ov) else {
+                throw StackError.io("spill read failed (error \(GetLastError()))")
+            }
+            if n == 0 {
+                throw StackError.io("spill read hit EOF at frame \(frame)")
+            }
+            done += Int(n)
+        }
+    }
+    #else
     func write(frame: Int, from ptr: UnsafeRawPointer) throws {
         var done = 0
         while done < frameBytes {
@@ -129,4 +205,5 @@ public final class FrameSpill {
             done += n
         }
     }
+    #endif
 }

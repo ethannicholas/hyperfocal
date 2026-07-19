@@ -43,6 +43,18 @@ func pkgExists(_ pkg: String) -> Bool {
     return proc.terminationStatus == 0
 }
 
+#if os(Windows)
+// vcpkg supplies every C library on Windows (no pkg-config; see
+// Docs/cross-platform-plan.md). The installed tree is resolved at
+// manifest-eval time from VCPKG_ROOT (falling back to a `vcpkg` checkout
+// beside this repo) and VCPKG_TRIPLET.
+let winEnv = ProcessInfo.processInfo.environment
+let vcpkgRoot = winEnv["VCPKG_ROOT"]
+    ?? FileManager.default.currentDirectoryPath + "\\..\\vcpkg"
+let vcpkgTriplet = winEnv["VCPKG_TRIPLET"] ?? "arm64-windows"
+let vcpkgPrefix = "\(vcpkgRoot)\\installed\\\(vcpkgTriplet)"
+#endif
+
 // Platform flag the vendored DNG SDK selects its OS layer on (dng_flags.h has
 // first-class qLinux support; only zlib is linked — XMP/JPEG/JXL are compiled
 // out via the qDNG* defines below).
@@ -81,16 +93,23 @@ var appCoreDeps: [Target.Dependency] = ["HyperfocalKit"]
 #if !os(macOS)
 appCoreDeps.append(.product(name: "OpenCombine", package: "OpenCombine"))
 // `import zlib` is an Apple-SDK module; elsewhere ProjectStore's crc32 comes
-// from a minimal system-library shim over <zlib.h>.
+// from a minimal system-library shim over <zlib.h>. vcpkg's zlib names its
+// import library z.lib, so the modulemap's `link "z"` holds on Windows too.
 appCoreDeps.append("CZlib")
 extraTargets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
+#endif
+var appCoreSwiftSettings: [SwiftSetting] = [.unsafeFlags(["-enable-testing"])]
+#if os(Windows)
+// CZlib's <zlib.h> and the link path both come from vcpkg.
+appCoreSwiftSettings.append(.unsafeFlags(
+    ["-Xcc", "-I\(vcpkgPrefix)\\include", "-L", "\(vcpkgPrefix)\\lib"]))
 #endif
 extraTargets.append(
     .target(
         name: "AppCore",
         dependencies: appCoreDeps,
         path: "AppCore",
-        swiftSettings: [.unsafeFlags(["-enable-testing"])]
+        swiftSettings: appCoreSwiftSettings
     )
 )
 // C-ABI bridge the Qt shell drives (cross-platform-plan Phase 2): a
@@ -189,6 +208,41 @@ extraTargets.append(
     )
 )
 hyperfocalKitDeps.append("CImaging")
+#elseif os(Windows)
+// The same C-ABI imaging shim, with the libraries supplied by vcpkg
+// (Docs/cross-platform-plan.md). No pkg-config on Windows: the installed
+// tree is resolved at manifest-eval time from VCPKG_ROOT (falling back to
+// a `vcpkg` checkout beside this repo) and VCPKG_TRIPLET.
+// Import-library names as vcpkg builds them (dynamic triplet; raw_r is
+// LibRaw's thread-safe build — the only one vcpkg ships).
+let winImagingLibs = ["tiff", "libpng16", "jpeg", "lcms2", "raw_r", "exiv2",
+                      "opencv_core4", "opencv_imgproc4", "opencv_features2d4",
+                      "opencv_calib3d4", "opencv_video4"]
+extraTargets.append(
+    .target(
+        name: "CImaging",
+        path: "Sources/CImaging",
+        publicHeadersPath: "include",
+        cxxSettings: [
+            .unsafeFlags(["-I", vcpkgPrefix + "\\include",
+                          // OpenCV nests its headers one level down, as on Linux.
+                          "-I", vcpkgPrefix + "\\include\\opencv4"]),
+        ],
+        linkerSettings: [
+            .unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]),
+        ] + winImagingLibs.map { .linkedLibrary($0) }
+    )
+)
+hyperfocalKitDeps.append("CImaging")
+#endif
+
+// zlib for the DNG SDK: the system library on Apple/Linux; on Windows the
+// vcpkg build (which also names its import library z.lib), located via -I/-L.
+var dngCxxExtra: [CXXSetting] = []
+var dngLinkerSettings: [LinkerSetting] = [.linkedLibrary("z")]
+#if os(Windows)
+dngCxxExtra = [.unsafeFlags(["-I", vcpkgPrefix + "\\include"])]
+dngLinkerSettings.insert(.unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]), at: 0)
 #endif
 
 var targets: [Target] = [
@@ -220,10 +274,8 @@ var targets: [Target] = [
             // not ours to fix. (unsafeFlags would block use of this package
             // as a remote dependency — acceptable for an app repo.)
             .unsafeFlags(["-Wno-deprecated-declarations"]),
-        ],
-        linkerSettings: [
-            .linkedLibrary("z"),
-        ]
+        ] + dngCxxExtra,
+        linkerSettings: dngLinkerSettings
     ),
     .target(
         name: "HyperfocalKit",

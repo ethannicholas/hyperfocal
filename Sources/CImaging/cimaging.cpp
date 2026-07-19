@@ -17,6 +17,11 @@
 #include <lcms2.h>
 #include <libraw/libraw.h>
 
+// Windows debug builds define _DEBUG, which makes OpenCV's headers wrap the
+// API in a debug_build_guard namespace that only debug-built OpenCV exports.
+// Swift's runtime is release-CRT (/MD) in every configuration, so we always
+// link the release OpenCV; opt out of the guard.
+#define CV_IGNORE_DEBUG_BUILD_GUARD
 #include <opencv2/core.hpp>
 #include <opencv2/features2d.hpp>
 #include <opencv2/calib3d.hpp>
@@ -24,6 +29,12 @@
 #include <opencv2/video/tracking.hpp>   // findTransformECC
 
 #include <exiv2/exiv2.hpp>
+
+// MSVC's UCRT spells POSIX timegm as _mkgmtime (same contract: UTC-naive
+// struct tm → epoch).
+#ifdef _WIN32
+#define timegm _mkgmtime
+#endif
 
 // ---------------------------------------------------------------------------
 // Color management (lcms2)

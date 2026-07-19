@@ -57,6 +57,39 @@ AsShotNeutral closed-loop). Verification used DNGs deliberately — lossy
 the workaround is punted; see
 `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
 
+The Windows bring-up landed too (2026-07-19): `swift build` and
+`Scripts/ci-gate.sh` are green on Windows 11 arm64 (Swift 6.3.3, VS 2022
+Build Tools, vcpkg-supplied C stack — build recipe in README "Building
+on Windows", environment loader `Scripts/windows-env.ps1`). Gate
+numbers: dmap 39.11 / pmax 38.66 / DNG round-trip 93.17 dB — within
+noise of the Linux aarch64 baselines (same OpenCV registration + LibRaw
+decode). Package.swift resolves the imaging libraries from
+`VCPKG_ROOT`/`VCPKG_TRIPLET` at manifest-eval time (the Windows
+analogue of the Linux pkg-config path); `FrameSpill` has a Win32
+positional-I/O backend (OVERLAPPED offsets, DELETE_ON_CLOSE).
+
+Windows residuals to close (each independently landable):
+
+1. **Qt shell on Windows.** Qt 6 isn't installed on the Windows box and
+   `QtShell/build.sh` assumes brew/apt layouts; needs a Qt install
+   (aqtinstall or the Qt online installer, msvc arm64 kit) and a
+   Windows build recipe, then the four-variant selftest matrix.
+2. **Non-ASCII paths on Windows.** CImaging opens files with
+   `fopen`/`TIFFOpen`/`LibRaw::open_file(char*)`, which Windows
+   interprets in the ANSI codepage while Swift hands over UTF-8 —
+   frames in folders with non-ASCII names will fail to open. Fix is
+   either an app-manifest UTF-8 codepage opt-in or `_wfopen`-family
+   conversions in the shim.
+3. **Windows CI runner** (plan Phase 1 names Windows CI): ci-gate.sh
+   already passes under Git Bash with the environment from
+   `Scripts/windows-env.ps1`; needs a GitHub Actions windows job (or
+   self-hosted arm64 runner) and possibly Windows-calibrated floors —
+   the measured margins above the shared floors are currently ≥ 0.36 dB.
+4. **CLI DLL deployment.** The exe finds vcpkg's DLLs via PATH
+   (windows-env.ps1 prepends `installed\<triplet>\bin`); distributing
+   the CLI needs the DLL set copied beside the exe or a static-triplet
+   build decision.
+
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
 capture-time EXIF *stamping* in `SynthStack` (ImageIO-only, for session-split

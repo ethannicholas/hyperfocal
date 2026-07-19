@@ -120,6 +120,44 @@ Then build and run:
 QtShell/build.sh --run
 ```
 
+### Building on Windows
+
+The Windows port shares the Linux architecture (LibRaw/OpenCV imaging
+stack behind the same C shim). The engine and the command-line tool
+build and pass the same regression gates; the Qt shell hasn't been
+brought up on Windows yet.
+
+Prerequisites (installable via winget except vcpkg):
+
+- **Visual Studio 2022 Build Tools** with the MSVC tools for your
+  architecture and a Windows 11 SDK
+  (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64` or `.ARM64`, and
+  `...Windows11SDK.26100`)
+- **Swift toolchain** from [swift.org](https://www.swift.org/install/)
+  (`winget install Swift.Toolchain`)
+- **CMake** and **Ninja**
+- **vcpkg**, checked out beside this repo (or point `VCPKG_ROOT` at it),
+  with the imaging libraries installed — use `x64-windows` on Intel
+  machines:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg.git ..\vcpkg
+..\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+..\vcpkg\vcpkg install zlib tiff libpng libjpeg-turbo lcms `
+    "libraw[dng-lossy]" exiv2 "opencv4[core,calib3d]" --triplet arm64-windows
+```
+
+Windows **Developer Mode** must be enabled (Settings → System → For
+developers): Swift package checkouts contain symlinks.
+
+Then, in PowerShell:
+
+```powershell
+. Scripts\windows-env.ps1     # loads the Swift + MSVC + vcpkg environment
+swift build -c release
+.build\release\hyperfocal-cli --help
+```
+
 New to focus stacking? Take a look at the
 [tutorial](https://ethannicholas.com/hyperfocal/tutorial.html).
 

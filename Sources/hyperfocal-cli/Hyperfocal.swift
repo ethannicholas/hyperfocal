@@ -7,6 +7,9 @@ import CoreGraphics
 #if canImport(simd)
 import simd
 #endif
+#if os(Windows)
+import WinSDK   // GetProcessMemoryInfo for the peak-memory report
+#endif
 
 // The CGImage-typed debug helpers (debug-align, debug-source) exist only where
 // Apple's imaging stack does; the rest of the CLI is portable.
@@ -290,11 +293,17 @@ struct Fuse: ParsableCommand {
         try saveFused(result!, to: URL(fileURLWithPath: output),
                       sourceFrame: fuseURLs.first, colorSpace: fusion.colorSpace)
         print("wrote \(output)")
-        var usage = rusage()
         #if canImport(Darwin)
+        var usage = rusage()
         getrusage(RUSAGE_SELF, &usage)
         let peakGB = Double(usage.ru_maxrss) / 1_073_741_824   // Darwin: bytes
+        #elseif os(Windows)
+        var counters = PROCESS_MEMORY_COUNTERS()
+        counters.cb = DWORD(MemoryLayout<PROCESS_MEMORY_COUNTERS>.size)
+        K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, counters.cb)
+        let peakGB = Double(counters.PeakWorkingSetSize) / 1_073_741_824
         #else
+        var usage = rusage()
         getrusage(RUSAGE_SELF.rawValue, &usage)
         let peakGB = Double(usage.ru_maxrss) / 1_048_576        // Linux: kilobytes
         #endif
