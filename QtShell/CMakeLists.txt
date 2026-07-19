@@ -12,6 +12,25 @@
 cmake_minimum_required(VERSION 3.21)
 project(HyperfocalQtShell LANGUAGES CXX)
 
+# Version = latest git tag (leading v stripped), build = commit count —
+# the same derivation as Scripts/package-app.sh (configure-time; dev
+# builds may lag a few commits, which is fine for an About box).
+execute_process(COMMAND git describe --tags --abbrev=0
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE HFQT_VERSION
+                OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git rev-list --count HEAD
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE HFQT_BUILD
+                OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT HFQT_VERSION)
+    set(HFQT_VERSION "1.0.0")
+endif()
+string(REGEX REPLACE "^v" "" HFQT_VERSION "${HFQT_VERSION}")
+if(NOT HFQT_BUILD)
+    set(HFQT_BUILD "1")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -58,6 +77,8 @@ qt_add_shaders(hyperfocal-qt "hyperfocal-shaders"
 )
 
 target_include_directories(hyperfocal-qt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(hyperfocal-qt PRIVATE
+    HFQT_VERSION="${HFQT_VERSION}" HFQT_BUILD="${HFQT_BUILD}")
 target_link_libraries(hyperfocal-qt PRIVATE
     Qt6::Quick Qt6::QuickControls2 Qt6::Widgets
     "${HYPERFOCAL_BRIDGE_LIB}")

@@ -156,6 +156,8 @@ public:
     Q_INVOKABLE void retouchStrokeEnd();
     QStringList collapsedSections() const;
     Q_INVOKABLE void toggleSection(const QString &name);
+    Q_INVOKABLE QString appVersion() const;
+    Q_INVOKABLE QString appBuild() const;
     Q_INVOKABLE void retouchHover(double x, double y);
     Q_INVOKABLE void retouchHoverClear();
     Q_INVOKABLE QPointF cursorScreenPos() const;

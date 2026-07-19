@@ -153,6 +153,20 @@ ApplicationWindow {
                 onTriggered: Shell.redo()
             }
         }
+        Menu {
+            title: "Help"
+            Action {
+                text: "Hyperfocal Help"
+                shortcut: "Ctrl+?"
+                // The server 301s http → https; link the final URL.
+                onTriggered: Qt.openUrlExternally(
+                    "https://ethannicholas.com/hyperfocal/tutorial.html")
+            }
+            Action {
+                text: "About Hyperfocal"
+                onTriggered: aboutDialog.open()
+            }
+        }
     }
 
     FileDialog {
@@ -295,6 +309,64 @@ ApplicationWindow {
 
     // The native Settings window's pipeline toggles (labels match
     // SettingsView.swift; GPU gated on an engine existing).
+    Dialog {
+        // The native standard about panel, hand-built (Qt has no
+        // equivalent of orderFrontStandardAboutPanel): icon, name,
+        // version (build), the credits link + DNG SDK paragraph, and
+        // the bundle copyright line.
+        id: aboutDialog
+        modal: true
+        anchors.centerIn: parent
+        padding: 24
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+            Image {
+                source: "qrc:/AppIcon.png"
+                sourceSize: Qt.size(64, 64)
+                Layout.alignment: Qt.AlignHCenter
+            }
+            Label {
+                text: "Hyperfocal"
+                font.bold: true
+                font.pixelSize: 16
+                Layout.alignment: Qt.AlignHCenter
+            }
+            Label {
+                text: "Version " + Shell.appVersion()
+                      + " (" + Shell.appBuild() + ")"
+                color: "#b5b5b5"
+                font.pixelSize: 11
+                Layout.alignment: Qt.AlignHCenter
+            }
+            Label {
+                text: "<a href=\"https://github.com/ethannicholas/hyperfocal\">"
+                      + "https://github.com/ethannicholas/hyperfocal</a>"
+                textFormat: Text.RichText
+                font.pixelSize: 11
+                Layout.alignment: Qt.AlignHCenter
+                onLinkActivated: link => Qt.openUrlExternally(link)
+            }
+            Label {
+                text: "Includes the Adobe DNG SDK — DNG technology under "
+                      + "license by Adobe Systems Incorporated. See "
+                      + "NOTICE.md in the source distribution for all "
+                      + "third-party credits."
+                color: "#8a8a8a"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.preferredWidth: 300
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Label {
+                text: "© 2026 Ethan Nicholas"
+                color: "#8a8a8a"
+                font.pixelSize: 11
+                Layout.alignment: Qt.AlignHCenter
+            }
+        }
+    }
+
     Dialog {
         id: settingsDialog
         title: "Settings"
@@ -624,14 +696,23 @@ ApplicationWindow {
                     spacing: 6
                     // Hand-rolled disclosure chevron (the native tree
                     // avoids DisclosureGroup for accessibility too).
-                    ToolButton {
-                        text: stackDelegate.modelData.expanded ? "▾" : "▸"
-                        font.pixelSize: 10
+                    Item {
                         implicitWidth: 22
                         implicitHeight: 22
-                        onClicked: Shell.setStackExpanded(
-                            stackDelegate.index,
-                            !stackDelegate.modelData.expanded)
+                        Text {
+                            anchors.centerIn: parent
+                            text: "\u276f"
+                            color: "#9a9a9a"
+                            font.pixelSize: 10
+                            font.bold: true
+                            rotation: stackDelegate.modelData.expanded
+                                      ? 90 : 0
+                        }
+                        TapHandler {
+                            onTapped: Shell.setStackExpanded(
+                                stackDelegate.index,
+                                !stackDelegate.modelData.expanded)
+                        }
                     }
                     CheckBox {
                         checked: modelData.enabled
@@ -640,7 +721,11 @@ ApplicationWindow {
                     }
                     Label {
                         text: modelData.name
-                        color: index === Shell.selectedStack ? "#ffffff"
+                        // Native: the title alone dims when the stack
+                        // is excluded from batch fuse; glyphs, count,
+                        // and chevron keep their normal colors.
+                        color: !modelData.enabled ? "#777777"
+                             : index === Shell.selectedStack ? "#ffffff"
                                                              : "#a5a5a5"
                         font.bold: index === Shell.selectedStack
                         elide: Text.ElideMiddle

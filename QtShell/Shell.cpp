@@ -308,6 +308,8 @@ QStringList Shell::collapsedSections() const {
         if (hf_section_collapsed(n)) out << QString::fromLatin1(n);
     return out;
 }
+QString Shell::appVersion() const { return QStringLiteral(HFQT_VERSION); }
+QString Shell::appBuild() const { return QStringLiteral(HFQT_BUILD); }
 void Shell::toggleSection(const QString &name) {
     hf_toggle_section(name.toUtf8().constData());
 }
