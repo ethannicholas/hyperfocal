@@ -4,8 +4,9 @@
 //  - Every hf_* call MUST be made on the process main thread. Qt's GUI
 //    thread on macOS is that thread, and it pumps the CFRunLoop, so
 //    DispatchQueue.main / MainActor work continues to drain under Qt's
-//    event loop. (The Linux/Windows story — pumping the main queue from
-//    Qt's loop — is a known open question this prototype defers.)
+//    event loop. Elsewhere nothing pumps it for us: the shell must call
+//    hf_pump_main() periodically (a Qt timer) or main-queue work never
+//    runs.
 //  - The change callback fires on the main thread, coalesced per runloop
 //    turn: many @Published mutations collapse into one callback, and the
 //    model state is fully settled by the time it fires (objectWillChange
@@ -178,6 +179,21 @@ private func fillUTF8(_ string: String,
 }
 
 // MARK: - Exports
+
+/// Drain the process main queue once (non-blocking). On Apple platforms
+/// Qt's Cocoa event loop already pumps the CFRunLoop — which is what
+/// drains DispatchQueue.main / MainActor work — so this is a no-op there.
+/// Everywhere else the shell must call it periodically from its event
+/// loop, or AppCore's main-queue hops (fuse completion, async decodes,
+/// the coalesced change callback) never run.
+@_cdecl("hf_pump_main")
+public func hf_pump_main() {
+    #if !canImport(Darwin)
+    // A single non-blocking RunLoop pass: services the libdispatch main
+    // queue (corelibs CF integration) and any main-thread Timers.
+    _ = RunLoop.main.run(mode: .default, before: Date())
+    #endif
+}
 
 @_cdecl("hf_init")
 public func hf_init() -> Int32 {
@@ -765,6 +781,16 @@ public func hf_input_title(_ buffer: UnsafeMutablePointer<CChar>?,
         let title = url.lastPathComponent
             + (model.inputPreviewAligned ? " (aligned)" : "")
         return fillUTF8(title, buffer, cap)
+    }
+}
+
+/// 1 while the selected frame's decode is in flight — hf_input_tile still
+/// serves the PREVIOUS image (and hf_input_title already names the new
+/// frame), so anything comparing input pixels must wait for 0.
+@_cdecl("hf_input_loading")
+public func hf_input_loading() -> Int32 {
+    MainActor.assumeIsolated {
+        Bridge.model?.inputPreviewLoading == true ? 1 : 0
     }
 }
 

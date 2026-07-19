@@ -28,6 +28,7 @@ class Shell : public QObject {
     Q_PROPERTY(QVariantList frames READ frames NOTIFY changed)
     Q_PROPERTY(bool displayIsData READ displayIsData NOTIFY changed)
     Q_PROPERTY(bool hasInput READ hasInput NOTIFY changed)
+    Q_PROPERTY(bool inputLoading READ inputLoading NOTIFY changed)
     Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY changed)
     Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
@@ -53,6 +54,9 @@ public:
     QVariantList frames() const;
     bool displayIsData() const;
     bool hasInput() const;
+    // The selected frame's decode is in flight — the input pane still
+    // shows the previous image (the title already names the new frame).
+    bool inputLoading() const;
     QString inputTitle() const;
     int selectedFrame() const;
     /// Bumps only when the tone curve's bytes actually change — the LUT

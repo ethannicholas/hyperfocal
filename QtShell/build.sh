@@ -13,8 +13,12 @@ echo "== building libHyperfocalBridge (SwiftPM)"
 swift build --product HyperfocalBridge
 
 echo "== configuring + building Qt shell"
+# Homebrew Qt needs the prefix hint on macOS; Linux distro Qt is found
+# without one.
+PREFIX_ARGS=()
+[ "$(uname)" = Darwin ] && PREFIX_ARGS=(-DCMAKE_PREFIX_PATH=/opt/homebrew)
 cmake -S QtShell -B QtShell/build -DHYPERFOCAL_BRIDGE_DIR="$BRIDGE_DIR" \
-    -DCMAKE_PREFIX_PATH=/opt/homebrew >/dev/null
+    "${PREFIX_ARGS[@]}" >/dev/null
 cmake --build QtShell/build --parallel
 
 echo "== built QtShell/build/hyperfocal-qt"

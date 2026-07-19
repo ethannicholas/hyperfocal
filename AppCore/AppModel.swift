@@ -328,7 +328,10 @@ public final class AppModel: ObservableObject {
     /// The preview is warped into the fused canvas (alignment transforms
     /// existed when it was decoded) rather than the raw file.
     @Published public var inputPreviewAligned = false
-    @Published var inputPreviewLoading = false
+    /// A decode for the selected frame is in flight; until it lands,
+    /// `inputPreview` still shows the previous image (public: the bridge
+    /// reports it so shells and journeys can wait out the swap).
+    @Published public private(set) var inputPreviewLoading = false
     /// Why the selected frame couldn't be shown (missing file, decode failure).
     /// Without this the pane falls back to the "select a frame" hint, which is
     /// misleading when a frame IS selected but its volume is unmounted.

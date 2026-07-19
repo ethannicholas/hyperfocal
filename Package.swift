@@ -167,10 +167,20 @@ extraTargets.append(
             // LibRaw's pkg-config Libs line carries compile flags (-fopenmp,
             // -pthread) the Swift link driver rejects; map them to the runtime
             // libraries they imply so LibRaw's parallel decode still links.
-            .unsafeFlags(pkgConfig("--libs", imagingPkgs).map {
+            .unsafeFlags(pkgConfig("--libs", imagingPkgs).compactMap {
                 switch $0 {
                 case "-fopenmp": return "-lgomp"
                 case "-pthread": return "-lpthread"
+                // Ubuntu's opencv4.pc links every module — including
+                // highgui/cvv/viz, which drag Qt5 into any process loading
+                // this library. The Qt 6 shell is such a process, and
+                // Qt5 + Qt6 together corrupt memory during loader init
+                // (identical symbol names, incompatible layouts). Link only
+                // the modules the shim uses.
+                case let lib where lib.hasPrefix("-lopencv_"):
+                    return ["-lopencv_core", "-lopencv_imgproc",
+                            "-lopencv_features2d", "-lopencv_calib3d",
+                            "-lopencv_video"].contains(lib) ? lib : nil
                 default: return $0
                 }
             }),

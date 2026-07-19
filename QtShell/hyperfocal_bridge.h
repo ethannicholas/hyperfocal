@@ -4,7 +4,9 @@
 // Threading contract:
 //  - Every hf_* call MUST be made on the process main thread (Qt's GUI
 //    thread). On macOS that thread pumps the CFRunLoop, which keeps
-//    AppCore's main-queue work draining under Qt's event loop.
+//    AppCore's main-queue work draining under Qt's event loop; on other
+//    platforms the shell must call hf_pump_main() periodically (a Qt
+//    timer — see main.cpp) or that work never runs.
 //  - The change callback fires on the main thread, coalesced per runloop
 //    turn; model state is settled when it fires. Treat it as "something
 //    changed, re-read what you display".
@@ -33,6 +35,11 @@ typedef int (*hf_confirm_cb)(const char *message, const char *informative,
                              const char *cancel_title, int warning, void *ctx);
 typedef void (*hf_notify_cb)(const char *message, const char *informative,
                              int warning, void *ctx);
+
+// Drain the Swift main queue once, non-blocking (no-op on Apple
+// platforms, where the Cocoa event loop already pumps it). Call
+// periodically from the shell's event loop on Linux/Windows.
+void hf_pump_main(void);
 
 // Create the model. Returns 1 (idempotent).
 int hf_init(void);
@@ -111,6 +118,10 @@ int hf_input_epoch(void);
 int hf_input_tile(int32_t level, int32_t x, int32_t y,
                   int32_t w, int32_t h, uint8_t *rgba, size_t cap);
 int hf_input_title(char *buf, int cap);             // returns bytes
+// 1 while the selected frame's decode is in flight: hf_input_tile still
+// serves the previous image even though hf_input_title already names the
+// new frame — wait for 0 before trusting input pixels.
+int hf_input_loading(void);
 
 // Crop, in result-canvas pixels + degrees. hf_set_crop mirrors the
 // UITest set-crop command (w/h <= 0 clears). hf_display_crop /

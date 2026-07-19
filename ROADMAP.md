@@ -59,17 +59,7 @@ Residuals to close (each independently landable; keep macOS green):
    (LibRaw `cam_mul`/`pre_mul`) that DNG export's WB un-bake reads — currently
    Apple-only, so Linux DNG declares a generic neutral.
 
-2. **SIFT performance on big images (bound proven on macOS — port to Linux).**
-   Full-res SIFT on 45 MP frames needs ~7.5 GB and often finds no model. The
-   fix — register on a downscaled copy (longest side 2500 px) and map the
-   homography back via `S⁻¹·H·S` — is implemented and validated in the macOS
-   A/B path (`Aligner.registerOpenCV`/`boxDownscale`; it made the 60×43 MP
-   fluorite stack register cleanly, residuals matching Vision). Port the same
-   downscale wrapper to the Linux `register(GrayImage,GrayImage)` call site
-   (its `hf_register` call is currently unbounded); synth frames sit below the
-   bound so the plane gate is unaffected.
-
-3. **CI.** GitHub Actions Linux job: a container with the toolchain + the `-dev`
+2. **CI.** GitHub Actions Linux job: a container with the toolchain + the `-dev`
    packages above, `swift build -c release`, then synth→fuse→compare asserting
    PSNR ≈ the plane baseline.
 
@@ -121,44 +111,25 @@ The shell keeps its own settings store (`HYPERFOCAL_SETTINGS_SUITE`,
 set to `org.hyperfocal.qtshell-settings` in main.cpp before any hf_*
 call) — nothing bleeds between the shells' persisted state.
 
+The shell also runs on Linux (Ubuntu Qt 6.10 via `QtShell/build.sh`;
+the four-variant selftest matrix passes on the Ubuntu box). Two
+Linux-only load-bearing facts: `hf_pump_main()` (bridge) drains the
+Swift main queue from a 5 ms QTimer in main.cpp — without it no
+main-queue/MainActor work ever runs under Qt's loop off-Apple; and
+Package.swift links only the OpenCV modules CImaging uses, because
+Ubuntu's `opencv4.pc` otherwise links `highgui`, whose Qt 5 corrupts a
+Qt 6 process during loader init. Selftest journeys that compare input
+pixels must gate on `hf_input_loading` (the title names the new frame
+before the decode lands — the stale-pixel race only shows on slow
+machines).
+
 Next, in rough order (each independently landable):
 
-1. **Qt shell on Linux — bring-up.** The macOS-verifiable prep is
-   done: AppCore is a SwiftPM module with the bridge a dynamic-library
-   product (CMake finds libHyperfocalBridge per-platform), imports are
-   partitioned (no SwiftUI/AppKit/UTType; CoreGraphics/Combine/os
-   behind canImport with OpenCombine + a stderr Logger stand-in
-   off-Apple), the published image currency is `PlatformImage`
-   (CGImage on Apple; an 8-bit RGBA class elsewhere, produced through
-   the one `Preview.image(from:)` seam), sandbox bookmarks are
-   macOS-gated (plain paths elsewhere), and the bridge's tile copy has
-   a direct byte-subsample path off CoreGraphics. Remaining, in
-   order — the `#else` branches have never met a Linux compiler, so
-   expect a fix-up pass:
-   - *First Linux build.* `swift build --product HyperfocalBridge` on
-     the Ubuntu box; shake out the blind branches (OpenCombine's
-     @Published/@MainActor fit is the likeliest friction; also
-     Foundation gaps like `.itemReplacementDirectory` in
-     ProjectStore).
-   - *Main-queue pumping.* DispatchQueue.main drains under Qt's loop
-     on macOS via CFRunLoop; Linux needs an explicit pump (Qt timer
-     or glib hook) — the prototype's known deferred question.
-   - *Deps.* Phase 1's package list plus Qt 6: Ubuntu
-     `qt6-base-dev qt6-declarative-dev qt6-shadertools-dev` and the
-     QtQuick Controls/Dialogs/Layouts QML modules
-     (`qml6-module-qtquick-*`).
-   - *Done =* the four-variant selftest matrix exits 0 on Linux:
-     plain, `HFQT_EXPECT_DISPLAY=WxH` on a >1600px stack,
-     `HFQT_EXPECT_EXCLUDED` on a `--misfire-frame` stack, and
-     `HFQT_STACK2` batch. Runner notes: derive the expected display
-     WxH from a first run's export (the fuse insets ~1px/side even
-     with `--jitter 0 --breathing 0`); `--misfire-frame` refuses the
-     middle (reference) frame — sabotage a different one.
-2. **Crop editing in the Qt shell** (the drag-handle overlay is
+1. **Crop editing in the Qt shell** (the drag-handle overlay is
    native-only; the bridge already speaks hf_set_crop, so this is a QML
    overlay over the output pane feeding the same call — the sidebar's
    numeric fields are the stand-in).
-3. **Dirty-rect tile invalidation** once a partial-update producer exists
+2. **Dirty-rect tile invalidation** once a partial-update producer exists
    (retouch strokes in the Qt shell): today any epoch bump drops every
    tile, which is right for wholesale changes (progressive updates, new
    fuse) and wasteful only for localized ones — build it with the

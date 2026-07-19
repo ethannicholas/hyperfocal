@@ -98,6 +98,10 @@ bool Shell::hasInput() const {
     return hf_input_size(&w, &h) != 0 && w > 0 && h > 0;
 }
 
+bool Shell::inputLoading() const {
+    return hf_input_loading() != 0;
+}
+
 QString Shell::inputTitle() const {
     char buffer[512];
     const int n = hf_input_title(buffer, sizeof buffer);

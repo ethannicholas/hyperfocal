@@ -8,6 +8,7 @@
 #include "LutImageProvider.h"
 #include "PaneItem.h"
 #include "Shell.h"
+#include "hyperfocal_bridge.h"
 
 // --selftest <stack-dir> <out.tif> [screenshot.png]
 //
@@ -193,8 +194,12 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             };
             switch (state->finishStage) {
             case 0:    // async input-frame decode, ~10s ceiling
+                // inputLoading must have cleared: the title names the new
+                // frame as soon as it's selected, but the pane serves the
+                // PREVIOUS image until the decode lands — grabbing the
+                // zoom reference before then compares against stale pixels.
                 state->inputOK = state->expectedInput.isEmpty()
-                    || (shell->hasInput()
+                    || (shell->hasInput() && !shell->inputLoading()
                         && shell->inputTitle().startsWith(state->expectedInput));
                 if (!state->inputOK && ++state->finishTries < 40) return;
                 // Zoom-cycle journey: deep zoom, out, and back — the same
@@ -210,6 +215,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     pane->setZoom(0.2);
                     advance(2);
                 } else if (++state->stageTicks > 40) {
+                    qWarning() << "selftest zoom: stage 1 (8x) never settled";
                     state->zoomOK = false;
                     advance(4);
                 }
@@ -219,6 +225,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     pane->setZoom(8);
                     advance(3);
                 } else if (++state->stageTicks > 40) {
+                    qWarning() << "selftest zoom: stage 2 (0.2x) never settled";
                     state->zoomOK = false;
                     advance(4);
                 }
@@ -226,9 +233,21 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             case 3:    // back at 8x: detail must have returned
                 if (stable()) {
                     state->zoomOK = state->zoomPrev == state->zoomShotA;
+                    if (!state->zoomOK) {
+                        qWarning() << "selftest zoom: pixels differ after "
+                                      "zoom cycle";
+                        if (!state->shotPath.isEmpty()) {
+                            state->zoomShotA.save(state->shotPath
+                                                  + ".zoomA.png");
+                            state->zoomPrev.save(state->shotPath
+                                                 + ".zoomB.png");
+                        }
+                    }
                     pane->setZoom(1);
                     advance(4);
                 } else if (++state->stageTicks > 40) {
+                    qWarning() << "selftest zoom: stage 3 (back to 8x) never "
+                                  "settled";
                     state->zoomOK = false;
                     advance(4);
                 }
@@ -281,6 +300,14 @@ int main(int argc, char *argv[]) {
     if (qEnvironmentVariableIsEmpty("HYPERFOCAL_SETTINGS_SUITE"))
         qputenv("HYPERFOCAL_SETTINGS_SUITE", "org.hyperfocal.qtshell-settings");
     QApplication app(argc, argv);  // QtWidgets: modal QMessageBox dialogs
+#ifndef Q_OS_MACOS
+    // On macOS Qt's Cocoa loop pumps the CFRunLoop, which drains the Swift
+    // side's DispatchQueue.main. Elsewhere nothing does — pump it from the
+    // event loop (hyperfocal_bridge.h threading contract).
+    auto *pump = new QTimer(&app);
+    QObject::connect(pump, &QTimer::timeout, &app, [] { hf_pump_main(); });
+    pump->start(5);
+#endif
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("hflut"), new LutImageProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
