@@ -77,7 +77,7 @@ result every time.
 
 If you'd prefer to skip the build process and the hassle of keeping it up to
 date (and give the author a small tip in the process), Hyperfocal is available
-from the Mac App Store for $5.
+from the [Mac App Store](https://apps.apple.com/us/app/hyperfocal-focus-stacker/id6789574802).
 
 ### Building on macOS
 

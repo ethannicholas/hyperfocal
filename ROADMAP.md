@@ -57,15 +57,6 @@ AsShotNeutral closed-loop). Verification used DNGs deliberately — lossy
 the workaround is punted; see
 `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
 
-Residuals to close (each independently landable; keep macOS green):
-
-1. **UI suite re-run.** The 2026-07-19 macOS re-verification is done
-   (ci-gate: release build, synth floors, DNG round-trip, probe; app
-   builds; Qt selftest matrix) except `Scripts/ui-test.sh`, which
-   takes over the machine — run it when someone is at the Mac, then
-   delete this item. (Also still owed from the 2026-07-19 AppCore
-   module/portability refactor.)
-
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
 capture-time EXIF *stamping* in `SynthStack` (ImageIO-only, for session-split
