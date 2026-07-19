@@ -35,6 +35,8 @@ struct SelfTest {
     bool exclusionOK = false, batchOK = false, cropOK = false;
     bool toneKeptPixels = false, depthBumpedPixels = false, fullRes = false;
     bool inputOK = false, zoomOK = true;
+    bool undoOK = false, projectOK = false;
+    QString projectFile;
     QString expectedInput;    // selected frame's name
     int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
     int finishTries = 0;
@@ -260,26 +262,49 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     advance(4);
                 }
                 return;
+            case 4:    // wrap-up: grab, crop clear, undo, save + reopen
+                if (!state->shotPath.isEmpty()) {
+                    const QImage shot = grab();
+                    if (!shot.isNull()) shot.save(state->shotPath);
+                }
+                shell->setCrop(0, 0, 0, 0, 0);
+                state->cropOK = state->cropOK
+                    && shell->displayCrop().isEmpty();
+                // Undo journey: the tone edit above guarantees history;
+                // undo all the way and the model must land back neutral
+                // (exposure 0), then one redo must take.
+                state->undoOK = shell->canUndo();
+                for (int guard = 64; shell->canUndo() && guard > 0; --guard)
+                    state->undoOK = shell->undo() && state->undoOK;
+                state->undoOK = state->undoOK && !shell->canUndo()
+                    && shell->slider(QStringLiteral("tone.slider.exposure")) == 0.0
+                    && shell->canRedo() && shell->redo();
+                // Project round-trip: save must clear the dirty flag and
+                // set the path; reopening the file must restore a fused
+                // stack (stage 5 waits out the load).
+                state->projectFile = state->outPath + ".hyperfocal";
+                state->projectOK =
+                    shell->saveProject(QUrl::fromLocalFile(state->projectFile))
+                    && !shell->hasUnsavedWork()
+                    && shell->projectPath() == state->projectFile;
+                if (state->projectOK)
+                    shell->openStack(QUrl::fromLocalFile(state->projectFile));
+                advance(5);
+                return;
+            case 5: {   // reload settles: a stack is back, still fused
+                if (shell->isRunning()) { state->stageTicks = 0; return; }
+                const QVariantList stacks = shell->stacks();
+                const bool reloaded = stacks.size() >= 1
+                    && stacks[0].toMap().value(QStringLiteral("status"))
+                           .toInt() == 2;
+                if (!reloaded && ++state->stageTicks < 40) return;
+                state->projectOK = state->projectOK && reloaded;
+                break;
+            }
             default:
                 break;
             }
             finish->stop();
-            if (!state->shotPath.isEmpty()) {
-                const QImage shot = grab();
-                if (!shot.isNull()) shot.save(state->shotPath);
-            }
-            shell->setCrop(0, 0, 0, 0, 0);
-            state->cropOK = state->cropOK && shell->displayCrop().isEmpty();
-            // Undo journey: the tone edit above guarantees history; undo
-            // all the way and the model must land back neutral (exposure
-            // 0), then one redo must take. Runs after the grab, so the
-            // shot shows the settled pre-undo UI.
-            bool undoOK = shell->canUndo();
-            for (int guard = 64; shell->canUndo() && guard > 0; --guard)
-                undoOK = shell->undo() && undoOK;
-            undoOK = undoOK && !shell->canUndo()
-                && shell->slider(QStringLiteral("tone.slider.exposure")) == 0.0
-                && shell->canRedo() && shell->redo();
             if (!state->exported) { QCoreApplication::exit(5); return; }
             if (!state->depthExported) { QCoreApplication::exit(6); return; }
             if (state->wasStale || !state->staleAfterEdit) {
@@ -296,7 +321,8 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!state->inputOK) { QCoreApplication::exit(12); return; }
             if (!state->cropOK) { QCoreApplication::exit(13); return; }
             if (!state->zoomOK) { QCoreApplication::exit(14); return; }
-            if (!undoOK) { QCoreApplication::exit(15); return; }
+            if (!state->undoOK) { QCoreApplication::exit(15); return; }
+            if (!state->projectOK) { QCoreApplication::exit(16); return; }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the

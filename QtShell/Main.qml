@@ -13,8 +13,136 @@ ApplicationWindow {
     width: 1280
     height: 800
     visible: true
-    title: "Hyperfocal (Qt shell — dev)"
+    // Project name + dirty marker, the native titlebar behavior.
+    title: {
+        var name = "Hyperfocal"
+        if (Shell.projectPath !== "") {
+            var parts = Shell.projectPath.split("/")
+            name = parts[parts.length - 1].replace(/\.hyperfocal$/, "")
+        }
+        return name + (Shell.hasUnsavedWork ? " — Edited" : "")
+    }
     color: "#1b1b1b"
+
+    property bool quitApproved: false
+    onClosing: function(close) {
+        // The native unsaved-work gate, through the same confirm shape.
+        if (Shell.hasUnsavedWork && !quitApproved) {
+            close.accepted = false
+            quitDialog.open()
+        }
+    }
+
+    menuBar: MenuBar {
+        Menu {
+            title: "File"
+            Action {
+                text: "New Project…"
+                shortcut: StandardKey.New
+                onTriggered: openDialog.open()
+            }
+            Action {
+                text: "Open Project…"
+                shortcut: StandardKey.Open
+                onTriggered: openProjectDialog.open()
+            }
+            Action {
+                text: "Add Stack Folder…"
+                shortcut: "Ctrl+Shift+N"
+                onTriggered: openDialog.open()
+            }
+            MenuSeparator {}
+            Action {
+                text: "Close Stack"
+                enabled: !Shell.isRunning && Shell.stacks.length > 0
+                onTriggered: Shell.closeStack()
+            }
+            Action {
+                text: "Close Project"
+                enabled: !Shell.isRunning && Shell.stacks.length > 0
+                onTriggered: Shell.closeProject()
+            }
+            MenuSeparator {}
+            Action {
+                text: "Save Project"
+                shortcut: StandardKey.Save
+                enabled: !Shell.isRunning
+                onTriggered: {
+                    if (!Shell.saveProject(""))
+                        saveProjectDialog.open()
+                }
+            }
+            Action {
+                text: "Save Project As…"
+                shortcut: "Ctrl+Shift+S"
+                enabled: !Shell.isRunning
+                onTriggered: saveProjectDialog.open()
+            }
+            MenuSeparator {}
+            Action {
+                text: "Export…"
+                shortcut: "Ctrl+E"
+                enabled: !Shell.isRunning
+                onTriggered: exportDialog.open()
+            }
+        }
+        Menu {
+            title: "Edit"
+            Action {
+                text: Shell.undoTitle
+                shortcut: StandardKey.Undo
+                enabled: Shell.canUndo
+                onTriggered: Shell.undo()
+            }
+            Action {
+                text: Shell.redoTitle
+                shortcut: StandardKey.Redo
+                enabled: Shell.canRedo
+                onTriggered: Shell.redo()
+            }
+        }
+    }
+
+    Dialog {
+        id: quitDialog
+        title: "Are you sure you want to quit?"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Discard | Dialog.Cancel
+        Label { text: "Unsaved data will be lost." }
+        onDiscarded: {
+            window.quitApproved = true
+            quitDialog.close()
+            window.close()
+        }
+    }
+
+    FileDialog {
+        id: openProjectDialog
+        title: "Open a project"
+        nameFilters: ["Hyperfocal projects (*.hyperfocal)"]
+        onAccepted: Shell.openStack(selectedFile)
+    }
+
+    FileDialog {
+        id: saveProjectDialog
+        title: "Save project"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "hyperfocal"
+        nameFilters: ["Hyperfocal projects (*.hyperfocal)"]
+        onAccepted: Shell.saveProject(selectedFile)
+    }
+
+    // Folders dropped anywhere on the window add stacks, like the
+    // native app.
+    DropArea {
+        anchors.fill: parent
+        z: 100
+        onDropped: function(drop) {
+            for (var i = 0; i < drop.urls.length; ++i)
+                Shell.openStack(drop.urls[i])
+        }
+    }
 
     // One viewport across both panes, the native shells' shared
     // ViewportState: a gesture on either pane lands on both.
@@ -89,6 +217,14 @@ ApplicationWindow {
             id: paneItem
             anchors.fill: parent
             input: toned.inputSource
+        }
+        property string hint: ""
+        Label {
+            anchors.centerIn: parent
+            text: toned.hint
+            visible: toned.hint !== ""
+            color: "#777777"
+            font.pixelSize: 13
         }
         Label {
             text: toned.title
@@ -535,15 +671,20 @@ ApplicationWindow {
                 // tone LUT; the input is toned too, like the native app.
                 TonedPane {
                     id: inputPane
-                    visible: Shell.hasInput
                     inputSource: true
                     title: Shell.inputTitle
+                    hint: Shell.hasInput ? ""
+                        : Shell.frames.length === 0
+                            ? "Open a stack to begin"
+                            : "Select a frame in the Stack list"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                 }
                 TonedPane {
                     id: outputPane
                     dataDisplay: Shell.displayIsData
+                    hint: Shell.hasDisplay ? ""
+                        : Shell.canFuse ? "Press “Fuse Stack”" : "No output yet"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                 }

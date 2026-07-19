@@ -122,27 +122,21 @@ functional but rough; inventory taken 2026-07-19 against
 ContentView/HyperfocalAppMain/SettingsView). In rough priority order,
 each independently landable:
 
-1. **Project lifecycle**: hf_save_project / save-as / close-stack /
-   close-project / project-name / dirty-flag; Qt menu bar with the
-   native shortcut set (New/Open/Add Stack Folder ⌘N/⌘O/⇧⌘N are
-   bridge-ready via hf_load_stack); unsaved-work quit gate through the
-   dialog seam; drag-drop of folders onto the window; empty-state
-   hints in panes and stack list.
-2. **Export flows**: format/color-space options UI (needs a format
+1. **Export flows**: format/color-space options UI (needs a format
    enumeration or hardcoded list matching AppModel.ExportFormat),
    Export Depth label swap, export-all-fused, export-aligned-frames,
    rocking-animation export (+ strength; Linux needs the FFmpeg/giflib
    backend first) — all but the format param need bridge calls.
-3. **Crop editing overlay**: drag handles/move/rotate, aspect-ratio
+2. **Crop editing overlay**: drag handles/move/rotate, aspect-ratio
    picker, orientation swap, modal accept/cancel (C/X/return/esc) —
    replaces the numeric stand-in; bridge-ready (hf_set_crop).
-4. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
+3. **Zoom bar + zoom shortcuts** (menu with Fit + fixed levels, ⌘+/⌘−/
    ⌘0): PaneItem-side only, no bridge needed.
-5. **Settings window**: order-by-capture, align, normalize-exposure,
+4. **Settings window**: order-by-capture, align, normalize-exposure,
    GPU, disk-cache toggles — each needs a bridge get/set.
-6. **Noise-floor live depth preview** on slider drag (begin/end bridge
+5. **Noise-floor live depth preview** on slider drag (begin/end bridge
    calls mirroring beginNoiseFloorPreview/end).
-7. **Retouch in the Qt shell** — the largest piece: full session
+6. **Retouch in the Qt shell** — the largest piece: full session
    surface over the bridge (enter/exit, brush size/softness, source
    kind picker + frame cycling + auto-pick, strokes with the
    image-space dirty rects, PMax build/cancel/progress, revert,
@@ -151,15 +145,21 @@ each independently landable:
    fusion resets, cancel, badges, include-all/none, counts) and
    undo/redo (hf_undo/redo/titles + the hf_tone_editing drag bracket —
    tone sets outside a bracket are silent to undo; Qt sliders bracket
-   via pressed state; StandardKey shortcuts) landed 2026-07-19.
-8. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+   via pressed state; StandardKey shortcuts) landed 2026-07-19, as did
+   project lifecycle: hf_save_project (NULL path = Save to the existing
+   file, the Save/Save-As split) / hf_project_path / hf_has_unsaved_work
+   / hf_close_stack / hf_close_project; menu bar (File/Edit, native
+   system bar on macOS per Qt 6.8+ Menu adoption), dirty-marked window
+   title, unsaved-work quit gate, folder drag-drop, pane empty-state
+   hints, and a selftest save→reload round-trip (exit 16).
+7. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
 Then, deferred until their prerequisites exist:
 
 - **Dirty-rect tile invalidation** once a partial-update producer exists
-  (retouch strokes in the Qt shell, item 7): today any epoch bump drops
+  (retouch strokes in the Qt shell, item 6): today any epoch bump drops
   every tile, which is right for wholesale changes (progressive
   updates, new fuse) and wasteful only for localized ones — build it
   with the feature that needs it.

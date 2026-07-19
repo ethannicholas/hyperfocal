@@ -63,6 +63,18 @@ double hf_stage_fraction(void);
 // UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
 int hf_stage_text(char *buf, int cap);
 
+// Project lifecycle. hf_save_project writes to `path`, or with NULL to
+// the existing project file (0 when there is none — the shell then asks
+// for a path, the native Save vs Save-As split). hf_project_path names
+// the open project file (bytes; 0 = never saved); hf_has_unsaved_work
+// drives the dirty marker and the quit gate; close-stack/close-project
+// confirm destructive cases through the dialog seam.
+int hf_save_project(const char *path);
+int hf_project_path(char *buf, int cap);
+int hf_has_unsaved_work(void);
+int hf_close_stack(void);
+int hf_close_project(void);
+
 // Tone drag bracket: editing=1 at drag start, 0 at drag end records
 // ONE undoable edit for the whole drag (mirrors the native sliders'
 // onEditingChanged). Tone sets outside a bracket are silent to undo.

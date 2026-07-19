@@ -299,6 +299,66 @@ public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) 
     }
 }
 
+// MARK: Project lifecycle
+
+/// Write the project to `path`, or to its existing file when NULL (the
+/// native Save vs Save As split — the shell chooses the path with its
+/// own dialog, like exports). 0 when NULL with no existing file, or on
+/// write failure.
+@_cdecl("hf_save_project")
+public func hf_save_project(_ path: UnsafePointer<CChar>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        let url: URL
+        if let path, let string = String(validatingUTF8: path) {
+            url = URL(fileURLWithPath: string)
+        } else if let existing = model.projectURL {
+            url = existing
+        } else {
+            return 0
+        }
+        return model.writeProject(to: url) ? 1 : 0
+    }
+}
+
+/// The open project's file path (window titles, Save reuse). Bytes; 0
+/// when the project has never been saved.
+@_cdecl("hf_project_path")
+public func hf_project_path(_ buffer: UnsafeMutablePointer<CChar>?,
+                            _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let url = Bridge.model?.projectURL else { return 0 }
+        return fillUTF8(url.path, buffer, cap)
+    }
+}
+
+/// Anything worth saving since the last save? (quit gate, dirty marker)
+@_cdecl("hf_has_unsaved_work")
+public func hf_has_unsaved_work() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.hasUnsavedWork == true ? 1 : 0 }
+}
+
+/// File > Close Stack — removes the selected stack (confirms through
+/// the dialog seam when its fused work would be lost).
+@_cdecl("hf_close_stack")
+public func hf_close_stack() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.phase.isRunning else { return 0 }
+        model.closeSelectedStack()
+        return 1
+    }
+}
+
+/// File > Close Project — back to the empty state (confirms likewise).
+@_cdecl("hf_close_project")
+public func hf_close_project() -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, !model.phase.isRunning else { return 0 }
+        model.closeProject()
+        return 1
+    }
+}
+
 // MARK: Undo/redo of model edits (tone, crop, frame inclusion — the
 // native ⌘Z family; retouch strokes keep their own undo, reached
 // through the same entry points once retouch mode exists here)

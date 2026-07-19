@@ -512,13 +512,13 @@ public final class AppModel: ObservableObject {
     /// A fused result (or retouch edits on one) exists that no project file
     /// holds. Set by fuse completion and retouch strokes, cleared by saving
     /// or opening a project; quitting with it set asks for confirmation.
-    private(set) var hasUnsavedWork = false
+    public private(set) var hasUnsavedWork = false
     /// The file the current project was opened from or last saved to —
     /// File > Save writes straight back to it; nil (never saved, or project
     /// closed) makes Save fall through to Save As. The open/save panels'
     /// sandbox grants cover the URL for the app's lifetime, so in-place
     /// re-saves need no new grant. Published: the window title shows it.
-    @Published private(set) var projectURL: URL?
+    @Published public private(set) var projectURL: URL?
 
     // Security-scoped file access (the app is sandboxed; frames live outside
     // the container). `grantedRoots` are the URLs the user granted this
@@ -807,7 +807,7 @@ public final class AppModel: ObservableObject {
     /// File > Close Stack: removes the selected stack from the project. Its
     /// fused result and retouch edits go with it (they can't be recomputed),
     /// so a fused stack asks first unless everything is already saved.
-    func closeSelectedStack() {
+    public func closeSelectedStack() {
         guard !phase.isRunning, let stack = selectedStack else { return }
         stash(into: stack)
         if stack.result != nil, hasUnsavedWork,
@@ -830,7 +830,7 @@ public final class AppModel: ObservableObject {
     }
 
     /// File > Close Project: back to the freshly launched empty state.
-    func closeProject() {
+    public func closeProject() {
         guard !phase.isRunning else { return }
         guard confirmDiscardingUnsavedWork(message: "Close this project?",
                                            confirmTitle: "Close Project") else { return }
@@ -1032,7 +1032,7 @@ public final class AppModel: ObservableObject {
     /// Panel-free save: the write body of saveProject/saveProjectAs,
     /// callable directly (UITestSupport, and any future probe checks).
     @discardableResult
-    func writeProject(to url: URL) -> Bool {
+    public func writeProject(to url: URL) -> Bool {
         guard let project = captureProject() else { return false }
         do {
             try ProjectStore.write(project, to: url)

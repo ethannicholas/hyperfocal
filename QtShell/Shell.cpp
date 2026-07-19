@@ -172,6 +172,22 @@ bool Shell::fuseEnabledStacks() { return hf_fuse_enabled_stacks() != 0; }
 
 bool Shell::cancelFuse() { return hf_cancel_fuse() != 0; }
 
+bool Shell::saveProject(const QUrl &file) {
+    if (file.isEmpty()) return hf_save_project(nullptr) != 0;
+    return hf_save_project(file.toLocalFile().toUtf8().constData()) != 0;
+}
+
+bool Shell::closeStack() { return hf_close_stack() != 0; }
+bool Shell::closeProject() { return hf_close_project() != 0; }
+
+QString Shell::projectPath() const {
+    char buffer[1024];
+    const int n = hf_project_path(buffer, sizeof buffer);
+    return QString::fromUtf8(buffer, n);
+}
+
+bool Shell::hasUnsavedWork() const { return hf_has_unsaved_work() != 0; }
+
 void Shell::toneEditing(bool editing) { hf_tone_editing(editing ? 1 : 0); }
 
 bool Shell::undo() { return hf_undo() != 0; }

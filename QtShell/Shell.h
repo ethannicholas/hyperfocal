@@ -35,6 +35,9 @@ class Shell : public QObject {
     Q_PROPERTY(double displayCropAngle READ displayCropAngle NOTIFY changed)
     Q_PROPERTY(bool toneNeutral READ toneNeutral NOTIFY changed)
     Q_PROPERTY(bool fusionDefault READ fusionDefault NOTIFY changed)
+    Q_PROPERTY(bool hasDisplay READ hasDisplay NOTIFY changed)
+    Q_PROPERTY(QString projectPath READ projectPath NOTIFY changed)
+    Q_PROPERTY(bool hasUnsavedWork READ hasUnsavedWork NOTIFY changed)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY changed)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY changed)
     Q_PROPERTY(QString undoTitle READ undoTitle NOTIFY changed)
@@ -102,6 +105,13 @@ public:
     Q_INVOKABLE void setAllFramesIncluded(bool included);
     bool toneNeutral() const;
     bool fusionDefault() const;
+    /// Save to `file`, or to the existing project file when empty
+    /// (returns false when there is none yet — caller then asks).
+    Q_INVOKABLE bool saveProject(const QUrl &file);
+    Q_INVOKABLE bool closeStack();
+    Q_INVOKABLE bool closeProject();
+    QString projectPath() const;
+    bool hasUnsavedWork() const;
     Q_INVOKABLE void toneEditing(bool editing);
     Q_INVOKABLE bool undo();
     Q_INVOKABLE bool redo();
