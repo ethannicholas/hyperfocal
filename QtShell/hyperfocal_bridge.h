@@ -194,6 +194,16 @@ int hf_set_stack_enabled(int index, int enabled);
 int hf_stack_status(int index);
 int hf_stack_failure(int index, char *buf, int cap);   // returns bytes
 int hf_stack_frame_count(int index);
+// Tree disclosure + any stack's nested frame rows (name/included/
+// issue by stack+frame index, through the same model helpers native
+// uses; inclusion toggles are URL-global and undo-recorded).
+int hf_stack_expanded(int index);
+int hf_set_stack_expanded(int index, int expanded);
+int hf_stack_frame_name(int stack, int frame, char *buf, int cap);
+int hf_stack_frame_included(int stack, int frame);
+int hf_set_stack_frame_included(int stack, int frame, int included);
+int hf_stack_frame_issue(int stack, int frame, char *buf, int cap);
+
 // Batch fuse ("Fuse N Stacks"): N = hf_pending_stack_count (enabled +
 // needing a (re)fuse). hf_is_running holds for the whole batch and
 // hf_stage_text carries the "Stack i of N · " prefix; bad stacks are

@@ -138,6 +138,9 @@ public:
     double displayCropAngle() const;
     Q_INVOKABLE bool selectStack(int index);
     Q_INVOKABLE void setStackEnabled(int index, bool enabled);
+    Q_INVOKABLE void setStackExpanded(int index, bool expanded);
+    Q_INVOKABLE void setStackFrameIncluded(int stack, int frame,
+                                           bool included);
     Q_INVOKABLE bool fuseEnabledStacks();
     Q_INVOKABLE bool cancelFuse();
     Q_INVOKABLE void resetTone();

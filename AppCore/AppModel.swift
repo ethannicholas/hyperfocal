@@ -210,7 +210,7 @@ public final class AppModel: ObservableObject {
     // mirrors into the outgoing Stack and installs the incoming one.
     @Published public private(set) var stacks: [Stack] = []
     @Published public var selectedStackID: UUID?
-    @Published var expandedStacks: Set<UUID> = []
+    @Published public var expandedStacks: Set<UUID> = []
     var selectedStack: Stack? { stacks.first { $0.id == selectedStackID } }
 
     public enum StackStatus {
@@ -2168,16 +2168,16 @@ public final class AppModel: ObservableObject {
     }
 
     /// Reads a frame's checkbox through the mirrors for the selected stack.
-    func isIncluded(_ url: URL, in stack: Stack) -> Bool {
+    public func isIncluded(_ url: URL, in stack: Stack) -> Bool {
         stack.id == selectedStackID ? included.contains(url) : stack.included.contains(url)
     }
 
-    func frameIssue(_ url: URL, in stack: Stack) -> String? {
+    public func frameIssue(_ url: URL, in stack: Stack) -> String? {
         stack.id == selectedStackID ? frameIssues[url] : stack.frameIssues[url]
     }
 
     /// Frames of a stack as the UI should list them (mirrors for selected).
-    func listedFrames(of stack: Stack) -> [URL] {
+    public func listedFrames(of stack: Stack) -> [URL] {
         stack.id == selectedStackID ? frames : stack.frames
     }
 

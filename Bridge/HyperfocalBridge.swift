@@ -1119,6 +1119,86 @@ public func hf_stack_frame_count(_ index: Int32) -> Int32 {
     }
 }
 
+/// Tree disclosure state, persisted in the model like native
+/// (expandedStacks survives loads and stack churn).
+@_cdecl("hf_stack_expanded")
+public func hf_stack_expanded(_ index: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        return model.expandedStacks.contains(model.stacks[Int(index)].id) ? 1 : 0
+    }
+}
+
+@_cdecl("hf_set_stack_expanded")
+public func hf_set_stack_expanded(_ index: Int32, _ expanded: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        let id = model.stacks[Int(index)].id
+        if expanded != 0 { model.expandedStacks.insert(id) }
+        else { model.expandedStacks.remove(id) }
+        return 1
+    }
+}
+
+/// Any stack's frame rows (the tree's nested lists), through the same
+/// model helpers the native tree uses — the selected stack reads the
+/// live mirrors, and inclusion toggles are URL-global (undo-recorded)
+/// regardless of which stack owns the frame.
+@_cdecl("hf_stack_frame_name")
+public func hf_stack_frame_name(_ stack: Int32, _ frame: Int32,
+                                _ buffer: UnsafeMutablePointer<CChar>?,
+                                _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(stack)) else { return 0 }
+        let frames = model.listedFrames(of: model.stacks[Int(stack)])
+        guard frames.indices.contains(Int(frame)) else { return 0 }
+        return fillUTF8(frames[Int(frame)].lastPathComponent, buffer, cap)
+    }
+}
+
+@_cdecl("hf_stack_frame_included")
+public func hf_stack_frame_included(_ stack: Int32, _ frame: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(stack)) else { return 0 }
+        let s = model.stacks[Int(stack)]
+        let frames = model.listedFrames(of: s)
+        guard frames.indices.contains(Int(frame)) else { return 0 }
+        return model.isIncluded(frames[Int(frame)], in: s) ? 1 : 0
+    }
+}
+
+@_cdecl("hf_set_stack_frame_included")
+public func hf_set_stack_frame_included(_ stack: Int32, _ frame: Int32,
+                                        _ included: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(stack)) else { return 0 }
+        let frames = model.listedFrames(of: model.stacks[Int(stack)])
+        guard frames.indices.contains(Int(frame)) else { return 0 }
+        model.setIncluded(frames[Int(frame)], to: included != 0)
+        return 1
+    }
+}
+
+@_cdecl("hf_stack_frame_issue")
+public func hf_stack_frame_issue(_ stack: Int32, _ frame: Int32,
+                                 _ buffer: UnsafeMutablePointer<CChar>?,
+                                 _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(stack)) else { return 0 }
+        let s = model.stacks[Int(stack)]
+        let frames = model.listedFrames(of: s)
+        guard frames.indices.contains(Int(frame)),
+              let issue = model.frameIssue(frames[Int(frame)], in: s) else { return 0 }
+        return fillUTF8(issue, buffer, cap)
+    }
+}
+
 /// How many enabled stacks need a (re)fuse — the native "Fuse N Stacks"
 /// button's N.
 @_cdecl("hf_pending_stack_count")

@@ -337,6 +337,24 @@ QVariantList Shell::buildStacks() const {
         n = hf_stack_order_warning(i, text, sizeof text);
         row.insert(QStringLiteral("orderWarning"), QString::fromUtf8(text, n));
         row.insert(QStringLiteral("frameCount"), hf_stack_frame_count(i));
+        row.insert(QStringLiteral("expanded"), hf_stack_expanded(i) != 0);
+        QVariantList stackFrames;
+        if (hf_stack_expanded(i) != 0) {
+            const int frames = hf_stack_frame_count(i);
+            for (int f = 0; f < frames; ++f) {
+                QVariantMap frameRow;
+                int fn = hf_stack_frame_name(i, f, text, sizeof text);
+                frameRow.insert(QStringLiteral("name"),
+                                QString::fromUtf8(text, fn));
+                frameRow.insert(QStringLiteral("included"),
+                                hf_stack_frame_included(i, f) != 0);
+                fn = hf_stack_frame_issue(i, f, text, sizeof text);
+                frameRow.insert(QStringLiteral("issue"),
+                                QString::fromUtf8(text, fn));
+                stackFrames.append(frameRow);
+            }
+        }
+        row.insert(QStringLiteral("frames"), stackFrames);
         list.append(row);
     }
     return list;
@@ -349,6 +367,14 @@ bool Shell::selectStack(int index) { return hf_select_stack(index) != 0; }
 
 void Shell::setStackEnabled(int index, bool enabled) {
     hf_set_stack_enabled(index, enabled ? 1 : 0);
+}
+
+void Shell::setStackExpanded(int index, bool expanded) {
+    hf_set_stack_expanded(index, expanded ? 1 : 0);
+}
+
+void Shell::setStackFrameIncluded(int stack, int frame, bool included) {
+    hf_set_stack_frame_included(stack, frame, included ? 1 : 0);
 }
 
 bool Shell::fuseEnabledStacks() { return hf_fuse_enabled_stacks() != 0; }

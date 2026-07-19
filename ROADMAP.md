@@ -228,9 +228,6 @@ the running list of "works, but not the native way" (new
 simplifications must be added here the moment they're made, so
 reviewers stop discovering them by surprise):
 
-- The multi-stack tree is flat: frames listed for the selected stack
-  only — no per-stack disclosure rows, no persisted stack-section
-  collapse, no dimming of disabled stacks' rows.
 - Confirms/notices are Qt message boxes (idiomatic on Linux; visibly
   non-native chrome on macOS).
 - Batch-fuse and bulk-export summaries arrive as notice dialogs — the

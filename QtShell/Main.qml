@@ -463,14 +463,31 @@ ApplicationWindow {
                 id: stackList
                 visible: count > 1
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(160, contentHeight)
-                clip: true
+                // Natural height; the sidebar's ScrollView is the one
+                // scroll surface (nested scrolling reads as a trap).
+                Layout.preferredHeight: contentHeight
+                interactive: false
                 model: Shell.stacks
-                delegate: RowLayout {
+                delegate: ColumnLayout {
+                    id: stackDelegate
                     required property int index
                     required property var modelData
                     width: stackList.width
+                    spacing: 2
+                    RowLayout {
+                    Layout.fillWidth: true
                     spacing: 6
+                    // Hand-rolled disclosure chevron (the native tree
+                    // avoids DisclosureGroup for accessibility too).
+                    ToolButton {
+                        text: stackDelegate.modelData.expanded ? "▾" : "▸"
+                        font.pixelSize: 10
+                        implicitWidth: 22
+                        implicitHeight: 22
+                        onClicked: Shell.setStackExpanded(
+                            stackDelegate.index,
+                            !stackDelegate.modelData.expanded)
+                    }
                     CheckBox {
                         checked: modelData.enabled
                         enabled: !Shell.isRunning
@@ -509,9 +526,46 @@ ApplicationWindow {
                         HoverHandler { id: hover }
                     }
                     Label {
-                        text: modelData.frameCount
+                        text: stackDelegate.modelData.frameCount
                         color: "#8a8a8a"
                         font.pixelSize: 11
+                    }
+                    }
+                    // Nested frame rows while disclosed; dimmed and
+                    // inert when the stack is disabled, like native.
+                    Repeater {
+                        model: stackDelegate.modelData.expanded
+                               ? stackDelegate.modelData.frames : []
+                        delegate: RowLayout {
+                            required property int index
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 28
+                            spacing: 6
+                            opacity: stackDelegate.modelData.enabled ? 1 : 0.4
+                            enabled: stackDelegate.modelData.enabled
+                            CheckBox {
+                                checked: modelData.included
+                                enabled: !Shell.isRunning
+                                onToggled: Shell.setStackFrameIncluded(
+                                    stackDelegate.index, index, checked)
+                            }
+                            Label {
+                                text: modelData.name
+                                color: modelData.included ? "#d5d5d5"
+                                                          : "#777777"
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: "⚠"
+                                visible: modelData.issue !== ""
+                                color: "#e0c04a"
+                                ToolTip.visible: nestedIssueHover.hovered
+                                ToolTip.text: modelData.issue
+                                HoverHandler { id: nestedIssueHover }
+                            }
+                        }
                     }
                 }
             }
@@ -569,8 +623,12 @@ ApplicationWindow {
             }
             ListView {
                 id: frameList
+                // Single-stack projects list frames flat; with several
+                // stacks the tree's nested rows take over, like native.
+                visible: stackList.count <= 1
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(240, contentHeight)
+                Layout.preferredHeight: visible ? contentHeight : 0
+                interactive: false
                 clip: true
                 model: Shell.frames
                 delegate: RowLayout {
