@@ -38,6 +38,7 @@ struct SelfTest {
     bool toneKeptPixels = false, depthBumpedPixels = false, fullRes = false;
     bool inputOK = false, zoomOK = true;
     bool undoOK = false, projectOK = false, previewOK = false;
+    bool cycledSource = false;
     bool retouchOK = false;
     QString projectFile;
     QString expectedInput;    // selected frame's name
@@ -46,7 +47,7 @@ struct SelfTest {
     int stageTicks = 0;
     int changedCount = 0;      // Shell::changed emissions (see stage 6)
     int changedAtRetouch = 0;
-    QImage zoomPrev, zoomShotA;
+    QImage zoomPrev, zoomShotA, strokePre;
 };
 
 void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
@@ -335,6 +336,16 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                                         shell->displayHeight() / 2.0);
                     return;
                 }
+                // Paint from a NEIGHBOR frame, not the default pick:
+                // at the image center the fused result can be exactly the
+                // default frame's pixels (winner-take-all), which would
+                // make the stage-7 visibility check vacuously fail.
+                if (shell->retouchCanPaint() && !state->cycledSource) {
+                    state->cycledSource = true;
+                    state->stageTicks = 0;
+                    shell->retouchCycleSource(1);
+                    return;     // the new frame decodes async — re-wait
+                }
                 const bool paintable = shell->retouchCanPaint();
                 // The session's async load must have driven the shell's
                 // changed() signal — the QML UI depends on it (a silent
@@ -348,6 +359,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 // and Done exits the mode.
                 const double rcx = shell->displayWidth() / 2.0;
                 const double rcy = shell->displayHeight() / 2.0;
+                state->strokePre = grab();
                 const int epochBefore = shell->displayEpoch();
                 shell->retouchStrokeBegin(rcx - 40, rcy - 40);
                 shell->retouchStrokeMove(rcx - 40, rcy - 40,
@@ -356,7 +368,19 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->retouchOK = state->retouchOK && paintable
                     && shell->retouchHasEdits()
                     && shell->displayEpoch() != epochBefore
-                    && shell->undoTitle() == QStringLiteral("Undo Stroke")
+                    && shell->undoTitle() == QStringLiteral("Undo Stroke");
+                advance(7);
+                return;
+            }
+            case 7: {   // the stroke must be VISIBLE (stale-texture trap)
+                // Settled pixels must differ from the pre-stroke grab —
+                // tile eviction without texture replacement once left
+                // strokes invisible until a zoom/pan.
+                const QImage now = grab();
+                if (now == state->strokePre && ++state->stageTicks < 12)
+                    return;
+                state->retouchOK = state->retouchOK
+                    && !now.isNull() && now != state->strokePre
                     && shell->undo()
                     && shell->retouchHasEdits()
                     && shell->revertRetouch()
@@ -365,7 +389,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     && !shell->retouchMode();
                 // Project round-trip: save must clear the dirty flag and
                 // set the path; reopening the file must restore a fused
-                // stack (stage 7 waits out the load). Compare paths with
+                // stack (stage 8 waits out the load). Compare paths with
                 // forward slashes: the bridge echoes them that way, while a
                 // Windows runner passes the out path with backslashes.
                 state->projectFile = state->outPath + ".hyperfocal";
@@ -376,10 +400,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                         == QDir::fromNativeSeparators(state->projectFile);
                 if (state->projectOK)
                     shell->openStack(QUrl::fromLocalFile(state->projectFile));
-                advance(7);
+                advance(8);
                 return;
             }
-            case 7: {   // reload settles: a stack is back, still fused
+            case 8: {   // reload settles: a stack is back, still fused
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const QVariantList stacks = shell->stacks();
                 const bool reloaded = stacks.size() >= 1
@@ -393,10 +417,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->projectOK = state->projectOK
                     && shell->confirmNewProject()
                     && shell->newProject(QUrl::fromLocalFile(state->stackDir));
-                advance(8);
+                advance(9);
                 return;
             }
-            case 8: {   // new-project load settles: exactly one stack
+            case 9: {   // new-project load settles: exactly one stack
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const bool replaced = shell->stacks().size() == 1;
                 if (!replaced && ++state->stageTicks < 40) return;

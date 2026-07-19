@@ -286,8 +286,10 @@ void PaneItem::updatePolish() {
         const int lh = (imgH_ + (1 << level) - 1) >> level;
         QImage img(lw, lh, QImage::Format_RGBA8888);
         if (sourceTile(level, 0, 0, lw, lh, img.bits(),
-                       size_t(img.sizeInBytes())))
+                       size_t(img.sizeInBytes()))) {
             base_ = {img, QRectF(0, 0, imgW_, imgH_)};
+            basePending_ = true;
+        }
     }
 
     const int level = targetLevel();
@@ -321,6 +323,7 @@ void PaneItem::updatePolish() {
                 QRectF(x * s, y * s,
                        std::min(w * s, imgW_ - x * s),
                        std::min(h * s, imgH_ - y * s))});
+            pendingUpload_.insert(key);
         }
     }
     if (tiles_.size() > CACHE_CAP) {
@@ -410,7 +413,12 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         baseNode_ = makeNode(base_);
         // First child renders first: the coarse base stays under the tiles.
         contentNode_->prependChildNode(baseNode_);
+    } else if (baseNode_ && basePending_ && !base_.image.isNull()) {
+        // Refetched base (stroke dirt debounce): swap the texture in
+        // place — setTexture deletes the old one under ownsTexture.
+        baseNode_->setTexture(win->createTextureFromImage(base_.image));
     }
+    basePending_ = false;
     if (baseNode_) applyFiltering(baseNode_, base_);
 
     for (auto it = nodes_.begin(); it != nodes_.end();) {
@@ -445,9 +453,15 @@ QSGNode *PaneItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
         if (!node) {
             node = makeNode(it.value());
             groupFor(int(it.key() >> 48))->appendChildNode(node);
+        } else if (pendingUpload_.contains(it.key())) {
+            // Same key, fresh pixels (a stroke's dirty-rect refetch):
+            // the node survives eviction+refetch between paints, so its
+            // texture must be replaced explicitly.
+            node->setTexture(win->createTextureFromImage(it.value().image));
         }
         applyFiltering(node, it.value());
     }
+    pendingUpload_.clear();
     return root;
 }
 

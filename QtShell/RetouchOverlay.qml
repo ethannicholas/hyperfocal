@@ -12,59 +12,14 @@ Item {
     required property PaneItem pane
 
     property point lastPoint: Qt.point(0, 0)
-    property point cursorPane: Qt.point(0, 0)
-    property real radiusPane: 0
-    property bool cursorShown: false
 
-    function syncCursor() {
-        if (!visible) return
-        if (Shell.retouchCanPaint() && Shell.retouchCursorValid()) {
-            var c = Shell.retouchCursor()
-            cursorPane = pane.mapFromImage(Qt.point(c.x, c.y))
-            var a = pane.mapFromCanvas(Qt.point(0, 0))
-            var b = pane.mapFromCanvas(Qt.point(1, 0))
-            radiusPane = Math.max(1, Shell.retouchBrushRadius() * (b.x - a.x))
-            cursorShown = true
-        } else {
-            cursorShown = false
-        }
-        circle.requestPaint()
-    }
-
-    // Strokes re-anchor the circle and dead-drag state per callback;
-    // viewport moves under a stationary cursor re-anchor it too.
-    Connections {
-        target: Shell
-        function onTick() { overlay.syncCursor() }
-    }
-    Connections {
-        target: overlay.pane
-        function onViewportChanged() { overlay.syncCursor() }
-    }
-    onVisibleChanged: if (!visible) Shell.retouchHoverClear()
-
-    Canvas {
+    BrushCircle {
         id: circle
         anchors.fill: parent
-        onPaint: {
-            var ctx = getContext("2d")
-            ctx.reset()
-            if (!overlay.cursorShown) return
-            // Black under white, the native brush circle.
-            ctx.beginPath()
-            ctx.arc(overlay.cursorPane.x, overlay.cursorPane.y,
-                    overlay.radiusPane, 0, 2 * Math.PI)
-            ctx.lineWidth = 3
-            ctx.strokeStyle = Qt.rgba(0, 0, 0, 0.8)
-            ctx.stroke()
-            ctx.beginPath()
-            ctx.arc(overlay.cursorPane.x, overlay.cursorPane.y,
-                    overlay.radiusPane, 0, 2 * Math.PI)
-            ctx.lineWidth = 1.5
-            ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.9)
-            ctx.stroke()
-        }
+        pane: overlay.pane
+        active: overlay.visible
     }
+    onVisibleChanged: if (!visible) Shell.retouchHoverClear()
 
     MouseArea {
         anchors.fill: parent
@@ -77,7 +32,7 @@ Item {
             overlay.lastPoint = p
             Shell.retouchHover(p.x, p.y)
             Shell.retouchStrokeBegin(p.x, p.y)
-            overlay.syncCursor()
+            circle.sync()
         }
         onPositionChanged: function(mouse) {
             var p = pane.mapToImage(Qt.point(mouse.x, mouse.y))
@@ -87,13 +42,12 @@ Item {
                                         overlay.lastPoint.y, p.x, p.y)
                 overlay.lastPoint = p
             }
-            overlay.syncCursor()
+            circle.sync()
         }
         onReleased: Shell.retouchStrokeEnd()
         onExited: {
             Shell.retouchHoverClear()
-            overlay.cursorShown = false
-            circle.requestPaint()
+            circle.sync()
         }
         onWheel: function(wheel) {
             // ⌥-scroll resizes the brush (native pow(1.015, -deltaY));
@@ -101,7 +55,7 @@ Item {
             if (wheel.modifiers & Qt.AltModifier) {
                 Shell.retouchAdjustBrush(
                     Math.pow(1.015, -wheel.angleDelta.y / 8))
-                overlay.syncCursor()
+                circle.sync()
                 wheel.accepted = true
             } else {
                 wheel.accepted = false

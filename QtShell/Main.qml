@@ -1007,6 +1007,14 @@ ApplicationWindow {
                         property: "retouchSource"
                         value: Shell.retouchMode
                     }
+                    // The source pane mirrors the brush circle, like
+                    // native — you aim on either side.
+                    BrushCircle {
+                        parent: inputPane.contentArea
+                        anchors.fill: parent
+                        pane: inputPane.item
+                        active: Shell.retouchMode
+                    }
                     Label {
                         parent: inputPane.contentArea
                         anchors.centerIn: parent

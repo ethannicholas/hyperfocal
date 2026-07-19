@@ -247,6 +247,21 @@ Done = buckets in -v output, and either the overlap ported (output
 byte-identical, blocked-on-GPU ≈ 0) or this item deleted because the
 measurement showed nothing worth hiding.
 
+### Retouch stamp cost at large brush radii
+
+Painting with a large brush lags noticeably — in BOTH shells, so the
+cost is in `RetouchSession`'s stroke path, not the UIs: each segment
+stamps every `spacing` step and each stamp is O(r²) pixel work
+(mask blend + undo-tile capture + depth co-paint), so drag cost grows
+as O(len × r² / spacing) and spacing shrinks relative to r. Profile a
+slow drag first (Instruments, big synth stack, max radius), then
+likely wins: skip fully-overlapped intermediate stamps, blend only the
+mask's bounding circle instead of its bounding square's corners,
+SIMD/vDSP the per-row blend, or accumulate a per-segment coverage mask
+and composite once. Done = a max-radius drag on a 45 MP stack feels
+continuous in the native app (the Qt shell inherits the fix through
+the bridge).
+
 ### Research-informed fusion follow-ons
 
 From the 2026-07-12 deep-research pass — **full findings, evidence

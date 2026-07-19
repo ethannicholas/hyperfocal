@@ -2447,6 +2447,9 @@ public final class AppModel: ObservableObject {
                         self.inputPreviewURL = nil
                         self.showInputFrame(url)
                     }
+                    // Warm the retouch session so Start Retouching opens
+                    // with its source already decoded (both shells).
+                    if !self.batchMode { self.prepareRetouch() }
                 }
             } catch {
                 await MainActor.run { [weak self] in
@@ -2655,6 +2658,21 @@ public final class AppModel: ObservableObject {
     // MARK: - Retouching
 
     public func enterRetouch() {
+        guard result != nil, phase == .done, !resultDepth.isEmpty else { return }
+        prepareRetouch()
+        retouchMode = true
+        // Sync the list to the session's current source immediately.
+        if let session = retouch, session.urls.indices.contains(session.sourceIndex) {
+            selection = [session.urls[session.sourceIndex]]
+        }
+    }
+
+    /// Build the retouch session ahead of need — the constructor kicks
+    /// the initial aligned-source decode, so warming this right after a
+    /// fuse means Start Retouching opens with the source already in
+    /// hand instead of a "Loading source…" wait. Idempotent; both
+    /// shells share it (called from fuse completion and enterRetouch).
+    public func prepareRetouch() {
         guard let result, phase == .done, !resultDepth.isEmpty else { return }
         if retouch == nil {
             // Rebuild the exact source configuration the fusion used (same
@@ -2680,11 +2698,6 @@ public final class AppModel: ObservableObject {
                       session.urls.indices.contains(index) else { return }
                 self.selection = [session.urls[index]]
             }
-        }
-        retouchMode = true
-        // Sync the list to the session's current source immediately.
-        if let session = retouch, session.urls.indices.contains(session.sourceIndex) {
-            selection = [session.urls[session.sourceIndex]]
         }
     }
 

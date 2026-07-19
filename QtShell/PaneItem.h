@@ -150,7 +150,12 @@ private:
     QPointF lastPos_;
 
     QHash<quint64, Tile> tiles_;    // keyed by (level, tx, ty)
+    // Tiles whose pixels changed since the last paint (dirty-rect
+    // refetches): their existing nodes need a texture REPLACEMENT —
+    // node presence alone must not imply texture currency.
+    QSet<quint64> pendingUpload_;
     Tile base_;                     // whole image at a coarse level
+    bool basePending_ = false;
     bool reset_ = false;            // epoch changed: rebuild every texture
 
     // Scene-graph mirrors of base_/tiles_ — owned by the node tree; only
