@@ -10,6 +10,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <utility>
 #include <QPushButton>
 
 namespace {
@@ -78,12 +79,7 @@ void Shell::refreshFromBridge() {
     emit tick();
     const bool running = hf_is_running() != 0;
     const double fraction = hf_stage_fraction();
-    QString stage;
-    {
-        char buffer[256];
-        const int n = hf_stage_text(buffer, sizeof buffer);
-        stage = QString::fromUtf8(buffer, n);
-    }
+    const QString stage = stageText() + QStringLiteral("\x1f") + stageEta();
     if (running != cachedRunning_ || fraction != cachedFraction_
         || stage != cachedStage_) {
         cachedRunning_ = running;
@@ -153,6 +149,92 @@ QString Shell::stageText() const {
     char buffer[256];
     const int n = hf_stage_text(buffer, sizeof buffer);
     return QString::fromUtf8(buffer, n);
+}
+
+QString Shell::stageEta() const {
+    char buffer[128];
+    const int n = hf_stage_eta(buffer, sizeof buffer);
+    return QString::fromUtf8(buffer, n);
+}
+
+QString Shell::suggestedProjectName() const {
+    const QVariantList list = stacks();
+    if (list.isEmpty()) return QStringLiteral("Project.hyperfocal");
+    return list.first().toMap().value(QStringLiteral("name")).toString()
+        + QStringLiteral(".hyperfocal");
+}
+
+void Shell::exportAnimationInteractive() {
+    QFileDialog dialog(nullptr, QStringLiteral("Export Rocking Animation"));
+    dialog.setOption(QFileDialog::DontUseNativeDialog);
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+    const QStringList formats = {QStringLiteral("MP4 (H.264)"),
+                                 QStringLiteral("GIF (loops automatically)")};
+    const QStringList suffixes = {QStringLiteral("mp4"), QStringLiteral("gif")};
+    QStringList filters;
+    for (qsizetype i = 0; i < formats.size(); ++i)
+        filters << formats[i] + " (*." + suffixes[i] + ")";
+    dialog.setNameFilters(filters);
+    QString currentFormat;
+    {
+        char buffer[64];
+        currentFormat = QString::fromUtf8(
+            buffer, hf_animation_format(buffer, sizeof buffer));
+    }
+    dialog.selectNameFilter(
+        filters.value(qMax(qsizetype(0), formats.indexOf(currentFormat))));
+    auto applyFormat = [&] {
+        const qsizetype i = filters.indexOf(dialog.selectedNameFilter());
+        dialog.setDefaultSuffix(
+            suffixes.value(qMax(qsizetype(0), i), QStringLiteral("mp4")));
+    };
+    applyFormat();
+    QObject::connect(&dialog, &QFileDialog::filterSelected, &dialog,
+                     [&applyFormat](const QString &) { applyFormat(); });
+    // The native accessory's remaining rows.
+    auto *duration = new QComboBox(&dialog);
+    duration->addItems({QStringLiteral("2 seconds"), QStringLiteral("3 seconds"),
+                        QStringLiteral("4 seconds"), QStringLiteral("6 seconds")});
+    {
+        char buffer[64];
+        duration->setCurrentText(QString::fromUtf8(
+            buffer, hf_animation_duration(buffer, sizeof buffer)));
+    }
+    auto *path = new QComboBox(&dialog);
+    path->addItems({QStringLiteral("Rock left–right"),
+                    QStringLiteral("Rock up–down"), QStringLiteral("Circle")});
+    {
+        char buffer[64];
+        path->setCurrentText(QString::fromUtf8(
+            buffer, hf_animation_path(buffer, sizeof buffer)));
+    }
+    auto *strength = new QComboBox(&dialog);
+    strength->addItems({QStringLiteral("Subtle"), QStringLiteral("Medium"),
+                        QStringLiteral("Strong")});
+    strength->setCurrentText(animationStrength());
+    if (auto *grid = qobject_cast<QGridLayout *>(dialog.layout())) {
+        int row = grid->rowCount();
+        const std::pair<const char *, QComboBox *> rows[] = {
+            {"Duration:", duration}, {"Path:", path}, {"Strength:", strength}};
+        for (const auto &[label, combo] : rows) {
+            grid->addWidget(new QLabel(QString::fromUtf8(label), &dialog),
+                            row, 0, Qt::AlignRight);
+            grid->addWidget(combo, row, 1);
+            ++row;
+        }
+    }
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+        return;
+    hf_set_animation_format(
+        formats.value(qMax(qsizetype(0),
+                           filters.indexOf(dialog.selectedNameFilter())))
+            .toUtf8().constData());
+    hf_set_animation_duration(duration->currentText().toUtf8().constData());
+    hf_set_animation_path(path->currentText().toUtf8().constData());
+    setAnimationStrength(strength->currentText());
+    hf_export_animation(
+        dialog.selectedFiles().first().toUtf8().constData());
 }
 
 double Shell::exposure() const { return hf_tone_exposure(); }

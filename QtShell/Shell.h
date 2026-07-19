@@ -27,6 +27,7 @@ class Shell : public QObject {
     Q_PROPERTY(bool isRunning READ isRunning NOTIFY progressChanged)
     Q_PROPERTY(double stageFraction READ stageFraction NOTIFY progressChanged)
     Q_PROPERTY(QString stageText READ stageText NOTIFY progressChanged)
+    Q_PROPERTY(QString stageEta READ stageEta NOTIFY progressChanged)
     Q_PROPERTY(double exposure READ exposure WRITE setExposure NOTIFY changed)
     Q_PROPERTY(bool depthMode READ depthMode WRITE setDepthMode NOTIFY changed)
     Q_PROPERTY(QVariantList stacks READ stacks NOTIFY stacksChanged)
@@ -70,6 +71,7 @@ public:
     bool isRunning() const;
     double stageFraction() const;
     QString stageText() const;
+    QString stageEta() const;
     double exposure() const;
     void setExposure(double ev);
 
@@ -160,6 +162,12 @@ public:
     Q_INVOKABLE bool exportAll(const QUrl &dir);
     Q_INVOKABLE bool exportAligned(const QUrl &dir);
     Q_INVOKABLE bool exportAnimation(const QUrl &file);
+    /// The animation save dialog with the native accessory's Format /
+    /// Duration / Path / Strength rows inline; the format drives the
+    /// file suffix, so they can never disagree.
+    Q_INVOKABLE void exportAnimationInteractive();
+    /// Suggested project filename for Save As ("<stack>.hyperfocal").
+    Q_INVOKABLE QString suggestedProjectName() const;
     /// Save to `file`, or to the existing project file when empty
     /// (returns false when there is none yet — caller then asks).
     Q_INVOKABLE bool saveProject(const QUrl &file);

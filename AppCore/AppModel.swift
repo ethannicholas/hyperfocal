@@ -317,14 +317,14 @@ public final class AppModel: ObservableObject {
     /// the panes must not tone anything else.
     @Published public private(set) var progressiveIsData = false
     @Published public var processingSource: PlatformImage?
-    @Published var processingSourceLabel: String?
+    @Published public var processingSourceLabel: String?
     @Published var processingSourceNominalSize: CGSize?
 
     // Results & previews
     @Published public var outputPreview: PlatformImage?
     @Published public var depthPreview: PlatformImage?
     @Published public var inputPreview: PlatformImage?
-    @Published var inputPreviewURL: URL?
+    @Published public var inputPreviewURL: URL?
     /// The preview is warped into the fused canvas (alignment transforms
     /// existed when it was decoded) rather than the raw file.
     @Published public var inputPreviewAligned = false
@@ -390,17 +390,17 @@ public final class AppModel: ObservableObject {
     /// Animation container. GIF exists because it's the only format whose
     /// loop-forever flag every viewer honors; MP4 plays once unless the
     /// player is told to loop.
-    enum AnimationFormat: String, CaseIterable {
+    public enum AnimationFormat: String, CaseIterable {
         case mp4 = "MP4 (H.264)"
         case gif = "GIF (loops automatically)"
         var fileExtension: String { self == .gif ? "gif" : "mp4" }
     }
-    @Published var animationFormat: AnimationFormat {
+    @Published public var animationFormat: AnimationFormat {
         didSet { Self.settings.set(animationFormat.rawValue, forKey: "animationFormat") }
     }
 
     /// The viewpoint's motion (Zerene's path options).
-    enum AnimationPath: String, CaseIterable {
+    public enum AnimationPath: String, CaseIterable {
         case horizontal = "Rock left–right"
         case vertical = "Rock up–down"
         case circular = "Circle"
@@ -412,11 +412,11 @@ public final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var animationPath: AnimationPath {
+    @Published public var animationPath: AnimationPath {
         didSet { Self.settings.set(animationPath.rawValue, forKey: "animationPath") }
     }
 
-    enum AnimationDuration: String, CaseIterable {
+    public enum AnimationDuration: String, CaseIterable {
         case two = "2 seconds"
         case three = "3 seconds"
         case four = "4 seconds"
@@ -430,7 +430,7 @@ public final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var animationDuration: AnimationDuration {
+    @Published public var animationDuration: AnimationDuration {
         didSet { Self.settings.set(animationDuration.rawValue, forKey: "animationDuration") }
     }
 

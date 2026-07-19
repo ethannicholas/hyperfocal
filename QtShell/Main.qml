@@ -79,7 +79,11 @@ ApplicationWindow {
                 text: "Save Project As…"
                 shortcut: "Ctrl+Shift+S"
                 enabled: !Shell.isRunning
-                onTriggered: saveProjectDialog.open()
+                onTriggered: {
+                    saveProjectDialog.selectedFile =
+                        "file:///" + Shell.suggestedProjectName()
+                    saveProjectDialog.open()
+                }
             }
             MenuSeparator {}
             Action {
@@ -102,11 +106,34 @@ ApplicationWindow {
             Action {
                 text: "Export Rocking Animation…"
                 enabled: !Shell.isRunning && Shell.canAnimate
-                onTriggered: animationOptionsDialog.open()
+                onTriggered: Shell.exportAnimationInteractive()
             }
         }
         Menu {
             title: "Edit"
+            Action {
+                text: "Crop…"
+                shortcut: "C"
+                enabled: Shell.canCrop && !Shell.cropMode
+                onTriggered: Shell.beginCrop()
+            }
+            Action {
+                text: "Swap Crop Orientation"
+                shortcut: "X"
+                enabled: Shell.cropMode
+                onTriggered: Shell.toggleCropOrientation()
+            }
+            Action {
+                text: "Accept Crop"
+                enabled: Shell.cropMode
+                onTriggered: Shell.acceptCrop()
+            }
+            Action {
+                text: "Cancel Crop"
+                enabled: Shell.cropMode
+                onTriggered: Shell.cancelCrop()
+            }
+            MenuSeparator {}
             Action {
                 text: "Settings…"
                 shortcut: StandardKey.Preferences
@@ -292,32 +319,6 @@ ApplicationWindow {
         onAccepted: Shell.exportAligned(selectedFolder)
     }
 
-    Dialog {
-        id: animationOptionsDialog
-        title: "Rocking animation"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        RowLayout {
-            spacing: 8
-            Label { text: "Strength:"; color: "#b5b5b5" }
-            ComboBox {
-                model: ["Subtle", "Medium", "Strong"]
-                currentIndex: Math.max(0, model.indexOf(Shell.animationStrength))
-                onActivated: Shell.animationStrength = currentText
-            }
-        }
-        onAccepted: animationFileDialog.open()
-    }
-
-    FileDialog {
-        id: animationFileDialog
-        title: "Export rocking animation"
-        fileMode: FileDialog.SaveFile
-        defaultSuffix: "mp4"
-        nameFilters: ["Movie (*.mp4)", "Animated GIF (*.gif)"]
-        onAccepted: Shell.exportAnimation(selectedFile)
-    }
 
 
     // A pane with the tone LUT shader over its layer — the native
@@ -648,28 +649,6 @@ ApplicationWindow {
                 enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
                 onClicked: Shell.fuseEnabledStacks()
             }
-            RowLayout {
-                Layout.fillWidth: true
-                visible: Shell.isRunning
-                spacing: 6
-                ProgressBar {
-                    Layout.fillWidth: true
-                    value: Shell.stageFraction
-                }
-                Button {
-                    text: "Cancel"
-                    font.pixelSize: 11
-                    onClicked: Shell.cancelFuse()
-                }
-            }
-            Label {
-                Layout.fillWidth: true
-                visible: Shell.isRunning
-                text: Shell.stageText
-                color: "#b5b5b5"
-                font.pixelSize: 12
-                elide: Text.ElideRight
-            }
 
             RowLayout {
                 Layout.fillWidth: true
@@ -839,6 +818,51 @@ ApplicationWindow {
                         anchors.fill: parent
                         pane: outputPane.item
                         visible: Shell.cropMode
+                    }
+                    // The native progress overlay: bar + stage + ETA +
+                    // Cancel in a rounded card over the output pane.
+                    Rectangle {
+                        visible: Shell.isRunning
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.margins: 12
+                        anchors.bottomMargin: 12
+                        width: parent.width - 24
+                        height: progressColumn.implicitHeight + 20
+                        radius: 8
+                        color: "#e0282828"
+                        ColumnLayout {
+                            id: progressColumn
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 6
+                            ProgressBar {
+                                Layout.fillWidth: true
+                                value: Shell.stageFraction
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label {
+                                    text: Shell.stageText
+                                    color: "#b5b5b5"
+                                    font.pixelSize: 12
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                                Label {
+                                    text: Shell.stageEta
+                                    visible: text !== ""
+                                    color: "#8a8a8a"
+                                    font.pixelSize: 12
+                                }
+                                Button {
+                                    text: "Cancel"
+                                    font.pixelSize: 11
+                                    onClicked: Shell.cancelFuse()
+                                }
+                            }
+                        }
                     }
                 }
             }

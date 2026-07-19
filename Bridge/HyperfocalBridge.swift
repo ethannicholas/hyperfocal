@@ -292,10 +292,10 @@ public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) 
         guard let model = Bridge.model,
               model.phase.isRunning || model.batchStatus != nil else { return 0 }
         // The batch prefix ("Stack i of N · ") rides along, as in the
-        // native toolbar.
-        let text = (model.batchStatus ?? "") + model.stageText
-            + (model.stageETA.map { "  \($0)" } ?? "")
-        return fillUTF8(text, buffer, cap)
+        // native progress overlay; the ETA is its own label
+        // (hf_stage_eta), matching native.
+        return fillUTF8((model.batchStatus ?? "") + model.stageText,
+                        buffer, cap)
     }
 }
 
@@ -534,6 +534,66 @@ public func hf_set_export_color_space(_ name: UnsafePointer<CChar>?) -> Int32 {
         guard let model = Bridge.model,
               let space = AppModel.ExportColorSpace(rawValue: string) else { return 0 }
         model.exportColorSpace = space
+        return 1
+    }
+}
+
+@_cdecl("hf_animation_format")
+public func hf_animation_format(_ buffer: UnsafeMutablePointer<CChar>?,
+                                _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.animationFormat.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_animation_format")
+public func hf_set_animation_format(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let format = AppModel.AnimationFormat(rawValue: string) else { return 0 }
+        model.animationFormat = format
+        return 1
+    }
+}
+
+@_cdecl("hf_animation_path")
+public func hf_animation_path(_ buffer: UnsafeMutablePointer<CChar>?,
+                              _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.animationPath.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_animation_path")
+public func hf_set_animation_path(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let path = AppModel.AnimationPath(rawValue: string) else { return 0 }
+        model.animationPath = path
+        return 1
+    }
+}
+
+@_cdecl("hf_animation_duration")
+public func hf_animation_duration(_ buffer: UnsafeMutablePointer<CChar>?,
+                                  _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.animationDuration.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_animation_duration")
+public func hf_set_animation_duration(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let duration = AppModel.AnimationDuration(rawValue: string) else { return 0 }
+        model.animationDuration = duration
         return 1
     }
 }
@@ -793,6 +853,18 @@ public func hf_reset_fusion() -> Int32 {
         guard let model = Bridge.model else { return 0 }
         model.resetFusionSettings()
         return 1
+    }
+}
+
+/// The running fuse's ETA text ("about 20 seconds left"); bytes, 0
+/// when idle or unknown — the native progress.eta label's data.
+@_cdecl("hf_stage_eta")
+public func hf_stage_eta(_ buffer: UnsafeMutablePointer<CChar>?,
+                         _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.phase.isRunning,
+              let eta = model.stageETA else { return 0 }
+        return fillUTF8(eta, buffer, cap)
     }
 }
 
@@ -1302,9 +1374,15 @@ public func hf_input_title(_ buffer: UnsafeMutablePointer<CChar>?,
                            _ cap: Int32) -> Int32 {
     MainActor.assumeIsolated {
         guard let model = Bridge.model else { return 0 }
-        if model.phase.isRunning { return fillUTF8("Input", buffer, cap) }
-        guard model.selection.count == 1, let url = model.selection.first,
-              model.inputPreview != nil else { return 0 }
+        // The native inputPaneTitle: the cycling processing-source label
+        // mid-fuse, else the previewed frame's name (+ aligned marker).
+        if model.phase.isRunning, model.processingSource != nil,
+           let label = model.processingSourceLabel {
+            return fillUTF8(label, buffer, cap)
+        }
+        guard let url = model.inputPreviewURL, model.inputPreview != nil else {
+            return 0
+        }
         let title = url.lastPathComponent
             + (model.inputPreviewAligned ? " (aligned)" : "")
         return fillUTF8(title, buffer, cap)

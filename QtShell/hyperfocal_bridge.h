@@ -60,8 +60,10 @@ int hf_can_fuse(void);
 int hf_fuse(void);        // 0 if canFuse is false
 int hf_is_running(void);
 double hf_stage_fraction(void);
-// UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
+// UTF-8 stage text into buf (batch prefix included); returns bytes
+// written (0 when idle). The ETA is a separate label, like native.
 int hf_stage_text(char *buf, int cap);
+int hf_stage_eta(char *buf, int cap);
 
 // New Project: hf_confirm_new_project runs the discard-unsaved-work
 // confirm (ask BEFORE the folder picker, like native; trivially 1 when
@@ -114,6 +116,14 @@ int hf_export_color_space(char *buf, int cap);      // returns bytes
 int hf_set_export_color_space(const char *name);
 int hf_animation_strength(char *buf, int cap);      // returns bytes
 int hf_set_animation_strength(const char *name);
+// Animation format ("MP4 (H.264)" / "GIF (loops automatically)"),
+// rocking path, and duration — the native animate accessory's popups.
+int hf_animation_format(char *buf, int cap);        // returns bytes
+int hf_set_animation_format(const char *name);
+int hf_animation_path(char *buf, int cap);          // returns bytes
+int hf_set_animation_path(const char *name);
+int hf_animation_duration(char *buf, int cap);      // returns bytes
+int hf_set_animation_duration(const char *name);
 int hf_fused_stack_count(void);
 int hf_can_export_aligned(void);
 int hf_can_animate(void);
