@@ -522,15 +522,24 @@ ApplicationWindow {
             Shell.collapsedSections.indexOf(section) >= 0
         Layout.fillWidth: true
         spacing: 6
-        Text {
+        Item {
             // Native's chevron.right/chevron.down: a real chevron,
             // rotating to point down when expanded (the triangle
             // glyphs render too small to read as disclosure arrows).
-            text: "\u276f"
-            color: "#9a9a9a"
-            font.pixelSize: 12
-            font.bold: true
-            rotation: header.collapsed ? 0 : 90
+            // Square cell sized to the glyph's rotated extent — the
+            // narrow unrotated layout cell otherwise lets the rotated
+            // glyph overhang into the sidebar clip and lose an edge.
+            implicitWidth: chevronGlyph.paintedHeight
+            implicitHeight: chevronGlyph.paintedHeight
+            Text {
+                id: chevronGlyph
+                anchors.centerIn: parent
+                text: "\u276f"
+                color: "#9a9a9a"
+                font.pixelSize: 12
+                font.bold: true
+                rotation: header.collapsed ? 0 : 90
+            }
         }
         Label { text: header.title; color: "#d5d5d5"; font.bold: true }
         Label {
