@@ -50,18 +50,26 @@ liblcms2-dev libexiv2-dev libjpeg-turbo8-dev libtiff-dev libpng-dev
 zlib1g-dev libopencv-dev` (+ `libavformat/avcodec/avutil/swscale-dev
 libgif-dev` for the later rocking backend).
 
+Real-frame RAW decode, color, and the as-shot neutral are verified on
+Linux (2026-07-19: real DNG stack; DNG round-trip 93 dB; exported
+AsShotNeutral closed-loop). Verification used DNGs deliberately — lossy
+(High Efficiency) NEFs can't be decoded by any open-source library and
+the workaround is punted; see
+`Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
+
 Residuals to close (each independently landable; keep macOS green):
 
-1. **RAW + EXIF on real frames.** `hf_decode_raw` (LibRaw, output ProPhoto→P3
-   via lcms2) and the exiv2 EXIF reads compile but are unexercised by the synth
-   gate (TIFF, no EXIF). Verify against a real NEF stack; refine the RAW color
-   mapping (the ProPhoto-output first cut) and surface the as-shot neutral
-   (LibRaw `cam_mul`/`pre_mul`) that DNG export's WB un-bake reads — currently
-   Apple-only, so Linux DNG declares a generic neutral.
+1. **CI first green run.** `.github/workflows/ci.yml` runs
+   `Scripts/ci-gate.sh` (release build; plane PSNR floors 38.7/38.3; DNG
+   round-trip ≥ 60 dB) in a `swift:6.1-noble` container. Both were
+   validated on the aarch64 box only — confirm the first Actions run
+   (x86-64) is green, fix whatever differs, then delete this item.
 
-2. **CI.** GitHub Actions Linux job: a container with the toolchain + the `-dev`
-   packages above, `swift build -c release`, then synth→fuse→compare asserting
-   PSNR ≈ the plane baseline.
+2. **macOS gate re-run.** The 2026-07-19 RAW work touched shared code
+   (`DNGWriter` lost its `#if canImport(CoreGraphics)` gating around the
+   as-shot neutral) that this Linux box cannot compile for macOS — run
+   probe + synth baselines + UI suite on a Mac before trusting it there,
+   then delete this item.
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and

@@ -50,6 +50,11 @@ ship (no `default.metallib` → SwiftUI shaders silently no-op).
 
 ## Regression gates (run before trusting any engine/model change)
 
+`Scripts/ci-gate.sh` runs the whole non-UI set in one shot (release
+build, PSNR floors, DNG round-trip, probe where the platform builds it)
+— the same script CI runs. The individual invocations below remain for
+targeted runs.
+
 ```sh
 .build/debug/hyperfocal-cli synth -o /tmp/synth --frames 15 --max-blur 6 --breathing 0.02 --jitter 3
 .build/debug/retouch-probe /tmp/synth/frame_*.tif    # must print "probe: ALL PASS"
