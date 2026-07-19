@@ -868,10 +868,16 @@ ApplicationWindow {
                     onActivated: Shell.cropAspect = currentText
                 }
                 Button {
-                    // Icon button showing the current orientation, in
-                    // the aspect row like native's 18×18 symbol button.
-                    text: Shell.cropPortrait ? "▯" : "▭"
-                    Layout.preferredWidth: 36
+                    // Icon button in the aspect row, like native's
+                    // symbol button: the current orientation's
+                    // rectangle with a rotation arrow (drawn SVGs — SF
+                    // Symbols can't ship in a cross-platform shell;
+                    // the style tints them via icon.color).
+                    icon.source: Shell.cropPortrait
+                                 ? "crop-portrait.svg"
+                                 : "crop-landscape.svg"
+                    icon.width: 18
+                    icon.height: 18
                     onClicked: Shell.toggleCropOrientation()
                     ToolTip.visible: hovered
                     ToolTip.text:

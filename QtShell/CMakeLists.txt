@@ -36,6 +36,7 @@ qt_add_qml_module(hyperfocal-qt
     URI Hyperfocal
     VERSION 1.0
     QML_FILES Main.qml CropOverlay.qml RetouchOverlay.qml BrushCircle.qml
+    RESOURCES crop-landscape.svg crop-portrait.svg
     SOURCES Shell.h Shell.cpp PaneItem.h PaneItem.cpp LutImageProvider.h
 )
 
