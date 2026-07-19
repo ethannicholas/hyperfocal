@@ -96,9 +96,12 @@ Item {
             var hh = overlay.crop.height / 2 * s
             var rad = overlay.angle * Math.PI / 180
 
-            // Dim everything outside the rotated rect (even-odd fill).
+            // Dim the CANVAS outside the rotated rect (even-odd fill)
+            // — the letterbox around the image stays black, like native
+            // (its outer path is the canvas rect, not the view).
+            var o = pane.mapFromCanvas(Qt.point(0, 0))
             ctx.beginPath()
-            ctx.rect(0, 0, width, height)
+            ctx.rect(o.x, o.y, overlay.canvasW * s, overlay.canvasH * s)
             var poly = []
             for (var i = 0; i < 4; ++i) {
                 var px = [-hw, hw, hw, -hw][i]
@@ -132,11 +135,60 @@ Item {
         }
     }
 
+    // Classify a pane-space point: {mode, hx, hy} in the rotated local
+    // SCREEN frame so the handle tolerance (8px + 4px margin) is
+    // zoom-independent.
+    function classify(px, py) {
+        var s = paneScale()
+        var cx = crop.x + crop.width / 2
+        var cy = crop.y + crop.height / 2
+        var cPane = pane.mapFromCanvas(Qt.point(cx, cy))
+        var rad = angle * Math.PI / 180
+        var dx = px - cPane.x, dy = py - cPane.y
+        var lx = dx * Math.cos(rad) + dy * Math.sin(rad)
+        var ly = -dx * Math.sin(rad) + dy * Math.cos(rad)
+        var hw = crop.width / 2 * s
+        var hh = crop.height / 2 * s
+        for (var i = 0; i < handles.length; ++i) {
+            var hx = handles[i][0], hy = handles[i][1]
+            if (Math.abs(lx - hx * hw) <= 8 && Math.abs(ly - hy * hh) <= 8)
+                return { mode: 2, hx: hx, hy: hy }
+        }
+        return { mode: (Math.abs(lx) <= hw && Math.abs(ly) <= hh) ? 1 : 3,
+                 hx: 0, hy: 0 }
+    }
+
+    // Directional resize cursor for a handle: quantize the handle's
+    // outward direction AFTER rotation into the four built-in resize
+    // axes (the native 8-sector scheme, folded onto Qt's cursor pairs).
+    function resizeCursor(hx, hy) {
+        var rad = angle * Math.PI / 180
+        var sx = hx * Math.cos(rad) - hy * Math.sin(rad)
+        var sy = hx * Math.sin(rad) + hy * Math.cos(rad)
+        var sector = Math.round(Math.atan2(sy, sx) / (Math.PI / 4))
+        sector = ((sector % 4) + 4) % 4
+        return sector === 0 ? Qt.SizeHorCursor
+             : sector === 1 ? Qt.SizeFDiagCursor
+             : sector === 2 ? Qt.SizeVerCursor
+             : Qt.SizeBDiagCursor
+    }
+
+    property int hoverMode: 0
+    property point hoverDir: Qt.point(0, 0)
+
     MouseArea {
         anchors.fill: parent
-        cursorShape: overlay.mode === 1 ? Qt.ClosedHandCursor
-                   : overlay.mode === 2 ? Qt.SizeAllCursor
-                   : overlay.mode === 3 ? Qt.CrossCursor : Qt.ArrowCursor
+        hoverEnabled: true
+        cursorShape: {
+            var m = overlay.mode !== 0 ? overlay.mode : overlay.hoverMode
+            var d = overlay.mode !== 0 ? overlay.handleDir : overlay.hoverDir
+            // Move and rotate share the hand pair: open on hover,
+            // closed while dragging.
+            return m === 2 ? overlay.resizeCursor(d.x, d.y)
+                 : m === 0 ? Qt.ArrowCursor
+                 : overlay.mode !== 0 ? Qt.ClosedHandCursor
+                                      : Qt.OpenHandCursor
+        }
 
         onPressed: function(mouse) {
             var raw = pane.mapToCanvas(Qt.point(mouse.x, mouse.y))
@@ -147,31 +199,21 @@ Item {
             var cx = overlay.crop.x + overlay.crop.width / 2
             var cy = overlay.crop.y + overlay.crop.height / 2
             overlay.lastVec = Qt.point(raw.x - cx, raw.y - cy)
-            // Classify in the rotated local SCREEN frame so the handle
-            // tolerance (8px + 4px margin) is zoom-independent.
-            var s = overlay.paneScale()
-            var cPane = pane.mapFromCanvas(Qt.point(cx, cy))
-            var rad = overlay.angle * Math.PI / 180
-            var dx = mouse.x - cPane.x, dy = mouse.y - cPane.y
-            var lx = dx * Math.cos(rad) + dy * Math.sin(rad)
-            var ly = -dx * Math.sin(rad) + dy * Math.cos(rad)
-            var hw = overlay.crop.width / 2 * s
-            var hh = overlay.crop.height / 2 * s
-            overlay.mode = 0
-            for (var i = 0; i < overlay.handles.length; ++i) {
-                var hx = overlay.handles[i][0], hy = overlay.handles[i][1]
-                if (Math.abs(lx - hx * hw) <= 8 && Math.abs(ly - hy * hh) <= 8) {
-                    overlay.mode = 2
-                    overlay.handleDir = Qt.point(hx, hy)
-                    return
-                }
-            }
-            overlay.mode = (Math.abs(lx) <= hw && Math.abs(ly) <= hh) ? 1 : 3
+            var hit = overlay.classify(mouse.x, mouse.y)
+            overlay.mode = hit.mode
+            overlay.handleDir = Qt.point(hit.hx, hit.hy)
         }
         onReleased: overlay.mode = 0
 
         onPositionChanged: function(mouse) {
-            if (overlay.mode === 0) return
+            if (overlay.mode === 0) {
+                // Hover: track the region under the pointer so the
+                // cursor previews the drag it would start.
+                var hit = overlay.classify(mouse.x, mouse.y)
+                overlay.hoverMode = hit.mode
+                overlay.hoverDir = Qt.point(hit.hx, hit.hy)
+                return
+            }
             var raw = pane.mapToCanvas(Qt.point(mouse.x, mouse.y))
             var rad = overlay.angle * Math.PI / 180
             var cosA = Math.cos(rad), sinA = Math.sin(rad)

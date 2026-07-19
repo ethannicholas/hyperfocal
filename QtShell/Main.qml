@@ -627,7 +627,7 @@ ApplicationWindow {
             Label { text: "Crop"; color: "#d5d5d5"; font.bold: true }
             Button {
                 Layout.fillWidth: true
-                text: "Crop… (C)"
+                text: "Crop…"
                 enabled: Shell.canCrop && !Shell.cropMode
                 onClicked: Shell.beginCrop()
             }

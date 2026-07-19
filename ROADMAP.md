@@ -177,7 +177,15 @@ each independently landable:
    C/X/Return/Esc keys and the aspect/orientation controls bar mirror
    the native CropControls. The selftest walks the session
    (begin→full-canvas init→accept folds to no-crop).
-5. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+5. **Crop-overlay polish** (from Ethan's 2026-07-19 review; not
+   urgent): proper rotation cursors matching the native macOS
+   sector-oriented rotate cursors (Qt has no built-in rotate cursor —
+   needs custom cursor images quantized to the 8 sectors like
+   ContentView.swift:2093-2103); and hotkey discoverability — every
+   shortcut (C for crop, X for orientation, …) should also exist as a
+   menu item so the keys are learnable from the menus, not just
+   documentation.
+6. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
