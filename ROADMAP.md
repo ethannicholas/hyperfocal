@@ -163,71 +163,26 @@ pixels must gate on `hf_input_loading` (the title names the new frame
 before the decode lands — the stale-pixel race only shows on slow
 machines).
 
-**UI parity with the native app** is the phase's current goal (Qt is
-functional but rough; inventory taken 2026-07-19 against
-ContentView/HyperfocalAppMain/SettingsView). In rough priority order,
-each independently landable:
+**Feature parity with the native app was reached 2026-07-19** —
+retouch landed last: the session stays in AppCore behind hf_retouch_*
+(strokes/hover in full-image px, brush via the slider id namespace,
+source kinds/cycling/auto-pick, PMax build+cancel, revert; hf_undo
+mode-scopes to "Undo Stroke"); while active, hf_display_* serves the
+session's zero-copy working/depth image, and strokes bump the epoch
+with a union dirty rect (hf_display_dirty) the pane uses to evict only
+touched tiles (coarse base refetches debounced). The left pane
+reroutes to hf_retouch_source_*; RetouchOverlay.qml draws the brush
+circle under the canPaint rule; the selftest paints a stroke and
+proves edits→dirty-epoch→"Undo Stroke"→revert→exit. Remaining polish,
+in priority order:
 
-1. **Retouch in the Qt shell** — the largest piece: full session
-   surface over the bridge (enter/exit, brush size/softness, source
-   kind picker + frame cycling + auto-pick, strokes with the
-   image-space dirty rects, PMax build/cancel/progress, revert,
-   stroke undo), a paint-canvas item, and dirty-rect tile invalidation
-   in the pane (deferred item below). Sidebar completeness (tone/
-   fusion resets, cancel, badges, include-all/none, counts) and
-   undo/redo (hf_undo/redo/titles + the hf_tone_editing drag bracket —
-   tone sets outside a bracket are silent to undo; Qt sliders bracket
-   via pressed state; StandardKey shortcuts) landed 2026-07-19, as did
-   project lifecycle: hf_save_project (NULL path = Save to the existing
-   file, the Save/Save-As split) / hf_project_path / hf_has_unsaved_work
-   / hf_close_stack / hf_close_project; menu bar (File/Edit, native
-   system bar on macOS per Qt 6.8+ Menu adoption), dirty-marked window
-   title, unsaved-work quit gate, folder drag-drop, pane empty-state
-   hints, and a selftest save→reload round-trip (exit 16). Export flows
-   followed the same day: persisted format/color-space/strength options
-   (hf_*_format/color_space/animation_strength by native UI names), the
-   export save dialog with the format choice unified into the filter
-   combo and a labeled Color Space accessory row (Qt's widget
-   QFileDialog in non-native mode — the only Qt dialog that hosts
-   accessory rows; standard on Linux/Windows, trades the Finder
-   sidebar on macOS; DNG switches the popup to read "Linear Display
-   P3" and disables it, the native accessory's rule), the full
-   extension→format map in Shell::exportTo (the selftest exports TIFF
-   + DNG through it), the
-   Depth label swap, and async export-all / export-aligned / rocking
-   animation (started by hf_export_all/aligned/animation, summaries
-   through the notice seam; Linux animation still needs the
-   FFmpeg/giflib backend from the Phase 1 deferred list). The crop
-   overlay landed 2026-07-19: a transactional crop-mode session over
-   the bridge (hf_begin/accept/cancel_crop, hf_edit_crop for the live
-   un-gated rect, aspect/orientation by native label — geometry
-   authority stays in the model), with the QML overlay
-   (QtShell/CropOverlay.qml) porting the native drag math verbatim:
-   move with interior-rounded bbox clamping, anchored resize with
-   aspect lock and 32px min, unwrapped rotation with 20-step bisection
-   to the containment stop, corner-containment as the universal gate;
-   C/X/Return/Esc keys and the aspect/orientation controls bar mirror
-   the native CropControls. The selftest walks the session
-   (begin→full-canvas init→accept folds to no-crop). The zoom bar
-   landed 2026-07-19: −/%/+ cluster with a Fit + fixed-levels menu by
-   the mode picker, ⌘+/⌘−/⌘0 shortcuts, PaneItem
-   zoomBy/setAbsoluteScale/fit + displayScale on a viewportChanged
-   signal, acting on the shared two-pane viewport. The settings window landed
-   the same day: Edit > Settings… (⌘,) with the five pipeline toggles
-   by native label over hf_bool_setting/hf_set_bool_setting (native
-   settings.* id leaves) and hf_gpu_available gating Use GPU. The
-   noise-floor live depth preview landed too: hf_noise_floor_editing
-   brackets the slider drag (display switches to the async-built depth
-   preview, a data visualization — epoch-driven pane refresh, no tone
-   LUT; end restores), driven from the Qt slider's pressed state; the
-   selftest waits the preview in and asserts the data flag both ways.
-2. **Crop-overlay polish** (from Ethan's 2026-07-19 review; not
+1. **Crop-overlay polish** (from Ethan's 2026-07-19 review; not
    urgent): proper rotation cursors matching the native macOS
    sector-oriented rotate cursors (Qt has no built-in rotate cursor —
    needs custom cursor images quantized to the 8 sectors like
    ContentView.swift:2093-2103); (Hotkey menu items landed
    2026-07-19: Edit carries Crop/Swap Orientation/Accept/Cancel.)
-3. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+2. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
@@ -240,14 +195,6 @@ reviewers stop discovering them by surprise):
   non-native chrome on macOS).
 - Batch-fuse and bulk-export summaries arrive as notice dialogs — the
   native queueSummaryPresenter styling differs.
-
-Then, deferred until their prerequisites exist:
-
-- **Dirty-rect tile invalidation** once a partial-update producer exists
-  (retouch strokes in the Qt shell, item 1): today any epoch bump drops
-  every tile, which is right for wholesale changes (progressive
-  updates, new fuse) and wasteful only for localized ones — build it
-  with the feature that needs it.
 
 ## Engine performance
 
