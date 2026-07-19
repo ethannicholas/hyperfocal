@@ -59,17 +59,7 @@ the workaround is punted; see
 
 Residuals to close (each independently landable; keep macOS green):
 
-1. **CI first green run.** `.github/workflows/ci.yml` runs
-   `Scripts/ci-gate.sh` in a `swift:6.1-noble` container. The first
-   x86-64 run failed on exiv2 0.27 (Noble) vs 0.28 (dev box) —
-   `toInt64` is now version-guarded — and the gate floors are
-   platform-calibrated (macOS pmax baseline 38.26 sat under the shared
-   38.3 floor; CIRAW renders linear DNGs through Apple's own pipeline
-   at ≈48 dB — pre-existing, measured identically before the RAW work —
-   vs LibRaw's 93, so Darwin floors are 38.1/45). Confirm the next
-   Actions run is green, then delete this item.
-
-2. **UI suite re-run.** The 2026-07-19 macOS re-verification is done
+1. **UI suite re-run.** The 2026-07-19 macOS re-verification is done
    (ci-gate: release build, synth floors, DNG round-trip, probe; app
    builds; Qt selftest matrix) except `Scripts/ui-test.sh`, which
    takes over the machine — run it when someone is at the Mac, then
