@@ -1,6 +1,6 @@
 # Hyperfocal
 
-A focus stacking application for macOS.
+A free, open-source, cross-platform focus stacking application.
 
 [Website](https://ethannicholas.com/hyperfocal) ·
 [Tutorial](https://ethannicholas.com/hyperfocal/tutorial.html)
@@ -71,14 +71,15 @@ result every time.
   and format (MP4 or loop-forever GIF).
 
 - **Projects and batches.** Multi-stack projects with per-stack results and
-  retouch state, a queue that fuses every stack in a session, export-all, and
-  a full command-line interface for headless batch work.
+  retouch state, a queue that fuses every stack in a session, and export-all.
 
 ## Get Hyperfocal
 
 If you'd prefer to skip the build process and the hassle of keeping it up to
 date (and give the author a small tip in the process), Hyperfocal is available
 from the Mac App Store for $5.
+
+### Building on macOS
 
 To build it yourself for free, you'll need Xcode and
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`):
@@ -93,22 +94,30 @@ open Hyperfocal.xcodeproj
 Then run from Xcode. You will need to change the signing certificate to your
 own or to "Sign to Run Locally".
 
-The command-line tool builds with plain SwiftPM:
+### Building on Linux
+
+The Linux port is under active development. The engine and the
+command-line tool build and pass the same regression gates as on macOS;
+the desktop app is a Qt shell that already runs but isn't a finished
+product yet (some editing features are still macOS-only).
+
+To install the prerequisite libraries on Ubuntu:
 
 ```sh
-swift build -c release
-BIN=.build/release/hyperfocal-cli
+sudo apt install swiftlang build-essential pkg-config \
+    libraw-dev liblcms2-dev libexiv2-dev libjpeg-turbo8-dev \
+    libtiff-dev libpng-dev zlib1g-dev libopencv-dev cmake \
+    qt6-base-dev qt6-declarative-dev qt6-shadertools-dev
+```
 
-# Fuse a stack (frames in focus order; alignment on by default)
-$BIN fuse shots/DSC_*.NEF -o stacked.tif
+(On other distributions, install a Swift 6 toolchain from
+[swift.org](https://www.swift.org/install/) and the equivalent `-dev`
+packages.)
 
-# Fuse a whole session: stacks are detected by EXIF capture-time gaps
-$BIN batch session/DSC_*.NEF -o fused/ --gap 10 --auto-exclude
+Then build and run:
 
-# Generate a synthetic stack with ground truth and check the pipeline
-$BIN synth -o /tmp/synth
-$BIN fuse /tmp/synth/frame_*.tif -o /tmp/out.tif
-$BIN compare /tmp/out.tif /tmp/synth/ground_truth.tif   # prints PSNR
+```sh
+QtShell/build.sh --run
 ```
 
 New to focus stacking? Take a look at the

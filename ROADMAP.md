@@ -35,7 +35,7 @@ The Linux bring-up landed (see git history + `Docs/cross-platform-plan.md`):
 `swift build` is green on Ubuntu 26.04 / aarch64 with the distro swift.org 6.1
 toolchain, and `hyperfocal-cli synth→fuse→compare` passes the **plane** synth
 gate — dmap **39.1 dB** (≥ 38.7), pmax **38.6 dB** (≥ 38.3), measured with the
-README invocation (default params, `--color-space p3`). The engine's Apple
+standard gate invocation (verify skill; default params, `--color-space p3`). The engine's Apple
 paths stay behind `#if canImport(<Framework>)`; Linux decode/encode/EXIF/
 registration go through a C-ABI shim (`Sources/CImaging` over libtiff /
 libpng / libjpeg-turbo / LibRaw / lcms2 / exiv2 / OpenCV) wired into

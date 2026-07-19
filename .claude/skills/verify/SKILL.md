@@ -55,8 +55,47 @@ ship (no `default.metallib` → SwiftUI shaders silently no-op).
 .build/debug/retouch-probe /tmp/synth/frame_*.tif    # must print "probe: ALL PASS"
 ```
 
-Synth PSNR baselines (default params): plane ≈ 38.6 dB dmap / 37.5 pmax;
-object ≈ 39.2; CPU↔GPU parity ≥ 90 dB.
+The synth PSNR gate — baseline numbers live in ROADMAP's header (don't
+copy them here; they move when defaults are retuned). The measured-with
+invocation is default synth params plus `--color-space p3` on the fuse
+(the pipeline and ground truth are P3; the default sRGB export skews the
+comparison):
+
+```sh
+.build/debug/hyperfocal-cli synth -o /tmp/synth
+.build/debug/hyperfocal-cli fuse /tmp/synth/frame_*.tif -o /tmp/out.tif --color-space p3
+.build/debug/hyperfocal-cli compare /tmp/out.tif /tmp/synth/ground_truth.tif   # prints PSNR
+```
+
+Repeat with `--method pmax` for the pmax baseline and `synth --scene
+object` for the object baseline. CPU↔GPU parity (≥ 90 dB, ROADMAP
+header): fuse the same stack with `--engine cpu` and `--engine gpu`,
+then `compare` the two outputs.
+
+## hyperfocal-cli reference
+
+The CLI is not documented for end users (deliberately — it exists for
+verification and headless batch work), so this is the record of its
+surface. `hyperfocal --help` / `hyperfocal <cmd> --help` are
+authoritative (ArgumentParser).
+
+- `fuse <frames…> -o out.tif` — fuse one stack. Frames in focus order;
+  alignment on by default (`--no-align`). Key options: `--method
+  dmap|pmax`, `--engine auto|gpu|cpu`, `--color-space srgb|p3|prophoto`,
+  `--auto-exclude` (drop flash-misfire/bad-alignment frames),
+  `--depth-map <path>` writes the regularized depth map, plus
+  per-parameter DMap tuning flags (see `--help`).
+- `batch <frames…> -o dir/ --gap 10 --auto-exclude` — split a session
+  into stacks by EXIF capture-time gaps and fuse each; `--dry-run`
+  prints the proposed split, `--ext tif|png|jpg|dng`, `--name-order`
+  for stacks whose capture-time order is unusable.
+- `animate <frames…>` — rocking-animation export (path/fps/strength
+  options mirror the app's).
+- `synth -o dir/` — synthetic stack + ground truth (see Test fixtures).
+- `compare a b` — prints PSNR between two images.
+- `debug-warp`, `debug-source`, `debug-diff`, `debug-boost`,
+  `debug-chain`, `debug-align` — pipeline-stage inspection tools; run
+  `--help` before reaching for AX-level diagnosis of an engine problem.
 
 ## Test fixtures
 
