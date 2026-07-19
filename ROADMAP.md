@@ -260,23 +260,26 @@ wgpu-native prebuilt (v29.0.1.1; default `../wgpu-native`), giving
 `Sources/CWgpu` + `WgpuEngine` (WGSL library, pipeline cache,
 upload/download, per-dispatch bind groups) and the
 `hyperfocal-cli debug-wgpu` kernel-parity harness (`WgpuParity`, floor
-90 dB). Three kernels are translated and passing — warp_lanczos3 129.6
-dB vs the CPU warp, blur_h/blur_v bit-identical — measured on D3D12
-WARP (the Windows-on-ARM VM has no hardware DX12; WARP validates
-correctness, real speedups need hardware). Remaining, in order:
+90 dB). All 27 kernels are translated and passing — 16 bit-identical,
+the rest 129–164 dB (transcendental precision), minimum 129.6 dB
+(warp_lanczos3; both warps check against the production `Warp.apply`,
+the rest against inline references mirroring the MSL) — measured on
+D3D12 WARP (the Windows-on-ARM VM has no hardware DX12; WARP validates
+correctness, real speedups need hardware). Kernel conventions: bindings
+in `run`'s order (storage 0..n-1, uniforms last, padded to 16-byte
+multiples); guided_apply_blend needs 9 storage buffers, which is why
+the engine requires the adapter's real limits at device creation (the
+spec default is 8) and callers without spill data bind 1-float
+dummies. Remaining, in order:
 
-1. **Translate the other 24 kernels** from `MetalEngine.kernelSource`
-   into `WgpuEngine.kernelSource` (per-kernel binding declarations in
-   `run`'s order: storage 0..n-1, uniforms last), each with a
-   `WgpuParity` case against its CPU reference.
-2. **Port GPUPyramid's orchestration** (the smaller of the two) onto
+1. **Port GPUPyramid's orchestration** (the smaller of the two) onto
    WgpuEngine — needs batched encoding (one submit per frame, not per
    dispatch) and ping-pong uploads to match the Metal path's overlap;
    wire into `PyramidFusion`'s preferGPU seam and gate with the CPU↔GPU
    fusion comparison (≥ 60 dB, the Metal pyramid's bar).
-3. **Port GPUDMap** the same way (≥ 90 dB bar), then flip `preferGPU`
+2. **Port GPUDMap** the same way (≥ 90 dB bar), then flip `preferGPU`
    on for Windows/Linux and calibrate ci-gate.
-4. Decide packaging: wgpu-native ships as a prebuilt DLL/so — vendor per
+3. Decide packaging: wgpu-native ships as a prebuilt DLL/so — vendor per
    platform, or fetch in CI like Qt/vcpkg (deployment story joins the
    CLI-DLL residual above).
 
