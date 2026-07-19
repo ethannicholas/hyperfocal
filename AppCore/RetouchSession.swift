@@ -74,6 +74,16 @@ public final class RetouchSession: ObservableObject {
     /// source (or during a dead drag) promises painting that can't happen.
     public var canPaint: Bool { sourceFloat != nil && !deadDrag }
 
+    /// Change-notification seam for non-Combine clients (the C-ABI
+    /// bridge) — the session is its own ObservableObject, so its
+    /// published state (source loading, canPaint, brush, edits) never
+    /// reaches AppModel.objectWillChange; clients that only observe the
+    /// model would show stale retouch UI forever. Same contract as
+    /// AppModel.addChangeObserver.
+    public func addChangeObserver(_ observer: @escaping () -> Void) -> AnyObject {
+        objectWillChange.sink { _ in observer() }
+    }
+
     private(set) var working: ImageBuffer
     /// The depth plane, co-painted by strokes: painting from frame N writes
     /// N's index under the brush (those ARE the pixels being copied), the

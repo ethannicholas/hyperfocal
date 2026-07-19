@@ -833,7 +833,14 @@ ApplicationWindow {
                 label: "Blacks"; from: -100; to: 100; decimals: 0
             }
 
-            Label { text: "Retouch"; color: "#d5d5d5"; font.bold: true }
+            Label { text: "Edit"; color: "#d5d5d5"; font.bold: true }
+            Button {
+                Layout.fillWidth: true
+                visible: !Shell.retouchMode
+                text: "Crop…"
+                enabled: Shell.canCrop && !Shell.cropMode
+                onClicked: Shell.beginCrop()
+            }
             Button {
                 Layout.fillWidth: true
                 visible: !Shell.retouchMode
@@ -900,13 +907,6 @@ ApplicationWindow {
                 onClicked: Shell.exitRetouch()
             }
 
-            Label { text: "Crop"; color: "#d5d5d5"; font.bold: true }
-            Button {
-                Layout.fillWidth: true
-                text: "Crop…"
-                enabled: Shell.canCrop && !Shell.cropMode
-                onClicked: Shell.beginCrop()
-            }
             Label {
                 Layout.fillWidth: true
                 visible: Shell.displayCrop.width > 0

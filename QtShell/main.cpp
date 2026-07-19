@@ -44,6 +44,8 @@ struct SelfTest {
     int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
     int finishTries = 0;
     int stageTicks = 0;
+    int changedCount = 0;      // Shell::changed emissions (see stage 6)
+    int changedAtRetouch = 0;
     QImage zoomPrev, zoomShotA;
 };
 
@@ -55,6 +57,12 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
         QCoreApplication::exit(4);
         return;
     }
+
+    // Witness the fine-grained notification path: QML only re-reads on
+    // these signals, so a journey that polls the bridge directly would
+    // pass even if the UI were stuck (the RetouchSession-observer bug).
+    QObject::connect(shell, &Shell::changed, engine,
+                     [state] { ++state->changedCount; });
 
     auto *poll = new QTimer(engine);
     QObject::connect(poll, &QTimer::timeout, engine, [engine, shell, state] {
@@ -313,6 +321,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->previewOK = isData && !shell->displayIsData();
                 // Retouch journey: enter (async source decode — stage 6
                 // waits for canPaint).
+                state->changedAtRetouch = state->changedCount;
                 state->retouchOK = shell->enterRetouch()
                     && shell->retouchMode();
                 advance(6);
@@ -327,6 +336,11 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     return;
                 }
                 const bool paintable = shell->retouchCanPaint();
+                // The session's async load must have driven the shell's
+                // changed() signal — the QML UI depends on it (a silent
+                // load leaves "Loading source…" stuck forever).
+                state->retouchOK = state->retouchOK
+                    && state->changedCount > state->changedAtRetouch;
                 // A short diagonal stroke through the center must mark
                 // edits, bump the display epoch through the dirty-rect
                 // channel, and scope undo to strokes; undo takes the

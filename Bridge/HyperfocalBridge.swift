@@ -51,6 +51,7 @@ private enum Bridge {
     /// the dirty subscription and accumulate a union rect the pane
     /// reads via hf_display_dirty to invalidate only touched tiles.
     static var retouchDirty: CGRect?
+    static var retouchChangeToken: AnyObject?
     static var lastSourceDisplay: PlatformImage?
     static var sourceDisplayEpoch: Int32 = 0
 
@@ -556,6 +557,12 @@ public func hf_enter_retouch() -> Int32 {
         guard let session = model.retouch else { return 0 }
         session.onDisplayDirty = { rect in
             MainActor.assumeIsolated { Bridge.retouchDisplayDirtied(rect) }
+        }
+        // The session's own published state (source loads, canPaint,
+        // edits) must reach the shell's change callback — it is a
+        // separate ObservableObject from the model.
+        Bridge.retouchChangeToken = session.addChangeObserver {
+            MainActor.assumeIsolated { Bridge.scheduleNotify() }
         }
         Bridge.retouchDisplayDirtied(
             CGRect(origin: .zero, size: session.nominalSize))
