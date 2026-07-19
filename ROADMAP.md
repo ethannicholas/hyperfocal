@@ -119,12 +119,48 @@ call) — nothing bleeds between the shells' persisted state.
 
 Next, in rough order (each independently landable):
 
-1. **Main-queue pumping off macOS**: DispatchQueue.main drains under Qt's
-   loop on macOS via CFRunLoop; Linux/Windows need an explicit pump (Qt
-   timer or glib hook) — the known open question the prototype defers.
+1. **Qt shell on Linux — bring-up.** The shell + selftest matrix runs
+   only on macOS today; the blockers, in dependency order:
+   - *AppCore portability (the load-bearing chunk).* `AppModel.swift`
+     imports SwiftUI, Combine, CoreGraphics, and
+     UniformTypeIdentifiers with **no** `canImport` guards; the
+     published image currency (`outputPreview`, `progressive`,
+     `depthPreview`, `inputPreview`, `processingSource`) is `CGImage`;
+     the bridge subscribes `objectWillChange` (Combine) and serves
+     tiles via `CGImage.cropping` + `CGContext` draws. Needed: the
+     plan's 0d observation seam (or OpenCombine), a portable image
+     handle for published previews (ImageBuffer-backed, with the
+     CGImage path kept behind `canImport(CoreGraphics)` — the engine
+     below is already portable, Phase 1 proved it), and
+     `#if canImport` partitioning of the SwiftUI/UTType touches. Most
+     of this is macOS-verifiable against the existing gates (probe,
+     UI suite, Qt selftest matrix) before Linux ever runs it.
+   - *Bridge build story.* macOS builds the bridge as an XcodeGen
+     dylib target because SwiftPM can't share the AppCore sources
+     with retouch-probe until AppCore is a real module (plan 0d);
+     Linux has no Xcode. Make AppCore a real SwiftPM target and the
+     bridge a SwiftPM dynamic-library product; teach
+     `QtShell/CMakeLists.txt` the `.so` name (it hardcodes
+     `HyperfocalBridge.dylib`, `BUILD_RPATH`, `MACOSX_BUNDLE`) and
+     `QtShell/build.sh` the non-xcodebuild path.
+   - *Main-queue pumping.* DispatchQueue.main drains under Qt's loop
+     on macOS via CFRunLoop; Linux needs an explicit pump (Qt timer
+     or glib hook) — the prototype's known deferred question.
+   - *Deps.* Phase 1's package list plus Qt 6: Ubuntu
+     `qt6-base-dev qt6-declarative-dev qt6-shadertools-dev` and the
+     QtQuick Controls/Dialogs/Layouts QML modules
+     (`qml6-module-qtquick-*`).
+   - *Done =* the four-variant selftest matrix exits 0 on Linux:
+     plain, `HFQT_EXPECT_DISPLAY=WxH` on a >1600px stack,
+     `HFQT_EXPECT_EXCLUDED` on a `--misfire-frame` stack, and
+     `HFQT_STACK2` batch. Runner notes: derive the expected display
+     WxH from a first run's export (the fuse insets ~1px/side even
+     with `--jitter 0 --breathing 0`); `--misfire-frame` refuses the
+     middle (reference) frame — sabotage a different one.
 2. **Crop editing in the Qt shell** (the drag-handle overlay is
    native-only; the bridge already speaks hf_set_crop, so this is a QML
-   overlay over the output pane feeding the same call).
+   overlay over the output pane feeding the same call — the sidebar's
+   numeric fields are the stand-in).
 3. **Dirty-rect tile invalidation** once a partial-update producer exists
    (retouch strokes in the Qt shell): today any epoch bump drops every
    tile, which is right for wholesale changes (progressive updates, new
