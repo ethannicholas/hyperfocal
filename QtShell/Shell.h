@@ -92,6 +92,9 @@ public:
 
     Q_INVOKABLE bool openStack(const QUrl &folder);
     Q_INVOKABLE bool confirmNewProject();
+    /// The unsaved-work quit confirm, through the same message-box path
+    /// as every dialog-seam confirm. True = quit.
+    Q_INVOKABLE bool confirmQuit();
     Q_INVOKABLE bool newProject(const QUrl &folder);
     Q_INVOKABLE bool fuse();
     Q_INVOKABLE bool exportTo(const QUrl &file);

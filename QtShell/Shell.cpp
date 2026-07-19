@@ -492,6 +492,18 @@ bool Shell::openStack(const QUrl &folder) {
 
 bool Shell::confirmNewProject() { return hf_confirm_new_project() != 0; }
 
+bool Shell::confirmQuit() {
+    QMessageBox box(QMessageBox::Warning,
+                    QStringLiteral("Are you sure you want to quit?"),
+                    QStringLiteral("Are you sure you want to quit?"));
+    box.setInformativeText(QStringLiteral("Unsaved data will be lost."));
+    QAbstractButton *quit = box.addButton(QStringLiteral("Quit"),
+                                          QMessageBox::AcceptRole);
+    box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+    box.exec();
+    return box.clickedButton() == quit;
+}
+
 bool Shell::newProject(const QUrl &folder) {
     return hf_new_project(folder.toLocalFile().toUtf8().constData()) != 0;
 }

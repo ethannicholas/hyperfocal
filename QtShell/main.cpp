@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
@@ -373,6 +374,7 @@ int main(int argc, char *argv[]) {
     if (qEnvironmentVariableIsEmpty("HYPERFOCAL_SETTINGS_SUITE"))
         qputenv("HYPERFOCAL_SETTINGS_SUITE", "org.hyperfocal.qtshell-settings");
     QApplication app(argc, argv);  // QtWidgets: modal QMessageBox dialogs
+    app.setWindowIcon(QIcon(QStringLiteral(":/AppIcon.png")));
 #ifndef Q_OS_MACOS
     // On macOS Qt's Cocoa loop pumps the CFRunLoop, which drains the Swift
     // side's DispatchQueue.main. Elsewhere nothing does — pump it from the

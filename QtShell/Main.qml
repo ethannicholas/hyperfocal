@@ -24,13 +24,11 @@ ApplicationWindow {
     }
     color: "#1b1b1b"
 
-    property bool quitApproved: false
     onClosing: function(close) {
-        // The native unsaved-work gate, through the same confirm shape.
-        if (Shell.hasUnsavedWork && !quitApproved) {
+        // The native unsaved-work gate, through the same message-box
+        // path as every other confirm (synchronous, full-size, icon).
+        if (Shell.hasUnsavedWork && !Shell.confirmQuit())
             close.accepted = false
-            quitDialog.open()
-        }
     }
 
     menuBar: MenuBar {
@@ -121,20 +119,6 @@ ApplicationWindow {
                 enabled: Shell.canRedo
                 onTriggered: Shell.redo()
             }
-        }
-    }
-
-    Dialog {
-        id: quitDialog
-        title: "Are you sure you want to quit?"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Discard | Dialog.Cancel
-        Label { text: "Unsaved data will be lost." }
-        onDiscarded: {
-            window.quitApproved = true
-            quitDialog.close()
-            window.close()
         }
     }
 
@@ -400,13 +384,6 @@ ApplicationWindow {
             height: Math.max(implicitHeight, sidebarScroll.availableHeight)
             spacing: 10
 
-            Button {
-                Layout.fillWidth: true
-                text: "Open Stack…"
-                enabled: !Shell.isRunning
-                onClicked: openDialog.open()
-            }
-
             // Stack tree (flat mirror): shown once a second stack exists,
             // like the native sidebar. Row click selects (stash/install);
             // the checkbox is the batch-fuse opt-in.
@@ -506,6 +483,23 @@ ApplicationWindow {
                     font.pixelSize: 11
                     onClicked: Shell.setAllFramesIncluded(false)
                 }
+            }
+            // Native empty state: hint + Open Folder…, under the
+            // Stack label, only while no stack is open.
+            Label {
+                Layout.fillWidth: true
+                visible: stackList.count === 0 && frameList.count === 0
+                text: "Drop a folder of frames here, or:"
+                color: "#8a8a8a"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+            Button {
+                Layout.fillWidth: true
+                visible: stackList.count === 0 && frameList.count === 0
+                text: "Open Folder…"
+                enabled: !Shell.isRunning
+                onClicked: openDialog.open()
             }
             ListView {
                 id: frameList
@@ -720,18 +714,25 @@ ApplicationWindow {
                 Layout.margins: 6
                 visible: !Shell.cropMode
                 Item { Layout.fillWidth: true }
-                ButtonGroup { id: modeGroup }
-                RadioButton {
-                    text: "Result"
-                    ButtonGroup.group: modeGroup
-                    checked: !Shell.depthMode
-                    onClicked: Shell.depthMode = false
-                }
-                RadioButton {
-                    text: "Depth"
-                    ButtonGroup.group: modeGroup
-                    checked: Shell.depthMode
-                    onClicked: Shell.depthMode = true
+                // Segmented picker, like the native output.mode control.
+                Row {
+                    spacing: 1
+                    Button {
+                        text: "Result"
+                        checkable: true
+                        autoExclusive: true
+                        checked: !Shell.depthMode
+                        onClicked: Shell.depthMode = false
+                        implicitWidth: 80
+                    }
+                    Button {
+                        text: "Depth"
+                        checkable: true
+                        autoExclusive: true
+                        checked: Shell.depthMode
+                        onClicked: Shell.depthMode = true
+                        implicitWidth: 80
+                    }
                 }
             }
 
