@@ -466,10 +466,17 @@ ApplicationWindow {
                 id: stackList
                 visible: count > 1
                 Layout.fillWidth: true
-                // Natural height; the sidebar's ScrollView is the one
-                // scroll surface (nested scrolling reads as a trap).
-                Layout.preferredHeight: contentHeight
-                interactive: false
+                // Bounded and independently scrollable — a big tree
+                // must not shove the fusion/tone controls offscreen
+                // (native bounds the stack area the same way).
+                Layout.preferredHeight: Math.min(300, contentHeight)
+                clip: true
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                    opacity: active ? 0.8 : 0
+                    visible: opacity > 0
+                    Behavior on opacity { NumberAnimation { duration: 200 } }
+                }
                 model: Shell.stacks
                 delegate: ColumnLayout {
                     id: stackDelegate
@@ -630,9 +637,15 @@ ApplicationWindow {
                 // stacks the tree's nested rows take over, like native.
                 visible: stackList.count <= 1
                 Layout.fillWidth: true
-                Layout.preferredHeight: visible ? contentHeight : 0
-                interactive: false
+                Layout.preferredHeight: visible
+                    ? Math.min(300, contentHeight) : 0
                 clip: true
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                    opacity: active ? 0.8 : 0
+                    visible: opacity > 0
+                    Behavior on opacity { NumberAnimation { duration: 200 } }
+                }
                 model: Shell.frames
                 delegate: RowLayout {
                     width: frameList.width
