@@ -867,14 +867,16 @@ ApplicationWindow {
                     currentIndex: Math.max(0, model.indexOf(Shell.cropAspect))
                     onActivated: Shell.cropAspect = currentText
                 }
-            }
-            Button {
-                Layout.fillWidth: true
-                visible: Shell.cropMode
-                text: Shell.cropPortrait ? "Portrait" : "Landscape"
-                onClicked: Shell.toggleCropOrientation()
-                ToolTip.visible: hovered
-                ToolTip.text: "Swap the crop between landscape and portrait (X)."
+                Button {
+                    // Icon button showing the current orientation, in
+                    // the aspect row like native's 18×18 symbol button.
+                    text: Shell.cropPortrait ? "▯" : "▭"
+                    Layout.preferredWidth: 36
+                    onClicked: Shell.toggleCropOrientation()
+                    ToolTip.visible: hovered
+                    ToolTip.text:
+                        "Swap the crop between landscape and portrait (X)."
+                }
             }
             RowLayout {
                 visible: Shell.cropMode
