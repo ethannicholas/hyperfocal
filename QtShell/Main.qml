@@ -83,7 +83,7 @@ ApplicationWindow {
                 text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"
                 shortcut: "Ctrl+E"
                 enabled: !Shell.isRunning && Shell.hasDisplay
-                onTriggered: exportDialog.open()
+                onTriggered: Shell.exportInteractive()
             }
             Action {
                 text: "Export All Fused…"
@@ -100,11 +100,6 @@ ApplicationWindow {
                 text: "Export Rocking Animation…"
                 enabled: !Shell.isRunning && Shell.canAnimate
                 onTriggered: animationOptionsDialog.open()
-            }
-            MenuSeparator {}
-            Action {
-                text: "Export Options…"
-                onTriggered: exportOptionsDialog.open()
             }
         }
         Menu {
@@ -203,18 +198,6 @@ ApplicationWindow {
         onAccepted: Shell.openStack(selectedFolder)
     }
 
-    FileDialog {
-        id: exportDialog
-        title: Shell.depthMode ? "Export depth map" : "Export result"
-        fileMode: FileDialog.SaveFile
-        defaultSuffix: "tif"
-        // The chosen extension picks the format for this export; the
-        // persisted preference (Export Options…) covers the rest.
-        nameFilters: ["TIFF (*.tif)", "DNG (*.dng)", "PNG (*.png)",
-                      "JPEG (*.jpg)"]
-        onAccepted: Shell.exportTo(selectedFile)
-    }
-
     FolderDialog {
         id: exportAllDialog
         title: "Export every fused stack to a folder"
@@ -235,7 +218,7 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         RowLayout {
             spacing: 8
-            Label { text: "Strength"; color: "#b5b5b5" }
+            Label { text: "Strength:"; color: "#b5b5b5" }
             ComboBox {
                 model: ["Subtle", "Medium", "Strong"]
                 currentIndex: Math.max(0, model.indexOf(Shell.animationStrength))
@@ -254,32 +237,6 @@ ApplicationWindow {
         onAccepted: Shell.exportAnimation(selectedFile)
     }
 
-    Dialog {
-        id: exportOptionsDialog
-        title: "Export options"
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Close
-        GridLayout {
-            columns: 2
-            columnSpacing: 8
-            rowSpacing: 8
-            Label { text: "Format"; color: "#b5b5b5" }
-            ComboBox {
-                model: ["TIFF (16-bit)", "DNG (raw)", "PNG (16-bit)", "JPEG"]
-                currentIndex: Math.max(0, model.indexOf(Shell.exportFormat))
-                onActivated: Shell.exportFormat = currentText
-                Layout.preferredWidth: 180
-            }
-            Label { text: "Color space"; color: "#b5b5b5" }
-            ComboBox {
-                model: ["sRGB", "Display P3", "ProPhoto RGB"]
-                currentIndex: Math.max(0, model.indexOf(Shell.exportColorSpace))
-                onActivated: Shell.exportColorSpace = currentText
-                Layout.preferredWidth: 180
-            }
-        }
-    }
 
     // A pane with the tone LUT shader over its layer — the native
     // ToneFilteredPaneView's color-cube-on-layer, mirrored. The PaneItem
@@ -713,9 +670,9 @@ ApplicationWindow {
 
             Button {
                 Layout.fillWidth: true
-                text: "Export…"
-                enabled: !Shell.isRunning
-                onClicked: exportDialog.open()
+                text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"
+                enabled: !Shell.isRunning && Shell.hasDisplay
+                onClicked: Shell.exportInteractive()
             }
         }
         }

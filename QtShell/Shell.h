@@ -127,6 +127,10 @@ public:
     void setExportColorSpace(const QString &name);
     QString animationStrength() const;
     void setAnimationStrength(const QString &name);
+    /// The export save dialog with the native accessory's Format /
+    /// Color Space rows inline (Qt's widget dialog, so the rows live in
+    /// the panel itself — the platform-native panel can't host them).
+    Q_INVOKABLE void exportInteractive();
     Q_INVOKABLE bool exportAll(const QUrl &dir);
     Q_INVOKABLE bool exportAligned(const QUrl &dir);
     Q_INVOKABLE bool exportAnimation(const QUrl &file);

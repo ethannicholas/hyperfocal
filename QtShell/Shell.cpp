@@ -5,6 +5,10 @@
 
 #include "hyperfocal_bridge.h"
 
+#include <QComboBox>
+#include <QFileDialog>
+#include <QGridLayout>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 
@@ -269,6 +273,78 @@ QString Shell::animationStrength() const {
 
 void Shell::setAnimationStrength(const QString &name) {
     hf_set_animation_strength(name.toUtf8().constData());
+}
+
+void Shell::exportInteractive() {
+    // Qt's own dialog (not the platform panel) so the accessory rows sit
+    // inside it, like the native save panel's Format/Color Space
+    // accessory — QFileDialog's grid accepts appended rows only in
+    // non-native mode. Standard on Linux/Windows; on macOS this trades
+    // the Finder sidebar for inline options.
+    QFileDialog dialog(nullptr, depthMode() ? QStringLiteral("Export Depth Map")
+                                            : QStringLiteral("Export Result"));
+    dialog.setOption(QFileDialog::DontUseNativeDialog);
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+    // The dialog's own filter combo IS the format picker — one control,
+    // no redundant "Format:" row; only Color Space needs an accessory.
+    const QStringList formats = {QStringLiteral("TIFF (16-bit)"),
+                                 QStringLiteral("DNG (raw)"),
+                                 QStringLiteral("PNG (16-bit)"),
+                                 QStringLiteral("JPEG")};
+    const QStringList suffixes = {QStringLiteral("tif"), QStringLiteral("dng"),
+                                  QStringLiteral("png"), QStringLiteral("jpg")};
+    QStringList filters;
+    for (qsizetype i = 0; i < formats.size(); ++i)
+        filters << formats[i] + " (*." + suffixes[i] + ")";
+    dialog.setNameFilters(filters);
+    dialog.selectNameFilter(
+        filters.value(qMax(qsizetype(0), formats.indexOf(exportFormat()))));
+    const QStringList spaces = {QStringLiteral("sRGB"),
+                                QStringLiteral("Display P3"),
+                                QStringLiteral("ProPhoto RGB")};
+    auto *space = new QComboBox(&dialog);
+    space->addItems(spaces);
+    space->setCurrentText(exportColorSpace());
+    QString savedSpace = exportColorSpace();
+    auto applyFormat = [&, space] {
+        const qsizetype i =
+            qMax(qsizetype(0), filters.indexOf(dialog.selectedNameFilter()));
+        dialog.setDefaultSuffix(suffixes.value(i, QStringLiteral("tif")));
+        // DNG always carries the full P3 gamut as linear raw: the popup
+        // switches to read "Linear Display P3" and disables, restoring
+        // the user's choice when another format is picked — the native
+        // accessory's behavior.
+        const bool dng = formats.value(i) == QStringLiteral("DNG (raw)");
+        if (dng && space->isEnabled()) {
+            savedSpace = space->currentText();
+            space->clear();
+            space->addItem(QStringLiteral("Linear Display P3"));
+            space->setEnabled(false);
+        } else if (!dng && !space->isEnabled()) {
+            space->clear();
+            space->addItems(spaces);
+            space->setCurrentText(savedSpace);
+            space->setEnabled(true);
+        }
+    };
+    applyFormat();
+    QObject::connect(&dialog, &QFileDialog::filterSelected, &dialog,
+                     [&applyFormat](const QString &) { applyFormat(); });
+    if (auto *grid = qobject_cast<QGridLayout *>(dialog.layout())) {
+        const int row = grid->rowCount();
+        grid->addWidget(new QLabel(QStringLiteral("Color Space:"), &dialog),
+                        row, 0, Qt::AlignRight);
+        grid->addWidget(space, row, 1);
+    }
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+        return;
+    // Both choices persist (the shell's own suite), like the native
+    // accessory; the write itself uses them via the model's settings.
+    setExportFormat(formats.value(
+        qMax(qsizetype(0), filters.indexOf(dialog.selectedNameFilter()))));
+    setExportColorSpace(space->isEnabled() ? space->currentText() : savedSpace);
+    hf_export(dialog.selectedFiles().first().toUtf8().constData(), nullptr);
 }
 
 bool Shell::exportAll(const QUrl &dir) {

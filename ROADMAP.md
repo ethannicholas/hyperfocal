@@ -156,9 +156,15 @@ each independently landable:
    title, unsaved-work quit gate, folder drag-drop, pane empty-state
    hints, and a selftest save→reload round-trip (exit 16). Export flows
    followed the same day: persisted format/color-space/strength options
-   (hf_*_format/color_space/animation_strength by native UI names, an
-   Export Options dialog), the full extension→format map on Export…
-   (tif/dng/png/jpg; the selftest exports TIFF + DNG through it), the
+   (hf_*_format/color_space/animation_strength by native UI names), the
+   export save dialog with the format choice unified into the filter
+   combo and a labeled Color Space accessory row (Qt's widget
+   QFileDialog in non-native mode — the only Qt dialog that hosts
+   accessory rows; standard on Linux/Windows, trades the Finder
+   sidebar on macOS; DNG switches the popup to read "Linear Display
+   P3" and disables it, the native accessory's rule), the full
+   extension→format map in Shell::exportTo (the selftest exports TIFF
+   + DNG through it), the
    Depth label swap, and async export-all / export-aligned / rocking
    animation (started by hf_export_all/aligned/animation, summaries
    through the notice seam; Linux animation still needs the
