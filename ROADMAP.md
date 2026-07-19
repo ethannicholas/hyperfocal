@@ -163,9 +163,7 @@ functional but rough; inventory taken 2026-07-19 against
 ContentView/HyperfocalAppMain/SettingsView). In rough priority order,
 each independently landable:
 
-1. **Noise-floor live depth preview** on slider drag (begin/end bridge
-   calls mirroring beginNoiseFloorPreview/end).
-2. **Retouch in the Qt shell** — the largest piece: full session
+1. **Retouch in the Qt shell** — the largest piece: full session
    surface over the bridge (enter/exit, brush size/softness, source
    kind picker + frame cycling + auto-pick, strokes with the
    image-space dirty rects, PMax build/cancel/progress, revert,
@@ -212,14 +210,19 @@ each independently landable:
    signal, acting on the shared two-pane viewport. The settings window landed
    the same day: Edit > Settings… (⌘,) with the five pipeline toggles
    by native label over hf_bool_setting/hf_set_bool_setting (native
-   settings.* id leaves) and hf_gpu_available gating Use GPU.
-3. **Crop-overlay polish** (from Ethan's 2026-07-19 review; not
+   settings.* id leaves) and hf_gpu_available gating Use GPU. The
+   noise-floor live depth preview landed too: hf_noise_floor_editing
+   brackets the slider drag (display switches to the async-built depth
+   preview, a data visualization — epoch-driven pane refresh, no tone
+   LUT; end restores), driven from the Qt slider's pressed state; the
+   selftest waits the preview in and asserts the data flag both ways.
+2. **Crop-overlay polish** (from Ethan's 2026-07-19 review; not
    urgent): proper rotation cursors matching the native macOS
    sector-oriented rotate cursors (Qt has no built-in rotate cursor —
    needs custom cursor images quantized to the 8 sectors like
    ContentView.swift:2093-2103); (Hotkey menu items landed
    2026-07-19: Edit carries Crop/Swap Orientation/Accept/Cancel.)
-4. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
+3. **Chrome**: About panel (+ DNG SDK credits), Help link, stack
    section collapse, disabled-stack dimming, per-stack inline frame
    disclosure in the multi-stack tree.
 
@@ -242,7 +245,7 @@ reviewers stop discovering them by surprise):
 Then, deferred until their prerequisites exist:
 
 - **Dirty-rect tile invalidation** once a partial-update producer exists
-  (retouch strokes in the Qt shell, item 2): today any epoch bump drops
+  (retouch strokes in the Qt shell, item 1): today any epoch bump drops
   every tile, which is right for wholesale changes (progressive
   updates, new fuse) and wasteful only for localized ones — build it
   with the feature that needs it.
