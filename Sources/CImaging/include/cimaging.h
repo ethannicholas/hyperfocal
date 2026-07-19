@@ -42,6 +42,12 @@ hf_status hf_decode(const char* path, int* out_w, int* out_h, float** out_rgba);
 // same RGBA Float32 P3 contract as hf_decode.
 hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, float** out_rgba);
 
+// As-shot neutral chromaticity (CIE xy) from a raw file's header — no pixel
+// decode. Counterpart of CIRAWFilter.neutralChromaticity on the Apple path;
+// DNG export's AsShotNeutral un-bake reads it. hf_err_format when the file
+// carries no usable white-balance data.
+hf_status hf_raw_neutral_xy(const char* path, double* out_x, double* out_y);
+
 // Decode any supported file to an 8-bit grayscale (luminance) plane — the
 // cheap representation registration runs on. *out_gray is a malloc'd
 // width*height byte buffer (free with hf_free). `is_raw` selects the RAW path.

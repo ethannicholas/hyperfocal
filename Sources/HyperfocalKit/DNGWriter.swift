@@ -29,12 +29,11 @@ public enum DNGWriter {
         public var fNumber: Double?
         public var focalLengthMM: Double?
         public var iso: Int?
-        #if canImport(CoreGraphics)
-        /// As-shot white chromaticity (CIE xy) from the raw decode. Apple-only
-        /// for now — the Linux LibRaw path doesn't surface it yet, so the DNG
-        /// export there declares a generic neutral (WB un-bake skipped).
+        /// As-shot white chromaticity (CIE xy) from the raw decode —
+        /// CIRAWFilter.neutralChromaticity on Apple platforms,
+        /// hf_raw_neutral_xy (LibRaw cam_mul through the camera matrix)
+        /// elsewhere.
         public var neutralXY: CGPoint?
-        #endif
     }
 
     /// Reads EXIF + as-shot white balance from a source frame (typically the
@@ -61,7 +60,14 @@ public enum DNGWriter {
             meta.neutralXY = filter.neutralChromaticity
         }
         #else
-        // exiv2 reads the same EXIF fields; as-shot neutral is not yet wired.
+        // exiv2 reads the same EXIF fields; the as-shot neutral comes from
+        // LibRaw's white-balance multipliers via the camera matrix.
+        if ImageFile.isRAW(url) {
+            var x = 0.0, y = 0.0
+            if hf_raw_neutral_xy(url.path, &x, &y) == hf_ok {
+                meta.neutralXY = CGPoint(x: x, y: y)
+            }
+        }
         var nums = hf_exif_numbers()
         let cap = 256
         var make = [CChar](repeating: 0, count: cap)
@@ -103,7 +109,6 @@ public enum DNGWriter {
         // the WB sliders now showing the shot's real temperature/tint.
         var neutral: (Double, Double, Double)? = nil
         var channelFactors: (Float, Float, Float)? = nil
-        #if canImport(CoreGraphics)
         if let xy = meta.neutralXY, xy.y > 0.0001 {
             let X = xy.x / xy.y, Y = 1.0, Z = (1 - xy.x - xy.y) / xy.y
             // Through the same XYZ→camera matrix the profile declares, so the
@@ -119,7 +124,6 @@ public enum DNGWriter {
                 channelFactors = (Float(n.0), Float(n.1), Float(n.2))
             }
         }
-        #endif
 
         let rgb = linearRGB16(from: image, channelFactors: channelFactors)
 

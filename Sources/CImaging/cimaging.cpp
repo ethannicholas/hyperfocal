@@ -48,6 +48,23 @@ cmsHPROFILE makeDisplayP3() {
     return prof;
 }
 
+// Linear ProPhoto / ROMM: ROMM primaries, D50, unity gamma — the space LibRaw
+// emits with output_color=4 once its output gamma is forced linear (see
+// hf_decode_raw). Source side of the RAW→Display P3 transform.
+cmsHPROFILE makeLinearProPhoto() {
+    cmsCIExyY white = {0.3457, 0.3585, 1.0};   // D50
+    cmsCIExyYTRIPLE prim = {
+        {0.7347, 0.2653, 1.0},
+        {0.1596, 0.8404, 1.0},
+        {0.0366, 0.0001, 1.0},
+    };
+    cmsToneCurve* curve = cmsBuildGamma(nullptr, 1.0);
+    cmsToneCurve* three[3] = {curve, curve, curve};
+    cmsHPROFILE prof = cmsCreateRGBProfile(&white, &prim, three);
+    cmsFreeToneCurve(curve);
+    return prof;
+}
+
 // ProPhoto / ROMM RGB: ROMM primaries, D50, gamma 1.8 (values ≥ 1/512 linear).
 cmsHPROFILE makeProPhoto() {
     cmsCIExyY white = {0.3457, 0.3585, 1.0};   // D50
@@ -435,6 +452,16 @@ extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, flo
     raw.imgdata.params.output_bps = 16;
     raw.imgdata.params.output_color = 4;   // ProPhoto — wide enough to hold P3
     raw.imgdata.params.no_auto_bright = 1;
+    // Linear output (LibRaw's default is the BT.709 curve, which would not
+    // match any profile lcms can be handed): the transform below owns the
+    // entire transfer-curve conversion into Display P3.
+    raw.imgdata.params.gamm[0] = 1.0;
+    raw.imgdata.params.gamm[1] = 1.0;
+    // Scale strictly by the declared white level. The default (0.75) lets
+    // LibRaw stretch each file by its own data maximum — a per-frame
+    // brightness gain that broke DNG round-trips by ~1.14x linear (measured)
+    // and would wobble exposure across a focus ramp.
+    raw.imgdata.params.adjust_maximum_thr = 0;
     if (raw.open_file(path) != LIBRAW_SUCCESS) return hf_err_open;
     if (raw.unpack() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
     if (raw.dcraw_process() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
@@ -458,14 +485,149 @@ extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, flo
     }
     LibRaw::dcraw_clear_mem(img);
     raw.recycle();
-    // LibRaw ProPhoto output uses a linear-ish BT.709 gamma by default; treat
-    // the 16-bit values as ProPhoto-encoded and convert to Display P3.
-    cmsHPROFILE pp = makeProPhoto();
+    // The 16-bit values are linear ProPhoto (gamm forced to unity above);
+    // convert primaries + white point + transfer into Display P3 in one step.
+    cmsHPROFILE pp = makeLinearProPhoto();
     cmsHPROFILE p3 = makeDisplayP3();
     bool ok = convertRGBA(rgba, (int)px, pp, p3);
     cmsCloseProfile(pp); cmsCloseProfile(p3);
     if (!ok) { std::free(rgba); return hf_err_color; }
     *out_w = w; *out_h = h; *out_rgba = rgba;
+    return hf_ok;
+}
+
+namespace {
+// 3×3 inverse; false if singular.
+bool inv3(const double m[3][3], double out[3][3]) {
+    const double det =
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+        m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+        m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if (std::fabs(det) < 1e-12) return false;
+    out[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / det;
+    out[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / det;
+    out[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / det;
+    out[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / det;
+    out[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / det;
+    out[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / det;
+    out[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / det;
+    out[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / det;
+    out[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / det;
+    return true;
+}
+
+// Correlated color temperature of a chromaticity (McCamy's approximation —
+// only steers the DNG dual-matrix interpolation, so accuracy demands are mild).
+double cctOf(double x, double y) {
+    const double n = (x - 0.3320) / (0.1858 - y);
+    return ((449.0 * n + 3525.0) * n + 6823.3) * n + 5520.33;
+}
+
+// CCT of an EXIF/DNG CalibrationIlluminant code (the common ones).
+double illuminantCCT(int code) {
+    switch (code) {
+        case 3: case 17: return 2856;   // tungsten / standard A
+        case 2:          return 4200;   // fluorescent
+        case 18:         return 4874;   // standard B
+        case 23:         return 5003;   // D50
+        case 4: case 20: return 5503;   // flash / D55
+        case 19:         return 6774;   // standard C
+        case 22:         return 7504;   // D75
+        default:         return 6504;   // D65 and everything else
+    }
+}
+} // namespace
+
+// As-shot neutral chromaticity (CIE xy) from a raw header — the illuminant the
+// camera's white-balance multipliers were correcting for. Header parse only,
+// no pixel decode. Counterpart of CIRAWFilter.neutralChromaticity on the Apple
+// path; feeds DNG export's AsShotNeutral un-bake (DNGWriter).
+//
+// Method is the DNG-spec white-point solve: neutral n in camera space is
+// mapped to XYZ through the inverse of the XYZ→camera ColorMatrix, which
+// itself depends on the illuminant — so iterate, interpolating the DNG's two
+// calibration matrices by inverse CCT. Non-DNG raws carry a single D65 matrix
+// (LibRaw cam_xyz, from Adobe's data); the loop then converges in one step.
+// LibRaw's rgb_cam is NOT usable here: its rows are normalized so camera
+// white maps to sRGB white, which destroys the colorimetry of any non-white
+// vector (measured Δxy ≈ 0.06 against this solve on a Z 9 DNG).
+extern "C" hf_status hf_raw_neutral_xy(const char* path, double* out_x, double* out_y) {
+    LibRaw raw;
+    if (raw.open_file(path) != LIBRAW_SUCCESS) return hf_err_open;
+    const float* mul = raw.imgdata.color.cam_mul;   // as-shot WB multipliers
+    if (!(mul[0] > 0 && mul[1] > 0 && mul[2] > 0)) { raw.recycle(); return hf_err_format; }
+    // A neutral patch under the shot's illuminant records 1/mul per channel
+    // (that is what the multipliers exist to flatten out).
+    const double n[3] = {1.0 / mul[0], 1.0 / mul[1], 1.0 / mul[2]};
+
+    // XYZ→camera matrices: the file's embedded DNG matrices first (dual pair
+    // when both calibrations exist, either alone otherwise), cam_xyz only as
+    // the non-DNG fallback. cam_xyz is NOT preferred even when filled: LibRaw
+    // overwrites it from its built-in per-camera table whenever it recognizes
+    // the Make/Model tags — for a DNG whose camera space is not that camera's
+    // native space (our own exports declare linear Display P3, with the
+    // source camera's Make/Model propagated), the embedded matrix is the
+    // only correct one.
+    double m1[3][3], m2[3][3];
+    double cct1 = 2856, cct2 = 6504;
+    bool havePair = false, haveMatrix = false;
+    const auto& d0 = raw.imgdata.color.dng_color[0];
+    const auto& d1 = raw.imgdata.color.dng_color[1];
+    const bool have0 = d0.colormatrix[1][1] != 0;
+    const bool have1 = d1.colormatrix[1][1] != 0;
+    if (have0 && have1 && d0.illuminant != d1.illuminant) {
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++) {
+                m1[r][c] = d0.colormatrix[r][c];
+                m2[r][c] = d1.colormatrix[r][c];
+            }
+        cct1 = illuminantCCT(d0.illuminant);
+        cct2 = illuminantCCT(d1.illuminant);
+        havePair = haveMatrix = true;
+    } else if (have0 || have1) {
+        const auto& d = have1 ? d1 : d0;
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++) m2[r][c] = d.colormatrix[r][c];
+        haveMatrix = true;
+    } else if (raw.imgdata.color.cam_xyz[1][1] != 0) {
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++) m2[r][c] = raw.imgdata.color.cam_xyz[r][c];
+        haveMatrix = true;
+    }
+    if (!haveMatrix) {
+        raw.recycle();
+        return hf_err_format;
+    }
+    raw.recycle();
+    if (havePair && cct1 > cct2) { std::swap(m1, m2); std::swap(cct1, cct2); }
+
+    double x = 0.3127, y = 0.3290;   // seed at D65
+    for (int it = 0; it < 20; it++) {
+        double m[3][3];
+        if (havePair) {
+            const double t = std::min(std::max(cctOf(x, y), cct1), cct2);
+            const double w = (1 / t - 1 / cct2) / (1 / cct1 - 1 / cct2);
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    m[r][c] = w * m1[r][c] + (1 - w) * m2[r][c];
+        } else {
+            std::memcpy(m, m2, sizeof m);
+        }
+        double inv[3][3];
+        if (!inv3(m, inv)) return hf_err_format;
+        const double X = inv[0][0] * n[0] + inv[0][1] * n[1] + inv[0][2] * n[2];
+        const double Y = inv[1][0] * n[0] + inv[1][1] * n[1] + inv[1][2] * n[2];
+        const double Z = inv[2][0] * n[0] + inv[2][1] * n[1] + inv[2][2] * n[2];
+        const double sum = X + Y + Z;
+        if (!(sum > 0) || Y <= 0) return hf_err_format;
+        const double nx = X / sum, ny = Y / sum;
+        const bool settled = std::fabs(nx - x) < 1e-6 && std::fabs(ny - y) < 1e-6;
+        x = nx; y = ny;
+        if (settled || !havePair) break;
+    }
+    if (!(y > 0.0001)) return hf_err_format;
+    *out_x = x;
+    *out_y = y;
     return hf_ok;
 }
 
