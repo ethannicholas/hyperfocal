@@ -9,6 +9,7 @@
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QLabel>
+#include <QIcon>
 #include <QMessageBox>
 #include <utility>
 #include <QPushButton>
@@ -32,12 +33,20 @@ void refreshLut() {
 // HFQT_AUTOCONFIRM=1 answers every confirm with its default button and
 // swallows notices — the headless hook the selftest uses (the native
 // suite's HYPERFOCAL_AUTOCONFIRM, mirrored).
+// Alerts carry the app icon like native NSAlerts (the style default
+// is a generic severity glyph).
+void applyAlertIcon(QMessageBox &box) {
+    const QIcon icon(QStringLiteral(":/AppIcon.png"));
+    if (!icon.isNull()) box.setIconPixmap(icon.pixmap(48, 48));
+}
+
 int shellConfirm(const char *message, const char *informative,
                  const char *confirmTitle, const char *cancelTitle,
                  int warning, void *) {
     if (qEnvironmentVariableIsSet("HFQT_AUTOCONFIRM")) return 1;
     QMessageBox box(warning ? QMessageBox::Warning : QMessageBox::Question,
                     QString::fromUtf8(message), QString::fromUtf8(message));
+    applyAlertIcon(box);
     box.setInformativeText(QString::fromUtf8(informative));
     QAbstractButton *confirm = box.addButton(QString::fromUtf8(confirmTitle),
                                              QMessageBox::AcceptRole);
@@ -51,6 +60,7 @@ void shellNotify(const char *message, const char *informative, int warning,
     if (qEnvironmentVariableIsSet("HFQT_AUTOCONFIRM")) return;
     QMessageBox box(warning ? QMessageBox::Warning : QMessageBox::Information,
                     QString::fromUtf8(message), QString::fromUtf8(message));
+    applyAlertIcon(box);
     box.setInformativeText(QString::fromUtf8(informative));
     box.exec();
 }
@@ -618,6 +628,7 @@ bool Shell::confirmQuit() {
     QMessageBox box(QMessageBox::Warning,
                     QStringLiteral("Are you sure you want to quit?"),
                     QStringLiteral("Are you sure you want to quit?"));
+    applyAlertIcon(box);
     box.setInformativeText(QStringLiteral("Unsaved data will be lost."));
     QAbstractButton *quit = box.addButton(QStringLiteral("Quit"),
                                           QMessageBox::AcceptRole);

@@ -235,12 +235,6 @@ reviewers stop discovering them by surprise):
   non-native chrome on macOS).
 - Batch-fuse and bulk-export summaries arrive as notice dialogs — the
   native queueSummaryPresenter styling differs.
-- Gestures (two finger pan / zoom) do not match native.
-- The source image title label is overlaid on top of the image rather
-  than above it as in native, and the output label doesn't exist at
-  all.
-- The icon in the quit messagebox is a generic folder icon instead of
-  the Hyperfocal icon.
 
 Then, deferred until their prerequisites exist:
 

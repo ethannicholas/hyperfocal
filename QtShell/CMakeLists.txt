@@ -42,10 +42,11 @@ qt_add_qml_module(hyperfocal-qt
 # The app icon rides in resources for QGuiApplication::setWindowIcon
 # (dock/taskbar identity on every platform; macOS bundles would use an
 # icns, but the dev shell is a bare executable).
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../App/AppIcon.png"
+    PROPERTIES QT_RESOURCE_ALIAS "AppIcon.png")
 qt_add_resources(hyperfocal-qt "hyperfocal-icon"
     PREFIX "/"
-    BASE "${CMAKE_CURRENT_SOURCE_DIR}/../App"
-    FILES ../App/AppIcon.png
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../App/AppIcon.png"
 )
 
 # The pane's tone shader (see lut.frag) — compiled to qsb for the scene

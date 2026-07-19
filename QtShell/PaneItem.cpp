@@ -387,21 +387,54 @@ void PaneItem::geometryChange(const QRectF &newGeometry,
     schedule();
 }
 
-void PaneItem::wheelEvent(QWheelEvent *event) {
-    if (imgW_ <= 0) return;
-    const double steps = event->angleDelta().y() / 120.0;
-    if (steps == 0) return;
-    const double factor = std::pow(1.15, steps);
+void PaneItem::zoomAnchored(double factor, QPointF pos) {
     const double before = fitScale() * zoom_;
     zoom_ = std::clamp(zoom_ * factor, 0.2, 64.0);
     const double after = fitScale() * zoom_;
-    // Cursor-anchored: keep the image point under the cursor stationary.
-    const QPointF pane = event->position() - QPointF(width() / 2, height() / 2);
+    // Anchored: keep the image point under the cursor stationary.
+    const QPointF pane = pos - QPointF(width() / 2, height() / 2);
     offset_ += pane / before - pane / after;
     clampOffset();
     pushViewport();
     schedule();
+}
+
+void PaneItem::wheelEvent(QWheelEvent *event) {
+    if (imgW_ <= 0) return;
     event->accept();
+    // Trackpad two-finger scrolls carry pixel deltas and PAN, matching
+    // the native gesture; discrete mouse wheels (angle deltas only)
+    // keep zooming.
+    if (!event->pixelDelta().isNull()) {
+        const double scale = fitScale() * zoom_;
+        if (scale <= 0) return;
+        offset_ -= QPointF(event->pixelDelta()) / scale;
+        clampOffset();
+        pushViewport();
+        schedule();
+        return;
+    }
+    const double steps = event->angleDelta().y() / 120.0;
+    if (steps == 0) return;
+    zoomAnchored(std::pow(1.15, steps), event->position());
+}
+
+bool PaneItem::event(QEvent *event) {
+    // Pinch zooms (anchored under the fingers); smart zoom (two-finger
+    // double tap) toggles fit ↔ 1:1, both as on the native panes.
+    if (event->type() == QEvent::NativeGesture && imgW_ > 0) {
+        auto *gesture = static_cast<QNativeGestureEvent *>(event);
+        if (gesture->gestureType() == Qt::ZoomNativeGesture) {
+            zoomAnchored(1.0 + gesture->value(), gesture->position());
+            return true;
+        }
+        if (gesture->gestureType() == Qt::SmartZoomNativeGesture) {
+            if (fitted()) setAbsoluteScale(1);
+            else fit();
+            return true;
+        }
+    }
+    return QQuickItem::event(event);
 }
 
 void PaneItem::mousePressEvent(QMouseEvent *event) {

@@ -70,6 +70,7 @@ signals:
     void viewportChanged();
 
 protected:
+    bool event(QEvent *event) override;
     QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *) override;
     void updatePolish() override;
     void componentComplete() override;
@@ -112,6 +113,9 @@ private:
     QMatrix4x4 viewportMatrix() const;
     QMatrix4x4 rotationMatrix() const;
     QMatrix4x4 contentMatrix() const;    // viewportMatrix * rotationMatrix
+
+    // Cursor-anchored zoom shared by wheel and pinch.
+    void zoomAnchored(double factor, QPointF pos);
 
     // Mirror this pane's viewport onto the buddy after a gesture here.
     void pushViewport();

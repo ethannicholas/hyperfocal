@@ -325,49 +325,59 @@ ApplicationWindow {
     // ToneFilteredPaneView's color-cube-on-layer, mirrored. The PaneItem
     // stays on top (hideSource hides its direct rendering) so it keeps
     // receiving wheel/drag events.
-    component TonedPane: Pane {
+    component TonedPane: ColumnLayout {
         id: toned
         property bool inputSource: false
         property bool dataDisplay: false
         property string title: ""
-        readonly property PaneItem item: paneItem
-        padding: 0
-        background: Rectangle { color: "black" }
-
-        ShaderEffect {
-            anchors.fill: parent
-            property variant source: ShaderEffectSource {
-                sourceItem: paneItem
-                hideSource: true
-                live: true
-            }
-            property variant lut: lutImage
-            property real lutEnabled: toned.dataDisplay ? 0.0 : 1.0
-            fragmentShader: "qrc:/lut.frag.qsb"
-        }
-        PaneItem {
-            id: paneItem
-            anchors.fill: parent
-            input: toned.inputSource
-        }
         property string hint: ""
+        readonly property PaneItem item: paneItem
+        // Overlays (crop, progress) reparent here so they align exactly
+        // with the image area, not the title strip.
+        readonly property Item contentArea: contentAreaItem
+        spacing: 0
+
+        // Title strip ABOVE the image, the native PreviewPane header;
+        // always present so the two panes' image areas stay aligned.
         Label {
-            anchors.centerIn: parent
-            text: toned.hint
-            visible: toned.hint !== ""
-            color: "#777777"
-            font.pixelSize: 13
-        }
-        Label {
+            Layout.fillWidth: true
             text: toned.title
-            visible: text !== ""
-            color: "#d5d5d5"
+            color: "#b5b5b5"
             font.pixelSize: 12
-            padding: 4
-            background: Rectangle { color: "#c0000000"; radius: 3 }
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.margins: 6
+            padding: 5
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideMiddle
+            background: Rectangle { color: "#242424" }
+        }
+        Item {
+            id: contentAreaItem
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            Rectangle { anchors.fill: parent; color: "black"; z: -1 }
+            ShaderEffect {
+                anchors.fill: parent
+                property variant source: ShaderEffectSource {
+                    sourceItem: paneItem
+                    hideSource: true
+                    live: true
+                }
+                property variant lut: lutImage
+                property real lutEnabled: toned.dataDisplay ? 0.0 : 1.0
+                fragmentShader: "qrc:/lut.frag.qsb"
+            }
+            PaneItem {
+                id: paneItem
+                anchors.fill: parent
+                input: toned.inputSource
+            }
+            Label {
+                anchors.centerIn: parent
+                text: toned.hint
+                visible: toned.hint !== ""
+                color: "#777777"
+                font.pixelSize: 13
+            }
         }
     }
 
@@ -873,7 +883,11 @@ ApplicationWindow {
                 TonedPane {
                     id: inputPane
                     inputSource: true
-                    title: Shell.inputTitle
+                    // Equal split regardless of title length (implicit
+                    // widths must not skew the layout).
+                    Layout.preferredWidth: 1
+                    title: Shell.inputTitle !== "" ? Shell.inputTitle
+                                                   : "Input"
                     hint: Shell.hasInput ? ""
                         : Shell.frames.length === 0
                             ? "Open a stack to begin"
@@ -883,12 +897,15 @@ ApplicationWindow {
                 }
                 TonedPane {
                     id: outputPane
+                    Layout.preferredWidth: 1
+                    title: "Output"
                     dataDisplay: Shell.displayIsData
                     hint: Shell.hasDisplay ? ""
                         : Shell.canFuse ? "Press “Fuse Stack”" : "No output yet"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     CropOverlay {
+                        parent: outputPane.contentArea
                         anchors.fill: parent
                         pane: outputPane.item
                         visible: Shell.cropMode
@@ -896,6 +913,7 @@ ApplicationWindow {
                     // The native progress overlay: bar + stage + ETA +
                     // Cancel in a rounded card over the output pane.
                     Rectangle {
+                        parent: outputPane.contentArea
                         visible: Shell.isRunning
                         anchors.bottom: parent.bottom
                         anchors.horizontalCenter: parent.horizontalCenter
