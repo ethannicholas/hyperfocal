@@ -490,6 +490,25 @@ ApplicationWindow {
         }
     }
 
+    // Grouped-form card — the native sidebar renders each Form section
+    // on a rounded, slightly-lighter background (formStyle(.grouped));
+    // headers sit above the cards.
+    component SidebarCard: Rectangle {
+        default property alias content: cardColumn.data
+        Layout.fillWidth: true
+        implicitHeight: cardColumn.implicitHeight + 20
+        color: Qt.rgba(1, 1, 1, 0.055)
+        border.color: Qt.rgba(1, 1, 1, 0.07)
+        border.width: 1
+        radius: 8
+        ColumnLayout {
+            id: cardColumn
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 10
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -761,39 +780,41 @@ ApplicationWindow {
                     onClicked: Shell.resetFusion()
                 }
             }
-            SidebarSlider {
-                sliderId: "fusion.slider.sharpness"
-                label: "Sharpness σ"; from: 1; to: 16; format: "%1 px"
-                enabled: !Shell.isRunning
-            }
-            SidebarSlider {
-                sliderId: "fusion.slider.noise-floor"
-                label: "Noise floor"; from: 0.01; to: 1
-                enabled: !Shell.isRunning
-            }
-            SidebarSlider {
-                sliderId: "fusion.slider.median-radius"
-                label: "Median radius"; from: 0; to: 32; format: "%1 px"
-                enabled: !Shell.isRunning
-            }
-            SidebarSlider {
-                sliderId: "fusion.slider.blend-radius"
-                label: "Blend radius"; from: 0.75; to: 4
-                enabled: !Shell.isRunning
-            }
-            Button {
-                Layout.fillWidth: true
-                text: "Fuse Stack"
-                enabled: Shell.canFuse
-                highlighted: true
-                onClicked: Shell.fuse()
-            }
-            Button {
-                Layout.fillWidth: true
-                visible: stackList.count > 1
-                text: "Fuse " + Shell.pendingStackCount + " Stacks"
-                enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
-                onClicked: Shell.fuseEnabledStacks()
+            SidebarCard {
+                SidebarSlider {
+                    sliderId: "fusion.slider.sharpness"
+                    label: "Sharpness σ"; from: 1; to: 16; format: "%1 px"
+                    enabled: !Shell.isRunning
+                }
+                SidebarSlider {
+                    sliderId: "fusion.slider.noise-floor"
+                    label: "Noise floor"; from: 0.01; to: 1
+                    enabled: !Shell.isRunning
+                }
+                SidebarSlider {
+                    sliderId: "fusion.slider.median-radius"
+                    label: "Median radius"; from: 0; to: 32; format: "%1 px"
+                    enabled: !Shell.isRunning
+                }
+                SidebarSlider {
+                    sliderId: "fusion.slider.blend-radius"
+                    label: "Blend radius"; from: 0.75; to: 4
+                    enabled: !Shell.isRunning
+                }
+                Button {
+                    Layout.fillWidth: true
+                    text: "Fuse Stack"
+                    enabled: Shell.canFuse
+                    highlighted: true
+                    onClicked: Shell.fuse()
+                }
+                Button {
+                    Layout.fillWidth: true
+                    visible: stackList.count > 1
+                    text: "Fuse " + Shell.pendingStackCount + " Stacks"
+                    enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
+                    onClicked: Shell.fuseEnabledStacks()
+                }
             }
 
             RowLayout {
@@ -808,179 +829,185 @@ ApplicationWindow {
                     onClicked: Shell.resetTone()
                 }
             }
-            SidebarSlider {
-                sliderId: "tone.slider.exposure"
-                label: "Exposure"; from: -5; to: 5; format: "%1 EV"
-            }
-            SidebarSlider {
-                sliderId: "tone.slider.contrast"
-                label: "Contrast"; from: -100; to: 100; decimals: 0
-            }
-            SidebarSlider {
-                sliderId: "tone.slider.highlights"
-                label: "Highlights"; from: -100; to: 100; decimals: 0
-            }
-            SidebarSlider {
-                sliderId: "tone.slider.shadows"
-                label: "Shadows"; from: -100; to: 100; decimals: 0
-            }
-            SidebarSlider {
-                sliderId: "tone.slider.whites"
-                label: "Whites"; from: -100; to: 100; decimals: 0
-            }
-            SidebarSlider {
-                sliderId: "tone.slider.blacks"
-                label: "Blacks"; from: -100; to: 100; decimals: 0
+            SidebarCard {
+                SidebarSlider {
+                    sliderId: "tone.slider.exposure"
+                    label: "Exposure"; from: -5; to: 5; format: "%1 EV"
+                }
+                SidebarSlider {
+                    sliderId: "tone.slider.contrast"
+                    label: "Contrast"; from: -100; to: 100; decimals: 0
+                }
+                SidebarSlider {
+                    sliderId: "tone.slider.highlights"
+                    label: "Highlights"; from: -100; to: 100; decimals: 0
+                }
+                SidebarSlider {
+                    sliderId: "tone.slider.shadows"
+                    label: "Shadows"; from: -100; to: 100; decimals: 0
+                }
+                SidebarSlider {
+                    sliderId: "tone.slider.whites"
+                    label: "Whites"; from: -100; to: 100; decimals: 0
+                }
+                SidebarSlider {
+                    sliderId: "tone.slider.blacks"
+                    label: "Blacks"; from: -100; to: 100; decimals: 0
+                }
             }
 
             Label { text: "Edit"; color: "#d5d5d5"; font.bold: true }
-            Button {
-                Layout.fillWidth: true
-                visible: !Shell.retouchMode && !Shell.cropMode
-                text: "Crop…"
-                enabled: Shell.canCrop
-                onClicked: Shell.beginCrop()
-            }
-            Button {
-                Layout.fillWidth: true
-                visible: !Shell.retouchMode && !Shell.cropMode
-                text: Shell.retouchHasEdits ? "Continue Retouching"
-                                            : "Start Retouching"
-                enabled: Shell.canRetouch
-                onClicked: Shell.enterRetouch()
-            }
+            SidebarCard {
+                Button {
+                    Layout.fillWidth: true
+                    visible: !Shell.retouchMode && !Shell.cropMode
+                    text: "Crop…"
+                    enabled: Shell.canCrop
+                    onClicked: Shell.beginCrop()
+                }
+                Button {
+                    Layout.fillWidth: true
+                    visible: !Shell.retouchMode && !Shell.cropMode
+                    text: Shell.retouchHasEdits ? "Continue Retouching"
+                                                : "Start Retouching"
+                    enabled: Shell.canRetouch
+                    onClicked: Shell.enterRetouch()
+                }
 
-            // Crop-mode controls replace the Edit buttons, under a
-            // "Crop" sub-header — the native CropControls placement.
-            Label {
-                visible: Shell.cropMode
-                text: "Crop"; color: "#d5d5d5"; font.bold: true
-            }
-            RowLayout {
-                visible: Shell.cropMode
-                Layout.fillWidth: true
-                Label { text: "Aspect Ratio"; color: "#b5b5b5" }
-                ComboBox {
-                    Layout.fillWidth: true
-                    model: ["Original", "Custom", "1:1", "3:2", "5:4",
-                            "4:3", "16:9"]
-                    currentIndex: Math.max(0, model.indexOf(Shell.cropAspect))
-                    onActivated: Shell.cropAspect = currentText
-                }
-                Button {
-                    // Icon button in the aspect row, like native's
-                    // symbol button: the current orientation's
-                    // rectangle with a rotation arrow (drawn SVGs — SF
-                    // Symbols can't ship in a cross-platform shell;
-                    // the style tints them via icon.color).
-                    icon.source: Shell.cropPortrait
-                                 ? "crop-portrait.svg"
-                                 : "crop-landscape.svg"
-                    icon.width: 18
-                    icon.height: 18
-                    onClicked: Shell.toggleCropOrientation()
-                    ToolTip.visible: hovered
-                    ToolTip.text:
-                        "Swap the crop between landscape and portrait (X)."
-                }
-            }
-            RowLayout {
-                visible: Shell.cropMode
-                Layout.fillWidth: true
-                Button {
-                    Layout.fillWidth: true
-                    highlighted: true
-                    text: "Accept"
-                    onClicked: Shell.acceptCrop()
-                }
-                Button {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: Shell.cancelCrop()
-                }
-            }
-
-            Label {
-                visible: Shell.retouchMode
-                text: "Retouching"; color: "#d5d5d5"; font.bold: true
-            }
-            SidebarSlider {
-                visible: Shell.retouchMode
-                sliderId: "retouch.slider.brush-size"
-                label: "Brush size"; from: 1; to: 800; decimals: 0
-                format: "%1 px"
-            }
-            SidebarSlider {
-                visible: Shell.retouchMode
-                sliderId: "retouch.slider.softness"
-                label: "Softness"; from: 0; to: 1
-            }
-            ColumnLayout {
-                visible: Shell.retouchMode
-                Layout.fillWidth: true
-                spacing: 2
+                // Crop-mode controls replace the Edit buttons, under a
+                // "Crop" sub-header — the native CropControls placement.
                 Label {
-                    text: "Retouch from"
-                    color: "#b5b5b5"
-                    font.pixelSize: 12
+                    visible: Shell.cropMode
+                    text: "Crop"; color: "#d5d5d5"; font.bold: true
                 }
-                RadioButton {
-                    text: "Source Image"
-                    checked: Shell.retouchSourceKind === 0
-                    onClicked: Shell.retouchSourceKind = 0
+                RowLayout {
+                    visible: Shell.cropMode
+                    Layout.fillWidth: true
+                    Label { text: "Aspect Ratio"; color: "#b5b5b5" }
+                    ComboBox {
+                        Layout.fillWidth: true
+                        model: ["Original", "Custom", "1:1", "3:2", "5:4",
+                                "4:3", "16:9"]
+                        currentIndex: Math.max(0, model.indexOf(Shell.cropAspect))
+                        onActivated: Shell.cropAspect = currentText
+                    }
+                    Button {
+                        // Icon button in the aspect row, like native's
+                        // symbol button: the current orientation's
+                        // rectangle with a rotation arrow (drawn SVGs — SF
+                        // Symbols can't ship in a cross-platform shell;
+                        // the style tints them via icon.color).
+                        icon.source: Shell.cropPortrait
+                                     ? "crop-portrait.svg"
+                                     : "crop-landscape.svg"
+                        icon.width: 18
+                        icon.height: 18
+                        onClicked: Shell.toggleCropOrientation()
+                        ToolTip.visible: hovered
+                        ToolTip.text:
+                            "Swap the crop between landscape and portrait (X)."
+                    }
                 }
-                RadioButton {
-                    text: "PMax Result"
-                    checked: Shell.retouchSourceKind === 1
-                    onClicked: Shell.retouchSourceKind = 1
+                RowLayout {
+                    visible: Shell.cropMode
+                    Layout.fillWidth: true
+                    Button {
+                        Layout.fillWidth: true
+                        highlighted: true
+                        text: "Accept"
+                        onClicked: Shell.acceptCrop()
+                    }
+                    Button {
+                        Layout.fillWidth: true
+                        text: "Cancel"
+                        onClicked: Shell.cancelCrop()
+                    }
                 }
-                RadioButton {
-                    text: "Original Result (erase)"
-                    checked: Shell.retouchSourceKind === 2
-                    onClicked: Shell.retouchSourceKind = 2
-                }
-            }
-            Button {
-                Layout.fillWidth: true
-                visible: Shell.retouchMode && Shell.retouchSourceKind === 1
-                         && Shell.retouchSourceLoading
-                text: "Cancel PMax Build"
-                onClicked: Shell.retouchCancelPmax()
-            }
-            Button {
-                Layout.fillWidth: true
-                visible: Shell.retouchMode
-                enabled: Shell.retouchHasEdits
-                text: "Revert All"
-                onClicked: Shell.revertRetouch()
-            }
-            Button {
-                Layout.fillWidth: true
-                visible: Shell.retouchMode
-                highlighted: true
-                text: "Done Retouching"
-                onClicked: Shell.exitRetouch()
-            }
 
-            Label {
-                Layout.fillWidth: true
-                visible: Shell.displayCrop.width > 0
-                text: "Cropped to " + Shell.displayCrop.width + "×"
-                      + Shell.displayCrop.height
-                      + (Shell.displayCropAngle !== 0
-                         ? ", " + Shell.displayCropAngle.toFixed(1) + "°" : "")
-                color: "#8a8a8a"
-                font.pixelSize: 11
-                elide: Text.ElideRight
+                Label {
+                    visible: Shell.retouchMode
+                    text: "Retouching"; color: "#d5d5d5"; font.bold: true
+                }
+                SidebarSlider {
+                    visible: Shell.retouchMode
+                    sliderId: "retouch.slider.brush-size"
+                    label: "Brush size"; from: 1; to: 800; decimals: 0
+                    format: "%1 px"
+                }
+                SidebarSlider {
+                    visible: Shell.retouchMode
+                    sliderId: "retouch.slider.softness"
+                    label: "Softness"; from: 0; to: 1
+                }
+                ColumnLayout {
+                    visible: Shell.retouchMode
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: "Retouch from"
+                        color: "#b5b5b5"
+                        font.pixelSize: 12
+                    }
+                    RadioButton {
+                        text: "Source Image"
+                        checked: Shell.retouchSourceKind === 0
+                        onClicked: Shell.retouchSourceKind = 0
+                    }
+                    RadioButton {
+                        text: "PMax Result"
+                        checked: Shell.retouchSourceKind === 1
+                        onClicked: Shell.retouchSourceKind = 1
+                    }
+                    RadioButton {
+                        text: "Original Result (erase)"
+                        checked: Shell.retouchSourceKind === 2
+                        onClicked: Shell.retouchSourceKind = 2
+                    }
+                }
+                Button {
+                    Layout.fillWidth: true
+                    visible: Shell.retouchMode && Shell.retouchSourceKind === 1
+                             && Shell.retouchSourceLoading
+                    text: "Cancel PMax Build"
+                    onClicked: Shell.retouchCancelPmax()
+                }
+                Button {
+                    Layout.fillWidth: true
+                    visible: Shell.retouchMode
+                    enabled: Shell.retouchHasEdits
+                    text: "Revert All"
+                    onClicked: Shell.revertRetouch()
+                }
+                Button {
+                    Layout.fillWidth: true
+                    visible: Shell.retouchMode
+                    highlighted: true
+                    text: "Done Retouching"
+                    onClicked: Shell.exitRetouch()
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    visible: Shell.displayCrop.width > 0
+                    text: "Cropped to " + Shell.displayCrop.width + "×"
+                          + Shell.displayCrop.height
+                          + (Shell.displayCropAngle !== 0
+                             ? ", " + Shell.displayCropAngle.toFixed(1) + "°" : "")
+                    color: "#8a8a8a"
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                }
             }
 
             Item { Layout.fillHeight: true }
 
-            Button {
-                Layout.fillWidth: true
-                text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"
-                enabled: !Shell.isRunning && Shell.hasDisplay
-                onClicked: Shell.exportInteractive()
+            SidebarCard {
+                Button {
+                    Layout.fillWidth: true
+                    text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"
+                    enabled: !Shell.isRunning && Shell.hasDisplay
+                    onClicked: Shell.exportInteractive()
+                }
             }
         }
         }
