@@ -523,9 +523,14 @@ ApplicationWindow {
         Layout.fillWidth: true
         spacing: 6
         Text {
-            text: header.collapsed ? "\u25b8" : "\u25be"
+            // Native's chevron.right/chevron.down: a real chevron,
+            // rotating to point down when expanded (the triangle
+            // glyphs render too small to read as disclosure arrows).
+            text: "\u276f"
             color: "#9a9a9a"
-            font.pixelSize: 11
+            font.pixelSize: 12
+            font.bold: true
+            rotation: header.collapsed ? 0 : 90
         }
         Label { text: header.title; color: "#d5d5d5"; font.bold: true }
         Label {
