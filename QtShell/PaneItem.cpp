@@ -195,7 +195,10 @@ double PaneItem::fitScale() const {
 }
 
 void PaneItem::clampOffset() {
-    if (imgW_ <= 0) { offset_ = QPointF(); return; }
+    // No image (e.g. the gap between Fuse and the first progressive) is
+    // not a reason to recenter — the pan must survive so the viewport
+    // holds steady when pixels return.
+    if (imgW_ <= 0) return;
     const QRectF viewport = viewportRect();
     const double hw = viewport.width() / 2.0, hh = viewport.height() / 2.0;
     offset_.setX(std::clamp(offset_.x(), -hw, hw));
