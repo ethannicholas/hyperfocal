@@ -63,6 +63,26 @@ double hf_stage_fraction(void);
 // UTF-8 stage + ETA text into buf; returns bytes written (0 when idle).
 int hf_stage_text(char *buf, int cap);
 
+// Export flows. Options are persisted in the shell's own suite and
+// addressed by the native UI names (ExportFormat / ExportColorSpace /
+// AnimationStrength raw values: "TIFF (16-bit)" "DNG (raw)"
+// "PNG (16-bit)" "JPEG"; "sRGB" "Display P3" "ProPhoto RGB"; "Subtle"
+// "Medium" "Strong"). The bulk exports and the animation run async:
+// they return 1 when started, and the summary (or failure) arrives
+// through the notice dialog seam when done, like the native flows.
+int hf_export_format(char *buf, int cap);           // returns bytes
+int hf_set_export_format(const char *name);
+int hf_export_color_space(char *buf, int cap);      // returns bytes
+int hf_set_export_color_space(const char *name);
+int hf_animation_strength(char *buf, int cap);      // returns bytes
+int hf_set_animation_strength(const char *name);
+int hf_fused_stack_count(void);
+int hf_can_export_aligned(void);
+int hf_can_animate(void);
+int hf_export_all(const char *dir);
+int hf_export_aligned(const char *dir);
+int hf_export_animation(const char *path);
+
 // Project lifecycle. hf_save_project writes to `path`, or with NULL to
 // the existing project file (0 when there is none — the shell then asks
 // for a path, the native Save vs Save-As split). hf_project_path names

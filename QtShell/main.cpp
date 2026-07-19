@@ -102,8 +102,11 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 && shell->displayWidth() == parts[0].toInt()
                 && shell->displayHeight() == parts[1].toInt();
         }
+        // TIFF via the extension map, plus DNG through the same seam —
+        // the two per-call formats the format map must route correctly.
         state->exported =
-            shell->exportTo(QUrl::fromLocalFile(state->outPath));
+            shell->exportTo(QUrl::fromLocalFile(state->outPath))
+            && shell->exportTo(QUrl::fromLocalFile(state->outPath + ".dng"));
         // Depth mode displays + exports the (untoned) depth map — and the
         // pixel swap must move the epoch, or the pane would keep showing
         // the result's tiles.

@@ -145,7 +145,7 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    enum ExportColorSpace: String, CaseIterable, Identifiable {
+    public enum ExportColorSpace: String, CaseIterable, Identifiable {
         case srgb = "sRGB"
         case displayP3 = "Display P3"
         case prophoto = "ProPhoto RGB"
@@ -370,7 +370,7 @@ public final class AppModel: ObservableObject {
     /// Guards `tone.didSet` against marking stack switches as unsaved edits.
     private var installingStack = false
     /// Rocking-animation parallax strength, chosen in the export dialog.
-    enum AnimationStrength: String, CaseIterable {
+    public enum AnimationStrength: String, CaseIterable {
         case subtle = "Subtle"
         case medium = "Medium"
         case strong = "Strong"
@@ -383,7 +383,7 @@ public final class AppModel: ObservableObject {
             }
         }
     }
-    @Published var animationStrength: AnimationStrength {
+    @Published public var animationStrength: AnimationStrength {
         didSet { Self.settings.set(animationStrength.rawValue, forKey: "animationStrength") }
     }
 
@@ -453,7 +453,7 @@ public final class AppModel: ObservableObject {
     @Published public var exportFormat: ExportFormat {
         didSet { Self.settings.set(exportFormat.rawValue, forKey: "exportFormat") }
     }
-    @Published var exportColorSpace: ExportColorSpace {
+    @Published public var exportColorSpace: ExportColorSpace {
         didSet { Self.settings.set(exportColorSpace.rawValue, forKey: "exportColorSpace") }
     }
 
@@ -857,7 +857,7 @@ public final class AppModel: ObservableObject {
         openProject(from: project)
     }
 
-    var fusedStackCount: Int {
+    public var fusedStackCount: Int {
         stacks.filter { $0.id == selectedStackID ? result != nil : $0.result != nil }.count
     }
 
@@ -1960,7 +1960,7 @@ public final class AppModel: ObservableObject {
 
     /// Writes every fused stack (retouch edits included) to `directory` in the
     /// current export format and color space. Returns a summary line per stack.
-    func exportAllFused(to directory: URL) async -> String {
+    public func exportAllFused(to directory: URL) async -> String {
         if let current = selectedStack { stash(into: current) }
         let ext = exportFormat.fileExtension
         let space = exportColorSpace
@@ -2000,7 +2000,7 @@ public final class AppModel: ObservableObject {
     /// least one selected frame is part of the fused list. Without
     /// transforms the "aligned" frames would just be copies of the
     /// originals — pointless.
-    var canExportAligned: Bool {
+    public var canExportAligned: Bool {
         !phase.isRunning && alignmentCache.transforms(for: fuseURLs) != nil
             && selection.contains { fuseURLs.contains($0) }
     }
@@ -2032,7 +2032,7 @@ public final class AppModel: ObservableObject {
     /// Format, color space, and tone follow the result-export rules (tone
     /// bakes into display-referred formats; DNG stays linear and carries
     /// tone as XMP). Returns a summary line per frame.
-    func exportAlignedFrames(to directory: URL) async -> String {
+    public func exportAlignedFrames(to directory: URL) async -> String {
         let alignedURLs = fuseURLs
         guard let transforms = alignmentCache.transforms(for: alignedURLs) else {
             return "No alignment yet — fuse the stack (with alignment on) first."
@@ -2075,7 +2075,7 @@ public final class AppModel: ObservableObject {
 
     /// Rocking animation needs a fused result AND its depth plane (DMap
     /// fills it; a project restored without depth can't animate).
-    var canAnimate: Bool {
+    public var canAnimate: Bool {
         !phase.isRunning && result != nil && !resultDepth.isEmpty
     }
 
@@ -2097,7 +2097,7 @@ public final class AppModel: ObservableObject {
     /// Panel-free animation export (also the UI-test command seam): tone
     /// bakes in like every display-referred export, retouch edits included.
     /// Renders off-main; returns whether the file was written.
-    func writeAnimation(to url: URL) async -> Bool {
+    public func writeAnimation(to url: URL) async -> Bool {
         mergeRetouchDepth()  // animate what the user retouched, depth included
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
         guard let uncropped = baseImage, !resultDepth.isEmpty else { return false }

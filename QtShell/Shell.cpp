@@ -121,7 +121,8 @@ QVariantList Shell::fingerprint() const {
             inputLoading(), inputTitle(), displayCrop(), displayCropAngle(),
             toneNeutral(), fusionDefault(), hasDisplay(), projectPath(),
             hasUnsavedWork(), canUndo(), canRedo(), undoTitle(), redoTitle(),
-            lutEpoch(),
+            lutEpoch(), exportFormat(), exportColorSpace(),
+            animationStrength(),
             slider(QStringLiteral("fusion.slider.sharpness")),
             slider(QStringLiteral("fusion.slider.noise-floor")),
             slider(QStringLiteral("fusion.slider.median-radius")),
@@ -237,6 +238,51 @@ bool Shell::fuseEnabledStacks() { return hf_fuse_enabled_stacks() != 0; }
 
 bool Shell::cancelFuse() { return hf_cancel_fuse() != 0; }
 
+int Shell::fusedStackCount() const { return hf_fused_stack_count(); }
+bool Shell::canExportAligned() const { return hf_can_export_aligned() != 0; }
+bool Shell::canAnimate() const { return hf_can_animate() != 0; }
+
+QString Shell::exportFormat() const {
+    char buffer[128];
+    return QString::fromUtf8(buffer, hf_export_format(buffer, sizeof buffer));
+}
+
+void Shell::setExportFormat(const QString &name) {
+    hf_set_export_format(name.toUtf8().constData());
+}
+
+QString Shell::exportColorSpace() const {
+    char buffer[128];
+    return QString::fromUtf8(buffer,
+                             hf_export_color_space(buffer, sizeof buffer));
+}
+
+void Shell::setExportColorSpace(const QString &name) {
+    hf_set_export_color_space(name.toUtf8().constData());
+}
+
+QString Shell::animationStrength() const {
+    char buffer[128];
+    return QString::fromUtf8(buffer,
+                             hf_animation_strength(buffer, sizeof buffer));
+}
+
+void Shell::setAnimationStrength(const QString &name) {
+    hf_set_animation_strength(name.toUtf8().constData());
+}
+
+bool Shell::exportAll(const QUrl &dir) {
+    return hf_export_all(dir.toLocalFile().toUtf8().constData()) != 0;
+}
+
+bool Shell::exportAligned(const QUrl &dir) {
+    return hf_export_aligned(dir.toLocalFile().toUtf8().constData()) != 0;
+}
+
+bool Shell::exportAnimation(const QUrl &file) {
+    return hf_export_animation(file.toLocalFile().toUtf8().constData()) != 0;
+}
+
 bool Shell::saveProject(const QUrl &file) {
     if (file.isEmpty()) return hf_save_project(nullptr) != 0;
     return hf_save_project(file.toLocalFile().toUtf8().constData()) != 0;
@@ -344,8 +390,16 @@ bool Shell::exportTo(const QUrl &file) {
     // format was persisted last (the bridge restores the preference
     // after the write, so this never becomes a sticky settings change).
     const QString path = file.toLocalFile();
-    const bool tiff = path.endsWith(QStringLiteral(".tif"), Qt::CaseInsensitive)
-                   || path.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive);
-    return hf_export(path.toUtf8().constData(),
-                     tiff ? "TIFF (16-bit)" : nullptr) != 0;
+    const char *format = nullptr;    // unknown extension: persisted format
+    if (path.endsWith(QStringLiteral(".tif"), Qt::CaseInsensitive)
+        || path.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive))
+        format = "TIFF (16-bit)";
+    else if (path.endsWith(QStringLiteral(".dng"), Qt::CaseInsensitive))
+        format = "DNG (raw)";
+    else if (path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive))
+        format = "PNG (16-bit)";
+    else if (path.endsWith(QStringLiteral(".jpg"), Qt::CaseInsensitive)
+             || path.endsWith(QStringLiteral(".jpeg"), Qt::CaseInsensitive))
+        format = "JPEG";
+    return hf_export(path.toUtf8().constData(), format) != 0;
 }

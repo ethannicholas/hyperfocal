@@ -40,6 +40,12 @@ class Shell : public QObject {
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY framesChanged)
     Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
     Q_PROPERTY(double displayCropAngle READ displayCropAngle NOTIFY changed)
+    Q_PROPERTY(int fusedStackCount READ fusedStackCount NOTIFY stacksChanged)
+    Q_PROPERTY(bool canExportAligned READ canExportAligned NOTIFY stacksChanged)
+    Q_PROPERTY(bool canAnimate READ canAnimate NOTIFY stacksChanged)
+    Q_PROPERTY(QString exportFormat READ exportFormat WRITE setExportFormat NOTIFY changed)
+    Q_PROPERTY(QString exportColorSpace READ exportColorSpace WRITE setExportColorSpace NOTIFY changed)
+    Q_PROPERTY(QString animationStrength READ animationStrength WRITE setAnimationStrength NOTIFY changed)
     Q_PROPERTY(bool toneNeutral READ toneNeutral NOTIFY changed)
     Q_PROPERTY(bool fusionDefault READ fusionDefault NOTIFY changed)
     Q_PROPERTY(bool hasDisplay READ hasDisplay NOTIFY changed)
@@ -112,6 +118,18 @@ public:
     Q_INVOKABLE void setAllFramesIncluded(bool included);
     bool toneNeutral() const;
     bool fusionDefault() const;
+    int fusedStackCount() const;
+    bool canExportAligned() const;
+    bool canAnimate() const;
+    QString exportFormat() const;
+    void setExportFormat(const QString &name);
+    QString exportColorSpace() const;
+    void setExportColorSpace(const QString &name);
+    QString animationStrength() const;
+    void setAnimationStrength(const QString &name);
+    Q_INVOKABLE bool exportAll(const QUrl &dir);
+    Q_INVOKABLE bool exportAligned(const QUrl &dir);
+    Q_INVOKABLE bool exportAnimation(const QUrl &file);
     /// Save to `file`, or to the existing project file when empty
     /// (returns false when there is none yet — caller then asks).
     Q_INVOKABLE bool saveProject(const QUrl &file);

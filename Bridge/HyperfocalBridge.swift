@@ -299,6 +299,143 @@ public func hf_stage_text(_ buffer: UnsafeMutablePointer<CChar>?, _ cap: Int32) 
     }
 }
 
+// MARK: Export flows
+
+/// Persisted export options (the shell's own settings suite), addressed
+/// by the native UI names — ExportFormat/ExportColorSpace raw values.
+@_cdecl("hf_export_format")
+public func hf_export_format(_ buffer: UnsafeMutablePointer<CChar>?,
+                             _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.exportFormat.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_export_format")
+public func hf_set_export_format(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let format = AppModel.ExportFormat(rawValue: string) else { return 0 }
+        model.exportFormat = format
+        return 1
+    }
+}
+
+@_cdecl("hf_export_color_space")
+public func hf_export_color_space(_ buffer: UnsafeMutablePointer<CChar>?,
+                                  _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.exportColorSpace.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_export_color_space")
+public func hf_set_export_color_space(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let space = AppModel.ExportColorSpace(rawValue: string) else { return 0 }
+        model.exportColorSpace = space
+        return 1
+    }
+}
+
+@_cdecl("hf_animation_strength")
+public func hf_animation_strength(_ buffer: UnsafeMutablePointer<CChar>?,
+                                  _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.animationStrength.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_animation_strength")
+public func hf_set_animation_strength(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let strength = AppModel.AnimationStrength(rawValue: string) else { return 0 }
+        model.animationStrength = strength
+        return 1
+    }
+}
+
+@_cdecl("hf_fused_stack_count")
+public func hf_fused_stack_count() -> Int32 {
+    MainActor.assumeIsolated { Int32(Bridge.model?.fusedStackCount ?? 0) }
+}
+
+@_cdecl("hf_can_export_aligned")
+public func hf_can_export_aligned() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.canExportAligned == true ? 1 : 0 }
+}
+
+@_cdecl("hf_can_animate")
+public func hf_can_animate() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.canAnimate == true ? 1 : 0 }
+}
+
+/// Write every fused stack to `dir` in the persisted format/color space.
+/// Async — returns 1 when the export started; the per-stack summary
+/// arrives through the notice dialog seam when it finishes, like the
+/// native flow.
+@_cdecl("hf_export_all")
+public func hf_export_all(_ dir: UnsafePointer<CChar>?) -> Int32 {
+    guard let dir, let string = String(validatingUTF8: dir) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.fusedStackCount > 0,
+              !model.phase.isRunning else { return 0 }
+        let url = URL(fileURLWithPath: string)
+        Task { @MainActor in
+            let summary = await model.exportAllFused(to: url)
+            model.dialogs?.notify(message: "Export All Fused",
+                                  informative: summary, warning: false)
+        }
+        return 1
+    }
+}
+
+/// Write the selected stack's aligned frames to `dir`. Async, summary
+/// through the notice seam — mirrors hf_export_all.
+@_cdecl("hf_export_aligned")
+public func hf_export_aligned(_ dir: UnsafePointer<CChar>?) -> Int32 {
+    guard let dir, let string = String(validatingUTF8: dir) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.canExportAligned,
+              !model.phase.isRunning else { return 0 }
+        let url = URL(fileURLWithPath: string)
+        Task { @MainActor in
+            let summary = await model.exportAlignedFrames(to: url)
+            model.dialogs?.notify(message: "Export Aligned Frames",
+                                  informative: summary, warning: false)
+        }
+        return 1
+    }
+}
+
+/// Render the rocking animation to `path` with the persisted settings
+/// (tone baked, retouch and crop included). Async; failure surfaces
+/// through the notice seam.
+@_cdecl("hf_export_animation")
+public func hf_export_animation(_ path: UnsafePointer<CChar>?) -> Int32 {
+    guard let path, let string = String(validatingUTF8: path) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model, model.canAnimate else { return 0 }
+        let url = URL(fileURLWithPath: string)
+        Task { @MainActor in
+            if await !model.writeAnimation(to: url) {
+                model.dialogs?.notify(message: "The animation could not be written.",
+                                      informative: url.lastPathComponent,
+                                      warning: true)
+            }
+        }
+        return 1
+    }
+}
+
 // MARK: Project lifecycle
 
 /// Write the project to `path`, or to its existing file when NULL (the

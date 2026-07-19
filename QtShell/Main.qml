@@ -80,10 +80,31 @@ ApplicationWindow {
             }
             MenuSeparator {}
             Action {
-                text: "Export…"
+                text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"
                 shortcut: "Ctrl+E"
-                enabled: !Shell.isRunning
+                enabled: !Shell.isRunning && Shell.hasDisplay
                 onTriggered: exportDialog.open()
+            }
+            Action {
+                text: "Export All Fused…"
+                enabled: !Shell.isRunning && Shell.fusedStackCount > 1
+                onTriggered: exportAllDialog.open()
+            }
+            Action {
+                text: "Export Aligned Frames…"
+                shortcut: "Ctrl+Shift+E"
+                enabled: !Shell.isRunning && Shell.canExportAligned
+                onTriggered: exportAlignedDialog.open()
+            }
+            Action {
+                text: "Export Rocking Animation…"
+                enabled: !Shell.isRunning && Shell.canAnimate
+                onTriggered: animationOptionsDialog.open()
+            }
+            MenuSeparator {}
+            Action {
+                text: "Export Options…"
+                onTriggered: exportOptionsDialog.open()
             }
         }
         Menu {
@@ -184,11 +205,80 @@ ApplicationWindow {
 
     FileDialog {
         id: exportDialog
-        title: "Export result"
+        title: Shell.depthMode ? "Export depth map" : "Export result"
         fileMode: FileDialog.SaveFile
         defaultSuffix: "tif"
-        nameFilters: ["TIFF (*.tif)"]
+        // The chosen extension picks the format for this export; the
+        // persisted preference (Export Options…) covers the rest.
+        nameFilters: ["TIFF (*.tif)", "DNG (*.dng)", "PNG (*.png)",
+                      "JPEG (*.jpg)"]
         onAccepted: Shell.exportTo(selectedFile)
+    }
+
+    FolderDialog {
+        id: exportAllDialog
+        title: "Export every fused stack to a folder"
+        onAccepted: Shell.exportAll(selectedFolder)
+    }
+
+    FolderDialog {
+        id: exportAlignedDialog
+        title: "Export aligned frames to a folder"
+        onAccepted: Shell.exportAligned(selectedFolder)
+    }
+
+    Dialog {
+        id: animationOptionsDialog
+        title: "Rocking animation"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        RowLayout {
+            spacing: 8
+            Label { text: "Strength"; color: "#b5b5b5" }
+            ComboBox {
+                model: ["Subtle", "Medium", "Strong"]
+                currentIndex: Math.max(0, model.indexOf(Shell.animationStrength))
+                onActivated: Shell.animationStrength = currentText
+            }
+        }
+        onAccepted: animationFileDialog.open()
+    }
+
+    FileDialog {
+        id: animationFileDialog
+        title: "Export rocking animation"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "mp4"
+        nameFilters: ["Movie (*.mp4)", "Animated GIF (*.gif)"]
+        onAccepted: Shell.exportAnimation(selectedFile)
+    }
+
+    Dialog {
+        id: exportOptionsDialog
+        title: "Export options"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Close
+        GridLayout {
+            columns: 2
+            columnSpacing: 8
+            rowSpacing: 8
+            Label { text: "Format"; color: "#b5b5b5" }
+            ComboBox {
+                model: ["TIFF (16-bit)", "DNG (raw)", "PNG (16-bit)", "JPEG"]
+                currentIndex: Math.max(0, model.indexOf(Shell.exportFormat))
+                onActivated: Shell.exportFormat = currentText
+                Layout.preferredWidth: 180
+            }
+            Label { text: "Color space"; color: "#b5b5b5" }
+            ComboBox {
+                model: ["sRGB", "Display P3", "ProPhoto RGB"]
+                currentIndex: Math.max(0, model.indexOf(Shell.exportColorSpace))
+                onActivated: Shell.exportColorSpace = currentText
+                Layout.preferredWidth: 180
+            }
+        }
     }
 
     // A pane with the tone LUT shader over its layer — the native
