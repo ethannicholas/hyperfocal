@@ -39,6 +39,13 @@ Item {
         target: Shell
         function onChanged() { overlay.sync() }
     }
+    Connections {
+        // Pan/zoom moves the image under the overlay; everything here
+        // is derived from pane.mapFromCanvas at paint time, so a
+        // repaint re-anchors the dim + rect + handles.
+        target: overlay.pane
+        function onViewportChanged() { paint.requestPaint() }
+    }
     onVisibleChanged: if (visible) sync()
 
     function push() {
