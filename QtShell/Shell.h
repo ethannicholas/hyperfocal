@@ -95,6 +95,9 @@ public:
     /// The unsaved-work quit confirm, through the same message-box path
     /// as every dialog-seam confirm. True = quit.
     Q_INVOKABLE bool confirmQuit();
+    Q_INVOKABLE bool boolSetting(const QString &id) const;
+    Q_INVOKABLE void setBoolSetting(const QString &id, bool value);
+    Q_INVOKABLE bool gpuAvailable() const;
     Q_INVOKABLE bool newProject(const QUrl &folder);
     Q_INVOKABLE bool fuse();
     Q_INVOKABLE bool exportTo(const QUrl &file);

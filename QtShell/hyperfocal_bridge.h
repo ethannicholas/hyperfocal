@@ -93,6 +93,14 @@ double hf_crop_aspect_ratio(void);
 int hf_crop_portrait(void);
 int hf_toggle_crop_orientation(void);
 
+// Boolean settings by the native settings.* id leaves: order-by-
+// capture, align, normalize-exposure, gpu, disk-cache. Persisted like
+// every model setting; getter returns -1 for unknown ids.
+// hf_gpu_available gates the GPU toggle (no Metal/engine = 0).
+int hf_bool_setting(const char *id);
+int hf_set_bool_setting(const char *id, int value);
+int hf_gpu_available(void);
+
 // Export flows. Options are persisted in the shell's own suite and
 // addressed by the native UI names (ExportFormat / ExportColorSpace /
 // AnimationStrength raw values: "TIFF (16-bit)" "DNG (raw)"

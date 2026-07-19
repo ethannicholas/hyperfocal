@@ -436,6 +436,64 @@ public func hf_toggle_crop_orientation() -> Int32 {
     }
 }
 
+// MARK: Settings (the preferences window's pipeline toggles)
+
+@MainActor
+private func settingBinding(_ id: String, model: AppModel)
+    -> (get: () -> Bool, set: (Bool) -> Void)? {
+    switch id {
+    case "order-by-capture":
+        return ({ model.orderByCaptureTime }, { model.orderByCaptureTime = $0 })
+    case "align":
+        return ({ model.alignFrames }, { model.alignFrames = $0 })
+    case "normalize-exposure":
+        return ({ model.normalizeExposure }, { model.normalizeExposure = $0 })
+    case "gpu":
+        return ({ model.useGPU }, { model.useGPU = $0 })
+    case "disk-cache":
+        return ({ model.fusionDiskCache }, { model.fusionDiskCache = $0 })
+    default:
+        return nil
+    }
+}
+
+/// Boolean settings by the native settings.* id leaves (order-by-
+/// capture, align, normalize-exposure, gpu, disk-cache); persisted in
+/// the shell's own suite via the model's didSet. Getter returns -1 for
+/// unknown ids.
+@_cdecl("hf_bool_setting")
+public func hf_bool_setting(_ id: UnsafePointer<CChar>?) -> Int32 {
+    guard let id, let string = String(validatingUTF8: id) else { return -1 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let binding = settingBinding(string, model: model) else { return -1 }
+        return binding.get() ? 1 : 0
+    }
+}
+
+@_cdecl("hf_set_bool_setting")
+public func hf_set_bool_setting(_ id: UnsafePointer<CChar>?,
+                                _ value: Int32) -> Int32 {
+    guard let id, let string = String(validatingUTF8: id) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let binding = settingBinding(string, model: model) else { return 0 }
+        binding.set(value != 0)
+        return 1
+    }
+}
+
+/// Whether a GPU engine exists (gates the Use GPU toggle, like the
+/// native settings window's MetalEngine check).
+@_cdecl("hf_gpu_available")
+public func hf_gpu_available() -> Int32 {
+    #if canImport(Metal)
+    return MainActor.assumeIsolated { MetalEngine.shared != nil ? 1 : 0 }
+    #else
+    return 0
+    #endif
+}
+
 // MARK: Export flows
 
 /// Persisted export options (the shell's own settings suite), addressed

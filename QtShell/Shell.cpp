@@ -492,6 +492,16 @@ bool Shell::openStack(const QUrl &folder) {
 
 bool Shell::confirmNewProject() { return hf_confirm_new_project() != 0; }
 
+bool Shell::boolSetting(const QString &id) const {
+    return hf_bool_setting(id.toUtf8().constData()) == 1;
+}
+
+void Shell::setBoolSetting(const QString &id, bool value) {
+    hf_set_bool_setting(id.toUtf8().constData(), value ? 1 : 0);
+}
+
+bool Shell::gpuAvailable() const { return hf_gpu_available() != 0; }
+
 bool Shell::confirmQuit() {
     QMessageBox box(QMessageBox::Warning,
                     QStringLiteral("Are you sure you want to quit?"),

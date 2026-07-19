@@ -108,6 +108,12 @@ ApplicationWindow {
         Menu {
             title: "Edit"
             Action {
+                text: "Settings…"
+                shortcut: StandardKey.Preferences
+                onTriggered: settingsDialog.open()
+            }
+            MenuSeparator {}
+            Action {
                 text: Shell.undoTitle
                 shortcut: StandardKey.Undo
                 enabled: Shell.canUndo
@@ -214,6 +220,52 @@ ApplicationWindow {
         sequence: "Esc"
         enabled: Shell.cropMode
         onActivated: Shell.cancelCrop()
+    }
+
+    // The native Settings window's pipeline toggles (labels match
+    // SettingsView.swift; GPU gated on an engine existing).
+    Dialog {
+        id: settingsDialog
+        title: "Settings"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Close
+        onOpened: {
+            orderToggle.checked = Shell.boolSetting("order-by-capture")
+            alignToggle.checked = Shell.boolSetting("align")
+            normalizeToggle.checked = Shell.boolSetting("normalize-exposure")
+            gpuToggle.checked = Shell.boolSetting("gpu")
+            diskToggle.checked = Shell.boolSetting("disk-cache")
+        }
+        ColumnLayout {
+            spacing: 8
+            CheckBox {
+                id: orderToggle
+                text: "Order frames by capture time"
+                onToggled: Shell.setBoolSetting("order-by-capture", checked)
+            }
+            CheckBox {
+                id: alignToggle
+                text: "Align frames"
+                onToggled: Shell.setBoolSetting("align", checked)
+            }
+            CheckBox {
+                id: normalizeToggle
+                text: "Even out exposure"
+                onToggled: Shell.setBoolSetting("normalize-exposure", checked)
+            }
+            CheckBox {
+                id: gpuToggle
+                text: "Use GPU"
+                enabled: Shell.gpuAvailable()
+                onToggled: Shell.setBoolSetting("gpu", checked)
+            }
+            CheckBox {
+                id: diskToggle
+                text: "Cache frames on disk while fusing"
+                onToggled: Shell.setBoolSetting("disk-cache", checked)
+            }
+        }
     }
 
     FolderDialog {

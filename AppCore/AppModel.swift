@@ -242,17 +242,17 @@ public final class AppModel: ObservableObject {
                 : "org.hyperfocal.settings")) ?? .standard
 
     // Fusion parameters
-    @Published var alignFrames: Bool {
+    @Published public var alignFrames: Bool {
         didSet { Self.settings.set(alignFrames, forKey: "alignFrames") }
     }
-    @Published var useGPU: Bool {
+    @Published public var useGPU: Bool {
         didSet { Self.settings.set(useGPU, forKey: "useGPU") }
     }
     /// Fusion's temporary disk cache (FrameSpill): caches aligned frames
     /// between the two depth-fusion passes so the stack isn't decoded twice.
     /// Output is bit-identical either way — the toggle exists for machines
     /// short on disk (the cache is width×height×16 bytes per frame).
-    @Published var fusionDiskCache: Bool {
+    @Published public var fusionDiskCache: Bool {
         didSet { Self.settings.set(fusionDiskCache, forKey: "fusionDiskCache") }
     }
     // The fusion sliders are per-project creative controls, deliberately
@@ -266,13 +266,13 @@ public final class AppModel: ObservableObject {
     }
     @Published public var medianRadius = defaultMedianRadius
     @Published public var blendRadius = defaultBlendRadius
-    @Published var normalizeExposure: Bool {
+    @Published public var normalizeExposure: Bool {
         didSet { Self.settings.set(normalizeExposure, forKey: "normalizeExposure") }
     }
     /// Order each stack's frames by EXIF capture time at load (filename
     /// order breaks when the camera's file counter rolls over mid-stack).
     /// Off = filename always wins. Read at load time, not fuse time.
-    @Published var orderByCaptureTime: Bool {
+    @Published public var orderByCaptureTime: Bool {
         didSet { Self.settings.set(orderByCaptureTime, forKey: "orderByCaptureTime") }
     }
     /// Sidebar sections the user has collapsed — persisted like the other
