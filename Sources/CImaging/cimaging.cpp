@@ -794,7 +794,13 @@ extern "C" hf_status hf_exif_source_meta(const char* path,
         num("Exif.Photo.FNumber", nums->f_number);
         num("Exif.Photo.FocalLength", nums->focal_length_mm);
         auto iso = exif.findKey(Exiv2::ExifKey("Exif.Photo.ISOSpeedRatings"));
+        // exiv2 0.28 renamed toLong() to toInt64(); Ubuntu 24.04 (the CI
+        // container's base) still ships 0.27.
+#if EXIV2_TEST_VERSION(0, 28, 0)
         if (iso != exif.end()) nums->iso = (int)iso->toInt64();
+#else
+        if (iso != exif.end()) nums->iso = (int)iso->toLong();
+#endif
         return hf_ok;
     } catch (...) { return hf_ok; }
 }

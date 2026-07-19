@@ -13,9 +13,13 @@ WORK="${TMPDIR:-/tmp}/hyperfocal-ci-gate"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
-# PSNR floors are the ROADMAP-header baselines (plane scene, default
-# synth params, P3 export to match the ground truth). Linux measures
-# ~0.3–0.4 dB above them (39.1 dmap / 38.6 pmax on aarch64, 2026-07-19).
+# PSNR floors are platform-calibrated just under each platform's
+# measured baseline (plane scene, default synth params, P3 export to
+# match the ground truth): Linux measures 39.1 dmap / 38.6 pmax
+# (aarch64, 2026-07-19); macOS 38.71 dmap / 38.26 pmax (the ROADMAP
+# baselines) — a shared 38.3 pmax floor sat above the macOS baseline
+# and failed on noise alone.
+if [ "$(uname)" = Darwin ]; then PMAX_FLOOR=38.1; else PMAX_FLOOR=38.3; fi
 echo "== synth PSNR gates"
 "$BIN" synth -o "$WORK/synth"
 
@@ -32,19 +36,25 @@ gate() { # method floor
     }
 }
 gate dmap 38.7
-gate pmax 38.3
+gate pmax "$PMAX_FLOOR"
 
 # DNG round-trip: exporting through our DNG writer and decoding back (LibRaw
 # on Linux, CIRAW on macOS) must reproduce the TIFF render. Guards the raw
 # color chain — linear-gamma decode, declared-white-level scaling,
-# embedded-matrix preference (measured ≈93 dB on Linux/aarch64, 2026-07-19).
+# embedded-matrix preference. Floors are platform-calibrated because the
+# decoder differs by design (divergence documented in the plan): LibRaw
+# reproduces our linear DNGs at ≈93 dB (Linux/aarch64, 2026-07-19); CIRAW
+# renders them through Apple's own pipeline and has always sat at ≈48 dB
+# (measured identically at 3bc4b65, before the 2026-07-19 RAW work — a
+# tripwire against macOS-side drift, not a fidelity claim).
+if [ "$(uname)" = Darwin ]; then DNG_FLOOR=45; else DNG_FLOOR=60; fi
 echo "== DNG round-trip gate"
 "$BIN" fuse "$WORK"/synth/frame_*.tif -o "$WORK/rt.dng" --color-space p3
 rtline=$("$BIN" compare "$WORK/rt.dng" "$WORK/out-dmap.tif")
 rtpsnr=$(echo "$rtline" | awk '{print $2}')
-echo "dng round-trip: $rtline (floor 60)"
-awk -v p="$rtpsnr" 'BEGIN { exit !(p >= 60) }' || {
-    echo "== CI GATE FAILED: DNG round-trip PSNR $rtpsnr dB < floor 60 dB"
+echo "dng round-trip: $rtline (floor $DNG_FLOOR)"
+awk -v p="$rtpsnr" -v f="$DNG_FLOOR" 'BEGIN { exit !(p >= f) }' || {
+    echo "== CI GATE FAILED: DNG round-trip PSNR $rtpsnr dB < floor $DNG_FLOOR dB"
     exit 1
 }
 
