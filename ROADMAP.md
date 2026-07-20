@@ -95,13 +95,15 @@ Windows residuals to close (each independently landable):
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
 4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
-   JPEGs, 2-core Windows VM, 2026-07-19): Helicon Focus fuses the whole
-   stack in < 2 min; our registration now takes ~4.7 min there (SIFT
-   detect ~2.3 s/frame is the remaining term) and fusion is the long
-   pole — the CPU pyramid path runs ~42 s/frame at 11 MP on 2 cores
-   (allocation churn per level in `laplacianPyramid`, no pass fusion),
-   and the wgpu path on WARP ~12 s/frame. Helicon's number implies
-   ~1 s/frame is achievable on 2 cores. Profile the CPU pyramid first
+   JPEGs, 2-core Windows VM, 2026-07-19): registration now takes
+   ~4.7 min (SIFT detect ~2.3 s/frame is the remaining term) and fusion
+   is the long pole — the CPU pyramid path runs ~42 s/frame at 11 MP on
+   2 cores (allocation churn per level in `laplacianPyramid`, no pass
+   fusion, scalar loops), and the wgpu path on WARP ~12 s/frame.
+   Neither is near the hardware's ceiling: ~1 s/frame on the same
+   2 cores is demonstrably achievable (measured against commercial
+   stackers on this VM, 2026-07-19) — the gap is memory traffic and
+   vectorizability, not exotic tuning. Profile the CPU pyramid first
    (preallocate, fuse blur+decimate passes, check SIMD codegen on
    Windows/Linux); WARP dispatch overhead second. Measure with `-v`
    phase buckets + `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`.
