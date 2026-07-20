@@ -144,13 +144,18 @@ struct FusionOptions: ParsableArguments {
         case .cpu: return false
         }
         #elseif HYPERFOCAL_HAVE_WGPU
-        // wgpu backend (Windows/Linux): both fusion paths run on it.
+        // wgpu backend (Windows/Linux): both fusion paths run on it. `auto`
+        // skips software adapters (WARP/llvmpipe) — the CPU engine beats
+        // them; explicit `gpu` allows them so parity runs still can.
         switch engine {
-        case .auto: return WgpuEngine.shared != nil
+        case .auto:
+            guard let e = WgpuEngine.shared else { return false }
+            return e.usableForAutoSelection
         case .gpu:
             guard WgpuEngine.shared != nil else {
                 throw ValidationError("no wgpu adapter available")
             }
+            WgpuEngine.allowSoftwareAdapter = true
             return true
         case .cpu: return false
         }

@@ -147,7 +147,8 @@ public enum StackPipeline {
             }
         }
         #elseif HYPERFOCAL_HAVE_WGPU
-        if configuration.preferGPU, WgpuEngine.shared != nil {
+        if configuration.preferGPU, let engine = WgpuEngine.shared,
+           engine.usableForAutoSelection {
             output = try WgpuDMap.fuseWithDepth(source: source, options: configuration.fusion,
                                                 log: log, progress: progress,
                                                 cancellation: cancellation)

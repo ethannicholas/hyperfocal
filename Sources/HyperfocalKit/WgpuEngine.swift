@@ -19,6 +19,23 @@ public final class WgpuEngine {
     let device: WGPUDevice
     let queue: WGPUQueue
     public let adapterSummary: String
+    /// True when the adapter is a software rasterizer (D3D12 WARP, llvmpipe —
+    /// wgpu reports adapterType CPU). Software "GPUs" execute on the same
+    /// cores the CPU engine uses, minus vectorization the CPU path has:
+    /// measured on a 2-core VM, WARP pyramid fusion ran ~11 s/frame vs the
+    /// CPU path's ~3 s (11 MP). Auto engine selection skips these; parity
+    /// work forces them via `allowSoftwareAdapter`.
+    public let isSoftwareAdapter: Bool
+    /// Opt-in to auto-selecting a software adapter anyway — the CLI's
+    /// explicit `--engine gpu` and the HYPERFOCAL_WGPU_SOFTWARE=1 env set
+    /// this so parity/validation runs still exercise the GPU path on
+    /// WARP-only machines.
+    public static var allowSoftwareAdapter =
+        ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU_SOFTWARE"] == "1"
+    /// The auto-selection gate: a real GPU, or software explicitly allowed.
+    public var usableForAutoSelection: Bool {
+        !isSoftwareAdapter || Self.allowSoftwareAdapter
+    }
     private let shader: WGPUShaderModule
     private var pipelines: [String: WGPUComputePipeline] = [:]
     private let lock = NSLock()
@@ -58,6 +75,7 @@ public final class WgpuEngine {
         var info = WGPUAdapterInfo()
         wgpuAdapterGetInfo(adapter, &info)
         self.adapterSummary = "\(sv(info.device)) [backend \(info.backendType.rawValue)]"
+        self.isSoftwareAdapter = info.adapterType == WGPUAdapterType_CPU
 
         // The default limit of 8 storage buffers per stage is below what
         // guided_apply_blend needs (9); require the adapter's real limits.
