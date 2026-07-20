@@ -560,25 +560,40 @@ public final class RetouchSession: ObservableObject {
 
     // MARK: - Painting
 
+    /// Path distance traveled since the last stamp, carried across
+    /// continueStroke calls: stamp density must be set by `spacing`, not by
+    /// mouse-event granularity. (Stamping at least once per event made a
+    /// max-radius drag do the full O(r²) blend for every few pixels of
+    /// travel — the large-brush lag, in both shells.)
+    private var strokeCarry: Double = 0
+
     public func beginStroke(at point: CGPoint) {
         guard sourceFloat != nil else {
             deadDrag = true
             return
         }
         strokeActive = true
+        strokeCarry = 0
         currentStrokeTiles = [:]
         stamp(at: point)
     }
 
     public func continueStroke(from p0: CGPoint, to p1: CGPoint) {
         guard strokeActive, sourceFloat != nil else { return }
-        let distance = hypot(p1.x - p0.x, p1.y - p0.y)
+        let length = hypot(p1.x - p0.x, p1.y - p0.y)
+        guard length > 0 else { return }
         let spacing = max(1, brushRadius / 3)
-        let steps = max(1, Int(distance / spacing))
-        for i in 1...steps {
-            let t = Double(i) / Double(steps)
-            stamp(at: CGPoint(x: p0.x + (p1.x - p0.x) * t, y: p0.y + (p1.y - p0.y) * t))
+        var next = spacing - strokeCarry  // distance along this segment to the next stamp
+        guard next <= length else {
+            strokeCarry += length
+            return
         }
+        while next <= length {
+            let t = next / length
+            stamp(at: CGPoint(x: p0.x + (p1.x - p0.x) * t, y: p0.y + (p1.y - p0.y) * t))
+            next += spacing
+        }
+        strokeCarry = length - (next - spacing)
     }
 
     public func endStroke() {
@@ -679,37 +694,78 @@ public final class RetouchSession: ObservableObject {
                     workingDepth.withUnsafeMutableBufferPointer { wd in
                         originalDepth.withUnsafeBufferPointer { od in
                             depthDisplayPixels.withUnsafeMutableBufferPointer { dbytes in
-                    for y in y0...y1 {
+                    let innerSq = inner * inner
+                    let count = w * self.height
+                    dst.baseAddress!.withMemoryRebound(to: SIMD4<Float>.self, capacity: count) { dstV in
+                    s.baseAddress!.withMemoryRebound(to: SIMD4<Float>.self, capacity: count) { srcV in
+                    bytes.baseAddress!.withMemoryRebound(to: SIMD4<UInt8>.self, capacity: count) { bytesV in
+                    let dstBox = UncheckedSendable(dstV)
+                    let srcBox = UncheckedSendable(srcV)
+                    let bytesBox = UncheckedSendable(bytesV)
+                    let wdBox = UncheckedSendable(wd)
+                    let odBox = UncheckedSendable(od)
+                    let dbytesBox = UncheckedSendable(dbytes)
+                    let paintRow: @Sendable (Int) -> Void = { y in
+                        let dstV = dstBox.value, srcV = srcBox.value
+                        let bytesV = bytesBox.value
+                        let wd = wdBox.value, od = odBox.value, dbytes = dbytesBox.value
                         let dy = Double(y) - center.y
-                        for x in x0...x1 {
+                        let dySq = dy * dy
+                        guard dySq <= r * r else { return }
+                        // Row extent from the circle equation: the loop never
+                        // visits the bounding square's corners, and pixels in
+                        // the hard core skip the square root entirely.
+                        let chord = (r * r - dySq).squareRoot()
+                        let xLo = max(x0, Int((center.x - chord).rounded(.up)))
+                        let xHi = min(x1, Int((center.x + chord).rounded(.down)))
+                        guard xLo <= xHi else { return }
+                        for x in xLo...xHi {
                             let dx = Double(x) - center.x
-                            let d = (dx * dx + dy * dy).squareRoot()
-                            guard d <= r else { continue }
-                            let t = r > inner
-                                ? min(max((r - d) / (r - inner), 0), 1)
-                                : 1
-                            let pi = (y * w + x) * 4
+                            let dSq = dx * dx + dySq
+                            let t: Double
+                            if dSq <= innerSq || r <= inner {
+                                t = 1
+                            } else {
+                                let d = dSq.squareRoot()
+                                t = min(max((r - d) / (r - inner), 0), 1)
+                            }
+                            let pi = y * w + x
                             // Respect source coverage: alpha 0 means the aligned
                             // frame has no data here (warp out-of-bounds) — never
                             // paint smear colors from past its edge.
-                            let alpha = Float(t * t * (3 - 2 * t)) * s[pi + 3]
+                            let sv = srcV[pi]
+                            let alpha = Float(t * t * (3 - 2 * t)) * sv.w
                             guard alpha > 0.003 else { continue }
-                            for c in 0..<3 {
-                                let v = dst[pi + c] * (1 - alpha) + s[pi + c] * alpha
-                                dst[pi + c] = v
-                                bytes[pi + c] = UInt8(min(max(v, 0), 1) * 255 + 0.5)
-                            }
-                            dst[pi + 3] = 1
-                            bytes[pi + 3] = 255
+                            // Same arithmetic as the scalar path had
+                            // (d·(1−α) + s·α), one vector op per pixel.
+                            var out = dstV[pi] * (1 - alpha) + sv * alpha
+                            out.w = 1
+                            dstV[pi] = out
+                            let scaled = pointwiseMin(pointwiseMax(out, .zero), .one)
+                                * 255 + SIMD4<Float>(repeating: 0.5)
+                            bytesV[pi] = SIMD4<UInt8>(scaled)
                             if paintsDepth {
-                                let di = y * w + x
-                                let target = eraseDepth ? od[di] : frameDepth
-                                let v = wd[di] * (1 - alpha) + target * alpha
-                                wd[di] = v
+                                let target = eraseDepth ? od[pi] : frameDepth
+                                let v = wd[pi] * (1 - alpha) + target * alpha
+                                wd[pi] = v
                                 let g = 1 - v * dScale
-                                dbytes[di] = UInt8(min(max(g, 0), 1) * 255 + 0.5)
+                                dbytes[pi] = UInt8(min(max(g, 0), 1) * 255 + 0.5)
                             }
                         }
+                    }
+                    // Rows write disjoint memory in every buffer — safe to
+                    // fan out (the convertToBytes structural argument). Small
+                    // brushes stay serial; the dispatch overhead would win.
+                    let rows = y1 - y0 + 1
+                    if rows >= 128 {
+                        DispatchQueue.concurrentPerform(iterations: rows) { i in
+                            paintRow(y0 + i)
+                        }
+                    } else {
+                        for y in y0...y1 { paintRow(y) }
+                    }
+                    }
+                    }
                     }
                             }
                         }
@@ -753,14 +809,12 @@ public final class RetouchSession: ObservableObject {
                         for row in 0..<r.h {
                             let srcStart = ((r.y0 + row) * width + r.x0) * 4
                             let dstStart = row * r.w * 4
-                            for i in 0..<(r.w * 4) {
-                                dst[dstStart + i] = src[srcStart + i]
-                            }
+                            memcpy(dst.baseAddress! + dstStart, src.baseAddress! + srcStart,
+                                   r.w * 4 * MemoryLayout<Float>.stride)
                             let srcDStart = (r.y0 + row) * width + r.x0
                             let dstDStart = row * r.w
-                            for i in 0..<r.w {
-                                dstD[dstDStart + i] = srcD[srcDStart + i]
-                            }
+                            memcpy(dstD.baseAddress! + dstDStart, srcD.baseAddress! + srcDStart,
+                                   r.w * MemoryLayout<Float>.stride)
                         }
                     }
                 }

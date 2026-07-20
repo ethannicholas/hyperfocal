@@ -244,20 +244,28 @@ Done = buckets in -v output, and either the overlap ported (output
 byte-identical, blocked-on-GPU ≈ 0) or this item deleted because the
 measurement showed nothing worth hiding.
 
-### Retouch stamp cost at large brush radii
+### Retouch stamp cost at large brush radii — verify feel, then close
 
-Painting with a large brush lags noticeably — in BOTH shells, so the
-cost is in `RetouchSession`'s stroke path, not the UIs: each segment
-stamps every `spacing` step and each stamp is O(r²) pixel work
-(mask blend + undo-tile capture + depth co-paint), so drag cost grows
-as O(len × r² / spacing) and spacing shrinks relative to r. Profile a
-slow drag first (Instruments, big synth stack, max radius), then
-likely wins: skip fully-overlapped intermediate stamps, blend only the
-mask's bounding circle instead of its bounding square's corners,
-SIMD/vDSP the per-row blend, or accumulate a per-segment coverage mask
-and composite once. Done = a max-radius drag on a 45 MP stack feels
-continuous in the native app (the Qt shell inherits the fix through
-the bridge).
+The engine-side fixes landed 2026-07-19 (all in `RetouchSession`, so
+both shells inherit them): stroke arc-length carry so stamps land
+every `spacing` along the path instead of ≥ once per mouse event (the
+dominant cost — per-event stamping did ~65× the intended work at max
+radius), per-row chord bounds + core sqrt skip, SIMD4 blend with
+parallel rows (serial under 128 rows), and memcpy undo-tile capture.
+Measured on a 45 MP synth stack via the probe's bench harness
+(`HYPERFOCAL_BENCH_STROKE=1 retouch-probe <frames…>`, VM-loaded
+machine): max-radius 4954 px drag 36.3 s → 0.56 s; warm click 54 →
+45 ms; steady-state stamp ≈ 5 ms snapshot + 20 ms paint (paint is
+memory-bound, not compute-bound — SIMD alone moved nothing until rows
+were parallelized). Remaining:
+
+- **Feel-check in the native app** (the item's done criterion): a
+  max-radius drag on a 45 MP stack should feel continuous. Note the
+  first stamp after a source-frame load pays a one-time cold-page
+  cost (~0.4 s at 45 MP in the bench); if that reads as a real-world
+  stutter, pre-warm the working/display buffers on session start.
+- If more is ever needed: parallelize `snapshotTiles`' 49-tile copy,
+  or accumulate a per-segment coverage mask and composite once.
 
 ### Research-informed fusion follow-ons
 

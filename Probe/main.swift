@@ -78,6 +78,82 @@ do {
 
 let args = CommandLine.arguments.dropFirst()
 let urls = args.map { URL(fileURLWithPath: $0) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+// Stroke-cost measurement harness (HYPERFOCAL_BENCH_STROKE=1), not a
+// regression check: builds a session directly over frame 0 (no fusion)
+// and times a simulated max-radius drag delivered at mouse-event
+// granularity — the workload behind the large-brush lag. Prints timing
+// and exits; the normal probe suite never runs under this flag.
+if ProcessInfo.processInfo.environment["HYPERFOCAL_BENCH_STROKE"] != nil {
+    Task { @MainActor in
+        let source = StackSource(urls: Array(urls))
+        let result = try! source.frame(at: 0)
+        let (w, h) = (result.width, result.height)
+        print("bench: \(w)x\(h), \(urls.count) frames")
+        let session = RetouchSession(result: result,
+                                     depth: [Float](repeating: 0, count: w * h),
+                                     sharpness: nil, source: source)
+        var ticks = 0
+        while session.sourceLoading && ticks < 600 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            ticks += 1
+        }
+        guard session.canPaint else { print("bench: SOURCE NEVER LOADED"); exit(1) }
+        // Let the neighbor prefetch decodes finish — they're 45 MP TIFF
+        // loads on background threads and contaminate every timing below.
+        try? await Task.sleep(nanoseconds: 8_000_000_000)
+        session.brushRadius = RetouchSession.brushRadiusRange.upperBound
+        // Clicks first: beginStroke+endStroke is what a single tap costs
+        // (undo-tile capture + one stamp).
+        var clickTotal = 0.0
+        let clicks = 5
+        for i in 0..<clicks {
+            let p = CGPoint(x: Double(w) * (0.2 + 0.12 * Double(i)), y: Double(h) * 0.3)
+            let c0 = ContinuousClock.now
+            session.beginStroke(at: p)
+            session.endStroke()
+            let d = c0.duration(to: .now)
+            clickTotal += Double(d.components.seconds) * 1000
+                + Double(d.components.attoseconds) / 1e15
+        }
+        print(String(format: "bench: click avg %.1f ms (%d clicks)",
+                     clickTotal / Double(clicks), clicks))
+        // Repeat-click at the last position: fully warm caches, no new
+        // undo tiles within the stroke — the floor of a stamp's cost.
+        let warmP = CGPoint(x: Double(w) * (0.2 + 0.12 * Double(clicks - 1)),
+                            y: Double(h) * 0.3)
+        let w0 = ContinuousClock.now
+        session.beginStroke(at: warmP)
+        session.endStroke()
+        let wd = w0.duration(to: .now)
+        print(String(format: "bench: warm repeat click %.1f ms",
+                     Double(wd.components.seconds) * 1000
+                         + Double(wd.components.attoseconds) / 1e15))
+        // A deliberate drag: 4 px per mouse event across 60% of the width.
+        let y = Double(h) / 2
+        let xStart = Double(w) * 0.2, xEnd = Double(w) * 0.8
+        let step = 4.0
+        var events = 0
+        let t0 = ContinuousClock.now
+        session.beginStroke(at: CGPoint(x: xStart, y: y))
+        var x = xStart
+        while x + step <= xEnd {
+            session.continueStroke(from: CGPoint(x: x, y: y),
+                                   to: CGPoint(x: x + step, y: y))
+            x += step
+            events += 1
+        }
+        session.endStroke()
+        let elapsed = t0.duration(to: .now)
+        let ms = Double(elapsed.components.seconds) * 1000
+            + Double(elapsed.components.attoseconds) / 1e15
+        print(String(format: "bench: radius %.0f, %d events over %.0f px: %.0f ms total, %.2f ms/event",
+                     session.brushRadius, events, xEnd - xStart, ms, ms / Double(events)))
+        exit(0)
+    }
+    RunLoop.main.run()
+}
+
 print("probe: fusing \(urls.count) frames")
 let cache = AlignmentCache()
 let output = try! StackPipeline.fuse(urls: Array(urls), configuration: .init(), alignmentCache: cache)
