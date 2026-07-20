@@ -112,14 +112,18 @@ Windows residuals to close (each independently landable):
    registering from a ¼-scale JPEG decode (libjpeg scaled decode) which
    would also shrink the gray/gradient glue (~15 s); (c) build ~19 s.
    **DMap lags pmax 2×** (341 s vs 166 s CLI; the shell's default method
-   is dmap, so UI fuses read ~6 min): it shares the registration/warp/
-   decode wins but has had no method-specific pass — and on a disk-tight
-   machine the aligned-frame spill silently doesn't fit (needs
-   w×h×16 B×frames; 14.6 GB here vs ~11 free), so render re-decodes and
-   re-warps the whole stack. Candidates: half-float spill (halves the
-   footprint; gate render sensitivity), phase buckets for the CPU dmap
-   path (it has none), then the same fused-pass treatment the pyramid
-   got. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
+   is dmap, so UI fuses read ~6 min). The CPU path now spills (adaptive
+   fp16 when fp32 won't fit) and has `dmap phases (cpu)` buckets;
+   measured walls on the sample stack: **energy ~85 s** (the σ=10
+   `blurPlane` at full res per frame — a downsample-blur-upsample
+   energy field would be ~50× cheaper but is a cross-engine algorithm
+   change: CPU + MSL + WGSL + both GPU orchestrators must move
+   together or the ≥90 dB dmap parity gates break, and the Metal side
+   needs Mac verification), **decode+warp ~78 s** (the dmap closure
+   still uses the allocating `Warp.apply`; port the pyramid's
+   warp-into-workspace treatment), **render-src ~28 s** (fp16 spill
+   read + a per-frame buffer alloc worth reusing). Regularize is only
+   ~4 s — not a target. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
    status (Mac, Fluorite stack): 1600 bound + 2000 cap verified
