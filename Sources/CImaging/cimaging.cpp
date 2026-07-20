@@ -4,11 +4,14 @@
 
 #include "cimaging.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <string>
+#include <thread>
 #include <vector>
 #include <csetjmp>
 
@@ -92,6 +95,18 @@ cmsHPROFILE makeProPhoto() {
     return prof;
 }
 
+// HYPERFOCAL_DECODE_DEBUG=1: per-phase decode timings to stderr — the
+// measurement tap for decode performance work (companion of
+// HYPERFOCAL_REGISTER_DEBUG in hf_register).
+bool decodeDebug() {
+    static const bool on = std::getenv("HYPERFOCAL_DECODE_DEBUG") != nullptr;
+    return on;
+}
+double msSince(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+}
+
 cmsHPROFILE profileForName(const char* name) {
     if (!name || std::strcmp(name, "p3") == 0) return makeDisplayP3();
     if (std::strcmp(name, "srgb") == 0) return cmsCreate_sRGBProfile();
@@ -101,14 +116,34 @@ cmsHPROFILE profileForName(const char* name) {
 
 // Convert an interleaved RGBA float buffer in-place from `src` space to `dst`
 // space. Alpha rides through untouched. No-op-safe if profiles are equal.
+// Chunked across threads: the transform is the decode hot spot (measured
+// 1.4-2.1 s single-threaded on an 11 MP frame — ~85% of decode), and an
+// lcms transform created with NOCACHE is stateless, so worker threads can
+// share it. Same math per pixel, so the result is unchanged.
 bool convertRGBA(float* rgba, int count, cmsHPROFILE src, cmsHPROFILE dst) {
     if (!src || !dst) return false;
     cmsHTRANSFORM xf = cmsCreateTransform(
         src, TYPE_RGBA_FLT, dst, TYPE_RGBA_FLT,
         INTENT_RELATIVE_COLORIMETRIC,
-        cmsFLAGS_COPY_ALPHA | cmsFLAGS_BLACKPOINTCOMPENSATION);
+        cmsFLAGS_COPY_ALPHA | cmsFLAGS_BLACKPOINTCOMPENSATION | cmsFLAGS_NOCACHE);
     if (!xf) return false;
-    cmsDoTransform(xf, rgba, rgba, count);
+    unsigned workers = std::max(1u, std::min(std::thread::hardware_concurrency(), 8u));
+    if (count < (1 << 16)) workers = 1;  // small images: spawn cost dominates
+    if (workers == 1) {
+        cmsDoTransform(xf, rgba, rgba, count);
+    } else {
+        const int chunk = (count + (int)workers - 1) / (int)workers;
+        std::vector<std::thread> pool;
+        for (unsigned t = 0; t < workers; t++) {
+            const int lo = (int)t * chunk;
+            const int n = std::min(chunk, count - lo);
+            if (n <= 0) break;
+            pool.emplace_back([xf, rgba, lo, n] {
+                cmsDoTransform(xf, rgba + (size_t)lo * 4, rgba + (size_t)lo * 4, n);
+            });
+        }
+        for (auto& th : pool) th.join();
+    }
     cmsDeleteTransform(xf);
     return true;
 }
@@ -371,6 +406,7 @@ struct jpegErrMgr { struct jpeg_error_mgr pub; jmp_buf jb; };
 void jpegOnError(j_common_ptr cinfo) { longjmp(((jpegErrMgr*)cinfo->err)->jb, 1); }
 
 hf_status decodeJPEG(const char* path, int* out_w, int* out_h, float** out_rgba) {
+    const auto t0 = std::chrono::steady_clock::now();
     FILE* fp = std::fopen(path, "rb");
     if (!fp) return hf_err_open;
     struct jpeg_decompress_struct cinfo;
@@ -407,7 +443,12 @@ hf_status decodeJPEG(const char* path, int* out_w, int* out_h, float** out_rgba)
     jpeg_finish_decompress(&cinfo);
     jpeg_destroy_decompress(&cinfo);
     std::fclose(fp);
+    const auto tJpeg = std::chrono::steady_clock::now();
+    const double jpegMs = std::chrono::duration<double, std::milli>(tJpeg - t0).count();
     bool colorOK = toDisplayP3(rgba, (int)px, iccData, iccLen);
+    if (decodeDebug())
+        fprintf(stderr, "decodeJPEG %dx%d: jpeg+float %.0fms, lcms %.0fms\n",
+                w, h, jpegMs, msSince(tJpeg));
     if (iccData) std::free(iccData);
     if (!colorOK) { std::free(rgba); return hf_err_color; }
     *out_w = w; *out_h = h; *out_rgba = rgba;
@@ -671,8 +712,56 @@ extern "C" hf_status hf_decode(const char* path, int* out_w, int* out_h, float**
     }
 }
 
+// JPEG fast path for the registration gray plane: decode 8-bit RGB rows and
+// take integer Rec.709 luma directly — no float buffer, no color management.
+// Registration consumes gradients of this plane, so the small shift from
+// skipping the ICC→P3 conversion (which the general path below pays ~1.4-2.1s
+// per 11 MP frame for) is irrelevant to it; the exposure-outlier check
+// compares these means *across frames*, where the encoding cancels.
+static hf_status decodeJPEGGray8(const char* path,
+                                 int* out_w, int* out_h, uint8_t** out_gray) {
+    const auto t0 = std::chrono::steady_clock::now();
+    FILE* fp = std::fopen(path, "rb");
+    if (!fp) return hf_err_open;
+    struct jpeg_decompress_struct cinfo;
+    jpegErrMgr jerr;
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jpegOnError;
+    uint8_t* gray = nullptr;
+    if (setjmp(jerr.jb)) { jpeg_destroy_decompress(&cinfo); if (gray) std::free(gray); std::fclose(fp); return hf_err_decode; }
+    jpeg_create_decompress(&cinfo);
+    jpeg_stdio_src(&cinfo, fp);
+    jpeg_read_header(&cinfo, TRUE);
+    cinfo.out_color_space = JCS_RGB;
+    jpeg_start_decompress(&cinfo);
+    int w = cinfo.output_width, h = cinfo.output_height;
+    gray = (uint8_t*)std::malloc((size_t)w * h);
+    if (!gray) longjmp(jerr.jb, 1);
+    std::vector<JSAMPLE> row((size_t)w * cinfo.output_components);
+    JSAMPROW rp = row.data();
+    while (cinfo.output_scanline < cinfo.output_height) {
+        int y = cinfo.output_scanline;
+        jpeg_read_scanlines(&cinfo, &rp, 1);
+        uint8_t* out = gray + (size_t)y * w;
+        for (int x = 0; x < w; x++) {
+            // Rec.709 weights in 16-bit fixed point (sum = 65536).
+            out[x] = (uint8_t)((13933u * row[x * 3 + 0] + 46871u * row[x * 3 + 1]
+                                + 4732u * row[x * 3 + 2] + 32768u) >> 16);
+        }
+    }
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+    std::fclose(fp);
+    if (decodeDebug())
+        fprintf(stderr, "decodeJPEGGray8 %dx%d: %.0fms\n", w, h, msSince(t0));
+    *out_w = w; *out_h = h; *out_gray = gray;
+    return hf_ok;
+}
+
 extern "C" hf_status hf_decode_gray8(const char* path, int is_raw,
                                      int* out_w, int* out_h, uint8_t** out_gray) {
+    if (!is_raw && sniff(path) == C_JPEG)
+        return decodeJPEGGray8(path, out_w, out_h, out_gray);
     int w = 0, h = 0; float* rgba = nullptr;
     hf_status s = is_raw ? hf_decode_raw(path, &w, &h, &rgba)
                          : hf_decode(path, &w, &h, &rgba);
@@ -820,20 +909,24 @@ extern "C" hf_status hf_exif_source_meta(const char* path,
 // ---------------------------------------------------------------------------
 // Registration (OpenCV)
 // ---------------------------------------------------------------------------
-extern "C" hf_status hf_register(int w, int h,
-                                 const uint8_t* fixed, const uint8_t* moving,
-                                 float* out_h) {
-    // HYPERFOCAL_REGISTER_DEBUG=1: per-phase timings + keypoint counts to
-    // stderr — the measurement tap for registration performance work (same
-    // pattern as the HYPERFOCAL_DUMP_* switches).
-    static const bool debugTiming = std::getenv("HYPERFOCAL_REGISTER_DEBUG") != nullptr;
+// Keypoints + descriptors of one gray frame (opaque to callers).
+struct hf_sift {
+    std::vector<cv::KeyPoint> kp;
+    cv::Mat desc;
+};
+
+// HYPERFOCAL_REGISTER_DEBUG=1: per-phase timings + keypoint counts to
+// stderr — the measurement tap for registration performance work (same
+// pattern as the HYPERFOCAL_DUMP_* switches).
+static bool registerDebug() {
+    static const bool on = std::getenv("HYPERFOCAL_REGISTER_DEBUG") != nullptr;
+    return on;
+}
+
+extern "C" hf_sift* hf_sift_detect(int w, int h, const uint8_t* gray) {
     const int64_t t0 = cv::getTickCount();
-    auto ms = [](int64_t from, int64_t to) {
-        return (double)(to - from) * 1000.0 / cv::getTickFrequency();
-    };
     try {
-        cv::Mat fixedM(h, w, CV_8U, (void*)fixed);
-        cv::Mat movingM(h, w, CV_8U, (void*)moving);
+        cv::Mat img(h, w, CV_8U, (void*)gray);
         // SIFT: scale-space extrema are localized to sub-pixel, so the fitted
         // homography is markedly more precise than ORB's FAST corners — and
         // feature matching (unlike dense ECC) survives the appearance change
@@ -845,34 +938,46 @@ extern "C" hf_status hf_register(int w, int h,
         // ratio test. The cap keeps the strongest N by response; hundreds of
         // ratio-test survivors remain, which is all RANSAC needs.
         cv::Ptr<cv::SIFT> sift = cv::SIFT::create(4000);
-        std::vector<cv::KeyPoint> kpF, kpM;
-        cv::Mat descF, descM;
-        sift->detectAndCompute(fixedM, cv::noArray(), kpF, descF);
-        sift->detectAndCompute(movingM, cv::noArray(), kpM, descM);
-        const int64_t tDetect = cv::getTickCount();
-        if (descF.empty() || descM.empty() || kpF.size() < 4 || kpM.size() < 4)
+        auto* f = new hf_sift();
+        sift->detectAndCompute(img, cv::noArray(), f->kp, f->desc);
+        if (registerDebug())
+            fprintf(stderr, "hf_sift_detect %dx%d: kp %zu, %.0fms\n",
+                    w, h, f->kp.size(),
+                    (double)(cv::getTickCount() - t0) * 1000.0 / cv::getTickFrequency());
+        return f;
+    } catch (...) { return nullptr; }
+}
+
+extern "C" void hf_sift_free(hf_sift* frame) { delete frame; }
+
+extern "C" hf_status hf_sift_match(const hf_sift* fixedF, const hf_sift* movingF,
+                                   float* out_h) {
+    const int64_t t0 = cv::getTickCount();
+    try {
+        if (!fixedF || !movingF) return hf_err_register;
+        if (fixedF->desc.empty() || movingF->desc.empty()
+            || fixedF->kp.size() < 4 || movingF->kp.size() < 4)
             return hf_err_register;
         cv::BFMatcher matcher(cv::NORM_L2);
         std::vector<std::vector<cv::DMatch>> knn;
-        matcher.knnMatch(descM, descF, knn, 2);   // query = moving, train = fixed
+        matcher.knnMatch(movingF->desc, fixedF->desc, knn, 2);   // query = moving, train = fixed
         const int64_t tMatch = cv::getTickCount();
         std::vector<cv::Point2f> ptsM, ptsF;
         for (auto& m : knn) {
             if (m.size() < 2) continue;
             if (m[0].distance < 0.75f * m[1].distance) {
-                ptsM.push_back(kpM[m[0].queryIdx].pt);
-                ptsF.push_back(kpF[m[0].trainIdx].pt);
+                ptsM.push_back(movingF->kp[m[0].queryIdx].pt);
+                ptsF.push_back(fixedF->kp[m[0].trainIdx].pt);
             }
         }
         if (ptsM.size() < 4) return hf_err_register;
         cv::Mat H = cv::findHomography(ptsM, ptsF, cv::RANSAC, 3.0);
-        if (debugTiming) {
+        if (registerDebug()) {
             fprintf(stderr,
-                    "hf_register %dx%d: kp %zu/%zu, matches %zu, "
-                    "detect %.0fms match %.0fms ransac %.0fms\n",
-                    w, h, kpF.size(), kpM.size(), ptsM.size(),
-                    ms(t0, tDetect), ms(tDetect, tMatch),
-                    ms(tMatch, cv::getTickCount()));
+                    "hf_sift_match: kp %zu/%zu, matches %zu, match %.0fms ransac %.0fms\n",
+                    fixedF->kp.size(), movingF->kp.size(), ptsM.size(),
+                    (double)(tMatch - t0) * 1000.0 / cv::getTickFrequency(),
+                    (double)(cv::getTickCount() - tMatch) * 1000.0 / cv::getTickFrequency());
         }
         if (H.empty()) return hf_err_register;
         for (int r = 0; r < 3; r++)
@@ -880,4 +985,15 @@ extern "C" hf_status hf_register(int w, int h,
                 out_h[r * 3 + c] = (float)H.at<double>(r, c);
         return hf_ok;
     } catch (...) { return hf_err_register; }
+}
+
+extern "C" hf_status hf_register(int w, int h,
+                                 const uint8_t* fixed, const uint8_t* moving,
+                                 float* out_h) {
+    hf_sift* f = hf_sift_detect(w, h, fixed);
+    hf_sift* m = hf_sift_detect(w, h, moving);
+    hf_status s = (f && m) ? hf_sift_match(f, m, out_h) : hf_err_register;
+    hf_sift_free(f);
+    hf_sift_free(m);
+    return s;
 }

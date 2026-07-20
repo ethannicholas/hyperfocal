@@ -94,16 +94,17 @@ Windows residuals to close (each independently landable):
    (windows-env.ps1 prepends `installed\<triplet>\bin`); distributing
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
-4. **Registration: cache SIFT per frame.** `hf_register` recomputes
-   `detectAndCompute` for both frames of every pair, but each interior
-   frame sits in two pairs — detect (the dominant per-pair cost since
-   the 4000-feature cap killed the quadratic match term: ~4.8 s vs
-   0.8 s per pair on the 2-core VM, 4K frames) is being paid twice per
-   frame. A detect-once/match-many shim API (handles for per-frame
-   descriptors) would roughly halve registration wall-clock on big
-   stacks. Only worth doing if registration still feels slow on real
-   hardware — measure first (`HYPERFOCAL_REGISTER_DEBUG=1` prints
-   per-phase timings and keypoint counts).
+4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
+   JPEGs, 2-core Windows VM, 2026-07-19): Helicon Focus fuses the whole
+   stack in < 2 min; our registration now takes ~4.7 min there (SIFT
+   detect ~2.3 s/frame is the remaining term) and fusion is the long
+   pole — the CPU pyramid path runs ~42 s/frame at 11 MP on 2 cores
+   (allocation churn per level in `laplacianPyramid`, no pass fusion),
+   and the wgpu path on WARP ~12 s/frame. Helicon's number implies
+   ~1 s/frame is achievable on 2 cores. Profile the CPU pyramid first
+   (preallocate, fuse blur+decimate passes, check SIMD codegen on
+   Windows/Linux); WARP dispatch overhead second. Measure with `-v`
+   phase buckets + `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`.
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and

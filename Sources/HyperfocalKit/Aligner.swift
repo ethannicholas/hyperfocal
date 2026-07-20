@@ -151,18 +151,22 @@ public enum Aligner {
         // content nearly vanishes and the in-focus texture dominates. Only the
         // gradient plane stays in memory (~1/16th of the float image); the
         // luminance mean rides along for the exposure check.
-        let decoded = try boundedConcurrentMap(count: n, concurrency: registrationConcurrency) { i -> (GrayImage, GrayStats, Float) in
+        let decoded = try boundedConcurrentMap(count: n, concurrency: registrationConcurrency) { i -> (GrayImage, GrayStats, Float, RegistrationFrame) in
             try cancellation?.checkCancelled()
             let g = try ImageFile.loadGray8(url: urls[i])
             let (gradient, lumMean) = gradientImage(g)
             let stats = grayStats(gradient)
+            // Per-frame registration prep (SIFT detection on the OpenCV
+            // path) happens here, once — pairs only match.
+            let regFrame = try prepareForRegistration(gradient)
             log?("decoded frame \(i)")
             bump(frameIndex: i, frame: preview(of: g), pass: .decode)
-            return (gradient, stats, lumMean)
+            return (gradient, stats, lumMean, regFrame)
         }
         let grays = decoded.map(\.0)
         let stats = decoded.map(\.1)
         let lumMeans = decoded.map(\.2)
+        let regFrames = decoded.map(\.3)
 
         // Exposure outliers vs the stack *median* (robust: a near-black misfire
         // in a short stack would drag a mean-based reference toward itself).
@@ -195,7 +199,7 @@ public enum Aligner {
             let a = kept[j], b = kept[j + 1]
             defer { bump(frameIndex: b, frame: preview(of: grays[b]), pass: .register) }
             do {
-                let h = try register(moving: grays[b], fixed: grays[a])
+                let h = try register(moving: regFrames[b], fixed: regFrames[a])
                 let residual = pairResidual(fixed: stats[a], moving: stats[b], homography: h)
                 // Occam gate: on featureless pairs (focus racked past every
                 // surface — nothing but bokeh gradients) the registrar
@@ -273,10 +277,10 @@ public enum Aligner {
             } else if case .failed = pairs[j] {
                 // Interior failed pair, both endpoints otherwise fine: whichever
                 // frame the chain can bridge around is the bad one.
-                if let h = try? register(moving: grays[kept[j + 2]], fixed: grays[kept[j]]) {
+                if let h = try? register(moving: regFrames[kept[j + 2]], fixed: regFrames[kept[j]]) {
                     alignBad.insert(j + 1)
                     bridgeCache[j] = h  // kept[j+2] → kept[j], keyed by lower survivor
-                } else if let h = try? register(moving: grays[kept[j + 1]], fixed: grays[kept[j - 1]]) {
+                } else if let h = try? register(moving: regFrames[kept[j + 1]], fixed: regFrames[kept[j - 1]]) {
                     alignBad.insert(j)
                     bridgeCache[j - 1] = h
                 } else {
@@ -319,7 +323,7 @@ public enum Aligner {
                 h = bridged
             } else {
                 do {
-                    h = try register(moving: grays[b], fixed: grays[a])
+                    h = try register(moving: regFrames[b], fixed: regFrames[a])
                     log?("bridged frame \(b) → \(a) across excluded frame(s)")
                 } catch {
                     throw AlignError.registrationFailed(b)
@@ -338,7 +342,7 @@ public enum Aligner {
         // registrar can manage one, else that survivor's transform verbatim.
         for f in flagged.sorted() {
             let nearest = survivors.min { abs($0 - f) < abs($1 - f) }!
-            if let h = try? register(moving: grays[f], fixed: grays[nearest]) {
+            if let h = try? register(moving: regFrames[f], fixed: regFrames[nearest]) {
                 transforms[f] = transforms[nearest] * h
             } else {
                 transforms[f] = transforms[nearest]
@@ -631,6 +635,14 @@ public enum Aligner {
 
     static func preview(of g: GrayImage) -> RegistrationPreview { cgImage(from: g) }
 
+    /// Vision registers gray images directly — no per-frame preparation to
+    /// cache, so the "prepared frame" is the gradient image itself (the
+    /// OpenCV branch detects SIFT here instead; see its RegistrationFrame).
+    typealias RegistrationFrame = GrayImage
+    static func prepareForRegistration(_ gradient: GrayImage) throws -> RegistrationFrame {
+        gradient
+    }
+
     static func grayStats(_ img: GrayImage, factor: Int = 4) -> GrayStats {
         let cg = cgImage(from: img)
         let pw = max(1, cg.width / factor), ph = max(1, cg.height / factor)
@@ -654,26 +666,48 @@ public enum Aligner {
 
     static func preview(of g: GrayImage) -> RegistrationPreview { g }
 
-    static func register(moving: GrayImage, fixed: GrayImage) throws -> simd_float3x3 {
+    /// One frame's SIFT keypoints + descriptors, detected once on the
+    /// registration-bounded downscale of its gradient image. Detection
+    /// dominates pair cost and every interior frame sits in two pairs, so
+    /// `transformsAndQuality` prepares each frame once (in the decode pass)
+    /// and pairs match handles.
+    final class RegistrationFrame {
+        let handle: OpaquePointer
+        let scale: Float          // downscale applied before detection
+        let width: Int, height: Int   // original (gradient) dimensions
+
+        init(gray: GrayImage) throws {
+            // Bound SIFT's input (openCVRegisterMaxSide) and map the
+            // homography back — same downscale-for-registration wrapper the
+            // macOS A/B path validated; full-res SIFT on 45 MP frames needs
+            // ~7.5 GB and often finds no model.
+            let longest = max(gray.width, gray.height)
+            scale = longest > openCVRegisterMaxSide
+                ? Float(openCVRegisterMaxSide) / Float(longest) : 1
+            let small = scale < 1 ? boxDownscale(gray, scale: scale) : gray
+            let h = small.pixels.withUnsafeBufferPointer {
+                hf_sift_detect(CInt(small.width), CInt(small.height), $0.baseAddress)
+            }
+            guard let h else { throw AlignError.registrationFailed(0) }
+            handle = h
+            width = gray.width
+            height = gray.height
+        }
+
+        deinit { hf_sift_free(handle) }
+    }
+
+    static func prepareForRegistration(_ gradient: GrayImage) throws -> RegistrationFrame {
+        try RegistrationFrame(gray: gradient)
+    }
+
+    static func register(moving: RegistrationFrame, fixed: RegistrationFrame) throws -> simd_float3x3 {
         precondition(moving.width == fixed.width && moving.height == fixed.height,
                      "OpenCV registration expects same-sized gray frames")
-        // Bound SIFT's input (openCVRegisterMaxSide) and map the homography
-        // back — same downscale-for-registration wrapper the macOS A/B path
-        // validated; full-res SIFT on 45 MP frames needs ~7.5 GB and often
-        // finds no model.
-        let longest = max(moving.width, moving.height)
-        let scale: Float = longest > openCVRegisterMaxSide
-            ? Float(openCVRegisterMaxSide) / Float(longest) : 1
-        let sm = scale < 1 ? boxDownscale(moving, scale: scale) : moving
-        let sf = scale < 1 ? boxDownscale(fixed, scale: scale) : fixed
         var h = [Float](repeating: 0, count: 9)
-        let status = sf.pixels.withUnsafeBufferPointer { f in
-            sm.pixels.withUnsafeBufferPointer { m in
-                hf_register(CInt(sf.width), CInt(sf.height),
-                            f.baseAddress, m.baseAddress, &h)
-            }
+        guard hf_sift_match(fixed.handle, moving.handle, &h) == hf_ok else {
+            throw AlignError.registrationFailed(0)
         }
-        guard status == hf_ok else { throw AlignError.registrationFailed(0) }
         // OpenCV already works top-left / y-down, matching our convention — no
         // flip (unlike Vision's bottom-left warp).
         let hs = simd_float3x3(rows: [
@@ -681,8 +715,8 @@ public enum Aligner {
             SIMD3<Float>(h[3], h[4], h[5]),
             SIMD3<Float>(h[6], h[7], h[8]),
         ])
-        guard scale < 1 else { return hs }
-        return upscaleHomography(hs, scale: scale)
+        guard moving.scale < 1 else { return hs }
+        return upscaleHomography(hs, scale: moving.scale)
     }
 
     static func grayStats(_ img: GrayImage, factor: Int = 4) -> GrayStats {

@@ -98,6 +98,17 @@ hf_status hf_register(int w, int h,
                       const uint8_t* fixed, const uint8_t* moving,
                       float* out_h);
 
+// Split registration: detect once per frame, match per pair. Detection (SIFT)
+// dominates pair cost and every interior frame of a focus stack sits in two
+// pairs, so callers registering a chain should detect each frame once and
+// match handles. hf_register remains the fused convenience (and the reference
+// recipe — hf_sift_match must stay byte-for-byte its match half).
+typedef struct hf_sift hf_sift;   // keypoints + descriptors of one gray frame
+hf_sift* hf_sift_detect(int w, int h, const uint8_t* gray);  // NULL on failure
+void hf_sift_free(hf_sift* frame);
+hf_status hf_sift_match(const hf_sift* fixed, const hf_sift* moving,
+                        float* out_h);
+
 #ifdef __cplusplus
 }
 #endif
