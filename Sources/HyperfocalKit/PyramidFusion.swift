@@ -166,6 +166,7 @@ public enum PyramidFusion {
         #endif
         var levels = 0
         var fused: [ImageBuffer]? = nil
+        var workspace: CPUWorkspace? = nil
         // Winner energy per band-pass level, updated as frames stream through.
         var bestEnergy: [[Float]] = []
         // Wall-clock phase buckets, reported through `log` at the end — the
@@ -195,43 +196,37 @@ public enum PyramidFusion {
                 levels = max(3, Int(log2(Double(min(img.width, img.height)) / 16.0)))
             }
             t0 = now()
-            let pyr = laplacianPyramid(img, levels: levels)
+            if workspace == nil {
+                let ws = CPUWorkspace(width: img.width, height: img.height, levels: levels)
+                workspace = ws
+                // bestEnergy = −1: the first frame's bands install
+                // unconditionally (energies are ≥ 0) — same convention as
+                // the GPU paths' bestE fill.
+                fused = ws.sizes.map { ImageBuffer(width: $0.w, height: $0.h) }
+                bestEnergy = ws.sizes.dropLast().map {
+                    [Float](repeating: -1, count: $0.w * $0.h)
+                }
+            }
+            let ws = workspace!
+            precondition(img.width == ws.sizes[0].w && img.height == ws.sizes[0].h,
+                         "frame size mismatch: \(img.width)x\(img.height)")
+            img.pixels.withUnsafeBufferPointer { src in
+                ws.gauss[0].withUnsafeMutableBufferPointer { dst in
+                    dst.baseAddress!.update(from: src.baseAddress!, count: src.count)
+                }
+            }
+            for l in 0..<levels { ws.fusedDownsample(level: l) }
+            ws.level0BandEnergy()
             tBuild += now() - t0
             t0 = now()
-            if fused == nil {
-                fused = pyr
-                bestEnergy = pyr.dropLast().enumerated().map { l, band in
-                    selectionEnergy(band, level: l)
-                }
-                // Base level accumulates a running sum for averaging.
-            } else {
-                for l in 0..<levels {
-                    let band = pyr[l]
-                    let energy = selectionEnergy(band, level: l)
-                    let bw = band.width
-                    fused![l].pixels.withUnsafeMutableBufferPointer { fp in
-                        band.pixels.withUnsafeBufferPointer { bp in
-                            energy.withUnsafeBufferPointer { ep in
-                                bestEnergy[l].withUnsafeMutableBufferPointer { best in
-                                    DispatchQueue.concurrentPerform(iterations: band.height) { y in
-                                        for i in (y * bw)..<((y + 1) * bw) {
-                                            if ep[i] > best[i] {
-                                                best[i] = ep[i]
-                                                let pi = i * 4
-                                                fp[pi] = bp[pi]
-                                                fp[pi + 1] = bp[pi + 1]
-                                                fp[pi + 2] = bp[pi + 2]
-                                                fp[pi + 3] = bp[pi + 3]
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                for i in fused![levels].pixels.indices {
-                    fused![levels].pixels[i] += pyr[levels].pixels[i]
+            ws.select0(fused: &fused![0], best: &bestEnergy[0])
+            for l in 1..<levels {
+                ws.selectStreaming(level: l, fused: &fused![l], best: &bestEnergy[l])
+            }
+            // Base level accumulates a running sum for averaging.
+            fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
+                ws.gauss[levels].withUnsafeBufferPointer { gp in
+                    for i in 0..<gp.count { fp[i] += gp[i] }
                 }
             }
             tSelect += now() - t0
@@ -256,6 +251,247 @@ public enum PyramidFusion {
     public static func fuse(_ frames: [ImageBuffer], log: ((String) -> Void)? = nil) -> ImageBuffer {
         // No throwing closure and no cancellation token: cannot actually throw.
         try! fuse(frameCount: frames.count, log: log) { frames[$0] }
+    }
+
+    /// Preallocated buffers + fused passes for the CPU streaming loop. The
+    /// naive per-frame pipeline (laplacianPyramid → selectionEnergy → select)
+    /// materialized every intermediate and allocated fresh buffers per level
+    /// per frame — measured ~1.4 s per 11 MP frame against ~0.6 s for the
+    /// same arithmetic fused (2-core reference VM). Per-pixel math and
+    /// ordering are identical to the naive helpers (and to the GPU kernels):
+    /// 5-tap H-then-V blur with edge clamps, min(2x, w−1) decimation,
+    /// (x+0.5)·s−0.5 bilinear upsampling, |R|+|G|+|B| energy, grit blur on
+    /// level 0's energy only.
+    final class CPUWorkspace {
+        let levels: Int
+        let sizes: [(w: Int, h: Int)]
+        var gauss: [[Float]]      // levels+1 Gaussian levels, RGBA
+        var band: [Float]         // level-0 band, RGBA (kept for post-blur select)
+        var energy: [Float]       // level-0 selection energy plane
+        var energyTmp: [Float]    // blur scratch
+        let gritWeights: [Float]
+
+        init(width: Int, height: Int, levels: Int) {
+            self.levels = levels
+            var s: [(w: Int, h: Int)] = [(width, height)]
+            for _ in 0..<levels {
+                let p = s[s.count - 1]
+                s.append(((p.w + 1) / 2, (p.h + 1) / 2))
+            }
+            sizes = s
+            gauss = s.map { [Float](repeating: 0, count: $0.w * $0.h * 4) }
+            band = [Float](repeating: 0, count: width * height * 4)
+            energy = [Float](repeating: 0, count: width * height)
+            energyTmp = [Float](repeating: 0, count: width * height)
+            gritWeights = Filters.gaussianKernel(sigma: PyramidFusion.gritSigma)
+        }
+
+        /// 5-tap blur + decimate in one pass: horizontal blur is computed
+        /// only for the 5 source rows and even columns each output row
+        /// needs, so ~75% of the naive full-resolution blur (and both its
+        /// full-res temporaries) never happens. Same taps, same H-then-V
+        /// order, same edge clamps as `convolveSeparableRGBA` + `downsample`.
+        func fusedDownsample(level l: Int) {
+            let (sw, sh) = sizes[l]
+            let (nw, nh) = sizes[l + 1]
+            let k = PyramidFusion.downKernel
+            gauss[l].withUnsafeBufferPointer { src in
+                gauss[l + 1].withUnsafeMutableBufferPointer { dst in
+                    k.withUnsafeBufferPointer { kp in
+                        DispatchQueue.concurrentPerform(iterations: nh) { oy in
+                            // H-blur the 5 contributing source rows at the
+                            // decimated columns, then V-blur vertically.
+                            var rows = [Float](repeating: 0, count: 5 * nw * 4)
+                            let syBase = min(oy * 2, sh - 1)
+                            rows.withUnsafeMutableBufferPointer { rp in
+                                for ky in 0..<5 {
+                                    let sy = min(max(syBase - 2 + ky, 0), sh - 1)
+                                    let rowOff = sy * sw
+                                    for ox in 0..<nw {
+                                        let sx = min(ox * 2, sw - 1)
+                                        var acc = SIMD4<Float>()
+                                        for kx in 0..<5 {
+                                            let tx = min(max(sx - 2 + kx, 0), sw - 1)
+                                            let i = (rowOff + tx) * 4
+                                            acc += SIMD4<Float>(src[i], src[i + 1],
+                                                                src[i + 2], src[i + 3]) * kp[kx]
+                                        }
+                                        let o = (ky * nw + ox) * 4
+                                        rp[o] = acc.x; rp[o + 1] = acc.y
+                                        rp[o + 2] = acc.z; rp[o + 3] = acc.w
+                                    }
+                                }
+                                for ox in 0..<nw {
+                                    var acc = SIMD4<Float>()
+                                    for ky in 0..<5 {
+                                        let i = (ky * nw + ox) * 4
+                                        acc += SIMD4<Float>(rp[i], rp[i + 1],
+                                                            rp[i + 2], rp[i + 3]) * kp[ky]
+                                    }
+                                    let o = (oy * nw + ox) * 4
+                                    dst[o] = acc.x; dst[o + 1] = acc.y
+                                    dst[o + 2] = acc.z; dst[o + 3] = acc.w
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Bilinear sample of `gauss[l+1]` at the position `resizeBilinear`
+        /// maps output pixel (x, y) to — replicated exactly (incl. the
+        /// (x+0.5)·scale−0.5 mapping and edge clamps).
+        @inline(__always)
+        private static func upsampleAt(_ src: UnsafeBufferPointer<Float>,
+                                       sw: Int, sh: Int, x: Int, y: Int,
+                                       scaleX: Float, scaleY: Float) -> SIMD4<Float> {
+            let fy = (Float(y) + 0.5) * scaleY - 0.5
+            let y0 = Int(fy.rounded(.down))
+            let wy = fy - Float(y0)
+            let cy0 = min(max(y0, 0), sh - 1)
+            let cy1 = min(max(y0 + 1, 0), sh - 1)
+            let fx = (Float(x) + 0.5) * scaleX - 0.5
+            let x0 = Int(fx.rounded(.down))
+            let wx = fx - Float(x0)
+            let cx0 = min(max(x0, 0), sw - 1)
+            let cx1 = min(max(x0 + 1, 0), sw - 1)
+            let i00 = (cy0 * sw + cx0) * 4, i10 = (cy0 * sw + cx1) * 4
+            let i01 = (cy1 * sw + cx0) * 4, i11 = (cy1 * sw + cx1) * 4
+            var out = SIMD4<Float>()
+            for c in 0..<4 {
+                let top = src[i00 + c] * (1 - wx) + src[i10 + c] * wx
+                let bot = src[i01 + c] * (1 - wx) + src[i11 + c] * wx
+                out[c] = top * (1 - wy) + bot * wy
+            }
+            return out
+        }
+
+        /// Level 0: band + energy in one streaming pass (band kept — the
+        /// select must wait for the grit blur), then the energy blur.
+        func level0BandEnergy() {
+            let (w, h) = sizes[0]
+            let (nw, nh) = sizes[1]
+            let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
+            gauss[0].withUnsafeBufferPointer { fine in
+                gauss[1].withUnsafeBufferPointer { coarse in
+                    band.withUnsafeMutableBufferPointer { bp in
+                        energy.withUnsafeMutableBufferPointer { ep in
+                            DispatchQueue.concurrentPerform(iterations: h) { y in
+                                for x in 0..<w {
+                                    let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
+                                                             x: x, y: y, scaleX: sx, scaleY: sy)
+                                    let i = (y * w + x) * 4
+                                    let b = SIMD4<Float>(fine[i], fine[i + 1],
+                                                         fine[i + 2], fine[i + 3]) - up
+                                    bp[i] = b.x; bp[i + 1] = b.y
+                                    bp[i + 2] = b.z; bp[i + 3] = b.w
+                                    ep[y * w + x] = abs(b.x) + abs(b.y) + abs(b.z)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            blurEnergy()
+        }
+
+        /// Separable grit blur of the energy plane, in workspace buffers —
+        /// same taps and clamps as `Filters.blurPlane`.
+        private func blurEnergy() {
+            let (w, h) = sizes[0]
+            let r = gritWeights.count / 2
+            energy.withUnsafeBufferPointer { s in
+                energyTmp.withUnsafeMutableBufferPointer { t in
+                    gritWeights.withUnsafeBufferPointer { kp in
+                        DispatchQueue.concurrentPerform(iterations: h) { y in
+                            let row = y * w
+                            for x in 0..<w {
+                                var acc: Float = 0
+                                for i in -r...r {
+                                    let xi = min(max(x + i, 0), w - 1)
+                                    acc += s[row + xi] * kp[i + r]
+                                }
+                                t[row + x] = acc
+                            }
+                        }
+                    }
+                }
+            }
+            energyTmp.withUnsafeBufferPointer { t in
+                energy.withUnsafeMutableBufferPointer { o in
+                    gritWeights.withUnsafeBufferPointer { kp in
+                        DispatchQueue.concurrentPerform(iterations: h) { y in
+                            for x in 0..<w {
+                                var acc: Float = 0
+                                for i in -r...r {
+                                    let yi = min(max(y + i, 0), h - 1)
+                                    acc += t[yi * w + x] * kp[i + r]
+                                }
+                                o[y * w + x] = acc
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Level 0's winner update, from the stored band + blurred energy.
+        func select0(fused: inout ImageBuffer, best: inout [Float]) {
+            let (w, h) = sizes[0]
+            band.withUnsafeBufferPointer { bp in
+                energy.withUnsafeBufferPointer { ep in
+                    fused.pixels.withUnsafeMutableBufferPointer { fp in
+                        best.withUnsafeMutableBufferPointer { be in
+                            DispatchQueue.concurrentPerform(iterations: h) { y in
+                                for i in (y * w)..<((y + 1) * w) {
+                                    if ep[i] > be[i] {
+                                        be[i] = ep[i]
+                                        let pi = i * 4
+                                        fp[pi] = bp[pi]
+                                        fp[pi + 1] = bp[pi + 1]
+                                        fp[pi + 2] = bp[pi + 2]
+                                        fp[pi + 3] = bp[pi + 3]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Levels ≥ 1: upsample, band, energy, and winner update in one
+        /// streaming pass — nothing is materialized.
+        func selectStreaming(level l: Int, fused: inout ImageBuffer, best: inout [Float]) {
+            let (w, h) = sizes[l]
+            let (nw, nh) = sizes[l + 1]
+            let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
+            gauss[l].withUnsafeBufferPointer { fine in
+                gauss[l + 1].withUnsafeBufferPointer { coarse in
+                    fused.pixels.withUnsafeMutableBufferPointer { fp in
+                        best.withUnsafeMutableBufferPointer { be in
+                            DispatchQueue.concurrentPerform(iterations: h) { y in
+                                for x in 0..<w {
+                                    let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
+                                                             x: x, y: y, scaleX: sx, scaleY: sy)
+                                    let i = y * w + x
+                                    let pi = i * 4
+                                    let b = SIMD4<Float>(fine[pi], fine[pi + 1],
+                                                         fine[pi + 2], fine[pi + 3]) - up
+                                    let e = abs(b.x) + abs(b.y) + abs(b.z)
+                                    if e > be[i] {
+                                        be[i] = e
+                                        fp[pi] = b.x; fp[pi + 1] = b.y
+                                        fp[pi + 2] = b.z; fp[pi + 3] = b.w
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Per-pixel selection energy of a band-pass level: sum of |RGB| coefficients.
