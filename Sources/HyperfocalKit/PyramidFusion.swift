@@ -124,7 +124,7 @@ public enum PyramidFusion {
     /// winner energies, and the current frame's pyramid are resident. Runs on
     /// the GPU when one is available (same algorithm, ≥ 60 dB agreement;
     /// `preferGPU: false` forces the CPU path), falling back to the CPU on
-    /// Metal errors. The GPU path prefetches: `frame` may be invoked
+    /// Metal errors. Every path prefetches: `frame` may be invoked
     /// concurrently from background threads, so it must be stateless across
     /// calls (all in-tree closures are). `progress` receives, on the GPU path,
     /// a low-res collapse of the forming pyramid to display (nil on CPU —
@@ -153,7 +153,7 @@ public enum PyramidFusion {
         }
         #endif
         #if HYPERFOCAL_HAVE_WGPU
-        if preferGPU, WgpuEngine.shared != nil {
+        if preferGPU, let engine = WgpuEngine.shared, engine.usableForAutoSelection {
             do {
                 return try WgpuPyramid.fuse(frameCount: frameCount, warp: warp,
                                             log: log, progress: progress,
@@ -168,15 +168,36 @@ public enum PyramidFusion {
         var fused: [ImageBuffer]? = nil
         // Winner energy per band-pass level, updated as frames stream through.
         var bestEnergy: [[Float]] = []
+        // Wall-clock phase buckets, reported through `log` at the end — the
+        // GPU path's discipline: optimization here must start from
+        // measurements, not vibes. `decode` is time *blocked on* the
+        // prefetcher, not decode execution.
+        var tDecode = 0.0, tWarp = 0.0, tBuild = 0.0, tSelect = 0.0
+        func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
-        for fi in 0..<frameCount {
+        // Decode on background threads while this thread fuses the previous
+        // frame — same overlap (and same concurrent-invocation contract on
+        // `frame`) as the GPU paths.
+        let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
+                                         workers: decodeWorkers, decode: frame)
+        defer { prefetcher.cancel() }
+
+        for _ in 0..<frameCount {
             try cancellation?.checkCancelled()
-            var img = try frame(fi)
+            var t0 = now()
+            let (fi, decoded) = try prefetcher.next()
+            var img = decoded
+            tDecode += now() - t0
+            t0 = now()
             if let warp { img = warp.apply(img, at: fi) }
+            tWarp += now() - t0
             if fused == nil {
                 levels = max(3, Int(log2(Double(min(img.width, img.height)) / 16.0)))
             }
+            t0 = now()
             let pyr = laplacianPyramid(img, levels: levels)
+            tBuild += now() - t0
+            t0 = now()
             if fused == nil {
                 fused = pyr
                 bestEnergy = pyr.dropLast().enumerated().map { l, band in
@@ -213,6 +234,7 @@ public enum PyramidFusion {
                     fused![levels].pixels[i] += pyr[levels].pixels[i]
                 }
             }
+            tSelect += now() - t0
             log?("pyramid \(fi + 1)/\(frameCount)")
             progress?(Double(fi + 1) / Double(frameCount), nil)
         }
@@ -222,7 +244,12 @@ public enum PyramidFusion {
         for i in fused![levels].pixels.indices {
             fused![levels].pixels[i] /= n
         }
-        return collapse(fused!)
+        let t0 = now()
+        let out = collapse(fused!)
+        log?(String(format: "pyramid phases (cpu): decode %.2fs, warp %.2fs, "
+                    + "build %.2fs, select %.2fs, collapse %.2fs",
+                    tDecode, tWarp, tBuild, tSelect, now() - t0))
+        return out
     }
 
     /// In-memory convenience for small stacks and tests.

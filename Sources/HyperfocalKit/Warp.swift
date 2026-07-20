@@ -45,15 +45,39 @@ public enum Warp {
         return 3 * sinf(px) * sinf(px / 3) / (px * px)
     }
 
+    /// `lanczos3` sampled over [0, 3] with linear interpolation. The exact
+    /// form costs 24 sinf calls per output pixel (~260 M per 11 MP frame) —
+    /// measured at ~93% of CPU pyramid-fusion wall clock. Interpolation
+    /// error at this resolution is O(1e-8), orders of magnitude below every
+    /// parity floor (the wgpu kernel gate measures the GPU's transcendental
+    /// precision at ~130 dB against this very function).
+    static let lanczos3TableSize = 8192
+    static let lanczos3Table: [Float] = {
+        var t = [Float](repeating: 0, count: lanczos3TableSize + 2)
+        for i in 0...lanczos3TableSize {
+            t[i] = lanczos3(Float(i) * 3 / Float(lanczos3TableSize))
+        }
+        return t
+    }()
+
+    @inline(__always)
+    static func lanczos3Fast(_ x: Float, _ table: UnsafePointer<Float>) -> Float {
+        let ax = min(abs(x) * (Float(lanczos3TableSize) / 3), Float(lanczos3TableSize))
+        let i = Int(ax)
+        let f = ax - Float(i)
+        return table[i] + (table[i + 1] - table[i]) * f
+    }
+
     static func applyLanczos3(_ src: ImageBuffer, outputToSource H: simd_float3x3,
                               outWidth: Int, outHeight: Int) -> ImageBuffer {
         let sw = src.width, sh = src.height
         var out = ImageBuffer(width: outWidth, height: outHeight)
+        lanczos3Table.withUnsafeBufferPointer { lutBuf in
+        let lut = lutBuf.baseAddress!
         src.pixels.withUnsafeBufferPointer { s in
+            let sraw = UnsafeRawPointer(s.baseAddress!)
             out.pixels.withUnsafeMutableBufferPointer { o in
                 DispatchQueue.concurrentPerform(iterations: outHeight) { y in
-                    var wx = [Float](repeating: 0, count: 6)
-                    var wy = [Float](repeating: 0, count: 6)
                     for x in 0..<outWidth {
                         let p = H * simd_float3(Float(x), Float(y), 1)
                         let sx = p.x / p.z
@@ -62,39 +86,75 @@ public enum Warp {
                         let y0 = Int(sy.rounded(.down))
                         let fx = sx - Float(x0)
                         let fy = sy - Float(y0)
+                        // Weights live in SIMD8 registers, not arrays — heap
+                        // subscripts in this loop cost more than the taps.
+                        var wx = SIMD8<Float>(), wy = SIMD8<Float>()
                         var sumX: Float = 0, sumY: Float = 0
                         for k in 0..<6 {
-                            wx[k] = lanczos3(fx - Float(k - 2)); sumX += wx[k]
-                            wy[k] = lanczos3(fy - Float(k - 2)); sumY += wy[k]
+                            wx[k] = lanczos3Fast(fx - Float(k - 2), lut); sumX += wx[k]
+                            wy[k] = lanczos3Fast(fy - Float(k - 2), lut); sumY += wy[k]
                         }
                         var acc = SIMD4<Float>()
-                        for ky in 0..<6 {
-                            let ty = min(max(y0 - 2 + ky, 0), sh - 1)
-                            let rowBase = ty * sw
-                            var row = SIMD4<Float>()
-                            for kx in 0..<6 {
-                                let tx = min(max(x0 - 2 + kx, 0), sw - 1)
-                                let i = (rowBase + tx) * 4
-                                row += SIMD4<Float>(s[i], s[i + 1], s[i + 2], s[i + 3]) * wx[kx]
+                        var sample: SIMD4<Float>
+                        // Interior fast path: the whole 6×6 footprint (and the
+                        // 2×2 anti-ring footprint) is in bounds, so the taps
+                        // are contiguous vector loads with no per-tap clamps.
+                        // Same taps, same weights, same summation order as the
+                        // border path — bit-identical where both could run.
+                        if x0 >= 2 && x0 + 3 < sw && y0 >= 2 && y0 + 3 < sh {
+                            for ky in 0..<6 {
+                                let rowBase = (y0 - 2 + ky) * sw + (x0 - 2)
+                                var row = SIMD4<Float>()
+                                for kx in 0..<6 {
+                                    let v = sraw.loadUnaligned(fromByteOffset: (rowBase + kx) << 4,
+                                                               as: SIMD4<Float>.self)
+                                    row += v * wx[kx]
+                                }
+                                acc += row * wy[ky]
                             }
-                            acc += row * wy[ky]
+                            sample = acc / (sumX * sumY)
+                            let ia = (y0 * sw + x0) << 4
+                            let ic = ((y0 + 1) * sw + x0) << 4
+                            let a = sraw.loadUnaligned(fromByteOffset: ia, as: SIMD4<Float>.self)
+                            let b = sraw.loadUnaligned(fromByteOffset: ia + 16, as: SIMD4<Float>.self)
+                            let c = sraw.loadUnaligned(fromByteOffset: ic, as: SIMD4<Float>.self)
+                            let d = sraw.loadUnaligned(fromByteOffset: ic + 16, as: SIMD4<Float>.self)
+                            // pointwiseMin/Max, never the simd_* shims: a
+                            // cross-file generic call here — even @inlinable —
+                            // doesn't specialize in per-file debug builds and
+                            // measured 1089 vs 35 ns/px (see PortableSIMD.swift).
+                            let lo = pointwiseMin(pointwiseMin(a, b), pointwiseMin(c, d))
+                            let hi = pointwiseMax(pointwiseMax(a, b), pointwiseMax(c, d))
+                            sample = pointwiseMin(pointwiseMax(sample, lo), hi)
+                        } else {
+                            for ky in 0..<6 {
+                                let ty = min(max(y0 - 2 + ky, 0), sh - 1)
+                                let rowBase = ty * sw
+                                var row = SIMD4<Float>()
+                                for kx in 0..<6 {
+                                    let tx = min(max(x0 - 2 + kx, 0), sw - 1)
+                                    let i = (rowBase + tx) * 4
+                                    row += SIMD4<Float>(s[i], s[i + 1], s[i + 2], s[i + 3]) * wx[kx]
+                                }
+                                acc += row * wy[ky]
+                            }
+                            sample = acc / (sumX * sumY)
+                            // Anti-ringing: the negative lobes overshoot at hard
+                            // edges (and would glow at the coverage boundary);
+                            // clamp to the bilinear footprint's range, which only
+                            // engages on overshoot and keeps in-range detail.
+                            let cx0 = min(max(x0, 0), sw - 1), cx1 = min(max(x0 + 1, 0), sw - 1)
+                            let cy0 = min(max(y0, 0), sh - 1), cy1 = min(max(y0 + 1, 0), sh - 1)
+                            let ia = (cy0 * sw + cx0) * 4, ib = (cy0 * sw + cx1) * 4
+                            let ic = (cy1 * sw + cx0) * 4, id = (cy1 * sw + cx1) * 4
+                            let a = SIMD4<Float>(s[ia], s[ia + 1], s[ia + 2], s[ia + 3])
+                            let b = SIMD4<Float>(s[ib], s[ib + 1], s[ib + 2], s[ib + 3])
+                            let c = SIMD4<Float>(s[ic], s[ic + 1], s[ic + 2], s[ic + 3])
+                            let d = SIMD4<Float>(s[id], s[id + 1], s[id + 2], s[id + 3])
+                            let lo = pointwiseMin(pointwiseMin(a, b), pointwiseMin(c, d))
+                            let hi = pointwiseMax(pointwiseMax(a, b), pointwiseMax(c, d))
+                            sample = pointwiseMin(pointwiseMax(sample, lo), hi)
                         }
-                        var sample = acc / (sumX * sumY)
-                        // Anti-ringing: the negative lobes overshoot at hard
-                        // edges (and would glow at the coverage boundary);
-                        // clamp to the bilinear footprint's range, which only
-                        // engages on overshoot and keeps in-range detail.
-                        let cx0 = min(max(x0, 0), sw - 1), cx1 = min(max(x0 + 1, 0), sw - 1)
-                        let cy0 = min(max(y0, 0), sh - 1), cy1 = min(max(y0 + 1, 0), sh - 1)
-                        let ia = (cy0 * sw + cx0) * 4, ib = (cy0 * sw + cx1) * 4
-                        let ic = (cy1 * sw + cx0) * 4, id = (cy1 * sw + cx1) * 4
-                        let a = SIMD4<Float>(s[ia], s[ia + 1], s[ia + 2], s[ia + 3])
-                        let b = SIMD4<Float>(s[ib], s[ib + 1], s[ib + 2], s[ib + 3])
-                        let c = SIMD4<Float>(s[ic], s[ic + 1], s[ic + 2], s[ic + 3])
-                        let d = SIMD4<Float>(s[id], s[id + 1], s[id + 2], s[id + 3])
-                        sample = simd_clamp(sample,
-                                            simd_min(simd_min(a, b), simd_min(c, d)),
-                                            simd_max(simd_max(a, b), simd_max(c, d)))
                         let inside = sx >= -0.5 && sx <= Float(sw) - 0.5
                             && sy >= -0.5 && sy <= Float(sh) - 0.5
                         let oi = (y * outWidth + x) * 4
@@ -105,6 +165,7 @@ public enum Warp {
                     }
                 }
             }
+        }
         }
         return out
     }

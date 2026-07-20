@@ -13,6 +13,18 @@ import simd
 // cross-check is the shim's correctness gate (retouch-probe: "portable simd").
 // The `simd_*` aliases/functions below bind to it only where `simd` is
 // absent; on Apple platforms the engine keeps using the real `simd`.
+//
+// Performance contract (learned the hard way — Windows/arm64 debug -O,
+// measured on the Lanczos warp inner loop, 2026-07-19):
+// - Concrete functions here must be `@inlinable` (bodies serialized).
+//   Debug builds compile per-file (no WMO; it breaks SwiftPM's incremental
+//   driver), so non-inlinable helpers stay opaque cross-file calls.
+// - The GENERIC shims below (simd_min/max/clamp over `V: SIMD`) do not
+//   specialize cross-file even when @inlinable: calling them from a
+//   per-pixel loop measured 1089 ns/px vs 35 ns/px with the stdlib's
+//   pointwiseMin/Max written inline — 31x. They exist for API parity in
+//   cold code; per-pixel loops must use pointwiseMin/pointwiseMax
+//   directly (see Warp.applyLanczos3).
 
 /// A 3×3 `Float` matrix matching `simd_float3x3`'s semantics for the
 /// operations the engine uses: `init(rows:)` builds the matrix whose i-th row
@@ -31,6 +43,7 @@ public struct Float3x3: Equatable {
         r0 = rows[0]; r1 = rows[1]; r2 = rows[2]
     }
 
+    @inlinable
     public init(_ r0: SIMD3<Float>, _ r1: SIMD3<Float>, _ r2: SIMD3<Float>) {
         self.r0 = r0; self.r1 = r1; self.r2 = r2
     }
@@ -49,18 +62,22 @@ public struct Float3x3: Equatable {
         SIMD3<Float>(0, 0, 1))
 
     /// Column i (simd is column-major, so `matrix[i]` yields a column).
+    @inlinable
     public subscript(_ column: Int) -> SIMD3<Float> {
         SIMD3<Float>(r0[column], r1[column], r2[column])
     }
 
-    private static func dot(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+    @inlinable
+    internal static func dot(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
         a.x * b.x + a.y * b.y + a.z * b.z
     }
 
+    @inlinable
     public static func * (m: Float3x3, v: SIMD3<Float>) -> SIMD3<Float> {
         SIMD3<Float>(dot(m.r0, v), dot(m.r1, v), dot(m.r2, v))
     }
 
+    @inlinable
     public static func * (a: Float3x3, b: Float3x3) -> Float3x3 {
         let c0 = b[0], c1 = b[1], c2 = b[2]
         return Float3x3(
@@ -99,21 +116,29 @@ public typealias simd_float3x3 = Float3x3
 public typealias matrix_float3x3 = Float3x3
 public let matrix_identity_float3x3 = Float3x3.identity
 
+@inlinable
 public func simd_length(_ v: SIMD2<Float>) -> Float {
     (v.x * v.x + v.y * v.y).squareRoot()
 }
 
+// Implemented on the stdlib's pointwiseMin/Max, never on masked
+// `.replacing(with:where:)`: the mask form compiled to an unspecialized
+// generic path that cost 3215 ns/px vs 44 ns/px in the Lanczos warp's
+// inner loop (73x — it WAS the CPU fusion bottleneck, measured 2026-07-19).
+@inlinable
 public func simd_min<V: SIMD>(_ a: V, _ b: V) -> V where V.Scalar: Comparable {
-    a.replacing(with: b, where: b .< a)
+    pointwiseMin(a, b)
 }
 
+@inlinable
 public func simd_max<V: SIMD>(_ a: V, _ b: V) -> V where V.Scalar: Comparable {
-    a.replacing(with: b, where: b .> a)
+    pointwiseMax(a, b)
 }
 
+@inlinable
 public func simd_clamp<V: SIMD>(_ x: V, _ lowerBound: V, _ upperBound: V) -> V
 where V.Scalar: Comparable {
-    simd_min(simd_max(x, lowerBound), upperBound)
+    pointwiseMin(pointwiseMax(x, lowerBound), upperBound)
 }
 
 #endif
