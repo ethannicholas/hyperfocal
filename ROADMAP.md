@@ -97,21 +97,25 @@ Windows residuals to close (each independently landable):
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
 4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
-   JPEGs, 2-core Windows VM, 2026-07-20): ~6.8 min end to end —
-   registration ~4.4 min, pmax fusion 135 s (phase buckets: warp 98 s,
-   build 30 s, select 4 s; decode hidden by prefetch). < 2 min
-   end-to-end is demonstrably achievable on the same 2 cores (measured
-   against commercial stackers on this VM). Remaining levers, largest
-   first: (a) **SIFT detect ~2.3 s/frame** (OpenCV-bound) is most of
-   registration — candidates: OpenCV's internal thread pool sizing,
-   nfeatures/contrastThreshold vs the 4000 cap (measure residuals + the
-   synth gates before trusting any change), or a cheaper detector for
-   the *pairing* decision with SIFT kept for the final homographies;
-   (b) **warp ~1.2 s/frame in-pipeline** vs 0.66 s standalone — the gap
-   is contention with the prefetcher's lcms threads, and `Warp.apply`
+   JPEGs, 2-core Windows VM, 2026-07-20): ~5.0 min end to end —
+   registration 2.4 min (SIFT bound now 1600; detect 0.93 s/frame),
+   pmax fusion 2.4 min (phase buckets: warp ~98 s, build ~30 s, select
+   ~4 s; decode hidden by prefetch). < 2 min end-to-end is demonstrably
+   achievable on the same 2 cores (measured against commercial stackers
+   on this VM). Remaining levers, largest first: (a) **warp
+   ~1.2 s/frame in-pipeline** vs 0.66 s standalone — the gap is
+   contention with the prefetcher's lcms threads, and `Warp.apply`
    still allocates its output per frame (a warp-into-workspace variant
-   would also drop the gauss[0] copy). Measure with `-v` phase buckets
-   + `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`. Sampling
+   would also drop the gauss[0] copy); (b) **registration match+glue**
+   (~0.8 s/pair match at 4000 features; a lower cap re-measures well
+   per the ablation taps but thins RANSAC's input — check residuals);
+   (c) decode's lcms transform (~0.8 s/frame, threaded) both feeds the
+   prefetcher and steals fusion cores. Ablation taps:
+   HYPERFOCAL_SIFT_NFEATURES / HYPERFOCAL_SIFT_CONTRAST /
+   HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase buckets +
+   HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. **Re-verify the
+   1600 SIFT bound on 45 MP frames on the Mac** (2500 was A/B-validated
+   there; see Aligner.openCVRegisterMaxSide's comment). Sampling
    profilers cannot run in the dev VM (hypervisor doesn't virtualize
    the profiling interrupt); on real Windows hardware, wpr + WPA work
    with `swift build -Xswiftc -debug-info-format=codeview -Xlinker
