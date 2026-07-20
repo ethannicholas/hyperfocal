@@ -96,6 +96,11 @@ var kitSwiftSettings: [SwiftSetting] = [
     // The engine's per-pixel loops are ~30-50x slower at -Onone — a 45MP depth
     // regularization goes from ~30s to tens of minutes. Keep the engine
     // optimized even in Debug builds; the app layer stays debuggable.
+    // (-wmo would help equally off Apple platforms — per-file debug compiles
+    // leave cross-file helpers as unspecialized calls in per-pixel loops —
+    // but it breaks SwiftPM's incremental driver; PortableSIMD is @inlinable
+    // instead, which is also how Apple's real `simd` module avoids the same
+    // trap. See the header note there before adding per-pixel helpers.)
     .unsafeFlags(["-O"], .when(configuration: .debug)),
 ]
 
