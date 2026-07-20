@@ -508,7 +508,19 @@ public enum Aligner {
     /// registration" bound (validated on macOS via the Phase 1.5 A/B; applied
     /// on every OpenCV path). Synth frames (≤900 px) sit below this, so the
     /// synth gates are unaffected.
-    static let openCVRegisterMaxSide = 2500
+    /// SIFT input bound. 1600 (from 2500, 2026-07-20): detect is the
+    /// registration wall-clock wall and scales with area — measured −68%
+    /// per frame at 1600 with pair residuals flat, ratio-test matches UP
+    /// (denser features per image), zero rejects/flags across an 82-frame
+    /// real stack, and ground-truth PSNR on a 3600×2400 jittered synth
+    /// slightly BETTER than 2500 (50.29 vs 49.62 dB). Caveat: 2500 was
+    /// validated on 45 MP frames (macOS A/B); at 45 MP, 1600 means a 0.19×
+    /// detect scale — re-verify on the Mac before trusting it there.
+    /// HYPERFOCAL_REGISTER_MAXSIDE overrides for ablation (same pattern as
+    /// the HYPERFOCAL_SIFT_* switches).
+    static let openCVRegisterMaxSide =
+        ProcessInfo.processInfo.environment["HYPERFOCAL_REGISTER_MAXSIDE"]
+            .flatMap(Int.init) ?? 1600
 
     /// Area-average downscale of an 8-bit gray plane by `scale` (0<scale<1) —
     /// enough to feed SIFT; not the fusion sampler.

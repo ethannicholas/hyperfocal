@@ -923,6 +923,23 @@ static bool registerDebug() {
     return on;
 }
 
+// SIFT knobs, env-overridable for ablation (HYPERFOCAL_SIFT_NFEATURES /
+// HYPERFOCAL_SIFT_CONTRAST — same pattern as HYPERFOCAL_PREFETCH_WORKERS).
+static int siftNFeatures() {
+    static const int v = [] {
+        const char* e = std::getenv("HYPERFOCAL_SIFT_NFEATURES");
+        return e ? std::atoi(e) : 4000;
+    }();
+    return v;
+}
+static double siftContrastThreshold() {
+    static const double v = [] {
+        const char* e = std::getenv("HYPERFOCAL_SIFT_CONTRAST");
+        return e ? std::atof(e) : 0.04;   // OpenCV's default
+    }();
+    return v;
+}
+
 extern "C" hf_sift* hf_sift_detect(int w, int h, const uint8_t* gray) {
     const int64_t t0 = cv::getTickCount();
     try {
@@ -937,13 +954,15 @@ extern "C" hf_sift* hf_sift_detect(int w, int h, const uint8_t* gray) {
         // them — 200+ seconds per pair, of which ~1300 matches survived the
         // ratio test. The cap keeps the strongest N by response; hundreds of
         // ratio-test survivors remain, which is all RANSAC needs.
-        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(4000);
+        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(siftNFeatures(), 3,
+                                                  siftContrastThreshold());
         auto* f = new hf_sift();
         sift->detectAndCompute(img, cv::noArray(), f->kp, f->desc);
         if (registerDebug())
-            fprintf(stderr, "hf_sift_detect %dx%d: kp %zu, %.0fms\n",
+            fprintf(stderr, "hf_sift_detect %dx%d: kp %zu, %.0fms (cvthreads %d)\n",
                     w, h, f->kp.size(),
-                    (double)(cv::getTickCount() - t0) * 1000.0 / cv::getTickFrequency());
+                    (double)(cv::getTickCount() - t0) * 1000.0 / cv::getTickFrequency(),
+                    cv::getNumThreads());
         return f;
     } catch (...) { return nullptr; }
 }
