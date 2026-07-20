@@ -105,6 +105,10 @@ Windows residuals to close (each independently landable):
    (preallocate, fuse blur+decimate passes, check SIMD codegen on
    Windows/Linux); WARP dispatch overhead second. Measure with `-v`
    phase buckets + `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`.
+   Once the CPU path beats WARP, `--engine auto` should stop selecting a
+   WARP adapter (it identifies as "Microsoft Basic Render Driver" /
+   `adapterSummary`) — software-GPU emulation only wins today because
+   the CPU path is unoptimized.
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
