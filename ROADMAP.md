@@ -97,22 +97,20 @@ Windows residuals to close (each independently landable):
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
 4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
-   JPEGs, 2-core Windows VM, 2026-07-20): ~4.2 min end to end —
-   registration 98 s (SIFT bound 1600, cap 2000; detect ~0.8 s/frame is
-   most of it), pmax fusion 132 s (phase buckets: warp 93 s, build
-   31 s, select 5 s; decode hidden by prefetch). < 2 min end-to-end is
+   JPEGs, 2-core Windows VM, 2026-07-20): ~3.5 min end to end —
+   registration ~100-113 s (SIFT bound 1600, cap 2000; detect
+   ~0.8 s/frame is most of it), pmax fusion 81 s (phase buckets: warp
+   58 s, build 18 s, select 3 s — all at standalone cost now that the
+   sRGB decode fast path stopped stealing cores). < 2 min end-to-end is
    demonstrably achievable on the same 2 cores (measured against
-   commercial stackers on this VM). Remaining levers, largest first:
-   (a) **warp ~1.1 s/frame in-pipeline** vs 0.66 s standalone — the
-   residual gap is core contention with the prefetcher's lcms threads;
-   (b) **decode's lcms transform** (~0.8 s/frame wall, ~1.6 core-s) —
-   a recognized-sRGB fast path (8-bit linearization LUT → 3×3 matrix →
-   encode LUT) would cut it ~10x for the JPEG-common case, with lcms as
-   the general fallback; changes decoded values slightly, so it must
-   re-run every gate; (c) **SIFT detect ~0.8 s/frame** — further cuts
-   mean a cheaper detector or smaller bound; measure against the
-   ground-truth synth recipe (3600×2400, above the bound, jitter on)
-   that validated 1600. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
+   commercial stackers on this VM), but the remaining cuts are harder:
+   (a) **SIFT detect ~0.8 s/frame** (~66 s) — a cheaper detector or a
+   smaller bound; measure against the ground-truth synth recipe
+   (3600×2400, above the bound, jitter on) that validated 1600;
+   (b) **warp 58 s** is at its measured floor (~59 ns/px) — further
+   means deeper SIMD restructuring of the 6×6 tap loop;
+   (c) registration's gray-decode+gradient glue (~20 s). Ablation
+   taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG.
    **Re-verify the 1600 bound + 2000 cap on 45 MP frames on the Mac
