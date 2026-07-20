@@ -513,9 +513,13 @@ public enum Aligner {
     /// per frame at 1600 with pair residuals flat, ratio-test matches UP
     /// (denser features per image), zero rejects/flags across an 82-frame
     /// real stack, and ground-truth PSNR on a 3600×2400 jittered synth
-    /// slightly BETTER than 2500 (50.29 vs 49.62 dB). Caveat: 2500 was
-    /// validated on 45 MP frames (macOS A/B); at 45 MP, 1600 means a 0.19×
-    /// detect scale — re-verify on the Mac before trusting it there.
+    /// slightly BETTER than 2500 (50.29 vs 49.62 dB). 45 MP re-verify
+    /// (2026-07-20, macOS A/B, 60-frame Fluorite NEF stack): quality-
+    /// neutral vs the 2500/uncapped baseline — crop sizes within a few px,
+    /// new↔Vision 33.3 dB vs baseline↔Vision 34.1 dB (cross-transform
+    /// comparisons bottom out near there), 8× amplified diff black in the
+    /// background with only texture-grain resampling differences, and 1:1
+    /// silhouette crops indistinguishable.
     /// HYPERFOCAL_REGISTER_MAXSIDE overrides for ablation (same pattern as
     /// the HYPERFOCAL_SIFT_* switches).
     static let openCVRegisterMaxSide =

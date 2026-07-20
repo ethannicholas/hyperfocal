@@ -113,10 +113,9 @@ Windows residuals to close (each independently landable):
    taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG.
-   **Re-verify the 1600 bound + 2000 cap on 45 MP frames on the Mac
-   A/B** (2500/4000 were validated there; see
-   Aligner.openCVRegisterMaxSide's comment) — a plain macOS fuse uses
-   Vision and does not exercise them. Sampling profilers cannot run in
+   (The 1600 bound + 2000 cap re-verified quality-neutral on 45 MP
+   frames 2026-07-20 — Mac A/B on the 60-frame Fluorite stack; numbers
+   in Aligner.openCVRegisterMaxSide's comment.) Sampling profilers cannot run in
    the dev VM (hypervisor doesn't virtualize the profiling interrupt);
    on real Windows hardware, wpr + WPA work with `swift build -Xswiftc
    -debug-info-format=codeview -Xlinker /DEBUG`. Before touching any
