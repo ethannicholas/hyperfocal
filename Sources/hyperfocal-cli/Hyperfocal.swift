@@ -319,10 +319,7 @@ struct Fuse: ParsableCommand {
                     out = try GPUDMap.fuseWithDepth(source: source, options: opts, log: log)
                 } else {
                     print("engine: CPU")
-                    out = try DMapFusion.fuseWithDepth(frameCount: source.count, options: opts,
-                                                       log: log) {
-                        try source.frame(at: $0)
-                    }
+                    out = try DMapFusion.fuseWithDepth(source: source, options: opts, log: log)
                 }
                 #elseif HYPERFOCAL_HAVE_WGPU
                 if useGPU {
@@ -330,18 +327,12 @@ struct Fuse: ParsableCommand {
                     out = try WgpuDMap.fuseWithDepth(source: source, options: opts, log: log)
                 } else {
                     print("engine: CPU")
-                    out = try DMapFusion.fuseWithDepth(frameCount: source.count, options: opts,
-                                                       log: log) {
-                        try source.frame(at: $0)
-                    }
+                    out = try DMapFusion.fuseWithDepth(source: source, options: opts, log: log)
                 }
                 #else
                 _ = useGPU
                 print("engine: CPU")
-                out = try DMapFusion.fuseWithDepth(frameCount: source.count, options: opts,
-                                                   log: log) {
-                    try source.frame(at: $0)
-                }
+                out = try DMapFusion.fuseWithDepth(source: source, options: opts, log: log)
                 #endif
                 result = out.image
                 depth = out.depthMap

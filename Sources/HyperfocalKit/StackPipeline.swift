@@ -139,12 +139,10 @@ public enum StackPipeline {
                                                log: log, progress: progress,
                                                cancellation: cancellation)
         } else {
-            output = try DMapFusion.fuseWithDepth(frameCount: source.count,
+            output = try DMapFusion.fuseWithDepth(source: source,
                                                   options: configuration.fusion, log: log,
                                                   progress: progress,
-                                                  cancellation: cancellation) {
-                try source.frame(at: $0)
-            }
+                                                  cancellation: cancellation)
         }
         #elseif HYPERFOCAL_HAVE_WGPU
         if configuration.preferGPU, let engine = WgpuEngine.shared,
@@ -153,20 +151,16 @@ public enum StackPipeline {
                                                 log: log, progress: progress,
                                                 cancellation: cancellation)
         } else {
-            output = try DMapFusion.fuseWithDepth(frameCount: source.count,
+            output = try DMapFusion.fuseWithDepth(source: source,
                                                   options: configuration.fusion, log: log,
                                                   progress: progress,
-                                                  cancellation: cancellation) {
-                try source.frame(at: $0)
-            }
+                                                  cancellation: cancellation)
         }
         #else
-        output = try DMapFusion.fuseWithDepth(frameCount: source.count,
+        output = try DMapFusion.fuseWithDepth(source: source,
                                               options: configuration.fusion, log: log,
                                               progress: progress,
-                                              cancellation: cancellation) {
-            try source.frame(at: $0)
-        }
+                                              cancellation: cancellation)
         #endif
         progress?(FusionProgress(stage: .finishing, fraction: 1))
         return FuseResult(output: output, issues: issues, fusedURLs: fuseURLs)

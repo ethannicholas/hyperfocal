@@ -102,7 +102,7 @@ public enum DMapFusion {
 
     public static func fuse(frameCount: Int, options: Options = Options(),
                             log: ((String) -> Void)? = nil,
-                            frame: (Int) throws -> ImageBuffer) throws -> ImageBuffer {
+                            frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         try fuseWithDepth(frameCount: frameCount, options: options, log: log, frame: frame).image
     }
 
@@ -121,11 +121,43 @@ public enum DMapFusion {
     /// while silhouette edges (tens of pixels wide) stay effectively crisp.
     public static let guideSigma: Float = 3
 
+    /// Fuses a StackSource: frames decode (prefetched) without warping, and
+    /// alignment applies on the fly into a reused canvas buffer. Prefer this
+    /// over the closure form for aligned sources — `source.frame` warps on
+    /// the CPU allocating a fresh canvas per frame.
+    public static func fuseWithDepth(source: StackSource,
+                                     options: Options = Options(),
+                                     log: ((String) -> Void)? = nil,
+                                     progress: FusionProgressHandler? = nil,
+                                     cancellation: CancellationToken? = nil) throws -> Output {
+        let warp = source.transforms.map {
+            PyramidWarp(transforms: $0, outputWidth: source.outputWidth,
+                        outputHeight: source.outputHeight)
+        }
+        return try fuseWithDepth(frameCount: source.count, options: options,
+                                 warp: warp, log: log, progress: progress,
+                                 cancellation: cancellation,
+                                 decodeWorkers: FramePrefetcher.workers(for: source.urls)) { i in
+            var img = try ImageFile.load(url: source.urls[i])
+            if let gain = source.gains?[i], gain != SIMD3(repeating: 1) {
+                img.scaleRGB(by: gain)
+            }
+            return img
+        }
+    }
+
+    /// With `warp`, `frame` must return unwarped frames; alignment applies
+    /// on the fly (Lanczos-3 into a reused canvas buffer — the pyramid
+    /// paths' seam). Frames decode on background threads (`FramePrefetcher`),
+    /// so `frame` may be invoked concurrently and must be stateless across
+    /// calls (all in-tree closures are).
     public static func fuseWithDepth(frameCount: Int, options: Options = Options(),
+                                     warp: PyramidWarp? = nil,
                                      log: ((String) -> Void)? = nil,
                                      progress: FusionProgressHandler? = nil,
                                      cancellation: CancellationToken? = nil,
-                                     frame: (Int) throws -> ImageBuffer) throws -> Output {
+                                     decodeWorkers: Int? = nil,
+                                     frame: @escaping (Int) throws -> ImageBuffer) throws -> Output {
         precondition(frameCount > 0)
         var width = 0, height = 0
         var bestEnergy: [Float] = []
@@ -145,20 +177,47 @@ public enum DMapFusion {
 
         // Wall-clock phase buckets, reported through `log` at the end — the
         // pyramid paths' discipline: optimization here must start from
-        // measurements, not vibes.
-        var tDecode = 0.0, tEnergy = 0.0, tSelect = 0.0, tSpill = 0.0
+        // measurements, not vibes. `decode` is time *blocked on* the
+        // prefetcher, not decode execution.
+        var tDecode = 0.0, tWarp = 0.0, tEnergy = 0.0, tSelect = 0.0, tSpill = 0.0
         var tRegularize = 0.0, tRenderDecode = 0.0, tRender = 0.0
         func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
+        // Reused canvas for on-the-fly warps: sized on the first frame,
+        // resampled into in place every frame after (loop-scoped borrows keep
+        // the pixel storage uniquely referenced between frames).
+        var warped = ImageBuffer(width: 0, height: 0)
+        func aligned(_ fi: Int, _ decoded: ImageBuffer) -> ImageBuffer {
+            // Identity transform on an uncropped canvas needs no warp — the
+            // same fast path every other engine seam takes.
+            let needsWarp = warp.map {
+                !($0.transforms[fi] == matrix_identity_float3x3
+                    && width == decoded.width && height == decoded.height)
+            } ?? false
+            guard needsWarp else { return decoded }
+            if warped.width != width || warped.height != height {
+                warped = ImageBuffer(width: width, height: height)
+            }
+            Warp.applyLanczos3(decoded, outputToSource: warp!.transforms[fi].inverse,
+                               outWidth: width, outHeight: height, into: &warped.pixels)
+            return warped
+        }
+
+        // Decode on background threads while this thread scores the previous
+        // frame — same overlap as the pyramid paths.
+        let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
+                                         workers: decodeWorkers, decode: frame)
+        defer { prefetcher.cancel() }
+
         // Pass 1: per-pixel argmax of smoothed |Laplacian| across the stack.
-        for fi in 0..<frameCount {
+        for _ in 0..<frameCount {
             try cancellation?.checkCancelled()
             var t0 = now()
-            let img = try frame(fi)
+            let (fi, decoded) = try prefetcher.next()
             tDecode += now() - t0
             if fi == 0 {
-                width = img.width
-                height = img.height
+                width = warp?.outputWidth ?? decoded.width
+                height = warp?.outputHeight ?? decoded.height
                 bestEnergy = [Float](repeating: 0, count: width * height)
                 bestIndex = [Float](repeating: 0, count: width * height)
                 guidePlane = [Float](repeating: 0, count: width * height)
@@ -167,6 +226,9 @@ public enum DMapFusion {
                                        frameCount: frameCount, log: log)
                 }
             }
+            t0 = now()
+            let img = aligned(fi, decoded)
+            tWarp += now() - t0
             precondition(img.width == width && img.height == height,
                          "frame \(fi) size mismatch: \(img.width)x\(img.height) vs \(width)x\(height)")
             t0 = now()
@@ -313,9 +375,19 @@ public enum DMapFusion {
         var accum = [Float](repeating: 0, count: width * height * 4)
         var wsum = [Float](repeating: 0, count: width * height)
         var renderedCount = 0
-        let renderTotal = (0..<frameCount).filter {
+        let renderIndices = (0..<frameCount).filter {
             Float($0) > depthLo - radius && Float($0) < depthHi + radius
-        }.count
+        }
+        let renderTotal = renderIndices.count
+        // Frames come back from the spill when pass 1 captured one;
+        // otherwise decode again (prefetched) and re-warp.
+        var renderPrefetcher: FramePrefetcher? = nil
+        if spill == nil {
+            renderPrefetcher = FramePrefetcher(indices: renderIndices,
+                                               workers: decodeWorkers, decode: frame)
+        }
+        defer { renderPrefetcher?.cancel() }
+        var spillBuf = ImageBuffer(width: 0, height: 0)  // reused read target
         for fi in 0..<frameCount {
             try cancellation?.checkCancelled()
             let index = Float(fi)
@@ -325,22 +397,26 @@ public enum DMapFusion {
                 continue
             }
             t0 = now()
-            // Aligned frames stream back from the spill when pass 1 captured
-            // one (a read failure degrades to re-decoding mid-pass).
             var img: ImageBuffer
             if let s = spill {
-                img = ImageBuffer(width: width, height: height)
+                if spillBuf.width != width || spillBuf.height != height {
+                    spillBuf = ImageBuffer(width: width, height: height)
+                }
                 do {
-                    try img.pixels.withUnsafeMutableBufferPointer {
+                    try spillBuf.pixels.withUnsafeMutableBufferPointer {
                         try s.read(frame: fi, into: $0.baseAddress!)
                     }
+                    img = spillBuf
                 } catch {
                     log?("frame spill read failed (\(error)) — re-decoding")
                     spill = nil
-                    img = try frame(fi)
+                    img = aligned(fi, try frame(fi))
                 }
+            } else if let p = renderPrefetcher {
+                img = aligned(fi, try p.next().image)
             } else {
-                img = try frame(fi)
+                // Spill failed mid-pass: no prefetcher was built for this path.
+                img = aligned(fi, try frame(fi))
             }
             tRenderDecode += now() - t0
             t0 = now()
@@ -384,10 +460,10 @@ public enum DMapFusion {
             }
         }
 
-        log?(String(format: "dmap phases (cpu): decode %.2fs, energy %.2fs, "
-                    + "select %.2fs, spill %.2fs, regularize %.2fs, "
-                    + "render-src %.2fs, render %.2fs",
-                    tDecode, tEnergy, tSelect, tSpill, tRegularize,
+        log?(String(format: "dmap phases (cpu): decode %.2fs, warp %.2fs, "
+                    + "energy %.2fs, select %.2fs, spill %.2fs, "
+                    + "regularize %.2fs, render-src %.2fs, render %.2fs",
+                    tDecode, tWarp, tEnergy, tSelect, tSpill, tRegularize,
                     tRenderDecode, tRender))
 
         var out = ImageBuffer(width: width, height: height)
