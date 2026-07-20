@@ -111,19 +111,18 @@ Windows residuals to close (each independently landable):
    ground-truth-passing, so the next real step is a cheaper detector or
    registering from a ¼-scale JPEG decode (libjpeg scaled decode) which
    would also shrink the gray/gradient glue (~15 s); (c) build ~19 s.
-   **DMap lags pmax 2×** (341 s vs 166 s CLI; the shell's default method
-   is dmap, so UI fuses read ~6 min). The CPU path now spills (adaptive
-   fp16 when fp32 won't fit) and has `dmap phases (cpu)` buckets;
-   measured walls on the sample stack: **energy ~85 s** (the σ=10
-   `blurPlane` at full res per frame — a downsample-blur-upsample
-   energy field would be ~50× cheaper but is a cross-engine algorithm
-   change: CPU + MSL + WGSL + both GPU orchestrators must move
-   together or the ≥90 dB dmap parity gates break, and the Metal side
-   needs Mac verification), **decode+warp ~78 s** (the dmap closure
-   still uses the allocating `Warp.apply`; port the pyramid's
-   warp-into-workspace treatment), **render-src ~28 s** (fp16 spill
-   read + a per-frame buffer alloc worth reusing). Regularize is only
-   ~4 s — not a target. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
+   **DMap** (shell default; 301 s vs pmax's 166 on the CLI sample
+   stack): the CPU path spills (adaptive fp16 when fp32 won't fit),
+   prefetches decode, warps into a reused canvas, and reports
+   `dmap phases (cpu)` buckets. Remaining walls: **energy ~89 s** —
+   the σ=10 `blurPlane` at full res per frame; a
+   downsample-blur-upsample energy field would be ~50× cheaper but is
+   a cross-engine algorithm change (CPU + MSL + WGSL + both GPU
+   orchestrators must move together or the ≥90 dB dmap parity gates
+   break, and the Metal side needs Mac verification) — **warp ~72 s**
+   (shared per-pixel floor with pmax), **spill write ~21 s +
+   render-src ~23 s** (fp16 convert + I/O). Regularize is ~4 s — not
+   a target. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
    status (Mac, Fluorite stack): 1600 bound + 2000 cap verified
