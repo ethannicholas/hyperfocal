@@ -4,6 +4,7 @@
 
 #include "cimaging.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
@@ -822,6 +823,14 @@ extern "C" hf_status hf_exif_source_meta(const char* path,
 extern "C" hf_status hf_register(int w, int h,
                                  const uint8_t* fixed, const uint8_t* moving,
                                  float* out_h) {
+    // HYPERFOCAL_REGISTER_DEBUG=1: per-phase timings + keypoint counts to
+    // stderr — the measurement tap for registration performance work (same
+    // pattern as the HYPERFOCAL_DUMP_* switches).
+    static const bool debugTiming = std::getenv("HYPERFOCAL_REGISTER_DEBUG") != nullptr;
+    const int64_t t0 = cv::getTickCount();
+    auto ms = [](int64_t from, int64_t to) {
+        return (double)(to - from) * 1000.0 / cv::getTickFrequency();
+    };
     try {
         cv::Mat fixedM(h, w, CV_8U, (void*)fixed);
         cv::Mat movingM(h, w, CV_8U, (void*)moving);
@@ -829,16 +838,24 @@ extern "C" hf_status hf_register(int w, int h,
         // homography is markedly more precise than ORB's FAST corners — and
         // feature matching (unlike dense ECC) survives the appearance change
         // between focus levels that a focus stack is made of.
-        cv::Ptr<cv::SIFT> sift = cv::SIFT::create();
+        //
+        // Feature cap: gradient-magnitude frames are feature-dense (50-70k
+        // keypoints on a 4K stack), and BFMatcher's cost is quadratic in
+        // them — 200+ seconds per pair, of which ~1300 matches survived the
+        // ratio test. The cap keeps the strongest N by response; hundreds of
+        // ratio-test survivors remain, which is all RANSAC needs.
+        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(4000);
         std::vector<cv::KeyPoint> kpF, kpM;
         cv::Mat descF, descM;
         sift->detectAndCompute(fixedM, cv::noArray(), kpF, descF);
         sift->detectAndCompute(movingM, cv::noArray(), kpM, descM);
+        const int64_t tDetect = cv::getTickCount();
         if (descF.empty() || descM.empty() || kpF.size() < 4 || kpM.size() < 4)
             return hf_err_register;
         cv::BFMatcher matcher(cv::NORM_L2);
         std::vector<std::vector<cv::DMatch>> knn;
         matcher.knnMatch(descM, descF, knn, 2);   // query = moving, train = fixed
+        const int64_t tMatch = cv::getTickCount();
         std::vector<cv::Point2f> ptsM, ptsF;
         for (auto& m : knn) {
             if (m.size() < 2) continue;
@@ -849,6 +866,14 @@ extern "C" hf_status hf_register(int w, int h,
         }
         if (ptsM.size() < 4) return hf_err_register;
         cv::Mat H = cv::findHomography(ptsM, ptsF, cv::RANSAC, 3.0);
+        if (debugTiming) {
+            fprintf(stderr,
+                    "hf_register %dx%d: kp %zu/%zu, matches %zu, "
+                    "detect %.0fms match %.0fms ransac %.0fms\n",
+                    w, h, kpF.size(), kpM.size(), ptsM.size(),
+                    ms(t0, tDetect), ms(tDetect, tMatch),
+                    ms(tMatch, cv::getTickCount()));
+        }
         if (H.empty()) return hf_err_register;
         for (int r = 0; r < 3; r++)
             for (int c = 0; c < 3; c++)

@@ -202,6 +202,9 @@ extraTargets.append(
         cxxSettings: [
             .unsafeFlags(pkgConfig("--cflags", imagingPkgs)),
             .unsafeFlags(["-Wno-deprecated-declarations"]),
+            // Same rationale as HyperfocalKit's debug -O: the shim's
+            // per-pixel decode/convert loops are ~10x slower at -O0.
+            .unsafeFlags(["-O2"], .when(configuration: .debug)),
         ],
         linkerSettings: [
             // LibRaw's pkg-config Libs line carries compile flags (-fopenmp,
@@ -248,6 +251,10 @@ extraTargets.append(
             .unsafeFlags(["-I", vcpkgPrefix + "\\include",
                           // OpenCV nests its headers one level down, as on Linux.
                           "-I", vcpkgPrefix + "\\include\\opencv4"]),
+            // Same rationale as HyperfocalKit's debug -O: the shim's
+            // per-pixel decode/convert loops run in the dev loop (the Qt
+            // shell uses the debug bridge) and are ~10x slower at -O0.
+            .unsafeFlags(["-O2"], .when(configuration: .debug)),
         ],
         linkerSettings: [
             .unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]),

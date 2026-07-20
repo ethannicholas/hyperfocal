@@ -151,7 +151,7 @@ public enum Aligner {
         // content nearly vanishes and the in-focus texture dominates. Only the
         // gradient plane stays in memory (~1/16th of the float image); the
         // luminance mean rides along for the exposure check.
-        let decoded = try boundedConcurrentMap(count: n, concurrency: 4) { i -> (GrayImage, GrayStats, Float) in
+        let decoded = try boundedConcurrentMap(count: n, concurrency: registrationConcurrency) { i -> (GrayImage, GrayStats, Float) in
             try cancellation?.checkCancelled()
             let g = try ImageFile.loadGray8(url: urls[i])
             let (gradient, lumMean) = gradientImage(g)
@@ -190,7 +190,7 @@ public enum Aligner {
             case ok(h: simd_float3x3, residual: Float)
             case failed
         }
-        let pairs = try boundedConcurrentMap(count: kept.count - 1, concurrency: 4) { j -> Pair in
+        let pairs = try boundedConcurrentMap(count: kept.count - 1, concurrency: registrationConcurrency) { j -> Pair in
             try cancellation?.checkCancelled()
             let a = kept[j], b = kept[j + 1]
             defer { bump(frameIndex: b, frame: preview(of: grays[b]), pass: .register) }
@@ -461,6 +461,14 @@ public enum Aligner {
 
     /// Runs `body` for each index with bounded concurrency, collecting results in
     /// order. Rethrows the first error encountered.
+    /// Decode/register worker count: the historical 4, but never more than
+    /// cores − 1 — on a 2-core VM, 4 concurrent SIFT registrations (each with
+    /// OpenCV's own internal parallelism) starved the UI and the rest of the
+    /// system for the whole pass.
+    static var registrationConcurrency: Int {
+        min(4, max(1, ProcessInfo.processInfo.activeProcessorCount - 1))
+    }
+
     static func boundedConcurrentMap<T>(count: Int, concurrency: Int,
                                         _ body: @escaping (Int) throws -> T) throws -> [T] {
         var results = [T?](repeating: nil, count: count)

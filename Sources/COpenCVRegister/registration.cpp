@@ -33,7 +33,13 @@ extern "C" hfr_status hfr_register(int w, int h,
         // homography is markedly more precise than ORB's FAST corners — and
         // feature matching (unlike dense ECC) survives the appearance change
         // between focus levels that a focus stack is made of.
-        cv::Ptr<cv::SIFT> sift = cv::SIFT::create();
+        //
+        // Feature cap: gradient-magnitude frames are feature-dense (50-70k
+        // keypoints on a 4K stack), and BFMatcher's cost is quadratic in
+        // them — 200+ seconds per pair, of which ~1300 matches survived the
+        // ratio test. The cap keeps the strongest N by response; hundreds of
+        // ratio-test survivors remain, which is all RANSAC needs.
+        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(4000);
         std::vector<cv::KeyPoint> kpF, kpM;
         cv::Mat descF, descM;
         sift->detectAndCompute(fixedM, cv::noArray(), kpF, descF);

@@ -94,6 +94,16 @@ Windows residuals to close (each independently landable):
    (windows-env.ps1 prepends `installed\<triplet>\bin`); distributing
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
+4. **Registration: cache SIFT per frame.** `hf_register` recomputes
+   `detectAndCompute` for both frames of every pair, but each interior
+   frame sits in two pairs — detect (the dominant per-pair cost since
+   the 4000-feature cap killed the quadratic match term: ~4.8 s vs
+   0.8 s per pair on the 2-core VM, 4K frames) is being paid twice per
+   frame. A detect-once/match-many shim API (handles for per-frame
+   descriptors) would roughly halve registration wall-clock on big
+   stacks. Only worth doing if registration still feels slow on real
+   hardware — measure first (`HYPERFOCAL_REGISTER_DEBUG=1` prints
+   per-phase timings and keypoint counts).
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
