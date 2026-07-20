@@ -979,11 +979,14 @@ public final class AppModel: ObservableObject {
     /// and turning the cache off in Settings. Batches never prompt (an
     /// unattended queue must keep moving; the engine skips the cache
     /// silently and the skip is logged). Returns false to cancel the fuse.
+    /// Engine-independent — every dmap path caches now — and sized to the
+    /// fp16 fallback footprint: when fp32 doesn't fit the engine degrades
+    /// to fp16 on its own, so the prompt is only for "not even fp16 fits".
     private func preflightDiskCache(urls: [URL]) -> Bool {
-        guard !batchMode, useGPU, FrameSpill.wanted(fusionDiskCache),
+        guard !batchMode, FrameSpill.wanted(fusionDiskCache),
               let first = urls.first,
               let size = ImageFile.pixelSize(url: first),
-              let short = FrameSpill.shortfall(frameBytes: size.width * size.height * 16,
+              let short = FrameSpill.shortfall(frameBytes: size.width * size.height * 8,
                                                frameCount: urls.count) else { return true }
         let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         return runConfirmAlert(

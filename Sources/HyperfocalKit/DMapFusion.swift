@@ -136,19 +136,40 @@ public enum DMapFusion {
         var gains0 = [SIMD3<Float>]()  // per-channel gain per frame, vs frame 0
         var meanRGB0 = SIMD3<Float>(repeating: 1)
 
+        // Pass 1 spills its aligned frames so pass 2 can stream them back
+        // instead of decoding + warping the stack a second time — the same
+        // FrameSpill the GPU paths use (fp32 when it fits, fp16 when only
+        // that does, skipped with a log when neither will).
+        let wantSpill = FrameSpill.wanted(options.spillEnabled)
+        var spill: FrameSpill?
+
+        // Wall-clock phase buckets, reported through `log` at the end — the
+        // pyramid paths' discipline: optimization here must start from
+        // measurements, not vibes.
+        var tDecode = 0.0, tEnergy = 0.0, tSelect = 0.0, tSpill = 0.0
+        var tRegularize = 0.0, tRenderDecode = 0.0, tRender = 0.0
+        func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
+
         // Pass 1: per-pixel argmax of smoothed |Laplacian| across the stack.
         for fi in 0..<frameCount {
             try cancellation?.checkCancelled()
+            var t0 = now()
             let img = try frame(fi)
+            tDecode += now() - t0
             if fi == 0 {
                 width = img.width
                 height = img.height
                 bestEnergy = [Float](repeating: 0, count: width * height)
                 bestIndex = [Float](repeating: 0, count: width * height)
                 guidePlane = [Float](repeating: 0, count: width * height)
+                if wantSpill {
+                    spill = FrameSpill(frameBytes: width * height * 16,
+                                       frameCount: frameCount, log: log)
+                }
             }
             precondition(img.width == width && img.height == height,
                          "frame \(fi) size mismatch: \(img.width)x\(img.height) vs \(width)x\(height)")
+            t0 = now()
             let lum = img.luminancePlane()
             // Gain chained against frame 0 (known once the first frame is seen),
             // so energies can be corrected as they stream. Measured per channel
@@ -188,6 +209,8 @@ public enum DMapFusion {
                 for i in lumGrid.indices { lumGrid[i] *= gain }
             }
             luminancePlanes.append(lumGrid)
+            tEnergy += now() - t0
+            t0 = now()
             let index = Float(fi)
             let first = fi == 0
             energy.withUnsafeBufferPointer { ep in
@@ -227,6 +250,21 @@ public enum DMapFusion {
                     }
                 }
             }
+            tSelect += now() - t0
+            // Spill the aligned frame for pass 2. A failed write just
+            // degrades the render back to re-decoding — never fails the fuse.
+            if let s = spill {
+                t0 = now()
+                do {
+                    try img.pixels.withUnsafeBufferPointer {
+                        try s.write(frame: fi, from: $0.baseAddress!)
+                    }
+                } catch {
+                    log?("frame spill write failed (\(error)) — render pass will re-decode")
+                    spill = nil
+                }
+                tSpill += now() - t0
+            }
             log?("depth pass \(fi + 1)/\(frameCount)")
             if let progress {
                 progress(FusionProgress(stage: .depth,
@@ -241,6 +279,7 @@ public enum DMapFusion {
             }
         }
 
+        var t0 = now()
         guidePlane = Filters.blurPlane(guidePlane, width: width, height: height,
                                        sigma: Self.guideSigma)
         dumpGuide(guidePlane)
@@ -259,6 +298,7 @@ public enum DMapFusion {
                                     progress: {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         })
+        tRegularize = now() - t0
 
         let gains = renderGains(from: gains0, options: options, log: log)
 
@@ -284,7 +324,26 @@ public enum DMapFusion {
                 log?("render pass \(fi + 1)/\(frameCount) (skipped)")
                 continue
             }
-            let img = try frame(fi)
+            t0 = now()
+            // Aligned frames stream back from the spill when pass 1 captured
+            // one (a read failure degrades to re-decoding mid-pass).
+            var img: ImageBuffer
+            if let s = spill {
+                img = ImageBuffer(width: width, height: height)
+                do {
+                    try img.pixels.withUnsafeMutableBufferPointer {
+                        try s.read(frame: fi, into: $0.baseAddress!)
+                    }
+                } catch {
+                    log?("frame spill read failed (\(error)) — re-decoding")
+                    spill = nil
+                    img = try frame(fi)
+                }
+            } else {
+                img = try frame(fi)
+            }
+            tRenderDecode += now() - t0
+            t0 = now()
             let gain = gains?[fi] ?? .one
             img.pixels.withUnsafeBufferPointer { fp in
                 depth.withUnsafeBufferPointer { dp in
@@ -310,6 +369,7 @@ public enum DMapFusion {
                     }
                 }
             }
+            tRender += now() - t0
             log?("render pass \(fi + 1)/\(frameCount)")
             renderedCount += 1
             if let progress {
@@ -323,6 +383,12 @@ public enum DMapFusion {
                                         sourceFullWidth: img.width, sourceFullHeight: img.height))
             }
         }
+
+        log?(String(format: "dmap phases (cpu): decode %.2fs, energy %.2fs, "
+                    + "select %.2fs, spill %.2fs, regularize %.2fs, "
+                    + "render-src %.2fs, render %.2fs",
+                    tDecode, tEnergy, tSelect, tSpill, tRegularize,
+                    tRenderDecode, tRender))
 
         var out = ImageBuffer(width: width, height: height)
         accum.withUnsafeBufferPointer { ap in

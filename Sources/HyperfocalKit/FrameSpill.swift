@@ -13,10 +13,13 @@ import WinSDK
 /// frame back from SSD replaces the render pass's decode + upload + warp and
 /// measures faster for every input format (RAW by the widest margin, but
 /// even uncompressed TIFF and JPEG win). Frames are stored as warped fp32
-/// RGBA — deliberately not fp16, which would halve the I/O but quantize the
-/// render inputs to ~75–80 dB and break the ≥ 90 dB CPU↔GPU parity gate.
-/// fp32 spill is bit-identical to re-warping: the warp kernel is
-/// deterministic, so the stored plane IS what pass 2 would compute.
+/// RGBA by default — bit-identical to re-warping (the warp kernel is
+/// deterministic, so the stored plane IS what pass 2 would compute), which
+/// the ≥ 90 dB CPU↔GPU parity gate leans on. When fp32 doesn't fit the temp
+/// volume, the spill *degrades to fp16* instead of vanishing: quantizing the
+/// render inputs to ~75–80 dB is far better than re-decoding + re-warping
+/// the whole stack, and machines where the gates run always fit fp32 (synth
+/// stacks are tiny), so the parity bar is unaffected.
 ///
 /// The backing file is unlinked immediately after creation — it lives only as
 /// this object's file descriptor, so the space is reclaimed on deinit or
@@ -29,8 +32,11 @@ public final class FrameSpill {
     #else
     private let fd: Int32
     #endif
-    private let frameBytes: Int
-    private let slotBytes: Int
+    private let frameBytes: Int   // fp32 payload size per frame (callers' unit)
+    private let slotBytes: Int    // on-disk slot (halved when fp16)
+    private let halfPrecision: Bool
+    private var scratch: [UInt16] = []
+    private let scratchLock = NSLock()
 
     /// Free space the spill must leave untouched on the temp volume.
     private static let margin: Int64 = 2 << 30
@@ -83,14 +89,24 @@ public final class FrameSpill {
         return (needed, capacity)
     }
 
-    /// Returns nil (logging why) when the temp volume can't hold the spill
-    /// with headroom to spare, or the file can't be created — callers fall
-    /// back to re-decoding.
+    /// Returns nil (logging why) when the temp volume can't hold even the
+    /// fp16 spill with headroom to spare, or the file can't be created —
+    /// callers fall back to re-decoding. When fp32 doesn't fit but fp16
+    /// does, the spill runs at half precision (logged).
     init?(frameBytes: Int, frameCount: Int, log: ((String) -> Void)? = nil) {
         self.frameBytes = frameBytes
-        self.slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
-        if let short = FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) {
-            log?(String(format: "frame spill skipped: needs %.1f GB, volume has %.1f GB free",
+        if FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) == nil {
+            halfPrecision = false
+            slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
+        } else if FrameSpill.shortfall(frameBytes: frameBytes / 2,
+                                       frameCount: frameCount) == nil {
+            halfPrecision = true
+            slotBytes = (frameBytes / 2 + 0x3FFF) & ~0x3FFF
+            log?("frame spill: fp32 won't fit the temp volume — caching at fp16")
+        } else {
+            let short = FrameSpill.shortfall(frameBytes: frameBytes / 2,
+                                             frameCount: frameCount)!
+            log?(String(format: "frame spill skipped: needs %.1f GB even at fp16, volume has %.1f GB free",
                         Double(short.needed) / Double(1 << 30),
                         Double(short.available) / Double(1 << 30)))
             return nil
@@ -149,12 +165,12 @@ public final class FrameSpill {
         return ov
     }
 
-    func write(frame: Int, from ptr: UnsafeRawPointer) throws {
+    private func writeRaw(frame: Int, from ptr: UnsafeRawPointer, byteCount: Int) throws {
         var done = 0
-        while done < frameBytes {
+        while done < byteCount {
             var ov = overlapped(at: UInt64(frame * slotBytes + done))
             var n: DWORD = 0
-            guard WriteFile(handle, ptr + done, DWORD(frameBytes - done), &n, &ov),
+            guard WriteFile(handle, ptr + done, DWORD(byteCount - done), &n, &ov),
                   n > 0 else {
                 throw StackError.io("spill write failed (error \(GetLastError()))")
             }
@@ -162,12 +178,12 @@ public final class FrameSpill {
         }
     }
 
-    func read(frame: Int, into ptr: UnsafeMutableRawPointer) throws {
+    private func readRaw(frame: Int, into ptr: UnsafeMutableRawPointer, byteCount: Int) throws {
         var done = 0
-        while done < frameBytes {
+        while done < byteCount {
             var ov = overlapped(at: UInt64(frame * slotBytes + done))
             var n: DWORD = 0
-            guard ReadFile(handle, ptr + done, DWORD(frameBytes - done), &n, &ov) else {
+            guard ReadFile(handle, ptr + done, DWORD(byteCount - done), &n, &ov) else {
                 throw StackError.io("spill read failed (error \(GetLastError()))")
             }
             if n == 0 {
@@ -177,10 +193,10 @@ public final class FrameSpill {
         }
     }
     #else
-    func write(frame: Int, from ptr: UnsafeRawPointer) throws {
+    private func writeRaw(frame: Int, from ptr: UnsafeRawPointer, byteCount: Int) throws {
         var done = 0
-        while done < frameBytes {
-            let n = pwrite(fd, ptr + done, frameBytes - done,
+        while done < byteCount {
+            let n = pwrite(fd, ptr + done, byteCount - done,
                            off_t(frame * slotBytes + done))
             if n < 0 {
                 if errno == EINTR { continue }
@@ -190,10 +206,10 @@ public final class FrameSpill {
         }
     }
 
-    func read(frame: Int, into ptr: UnsafeMutableRawPointer) throws {
+    private func readRaw(frame: Int, into ptr: UnsafeMutableRawPointer, byteCount: Int) throws {
         var done = 0
-        while done < frameBytes {
-            let n = pread(fd, ptr + done, frameBytes - done,
+        while done < byteCount {
+            let n = pread(fd, ptr + done, byteCount - done,
                           off_t(frame * slotBytes + done))
             if n < 0 {
                 if errno == EINTR { continue }
@@ -206,4 +222,44 @@ public final class FrameSpill {
         }
     }
     #endif
+
+    // Public write/read speak fp32 (`frameBytes` of it) regardless of the
+    // on-disk precision; fp16 conversion happens through a reused scratch
+    // buffer (locked — the GPU paths may spill from a worker thread).
+    func write(frame: Int, from ptr: UnsafeRawPointer) throws {
+        guard halfPrecision else {
+            return try writeRaw(frame: frame, from: ptr, byteCount: frameBytes)
+        }
+        let count = frameBytes / 4
+        let src = ptr.assumingMemoryBound(to: Float.self)
+        scratchLock.lock()
+        defer { scratchLock.unlock() }
+        if scratch.count < count { scratch = [UInt16](repeating: 0, count: count) }
+        try scratch.withUnsafeMutableBufferPointer { sp in
+            for i in 0..<count {
+                // Clamp: Float16 traps above 65504; pixels live in [0,1] but
+                // decode excursions must not crash the spill.
+                sp[i] = Float16(min(max(src[i], -65504), 65504)).bitPattern
+            }
+            try writeRaw(frame: frame, from: UnsafeRawPointer(sp.baseAddress!),
+                         byteCount: frameBytes / 2)
+        }
+    }
+
+    func read(frame: Int, into ptr: UnsafeMutableRawPointer) throws {
+        guard halfPrecision else {
+            return try readRaw(frame: frame, into: ptr, byteCount: frameBytes)
+        }
+        let count = frameBytes / 4
+        let dst = ptr.assumingMemoryBound(to: Float.self)
+        scratchLock.lock()
+        defer { scratchLock.unlock() }
+        if scratch.count < count { scratch = [UInt16](repeating: 0, count: count) }
+        try scratch.withUnsafeMutableBufferPointer { sp in
+            try readRaw(frame: frame, into: sp.baseAddress!, byteCount: frameBytes / 2)
+            for i in 0..<count {
+                dst[i] = Float(Float16(bitPattern: sp[i]))
+            }
+        }
+    }
 }
