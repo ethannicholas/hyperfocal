@@ -97,31 +97,41 @@ Windows residuals to close (each independently landable):
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
 4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
-   JPEGs, 2-core Windows VM, 2026-07-20): ~3.5 min end to end —
-   registration ~100-113 s (SIFT bound 1600, cap 2000; detect
-   ~0.8 s/frame is most of it), pmax fusion 81 s (phase buckets: warp
-   58 s, build 18 s, select 3 s — all at standalone cost now that the
-   sRGB decode fast path stopped stealing cores). < 2 min end-to-end is
-   demonstrably achievable on the same 2 cores (measured against
-   commercial stackers on this VM), but the remaining cuts are harder:
-   (a) **SIFT detect ~0.8 s/frame** (~66 s) — a cheaper detector or a
-   smaller bound; measure against the ground-truth synth recipe
-   (3600×2400, above the bound, jitter on) that validated 1600;
-   (b) **warp 58 s** is at its measured floor (~59 ns/px) — further
-   means deeper SIMD restructuring of the 6×6 tap loop;
-   (c) registration's gray-decode+gradient glue (~20 s). Ablation
-   taps: HYPERFOCAL_SIFT_NFEATURES /
+   JPEGs, 2-core Windows VM, 2026-07-20): ~2.8 min end to end —
+   registration 72 s (SIFT bound 1200, cap 2000; detect ~0.5 s/frame),
+   pmax fusion 88 s (phase buckets: warp ~60 s, build ~19 s, select
+   ~4 s — at standalone cost since the sRGB decode fast path stopped
+   stealing cores). < 2 min end-to-end is demonstrably achievable on
+   the same 2 cores (measured against commercial stackers on this VM);
+   the remaining ~45 s is spread thin: (a) **warp ~60 s** is at its
+   measured per-pixel floor — a Chebyshev-weights variant was tried and
+   reverted (equal to the LUT within VM noise; tap loads dominate), so
+   further means restructuring the 6×6 tap loop's memory access;
+   (b) **SIFT detect ~40 s** — the bound is at 1200 with 1000 also
+   ground-truth-passing, so the next real step is a cheaper detector or
+   registering from a ¼-scale JPEG decode (libjpeg scaled decode) which
+   would also shrink the gray/gradient glue (~15 s); (c) build ~19 s.
+   **DMap lags pmax 2×** (341 s vs 166 s CLI; the shell's default method
+   is dmap, so UI fuses read ~6 min): it shares the registration/warp/
+   decode wins but has had no method-specific pass — and on a disk-tight
+   machine the aligned-frame spill silently doesn't fit (needs
+   w×h×16 B×frames; 14.6 GB here vs ~11 free), so render re-decodes and
+   re-warps the whole stack. Candidates: half-float spill (halves the
+   footprint; gate render sensitivity), phase buckets for the CPU dmap
+   path (it has none), then the same fused-pass treatment the pyramid
+   got. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
-   buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG.
-   (The 1600 bound + 2000 cap re-verified quality-neutral on 45 MP
-   frames 2026-07-20 — Mac A/B on the 60-frame Fluorite stack; numbers
-   in Aligner.openCVRegisterMaxSide's comment.) Sampling profilers cannot run in
-   the dev VM (hypervisor doesn't virtualize the profiling interrupt);
-   on real Windows hardware, wpr + WPA work with `swift build -Xswiftc
-   -debug-info-format=codeview -Xlinker /DEBUG`. Before touching any
-   per-pixel loop, read PortableSIMD.swift's performance contract:
-   cross-file generic calls don't specialize in per-file debug builds —
-   that trap cost 55x in the warp until 2026-07-20.
+   buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
+   status (Mac, Fluorite stack): 1600 bound + 2000 cap verified
+   quality-neutral 2026-07-20; **the 1600→1200 step is not yet A/B'd at
+   45 MP** (see Aligner.openCVRegisterMaxSide's comment). Sampling
+   profilers cannot run in the dev VM (hypervisor doesn't virtualize
+   the profiling interrupt); on real Windows hardware, wpr + WPA work
+   with `swift build -Xswiftc -debug-info-format=codeview -Xlinker
+   /DEBUG`. Before touching any per-pixel loop, read
+   PortableSIMD.swift's performance contract: cross-file generic calls
+   don't specialize in per-file debug builds — that trap cost 55x in
+   the warp until 2026-07-20.
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
