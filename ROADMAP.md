@@ -95,22 +95,22 @@ Windows residuals to close (each independently landable):
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
 4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
-   JPEGs, 2-core Windows VM, 2026-07-19): registration now takes
-   ~4.7 min (SIFT detect ~2.3 s/frame is the remaining term) and fusion
-   is the long pole — the CPU pyramid path runs ~42 s/frame at 11 MP on
-   2 cores (allocation churn per level in `laplacianPyramid`, no pass
-   fusion, scalar loops), and the wgpu path on WARP ~12 s/frame.
-   Neither is near the hardware's ceiling: ~1 s/frame on the same
-   2 cores is demonstrably achievable (measured against commercial
-   stackers on this VM, 2026-07-19) — the gap is memory traffic and
-   vectorizability, not exotic tuning. Profile the CPU pyramid first
-   (preallocate, fuse blur+decimate passes, check SIMD codegen on
-   Windows/Linux); WARP dispatch overhead second. Measure with `-v`
-   phase buckets + `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`.
-   Once the CPU path beats WARP, `--engine auto` should stop selecting a
-   WARP adapter (it identifies as "Microsoft Basic Render Driver" /
-   `adapterSummary`) — software-GPU emulation only wins today because
-   the CPU path is unoptimized.
+   JPEGs, 2-core Windows VM, 2026-07-20, debug build): ~7.8 min end to
+   end — registration ~4.5 min, pmax fusion 198 s (2.4 s/frame CPU;
+   phase buckets: warp 85 s, build 90 s, select 19 s, decode hidden by
+   prefetch). ~1 s/frame fusion and < 2 min end-to-end are demonstrably
+   achievable on the same 2 cores (measured against commercial stackers
+   on this VM). Remaining levers, largest first: (a) `laplacianPyramid`
+   allocates fresh buffers per level per frame and runs blur / decimate
+   / upsample / subtract / energy as separate materialized passes —
+   preallocate a workspace and fuse them (blur+decimate computes only
+   even outputs; band+energy+select streams without materializing
+   bands); (b) SIFT detect ~2.3 s/frame (OpenCV-bound) dominates
+   registration. Measure with `-v` phase buckets +
+   `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`. Before
+   touching any per-pixel loop, read PortableSIMD.swift's performance
+   contract: cross-file generic calls don't specialize in per-file
+   debug builds — that trap cost 55x in the warp until 2026-07-20.
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
