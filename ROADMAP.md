@@ -89,7 +89,9 @@ Windows residuals to close (each independently landable):
    already passes under Git Bash with the environment from
    `Scripts/windows-env.ps1`; needs a GitHub Actions windows job (or
    self-hosted arm64 runner) and possibly Windows-calibrated floors —
-   the measured margins above the shared floors are currently ≥ 0.36 dB.
+   measured margins above the shared floors (2026-07-20): dmap ≥ 0.4 dB,
+   pmax 0.25 dB (38.55 vs floor 38.3; the registration gray-path fast
+   path shifted the crop by a pixel, which moved pmax from 38.66).
 3. **CLI DLL deployment.** The exe finds vcpkg's DLLs via PATH
    (windows-env.ps1 prepends `installed\<triplet>\bin`); distributing
    the CLI needs the DLL set copied beside the exe or a static-triplet
