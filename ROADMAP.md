@@ -97,22 +97,28 @@ Windows residuals to close (each independently landable):
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
 4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
-   JPEGs, 2-core Windows VM, 2026-07-20, debug build): ~7.8 min end to
-   end — registration ~4.5 min, pmax fusion 198 s (2.4 s/frame CPU;
-   phase buckets: warp 85 s, build 90 s, select 19 s, decode hidden by
-   prefetch). ~1 s/frame fusion and < 2 min end-to-end are demonstrably
-   achievable on the same 2 cores (measured against commercial stackers
-   on this VM). Remaining levers, largest first: (a) `laplacianPyramid`
-   allocates fresh buffers per level per frame and runs blur / decimate
-   / upsample / subtract / energy as separate materialized passes —
-   preallocate a workspace and fuse them (blur+decimate computes only
-   even outputs; band+energy+select streams without materializing
-   bands); (b) SIFT detect ~2.3 s/frame (OpenCV-bound) dominates
-   registration. Measure with `-v` phase buckets +
-   `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`. Before
-   touching any per-pixel loop, read PortableSIMD.swift's performance
-   contract: cross-file generic calls don't specialize in per-file
-   debug builds — that trap cost 55x in the warp until 2026-07-20.
+   JPEGs, 2-core Windows VM, 2026-07-20): ~6.8 min end to end —
+   registration ~4.4 min, pmax fusion 135 s (phase buckets: warp 98 s,
+   build 30 s, select 4 s; decode hidden by prefetch). < 2 min
+   end-to-end is demonstrably achievable on the same 2 cores (measured
+   against commercial stackers on this VM). Remaining levers, largest
+   first: (a) **SIFT detect ~2.3 s/frame** (OpenCV-bound) is most of
+   registration — candidates: OpenCV's internal thread pool sizing,
+   nfeatures/contrastThreshold vs the 4000 cap (measure residuals + the
+   synth gates before trusting any change), or a cheaper detector for
+   the *pairing* decision with SIFT kept for the final homographies;
+   (b) **warp ~1.2 s/frame in-pipeline** vs 0.66 s standalone — the gap
+   is contention with the prefetcher's lcms threads, and `Warp.apply`
+   still allocates its output per frame (a warp-into-workspace variant
+   would also drop the gauss[0] copy). Measure with `-v` phase buckets
+   + `HYPERFOCAL_REGISTER_DEBUG` / `HYPERFOCAL_DECODE_DEBUG`. Sampling
+   profilers cannot run in the dev VM (hypervisor doesn't virtualize
+   the profiling interrupt); on real Windows hardware, wpr + WPA work
+   with `swift build -Xswiftc -debug-info-format=codeview -Xlinker
+   /DEBUG`. Before touching any per-pixel loop, read
+   PortableSIMD.swift's performance contract: cross-file generic calls
+   don't specialize in per-file debug builds — that trap cost 55x in
+   the warp until 2026-07-20.
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
