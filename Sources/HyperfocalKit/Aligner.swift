@@ -508,23 +508,26 @@ public enum Aligner {
     /// registration" bound (validated on macOS via the Phase 1.5 A/B; applied
     /// on every OpenCV path). Synth frames (≤900 px) sit below this, so the
     /// synth gates are unaffected.
-    /// SIFT input bound. 1600 (from 2500, 2026-07-20): detect is the
-    /// registration wall-clock wall and scales with area — measured −68%
-    /// per frame at 1600 with pair residuals flat, ratio-test matches UP
-    /// (denser features per image), zero rejects/flags across an 82-frame
-    /// real stack, and ground-truth PSNR on a 3600×2400 jittered synth
-    /// slightly BETTER than 2500 (50.29 vs 49.62 dB). 45 MP re-verify
-    /// (2026-07-20, macOS A/B, 60-frame Fluorite NEF stack): quality-
-    /// neutral vs the 2500/uncapped baseline — crop sizes within a few px,
+    /// SIFT input bound. 1200 (from 2500 via 1600, 2026-07-20): detect is
+    /// the registration wall-clock wall and scales with area. Measured at
+    /// each step on the 82 × 11 MP sample stack + a 3600×2400 jittered
+    /// ground-truth synth: pair residuals flat, ratio-test matches high,
+    /// zero rejects/flags, truth PSNR 50.26 dB at 1200 (50.29 at 1600,
+    /// 49.62 at 2500) — and 1000 also passed (50.17), so 1200 is landed
+    /// with a tested step of margin below it.
+    /// 45 MP re-verify (2026-07-20, macOS A/B, 60-frame Fluorite NEF
+    /// stack) covered the **1600** bound + 2000 cap: quality-neutral vs
+    /// the 2500/uncapped baseline — crop sizes within a few px,
     /// new↔Vision 33.3 dB vs baseline↔Vision 34.1 dB (cross-transform
     /// comparisons bottom out near there), 8× amplified diff black in the
     /// background with only texture-grain resampling differences, and 1:1
-    /// silhouette crops indistinguishable.
+    /// silhouette crops indistinguishable. The 1600→1200 step has NOT yet
+    /// been A/B'd at 45 MP — rerun that check before trusting 1200 there.
     /// HYPERFOCAL_REGISTER_MAXSIDE overrides for ablation (same pattern as
     /// the HYPERFOCAL_SIFT_* switches).
     static let openCVRegisterMaxSide =
         ProcessInfo.processInfo.environment["HYPERFOCAL_REGISTER_MAXSIDE"]
-            .flatMap(Int.init) ?? 1600
+            .flatMap(Int.init) ?? 1200
 
     /// Area-average downscale of an 8-bit gray plane by `scale` (0<scale<1) —
     /// enough to feed SIFT; not the fusion sampler.
