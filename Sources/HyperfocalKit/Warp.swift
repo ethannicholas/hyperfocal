@@ -70,13 +70,24 @@ public enum Warp {
 
     static func applyLanczos3(_ src: ImageBuffer, outputToSource H: simd_float3x3,
                               outWidth: Int, outHeight: Int) -> ImageBuffer {
-        let sw = src.width, sh = src.height
         var out = ImageBuffer(width: outWidth, height: outHeight)
+        applyLanczos3(src, outputToSource: H, outWidth: outWidth, outHeight: outHeight,
+                      into: &out.pixels)
+        return out
+    }
+
+    /// Warp into a preallocated RGBA buffer — the CPU fusion workspace's
+    /// level 0. Skips the per-frame output allocation (a zeroed ~180 MB at
+    /// 11 MP, page-faulted on first touch) and the copy that followed it.
+    static func applyLanczos3(_ src: ImageBuffer, outputToSource H: simd_float3x3,
+                              outWidth: Int, outHeight: Int, into dst: inout [Float]) {
+        precondition(dst.count == outWidth * outHeight * 4)
+        let sw = src.width, sh = src.height
         lanczos3Table.withUnsafeBufferPointer { lutBuf in
         let lut = lutBuf.baseAddress!
         src.pixels.withUnsafeBufferPointer { s in
             let sraw = UnsafeRawPointer(s.baseAddress!)
-            out.pixels.withUnsafeMutableBufferPointer { o in
+            dst.withUnsafeMutableBufferPointer { o in
                 DispatchQueue.concurrentPerform(iterations: outHeight) { y in
                     for x in 0..<outWidth {
                         let p = H * simd_float3(Float(x), Float(y), 1)
@@ -167,7 +178,6 @@ public enum Warp {
             }
         }
         }
-        return out
     }
 
     static func applyBilinear(_ src: ImageBuffer, outputToSource H: simd_float3x3,

@@ -186,18 +186,16 @@ public enum PyramidFusion {
         for _ in 0..<frameCount {
             try cancellation?.checkCancelled()
             var t0 = now()
-            let (fi, decoded) = try prefetcher.next()
-            var img = decoded
+            let (fi, img) = try prefetcher.next()
             tDecode += now() - t0
-            t0 = now()
-            if let warp { img = warp.apply(img, at: fi) }
-            tWarp += now() - t0
-            if fused == nil {
-                levels = max(3, Int(log2(Double(min(img.width, img.height)) / 16.0)))
-            }
-            t0 = now()
             if workspace == nil {
-                let ws = CPUWorkspace(width: img.width, height: img.height, levels: levels)
+                // Canvas = the warp's output size (common-coverage crop) or
+                // the frame's own — decided before any warp so frames can be
+                // resampled straight into the workspace's level 0.
+                let w = warp?.outputWidth ?? img.width
+                let h = warp?.outputHeight ?? img.height
+                levels = max(3, Int(log2(Double(min(w, h)) / 16.0)))
+                let ws = CPUWorkspace(width: w, height: h, levels: levels)
                 workspace = ws
                 // bestEnergy = −1: the first frame's bands install
                 // unconditionally (energies are ≥ 0) — same convention as
@@ -208,13 +206,29 @@ public enum PyramidFusion {
                 }
             }
             let ws = workspace!
-            precondition(img.width == ws.sizes[0].w && img.height == ws.sizes[0].h,
-                         "frame size mismatch: \(img.width)x\(img.height)")
-            img.pixels.withUnsafeBufferPointer { src in
-                ws.gauss[0].withUnsafeMutableBufferPointer { dst in
-                    dst.baseAddress!.update(from: src.baseAddress!, count: src.count)
+            let (cw, ch) = ws.sizes[0]
+            t0 = now()
+            // Identity transform on an uncropped canvas needs no warp — the
+            // same fast path `PyramidWarp.apply` / the GPU paths take. Warped
+            // frames resample directly into the workspace's level 0.
+            let needsWarp = warp.map {
+                !($0.transforms[fi] == matrix_identity_float3x3
+                    && cw == img.width && ch == img.height)
+            } ?? false
+            if needsWarp {
+                Warp.applyLanczos3(img, outputToSource: warp!.transforms[fi].inverse,
+                                   outWidth: cw, outHeight: ch, into: &ws.gauss[0])
+            } else {
+                precondition(img.width == cw && img.height == ch,
+                             "frame size mismatch: \(img.width)x\(img.height)")
+                img.pixels.withUnsafeBufferPointer { src in
+                    ws.gauss[0].withUnsafeMutableBufferPointer { dst in
+                        dst.baseAddress!.update(from: src.baseAddress!, count: src.count)
+                    }
                 }
             }
+            tWarp += now() - t0
+            t0 = now()
             for l in 0..<levels { ws.fusedDownsample(level: l) }
             ws.level0BandEnergy()
             tBuild += now() - t0

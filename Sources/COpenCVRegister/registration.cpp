@@ -38,8 +38,9 @@ extern "C" hfr_status hfr_register(int w, int h,
         // keypoints on a 4K stack), and BFMatcher's cost is quadratic in
         // them — 200+ seconds per pair, of which ~1300 matches survived the
         // ratio test. The cap keeps the strongest N by response; hundreds of
-        // ratio-test survivors remain, which is all RANSAC needs.
-        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(4000);
+        // ratio-test survivors remain, which is all RANSAC needs. (2000
+        // matches the Linux/Windows backend's measured-neutral cap.)
+        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(2000);
         std::vector<cv::KeyPoint> kpF, kpM;
         cv::Mat descF, descM;
         sift->detectAndCompute(fixedM, cv::noArray(), kpF, descF);

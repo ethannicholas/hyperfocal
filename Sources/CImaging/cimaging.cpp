@@ -928,7 +928,10 @@ static bool registerDebug() {
 static int siftNFeatures() {
     static const int v = [] {
         const char* e = std::getenv("HYPERFOCAL_SIFT_NFEATURES");
-        return e ? std::atoi(e) : 4000;
+        // 2000 (from 4000, 2026-07-20): at the 1600 detect bound, matching
+        // is -77% (0.17 s/pair) with >=630 ratio-test survivors, residuals
+        // flat, and ground-truth PSNR unchanged (50.14 vs 50.29 dB).
+        return e ? std::atoi(e) : 2000;
     }();
     return v;
 }
