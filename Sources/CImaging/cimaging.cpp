@@ -10,8 +10,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <csetjmp>
 
@@ -146,6 +148,190 @@ bool convertRGBA(float* rgba, int count, cmsHPROFILE src, cmsHPROFILE dst) {
     }
     cmsDeleteTransform(xf);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// sRGB → Display P3 fast path (8-bit sources)
+// ---------------------------------------------------------------------------
+// The lcms float transform is decode's hot spot (~1.6 core-seconds per 11 MP
+// frame). For 8-bit input whose embedded profile behaves like standard sRGB —
+// the overwhelmingly common JPEG case — the same conversion is a 256-entry
+// linearization LUT, a 3×3 matrix (both D65, so relative colorimetric is a
+// pure primary matrix and black-point compensation is a no-op), and an
+// encode LUT. The fast path must EARN its use per profile: on first sight, a
+// 6×6×6 probe grid runs through lcms and through the LUT path, and the fast
+// path engages only if they agree within 2e-3 (measured agreement for the
+// standard sRGB profile is ~1e-4); anything else falls back to lcms. The
+// verdict is cached by profile hash. HYPERFOCAL_SRGB_FAST=0 disables (same
+// ablation-tap pattern as the HYPERFOCAL_SIFT_* switches).
+
+struct Mat3d { double m[9]; };
+
+Mat3d mat3Mul(const Mat3d& a, const Mat3d& b) {
+    Mat3d r{};
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            r.m[i * 3 + j] = a.m[i * 3 + 0] * b.m[0 * 3 + j]
+                           + a.m[i * 3 + 1] * b.m[1 * 3 + j]
+                           + a.m[i * 3 + 2] * b.m[2 * 3 + j];
+    return r;
+}
+
+Mat3d mat3Inverse(const Mat3d& a) {
+    const double* m = a.m;
+    const double A =  m[4] * m[8] - m[5] * m[7];
+    const double B = -(m[3] * m[8] - m[5] * m[6]);
+    const double C =  m[3] * m[7] - m[4] * m[6];
+    const double det = m[0] * A + m[1] * B + m[2] * C;
+    Mat3d r{};
+    r.m[0] = A / det;
+    r.m[1] = -(m[1] * m[8] - m[2] * m[7]) / det;
+    r.m[2] =  (m[1] * m[5] - m[2] * m[4]) / det;
+    r.m[3] = B / det;
+    r.m[4] =  (m[0] * m[8] - m[2] * m[6]) / det;
+    r.m[5] = -(m[0] * m[5] - m[2] * m[3]) / det;
+    r.m[6] = C / det;
+    r.m[7] = -(m[0] * m[7] - m[1] * m[6]) / det;
+    r.m[8] =  (m[0] * m[4] - m[1] * m[3]) / det;
+    return r;
+}
+
+// RGB→XYZ from primary/white chromaticities (the standard derivation:
+// scale primary columns so the white point maps to the white XYZ).
+Mat3d rgbToXYZ(double xr, double yr, double xg, double yg,
+               double xb, double yb, double xw, double yw) {
+    Mat3d P = {{ xr / yr,             xg / yg,             xb / yb,
+                 1.0,                 1.0,                 1.0,
+                 (1 - xr - yr) / yr,  (1 - xg - yg) / yg,  (1 - xb - yb) / yb }};
+    const double W[3] = { xw / yw, 1.0, (1 - xw - yw) / yw };
+    Mat3d Pinv = mat3Inverse(P);
+    double s[3];
+    for (int i = 0; i < 3; i++)
+        s[i] = Pinv.m[i * 3 + 0] * W[0] + Pinv.m[i * 3 + 1] * W[1]
+             + Pinv.m[i * 3 + 2] * W[2];
+    Mat3d r = P;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            r.m[i * 3 + j] *= s[j];
+    return r;
+}
+
+class SRGBToP3Fast {
+public:
+    static const SRGBToP3Fast& shared() {
+        static SRGBToP3Fast s;
+        return s;
+    }
+
+    // In-place convert an RGBA float buffer whose channel values are exact
+    // 8-bit fractions (i/255 — JPEG-decoded). Threaded like convertRGBA.
+    void apply(float* rgba, int count) const {
+        unsigned workers = std::max(1u, std::min(std::thread::hardware_concurrency(), 8u));
+        if (count < (1 << 16)) workers = 1;
+        const int chunk = (count + (int)workers - 1) / (int)workers;
+        auto run = [this, rgba, count, chunk](unsigned t) {
+            const int lo = (int)t * chunk;
+            const int n = std::min(chunk, count - lo);
+            if (n <= 0) return;
+            float* p = rgba + (size_t)lo * 4;
+            for (int i = 0; i < n; i++, p += 4) {
+                const float lr = lin[idx8(p[0])];
+                const float lg = lin[idx8(p[1])];
+                const float lb = lin[idx8(p[2])];
+                p[0] = encode(M[0] * lr + M[1] * lg + M[2] * lb);
+                p[1] = encode(M[3] * lr + M[4] * lg + M[5] * lb);
+                p[2] = encode(M[6] * lr + M[7] * lg + M[8] * lb);
+            }
+        };
+        if (workers == 1) {
+            run(0);
+        } else {
+            std::vector<std::thread> pool;
+            for (unsigned t = 0; t < workers; t++) pool.emplace_back(run, t);
+            for (auto& th : pool) th.join();
+        }
+    }
+
+private:
+    static constexpr int kEncN = 4096;
+    float lin[256];        // 8-bit sRGB → linear (exact per entry)
+    float enc[kEncN + 2];  // linear [0,1] → sRGB-encoded, lerped
+    float M[9];            // linear sRGB → linear P3 (both D65)
+
+    SRGBToP3Fast() {
+        for (int i = 0; i < 256; i++) {
+            const double v = i / 255.0;
+            lin[i] = (float)(v <= 0.04045 ? v / 12.92
+                                          : std::pow((v + 0.055) / 1.055, 2.4));
+        }
+        for (int i = 0; i <= kEncN + 1; i++) {
+            const double cl = std::min((double)i / kEncN, 1.0);
+            enc[i] = (float)(cl <= 0.0031308 ? cl * 12.92
+                                             : 1.055 * std::pow(cl, 1.0 / 2.4) - 0.055);
+        }
+        // Same chromaticities makeDisplayP3 declares; sRGB per IEC 61966-2-1.
+        Mat3d srgb = rgbToXYZ(0.640, 0.330, 0.300, 0.600, 0.150, 0.060, 0.3127, 0.3290);
+        Mat3d p3 = rgbToXYZ(0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290);
+        Mat3d m = mat3Mul(mat3Inverse(p3), srgb);
+        for (int i = 0; i < 9; i++) M[i] = (float)m.m[i];
+    }
+
+    static inline int idx8(float v) {
+        int i = (int)(v * 255.0f + 0.5f);
+        return i < 0 ? 0 : (i > 255 ? 255 : i);
+    }
+
+    inline float encode(float cl) const {
+        if (cl <= 0.0031308f) return cl < 0.f ? 0.f : cl * 12.92f;
+        if (cl >= 1.f) return 1.f;
+        const float p = cl * kEncN;
+        const int i = (int)p;
+        const float f = p - (float)i;
+        return enc[i] + (enc[i + 1] - enc[i]) * f;
+    }
+};
+
+bool toDisplayP3(float* rgba, int count, const void* iccData, size_t iccLen);
+
+// Does this embedded profile convert like standard sRGB? Probes a 6×6×6
+// 8-bit grid through lcms and the LUT path; verdict cached by profile hash.
+bool srgbFastUsable(const void* iccData, size_t iccLen) {
+    static const bool enabled =
+        [] { const char* e = std::getenv("HYPERFOCAL_SRGB_FAST");
+             return !(e && std::strcmp(e, "0") == 0); }();
+    if (!enabled || !iccData || iccLen == 0) return false;
+
+    uint64_t h = 1469598103934665603ull;   // FNV-1a
+    const uint8_t* bytes = (const uint8_t*)iccData;
+    for (size_t i = 0; i < iccLen; i++) { h ^= bytes[i]; h *= 1099511628211ull; }
+
+    static std::mutex mu;
+    static std::unordered_map<uint64_t, bool> verdicts;
+    std::lock_guard<std::mutex> lock(mu);
+    auto it = verdicts.find(h);
+    if (it != verdicts.end()) return it->second;
+
+    const int steps[6] = {0, 51, 102, 153, 204, 255};
+    std::vector<float> ref, fast;
+    ref.reserve(216 * 4);
+    for (int r : steps) for (int g : steps) for (int b : steps) {
+        ref.push_back(r / 255.0f); ref.push_back(g / 255.0f);
+        ref.push_back(b / 255.0f); ref.push_back(1.0f);
+    }
+    fast = ref;
+    bool ok = toDisplayP3(ref.data(), 216, iccData, iccLen);
+    if (ok) {
+        SRGBToP3Fast::shared().apply(fast.data(), 216);
+        float maxErr = 0;
+        for (size_t i = 0; i < ref.size(); i++)
+            maxErr = std::max(maxErr, std::fabs(ref[i] - fast[i]));
+        ok = maxErr < 2e-3f;
+        if (decodeDebug())
+            fprintf(stderr, "srgb fast-path probe: maxErr %.2e -> %s\n",
+                    maxErr, ok ? "fast" : "lcms");
+    }
+    verdicts[h] = ok;
+    return ok;
 }
 
 // Convert a decoded buffer that is tagged with `iccData` (or, if none, assumed
@@ -445,10 +631,19 @@ hf_status decodeJPEG(const char* path, int* out_w, int* out_h, float** out_rgba)
     std::fclose(fp);
     const auto tJpeg = std::chrono::steady_clock::now();
     const double jpegMs = std::chrono::duration<double, std::milli>(tJpeg - t0).count();
-    bool colorOK = toDisplayP3(rgba, (int)px, iccData, iccLen);
+    bool colorOK;
+    const char* colorPath;
+    if (iccData && iccLen && srgbFastUsable(iccData, iccLen)) {
+        SRGBToP3Fast::shared().apply(rgba, (int)px);
+        colorOK = true;
+        colorPath = "fast-srgb";
+    } else {
+        colorOK = toDisplayP3(rgba, (int)px, iccData, iccLen);
+        colorPath = "lcms";
+    }
     if (decodeDebug())
-        fprintf(stderr, "decodeJPEG %dx%d: jpeg+float %.0fms, lcms %.0fms\n",
-                w, h, jpegMs, msSince(tJpeg));
+        fprintf(stderr, "decodeJPEG %dx%d: jpeg+float %.0fms, %s %.0fms\n",
+                w, h, jpegMs, colorPath, msSince(tJpeg));
     if (iccData) std::free(iccData);
     if (!colorOK) { std::free(rgba); return hf_err_color; }
     *out_w = w; *out_h = h; *out_rgba = rgba;
