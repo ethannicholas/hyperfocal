@@ -292,6 +292,33 @@ public final class MetalEngine {
         dst[gid.y * p.dstW + gid.x] = acc / float((x1 - x0) * (y1 - y0));
     }
 
+    struct PlaneUpParams { uint srcW; uint srcH; uint dstW; uint dstH; };
+
+    // Bilinear plane upsample — must match Filters.resizePlaneBilinear
+    // (center-aligned sampling, clamp-to-edge, a*(1-w)+b*w expression order).
+    kernel void plane_upsample(device const float* src [[buffer(0)]],
+                               device float* dst [[buffer(1)]],
+                               constant PlaneUpParams& p [[buffer(2)]],
+                               uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= p.dstW || gid.y >= p.dstH) return;
+        int sw = int(p.srcW), sh = int(p.srcH);
+        float sx = float(p.srcW) / float(p.dstW);
+        float sy = float(p.srcH) / float(p.dstH);
+        float fy = (float(gid.y) + 0.5f) * sy - 0.5f;
+        int y0 = int(floor(fy));
+        float wy = fy - float(y0);
+        int cy0 = clamp(y0, 0, sh - 1);
+        int cy1 = clamp(y0 + 1, 0, sh - 1);
+        float fx = (float(gid.x) + 0.5f) * sx - 0.5f;
+        int x0 = int(floor(fx));
+        float wx = fx - float(x0);
+        int cx0 = clamp(x0, 0, sw - 1);
+        int cx1 = clamp(x0 + 1, 0, sw - 1);
+        float top = src[cy0 * sw + cx0] * (1.0f - wx) + src[cy0 * sw + cx1] * wx;
+        float bot = src[cy1 * sw + cx0] * (1.0f - wx) + src[cy1 * sw + cx1] * wx;
+        dst[gid.y * p.dstW + gid.x] = top * (1.0f - wy) + bot * wy;
+    }
+
     // Rec. 709 luma plane — must match ImageBuffer.luminancePlane.
     kernel void luma_plane(device const float4* img [[buffer(0)]],
                            device float* out [[buffer(1)]],

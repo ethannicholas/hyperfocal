@@ -114,15 +114,15 @@ Windows residuals to close (each independently landable):
    **DMap** (shell default; 301 s vs pmax's 166 on the CLI sample
    stack): the CPU path spills (adaptive fp16 when fp32 won't fit),
    prefetches decode, warps into a reused canvas, and reports
-   `dmap phases (cpu)` buckets. Remaining walls: **energy ~89 s** —
-   the σ=10 `blurPlane` at full res per frame; a
-   downsample-blur-upsample energy field would be ~50× cheaper but is
-   a cross-engine algorithm change (CPU + MSL + WGSL + both GPU
-   orchestrators must move together or the ≥90 dB dmap parity gates
-   break, and the Metal side needs Mac verification) — **warp ~72 s**
-   (shared per-pixel floor with pmax), **spill write ~21 s +
-   render-src ~23 s** (fp16 convert + I/O). Regularize is ~4 s — not
-   a target. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
+   `dmap phases (cpu)` buckets. Remaining walls after the grid-energy
+   change (landed 2026-07-20: energy = box-downsample |Laplacian| by
+   `DMapFusion.energyGridFactor`, blur at σ/factor, bilinear-upsample —
+   CPU + MSL + WGSL + both GPU orchestrators moved together; Mac A/B
+   measured energy 3.66→0.33 s on a 3600×2400×15 stack, output 88 dB
+   vs the old field, all parity gates re-measured green — re-measure
+   the VM's end-to-end numbers): **warp ~72 s** (shared per-pixel
+   floor with pmax), **spill write ~21 s + render-src ~23 s** (fp16
+   convert + I/O). Regularize is ~4 s — not a target. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
    status (Mac, Fluorite stack): 1600 bound + 2000 cap verified

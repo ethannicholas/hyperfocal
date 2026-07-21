@@ -628,6 +628,37 @@ public final class WgpuEngine {
         bd_dst[gid.y * bd_p.dstW + gid.x] = acc / f32((x1 - x0) * (y1 - y0));
     }
 
+    struct PlaneUpParams { srcW: u32, srcH: u32, dstW: u32, dstH: u32 }
+
+    @group(0) @binding(0) var<storage, read> plu_src: array<f32>;
+    @group(0) @binding(1) var<storage, read_write> plu_dst: array<f32>;
+    @group(0) @binding(2) var<uniform> plu_p: PlaneUpParams;
+
+    // Bilinear plane upsample — must match Filters.resizePlaneBilinear
+    // (center-aligned sampling, clamp-to-edge, a*(1-w)+b*w expression order,
+    // NOT mix(): the CPU reference writes the two-product form).
+    @compute @workgroup_size(16, 16)
+    fn plane_upsample(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= plu_p.dstW || gid.y >= plu_p.dstH) { return; }
+        let sw = i32(plu_p.srcW);
+        let sh = i32(plu_p.srcH);
+        let sx = f32(plu_p.srcW) / f32(plu_p.dstW);
+        let sy = f32(plu_p.srcH) / f32(plu_p.dstH);
+        let fy = (f32(gid.y) + 0.5) * sy - 0.5;
+        let y0 = i32(floor(fy));
+        let wy = fy - f32(y0);
+        let cy0 = clamp(y0, 0, sh - 1);
+        let cy1 = clamp(y0 + 1, 0, sh - 1);
+        let fx = (f32(gid.x) + 0.5) * sx - 0.5;
+        let x0 = i32(floor(fx));
+        let wx = fx - f32(x0);
+        let cx0 = clamp(x0, 0, sw - 1);
+        let cx1 = clamp(x0 + 1, 0, sw - 1);
+        let top = plu_src[cy0 * sw + cx0] * (1.0 - wx) + plu_src[cy0 * sw + cx1] * wx;
+        let bot = plu_src[cy1 * sw + cx0] * (1.0 - wx) + plu_src[cy1 * sw + cx1] * wx;
+        plu_dst[gid.y * plu_p.dstW + gid.x] = top * (1.0 - wy) + bot * wy;
+    }
+
     struct Count1 { count: u32, pad0: u32, pad1: u32, pad2: u32 }
 
     @group(0) @binding(0) var<storage, read> lp_img: array<vec4f>;

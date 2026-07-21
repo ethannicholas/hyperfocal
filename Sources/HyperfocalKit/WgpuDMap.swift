@@ -45,6 +45,9 @@ public enum WgpuDMap {
         var factor: UInt32
         var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0
     }
+    struct PlaneUpParams {
+        var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32
+    }
     struct ConfidenceParams {
         var width: UInt32; var concW: UInt32; var concH: UInt32; var factor: UInt32
         var halfFloor: Float; var conc2: Float
@@ -84,18 +87,26 @@ public enum WgpuDMap {
         for name in ["warp_lanczos3", "lum_laplacian", "blur_h", "blur_v",
                      "argmax_update", "tent_accumulate", "normalize_out",
                      "progressive_preview", "plane_preview", "box_downsample",
-                     "luma_plane", "confidence_map", "weighted_median",
-                     "guided_apply_blend", "clamp_plane", "pyr_fill"] {
+                     "plane_upsample", "luma_plane", "confidence_map",
+                     "weighted_median", "guided_apply_blend", "clamp_plane",
+                     "pyr_fill"] {
             _ = try engine.pipeline(name)
         }
 
-        let blurWeights = Filters.gaussianKernel(sigma: options.sharpnessSigma)
+        // Energy blur runs on the energyGridFactor grid at σ/factor (see
+        // DMapFusion.energyGridFactor — cross-engine algorithm constant).
+        let egf = DMapFusion.energyGridFactor(sigma: options.sharpnessSigma)
+        let blurWeights = Filters.gaussianKernel(
+            sigma: options.sharpnessSigma / Float(egf))
         let blurRadius = blurWeights.count / 2
 
         var width = 0, height = 0, pixelCount = 0   // output canvas (may be cropped)
         var srcWidth = 0, srcHeight = 0             // source frame dimensions
         var rawBuf: WgpuEngine.Buffer!, warpedBuf: WgpuEngine.Buffer!
         var lapBuf: WgpuEngine.Buffer!, tmpBuf: WgpuEngine.Buffer!, energyBuf: WgpuEngine.Buffer!
+        var lapGridBuf: WgpuEngine.Buffer!, gridTmpBuf: WgpuEngine.Buffer!,
+            energyGridBuf: WgpuEngine.Buffer!
+        var egw = 0, egh = 0                        // energy grid dims (egf > 1)
         var bestEBuf: WgpuEngine.Buffer!, bestIdxBuf: WgpuEngine.Buffer!
         var previewBuf: WgpuEngine.Buffer!
         var pw = 0, ph = 0
@@ -169,6 +180,13 @@ public enum WgpuDMap {
                 lapBuf = try engine.makeBuffer(floats: pixelCount)
                 tmpBuf = try engine.makeBuffer(floats: pixelCount)
                 energyBuf = try engine.makeBuffer(floats: pixelCount)
+                if egf > 1 {
+                    egw = (width + egf - 1) / egf
+                    egh = (height + egf - 1) / egf
+                    lapGridBuf = try engine.makeBuffer(floats: egw * egh)
+                    gridTmpBuf = try engine.makeBuffer(floats: egw * egh)
+                    energyGridBuf = try engine.makeBuffer(floats: egw * egh)
+                }
                 bestEBuf = try engine.makeBuffer(floats: pixelCount)
                 bestIdxBuf = try engine.makeBuffer(floats: pixelCount)
                 let previewScale = min(1.0, 1200.0 / Double(max(width, height)))
@@ -252,12 +270,31 @@ public enum WgpuDMap {
             try batch.dispatch("lum_laplacian", buffers: [input, lapBuf],
                                uniforms: bytes(of: Dims2(w: UInt32(width), h: UInt32(height))),
                                gridW: width, gridH: height)
-            let blurParams = BlurParams(width: UInt32(width), height: UInt32(height),
+            // Energy field: blur on the grid then upsample (egf > 1), or the
+            // plain full-res blur (egf == 1) — same rule as the CPU path.
+            let (blurW, blurH) = egf > 1 ? (egw, egh) : (width, height)
+            let blurParams = BlurParams(width: UInt32(blurW), height: UInt32(blurH),
                                         radius: Int32(blurRadius))
-            try batch.dispatch("blur_h", buffers: [lapBuf, tmpBuf, blurWeightsBuf],
-                               uniforms: bytes(of: blurParams), gridW: width, gridH: height)
-            try batch.dispatch("blur_v", buffers: [tmpBuf, energyBuf, blurWeightsBuf],
-                               uniforms: bytes(of: blurParams), gridW: width, gridH: height)
+            if egf > 1 {
+                let lapDownParams = BoxDownParams(
+                    srcW: UInt32(width), srcH: UInt32(height),
+                    dstW: UInt32(egw), dstH: UInt32(egh), factor: UInt32(egf))
+                try batch.dispatch("box_downsample", buffers: [lapBuf, lapGridBuf],
+                                   uniforms: bytes(of: lapDownParams), gridW: egw, gridH: egh)
+                try batch.dispatch("blur_h", buffers: [lapGridBuf, gridTmpBuf, blurWeightsBuf],
+                                   uniforms: bytes(of: blurParams), gridW: egw, gridH: egh)
+                try batch.dispatch("blur_v", buffers: [gridTmpBuf, energyGridBuf, blurWeightsBuf],
+                                   uniforms: bytes(of: blurParams), gridW: egw, gridH: egh)
+                let upParams = PlaneUpParams(srcW: UInt32(egw), srcH: UInt32(egh),
+                                             dstW: UInt32(width), dstH: UInt32(height))
+                try batch.dispatch("plane_upsample", buffers: [energyGridBuf, energyBuf],
+                                   uniforms: bytes(of: upParams), gridW: width, gridH: height)
+            } else {
+                try batch.dispatch("blur_h", buffers: [lapBuf, tmpBuf, blurWeightsBuf],
+                                   uniforms: bytes(of: blurParams), gridW: width, gridH: height)
+                try batch.dispatch("blur_v", buffers: [tmpBuf, energyBuf, blurWeightsBuf],
+                                   uniforms: bytes(of: blurParams), gridW: width, gridH: height)
+            }
 
             // The kernel also records the winning frame's luminance — the
             // regularizer's all-in-focus guide estimate.

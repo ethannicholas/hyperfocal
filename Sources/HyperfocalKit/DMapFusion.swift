@@ -114,6 +114,18 @@ public enum DMapFusion {
     /// Downsample factor for retained per-frame sharpness planes.
     public static let sharpnessDownsample = 8
 
+    /// Grid factor for the per-frame energy blur: |Laplacian| is
+    /// box-reduced by this factor, blurred at σ/factor, and bilinearly
+    /// upsampled back to full res — ~16× less blur work, and faithful
+    /// because the σ=10 blur removes everything above the grid's Nyquist
+    /// anyway. Below σ=4 the grid would under-resolve the field the blur
+    /// still preserves, so small sigmas keep the full-res path (factor 1).
+    /// Cross-engine algorithm constant: the CPU, Metal, and WGSL paths
+    /// must apply the same rule or the ≥90 dB dmap parity gate breaks.
+    public static func energyGridFactor(sigma: Float) -> Int {
+        sigma >= 4 ? 4 : 1
+    }
+
     /// Light low-pass on the winner-luminance guide. The winning frame's
     /// luminance carries in-focus pixel texture, and the guided filter copies
     /// guide structure into depth wherever confidence dips — luminance
@@ -250,8 +262,8 @@ public enum DMapFusion {
                              upperBound: .init(repeating: 2))
                 : .one)
             let lap = Filters.laplacianAbs(lum, width: width, height: height)
-            var energy = Filters.blurPlane(lap, width: width, height: height,
-                                           sigma: options.sharpnessSigma)
+            var energy = Self.gridEnergy(lap, width: width, height: height,
+                                         sigma: options.sharpnessSigma)
             if gain != 1 {
                 energy.withUnsafeMutableBufferPointer { ep in
                     DispatchQueue.concurrentPerform(iterations: height) { y in
@@ -570,6 +582,25 @@ public enum DMapFusion {
                             log: ((String) -> Void)? = nil) -> ImageBuffer {
         // No throwing closure and no cancellation token: cannot actually throw.
         try! fuse(frameCount: frames.count, options: options, log: log) { frames[$0] }
+    }
+
+    /// The per-frame energy field: σ-blurred |Laplacian|, computed on the
+    /// energyGridFactor grid and bilinearly upsampled back to full res
+    /// (factor 1 = the plain full-res blur). The CPU reference for the
+    /// Metal/WGSL sequences — box_downsample → blur_h/v → plane_upsample.
+    static func gridEnergy(_ lap: [Float], width: Int, height: Int,
+                           sigma: Float) -> [Float] {
+        let factor = energyGridFactor(sigma: sigma)
+        guard factor > 1 else {
+            return Filters.blurPlane(lap, width: width, height: height, sigma: sigma)
+        }
+        let gw = (width + factor - 1) / factor
+        let gh = (height + factor - 1) / factor
+        let grid = boxDownsample(lap, width: width, height: height, factor: factor)
+        let blurred = Filters.blurPlane(grid, width: gw, height: gh,
+                                        sigma: sigma / Float(factor))
+        return Filters.resizePlaneBilinear(blurred, width: gw, height: gh,
+                                           toWidth: width, toHeight: height)
     }
 
     /// Box-average downsample of a single-channel plane (region sums stay

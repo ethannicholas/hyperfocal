@@ -1,5 +1,8 @@
 #if HYPERFOCAL_HAVE_WGPU
 import Foundation
+#if canImport(simd)
+import simd
+#endif
 
 /// Kernel-level CPU↔wgpu parity checks — the wgpu backend's equivalent of the
 /// Metal path's parity discipline (ROADMAP header: ≥ 90 dB). One case per
@@ -72,6 +75,7 @@ public enum WgpuParity {
     struct TentParams { var gain: SIMD4<Float>; var index: Float; var radius: Float; var count: UInt32; var pad: UInt32 = 0 }
     struct PlanePreviewParams { var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32; var scale: Float; var bias: Float; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct BoxDownParams { var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32; var factor: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
+    struct PlaneUpParams { var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32 }
     struct PreviewParams { var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32 }
     struct ConfidenceParams { var width: UInt32; var concW: UInt32; var concH: UInt32; var factor: UInt32; var halfFloor: Float; var conc2: Float; var count: UInt32; var pad: UInt32 = 0 }
     struct MedianParams { var width: UInt32; var height: UInt32; var radius: Int32; var step: Int32; var bins: UInt32; var consensusWindow: Int32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
@@ -263,6 +267,17 @@ public enum WgpuParity {
             try engine.run("luma_plane", buffers: [try c.buf(img), ol],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             c.report("luma_plane", cpuLuma, try c.read(ol, n))
+
+            // plane_upsample vs the CPU reference it must match exactly.
+            let small = c.rand(dw2 * dh2, scale: 5)
+            let cpuUp = Filters.resizePlaneBilinear(small, width: dw2, height: dh2,
+                                                    toWidth: w, toHeight: h)
+            let ou = try engine.makeBuffer(floats: n)
+            let up = PlaneUpParams(srcW: UInt32(dw2), srcH: UInt32(dh2),
+                                   dstW: UInt32(w), dstH: UInt32(h))
+            try engine.run("plane_upsample", buffers: [try c.buf(small), ou],
+                           uniforms: bytes(of: up), gridW: w, gridH: h)
+            c.report("plane_upsample", cpuUp, try c.read(ou, n))
         }
 
         // -- progressive_preview / normalize_out ------------------------------

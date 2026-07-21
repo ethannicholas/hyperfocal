@@ -14,10 +14,16 @@ import WinSDK   // GetProcessMemoryInfo for the peak-memory report
 // The CGImage-typed debug helpers (debug-align, debug-source) exist only where
 // Apple's imaging stack does; the rest of the CLI is portable.
 #if canImport(CoreGraphics)
-private let subcommandList: [ParsableCommand.Type] =
-    [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
-     DebugAlign.self, DebugChain.self,
-     DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self]
+private let subcommandList: [ParsableCommand.Type] = {
+    var list: [ParsableCommand.Type] =
+        [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
+         DebugAlign.self, DebugChain.self,
+         DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self]
+    #if HYPERFOCAL_HAVE_WGPU
+    list.append(DebugWgpu.self)  // wgpu A/B builds (off in-tree on Apple)
+    #endif
+    return list
+}()
 #else
 private let subcommandList: [ParsableCommand.Type] = {
     var list: [ParsableCommand.Type] =

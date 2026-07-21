@@ -1,5 +1,8 @@
 #if HYPERFOCAL_HAVE_WGPU
 import Foundation
+#if canImport(simd)
+import simd
+#endif
 import Dispatch
 
 /// wgpu port of `GPUPyramid` — the same streaming max-coefficient Laplacian

@@ -72,6 +72,13 @@ public enum GPUDMap {
         var factor: UInt32
     }
 
+    struct PlaneUpParams {
+        var srcW: UInt32
+        var srcH: UInt32
+        var dstW: UInt32
+        var dstH: UInt32
+    }
+
     public static func fuseWithDepth(source: StackSource,
                                      options: DMapFusion.Options = DMapFusion.Options(),
                                      log: ((String) -> Void)? = nil,
@@ -94,14 +101,21 @@ public enum GPUDMap {
         let planePreviewPipeline = try engine.pipeline("plane_preview")
         let boxDownPipeline = try engine.pipeline("box_downsample")
         let lumaPipeline = try engine.pipeline("luma_plane")
+        let upsamplePipeline = try engine.pipeline("plane_upsample")
 
-        let blurWeights = Filters.gaussianKernel(sigma: options.sharpnessSigma)
+        // Energy blur runs on the energyGridFactor grid at σ/factor (see
+        // DMapFusion.energyGridFactor — cross-engine algorithm constant).
+        let egf = DMapFusion.energyGridFactor(sigma: options.sharpnessSigma)
+        let blurWeights = Filters.gaussianKernel(
+            sigma: options.sharpnessSigma / Float(egf))
         let blurRadius = blurWeights.count / 2
 
         var width = 0, height = 0, pixelCount = 0   // output canvas (may be cropped)
         var srcWidth = 0, srcHeight = 0             // source frame dimensions
         var rawBuf: MTLBuffer!, warpedBuf: MTLBuffer!
         var lapBuf: MTLBuffer!, tmpBuf: MTLBuffer!, energyBuf: MTLBuffer!
+        var lapGridBuf: MTLBuffer!, gridTmpBuf: MTLBuffer!, energyGridBuf: MTLBuffer!
+        var egw = 0, egh = 0                        // energy grid dims (egf > 1)
         var bestEBuf: MTLBuffer!, bestIdxBuf: MTLBuffer!
         var previewBuf: MTLBuffer!
         var pw = 0, ph = 0
@@ -174,6 +188,13 @@ public enum GPUDMap {
                 lapBuf = try engine.makeBuffer(floats: pixelCount)
                 tmpBuf = try engine.makeBuffer(floats: pixelCount)
                 energyBuf = try engine.makeBuffer(floats: pixelCount)
+                if egf > 1 {
+                    egw = (width + egf - 1) / egf
+                    egh = (height + egf - 1) / egf
+                    lapGridBuf = try engine.makeBuffer(floats: egw * egh)
+                    gridTmpBuf = try engine.makeBuffer(floats: egw * egh)
+                    energyGridBuf = try engine.makeBuffer(floats: egw * egh)
+                }
                 bestEBuf = try engine.makeBuffer(floats: pixelCount)
                 bestIdxBuf = try engine.makeBuffer(floats: pixelCount)
                 memset(bestEBuf.contents(), 0, pixelCount * 4)
@@ -234,21 +255,43 @@ public enum GPUDMap {
             encoder.setBytes(&dims, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
             engine.dispatch2D(encoder, lapPipeline, width: width, height: height)
 
-            var blurParams = BlurParams(width: UInt32(width), height: UInt32(height),
+            // Energy field: blur on the grid then upsample (egf > 1), or the
+            // plain full-res blur (egf == 1) — same rule as the CPU path.
+            let (blurW, blurH): (Int, Int) = egf > 1 ? (egw, egh) : (width, height)
+            var blurParams = BlurParams(width: UInt32(blurW), height: UInt32(blurH),
                                         radius: Int32(blurRadius))
-            blurWeights.withUnsafeBufferPointer { wp in
+            if egf > 1 {
+                var lapDownParams = BoxDownParams(
+                    srcW: UInt32(width), srcH: UInt32(height),
+                    dstW: UInt32(egw), dstH: UInt32(egh), factor: UInt32(egf))
                 encoder.setBuffer(lapBuf, offset: 0, index: 0)
-                encoder.setBuffer(tmpBuf, offset: 0, index: 1)
+                encoder.setBuffer(lapGridBuf, offset: 0, index: 1)
+                encoder.setBytes(&lapDownParams, length: MemoryLayout<BoxDownParams>.size, index: 2)
+                engine.dispatch2D(encoder, boxDownPipeline, width: egw, height: egh)
+            }
+            let (blurSrc, blurTmp, blurDst) = egf > 1
+                ? (lapGridBuf!, gridTmpBuf!, energyGridBuf!)
+                : (lapBuf!, tmpBuf!, energyBuf!)
+            blurWeights.withUnsafeBufferPointer { wp in
+                encoder.setBuffer(blurSrc, offset: 0, index: 0)
+                encoder.setBuffer(blurTmp, offset: 0, index: 1)
                 encoder.setBytes(wp.baseAddress!, length: wp.count * 4, index: 2)
                 encoder.setBytes(&blurParams, length: MemoryLayout<BlurParams>.size, index: 3)
-                engine.dispatch2D(encoder, blurHPipeline, width: width, height: height)
+                engine.dispatch2D(encoder, blurHPipeline, width: blurW, height: blurH)
 
-                encoder.setBuffer(tmpBuf, offset: 0, index: 0)
+                encoder.setBuffer(blurTmp, offset: 0, index: 0)
+                encoder.setBuffer(blurDst, offset: 0, index: 1)
+                encoder.setBytes(wp.baseAddress!, length: wp.count * 4, index: 2)
+                encoder.setBytes(&blurParams, length: MemoryLayout<BlurParams>.size, index: 3)
+                engine.dispatch2D(encoder, blurVPipeline, width: blurW, height: blurH)
+            }
+            if egf > 1 {
+                var upParams = PlaneUpParams(srcW: UInt32(egw), srcH: UInt32(egh),
+                                             dstW: UInt32(width), dstH: UInt32(height))
+                encoder.setBuffer(energyGridBuf, offset: 0, index: 0)
                 encoder.setBuffer(energyBuf, offset: 0, index: 1)
-                encoder.setBytes(wp.baseAddress!, length: wp.count * 4, index: 2)
-                encoder.setBytes(&blurParams, length: MemoryLayout<BlurParams>.size, index: 3)
-                engine.dispatch2D(encoder, blurVPipeline, width: width, height: height)
-
+                encoder.setBytes(&upParams, length: MemoryLayout<PlaneUpParams>.size, index: 2)
+                engine.dispatch2D(encoder, upsamplePipeline, width: width, height: height)
             }
 
             var frameIdx = Float(fi)
