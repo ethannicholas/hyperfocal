@@ -325,17 +325,14 @@ public enum DMapFusion {
                 }
             }
             tSelect += now() - t0
-            // Spill the aligned frame for pass 2. A failed write just
-            // degrades the render back to re-decoding — never fails the fuse.
+            // Spill the aligned frame for pass 2 — staged synchronously, the
+            // I/O overlaps the next frame's compute (write errors surface at
+            // the drain before pass 2 and degrade to re-decoding). The
+            // bucket therefore measures staging + backpressure, not disk.
             if let s = spill {
                 t0 = now()
-                do {
-                    try img.pixels.withUnsafeBufferPointer {
-                        try s.write(frame: fi, from: $0.baseAddress!)
-                    }
-                } catch {
-                    log?("frame spill write failed (\(error)) — render pass will re-decode")
-                    spill = nil
+                img.pixels.withUnsafeBufferPointer {
+                    s.writeAsync(frame: fi, from: $0.baseAddress!)
                 }
                 tSpill += now() - t0
             }
@@ -391,6 +388,16 @@ public enum DMapFusion {
             Float($0) > depthLo - radius && Float($0) < depthHi + radius
         }
         let renderTotal = renderIndices.count
+        // Pass 1's writes were queued; every slot must be on disk (and
+        // error-free) before pass 2 streams them back.
+        if let s = spill {
+            do {
+                try s.drainWrites()
+            } catch {
+                log?("frame spill write failed (\(error)) — render pass will re-decode")
+                spill = nil
+            }
+        }
         // Frames come back from the spill when pass 1 captured one;
         // otherwise decode again (prefetched) and re-warp.
         var renderPrefetcher: FramePrefetcher? = nil

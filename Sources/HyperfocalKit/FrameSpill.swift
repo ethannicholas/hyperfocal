@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -37,6 +38,15 @@ public final class FrameSpill {
     private let halfPrecision: Bool
     private var scratch: [UInt16] = []
     private let scratchLock = NSLock()
+
+    // HYPERFOCAL_SPILL_DEBUG=1: fp16-convert vs raw-I/O time split, printed
+    // at teardown — the measurement tap for spill performance work.
+    private static let debugTiming =
+        ProcessInfo.processInfo.environment["HYPERFOCAL_SPILL_DEBUG"] == "1"
+    private var tConvert = 0.0, tIO = 0.0
+    private static func now() -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds) / 1e9
+    }
 
     /// Free space the spill must leave untouched on the temp volume.
     private static let margin: Int64 = 2 << 30
@@ -147,6 +157,12 @@ public final class FrameSpill {
     }
 
     deinit {
+        writeQueue.sync {}   // never close the handle under an in-flight write
+        if FrameSpill.debugTiming {
+            FileHandle.standardError.write(Data(String(
+                format: "spill timing: convert %.2fs, io %.2fs (fp16 %d)\n",
+                tConvert, tIO, halfPrecision ? 1 : 0).utf8))
+        }
         #if os(Windows)
         CloseHandle(handle)
         #else
@@ -228,7 +244,10 @@ public final class FrameSpill {
     // buffer (locked — the GPU paths may spill from a worker thread).
     func write(frame: Int, from ptr: UnsafeRawPointer) throws {
         guard halfPrecision else {
-            return try writeRaw(frame: frame, from: ptr, byteCount: frameBytes)
+            let t0 = FrameSpill.now()
+            try writeRaw(frame: frame, from: ptr, byteCount: frameBytes)
+            tIO += FrameSpill.now() - t0
+            return
         }
         let count = frameBytes / 4
         let src = ptr.assumingMemoryBound(to: Float.self)
@@ -236,19 +255,87 @@ public final class FrameSpill {
         defer { scratchLock.unlock() }
         if scratch.count < count { scratch = [UInt16](repeating: 0, count: count) }
         try scratch.withUnsafeMutableBufferPointer { sp in
+            var t0 = FrameSpill.now()
             for i in 0..<count {
                 // Clamp: Float16 traps above 65504; pixels live in [0,1] but
                 // decode excursions must not crash the spill.
                 sp[i] = Float16(min(max(src[i], -65504), 65504)).bitPattern
             }
+            tConvert += FrameSpill.now() - t0
+            t0 = FrameSpill.now()
             try writeRaw(frame: frame, from: UnsafeRawPointer(sp.baseAddress!),
                          byteCount: frameBytes / 2)
+            tIO += FrameSpill.now() - t0
         }
+    }
+
+    // MARK: - Overlapped writes
+    // The spill's cost is raw I/O (measured: fp16 convert 2.7 s vs I/O 32 s
+    // for an 82-frame stack on the reference VM), and pass 1's writes were
+    // serial with compute. `writeAsync` stages the payload synchronously
+    // (fp16 convert or plain copy — tens of ms) and performs the positional
+    // write on a background queue; up to two frames stage at once, then the
+    // caller blocks. Errors surface at `drainWrites` — callers must call it
+    // before the first read.
+    private let writeQueue = DispatchQueue(label: "hyperfocal.spill.write")
+    private let stagingFree = DispatchSemaphore(value: 2)
+    private var asyncError: Error?
+
+    func writeAsync(frame: Int, from ptr: UnsafeRawPointer) {
+        stagingFree.wait()
+        let t0 = FrameSpill.now()
+        let payloadBytes = halfPrecision ? frameBytes / 2 : frameBytes
+        var staged = [UInt8](repeating: 0, count: payloadBytes)
+        staged.withUnsafeMutableBytes { sb in
+            if halfPrecision {
+                let count = frameBytes / 4
+                let src = ptr.assumingMemoryBound(to: Float.self)
+                let dst = sb.baseAddress!.assumingMemoryBound(to: UInt16.self)
+                for i in 0..<count {
+                    dst[i] = Float16(min(max(src[i], -65504), 65504)).bitPattern
+                }
+            } else {
+                sb.baseAddress!.copyMemory(from: ptr, byteCount: frameBytes)
+            }
+        }
+        scratchLock.lock()
+        tConvert += FrameSpill.now() - t0
+        scratchLock.unlock()
+        writeQueue.async { [self] in
+            let t1 = FrameSpill.now()
+            do {
+                try staged.withUnsafeBytes {
+                    try writeRaw(frame: frame, from: $0.baseAddress!,
+                                 byteCount: payloadBytes)
+                }
+            } catch {
+                scratchLock.lock()
+                if asyncError == nil { asyncError = error }
+                scratchLock.unlock()
+            }
+            scratchLock.lock()
+            tIO += FrameSpill.now() - t1
+            scratchLock.unlock()
+            stagingFree.signal()
+        }
+    }
+
+    /// Blocks until every queued write has landed; throws the first write
+    /// error (after which the file contents are unreliable — callers degrade
+    /// to re-decoding).
+    func drainWrites() throws {
+        writeQueue.sync {}
+        scratchLock.lock()
+        defer { scratchLock.unlock() }
+        if let e = asyncError { throw e }
     }
 
     func read(frame: Int, into ptr: UnsafeMutableRawPointer) throws {
         guard halfPrecision else {
-            return try readRaw(frame: frame, into: ptr, byteCount: frameBytes)
+            let t0 = FrameSpill.now()
+            try readRaw(frame: frame, into: ptr, byteCount: frameBytes)
+            tIO += FrameSpill.now() - t0
+            return
         }
         let count = frameBytes / 4
         let dst = ptr.assumingMemoryBound(to: Float.self)
@@ -256,10 +343,14 @@ public final class FrameSpill {
         defer { scratchLock.unlock() }
         if scratch.count < count { scratch = [UInt16](repeating: 0, count: count) }
         try scratch.withUnsafeMutableBufferPointer { sp in
+            var t0 = FrameSpill.now()
             try readRaw(frame: frame, into: sp.baseAddress!, byteCount: frameBytes / 2)
+            tIO += FrameSpill.now() - t0
+            t0 = FrameSpill.now()
             for i in 0..<count {
                 dst[i] = Float(Float16(bitPattern: sp[i]))
             }
+            tConvert += FrameSpill.now() - t0
         }
     }
 }
