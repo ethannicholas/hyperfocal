@@ -516,18 +516,32 @@ public enum Aligner {
     /// 49.62 at 2500) — and 1000 also passed (50.17), so 1200 is landed
     /// with a tested step of margin below it.
     /// 45 MP re-verify (2026-07-20, macOS A/B, 60-frame Fluorite NEF
-    /// stack) covered the **1600** bound + 2000 cap: quality-neutral vs
+    /// stack): the **1600** bound + 2000 cap passed quality-neutral vs
     /// the 2500/uncapped baseline — crop sizes within a few px,
     /// new↔Vision 33.3 dB vs baseline↔Vision 34.1 dB (cross-transform
     /// comparisons bottom out near there), 8× amplified diff black in the
     /// background with only texture-grain resampling differences, and 1:1
-    /// silhouette crops indistinguishable. The 1600→1200 step has NOT yet
-    /// been A/B'd at 45 MP — rerun that check before trusting 1200 there.
+    /// silhouette crops indistinguishable. **1200 FAILED that bar at
+    /// 45 MP** (same day, same stack, bound isolated on one binary via
+    /// the env override): 1600↔1200 only 30.4 dB — ~3.5 dB beyond the
+    /// same-family noise floor — the common-coverage crop grew ~10 px
+    /// (under-estimated motion), and the amplified diff shows
+    /// edge-following seams plus shifted background bokeh (misalignment
+    /// signatures, not resampling grain). Hence the scale floor below:
+    /// the bound is 1200 up to a 5× downscale, then grows with the
+    /// frame (45 MP → 1651, at/above the validated 1600 scale) — 11 MP
+    /// and smaller stacks keep 1200's measured detect cost exactly.
+    /// The floor re-validated on the same stack: fix↔1600 35.2 dB (the
+    /// tightest same-family agreement measured), fix↔Vision 31.8 dB.
     /// HYPERFOCAL_REGISTER_MAXSIDE overrides for ablation (same pattern as
     /// the HYPERFOCAL_SIFT_* switches).
-    static let openCVRegisterMaxSide =
-        ProcessInfo.processInfo.environment["HYPERFOCAL_REGISTER_MAXSIDE"]
-            .flatMap(Int.init) ?? 1200
+    static func openCVRegisterMaxSide(longest: Int) -> Int {
+        if let override = ProcessInfo.processInfo
+            .environment["HYPERFOCAL_REGISTER_MAXSIDE"].flatMap(Int.init) {
+            return override
+        }
+        return max(1200, longest / 5)
+    }
 
     /// Area-average downscale of an 8-bit gray plane by `scale` (0<scale<1) —
     /// enough to feed SIFT; not the fusion sampler.
@@ -605,8 +619,9 @@ public enum Aligner {
         precondition(moving.width == fixed.width && moving.height == fixed.height,
                      "OpenCV registration expects same-sized gray frames")
         let longest = max(moving.width, moving.height)
-        let scale: Float = longest > openCVRegisterMaxSide
-            ? Float(openCVRegisterMaxSide) / Float(longest) : 1
+        let maxSide = openCVRegisterMaxSide(longest: longest)
+        let scale: Float = longest > maxSide
+            ? Float(maxSide) / Float(longest) : 1
         let sm = scale < 1 ? boxDownscale(moving, scale: scale) : moving
         let sf = scale < 1 ? boxDownscale(fixed, scale: scale) : fixed
 
@@ -701,8 +716,9 @@ public enum Aligner {
             // macOS A/B path validated; full-res SIFT on 45 MP frames needs
             // ~7.5 GB and often finds no model.
             let longest = max(gray.width, gray.height)
-            scale = longest > openCVRegisterMaxSide
-                ? Float(openCVRegisterMaxSide) / Float(longest) : 1
+            let maxSide = openCVRegisterMaxSide(longest: longest)
+            scale = longest > maxSide
+                ? Float(maxSide) / Float(longest) : 1
             let small = scale < 1 ? boxDownscale(gray, scale: scale) : gray
             let h = small.pixels.withUnsafeBufferPointer {
                 hf_sift_detect(CInt(small.width), CInt(small.height), $0.baseAddress)

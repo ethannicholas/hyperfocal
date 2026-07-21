@@ -126,8 +126,13 @@ Windows residuals to close (each independently landable):
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
    status (Mac, Fluorite stack): 1600 bound + 2000 cap verified
-   quality-neutral 2026-07-20; **the 1600→1200 step is not yet A/B'd at
-   45 MP** (see Aligner.openCVRegisterMaxSide's comment). Sampling
+   quality-neutral 2026-07-20; **1200 FAILED the same bar at 45 MP**
+   (1600↔1200 only 30.4 dB bound-isolated, crop grew, diff shows
+   misalignment signatures), so the bound is now a scale floor —
+   max(1200, longest/5), keeping 1200's detect cost for ≤6000 px
+   frames and restoring the validated scale at 45 MP (re-validated
+   35.2 dB vs 1600; details in Aligner.openCVRegisterMaxSide's
+   comment). Sampling
    profilers cannot run in the dev VM (hypervisor doesn't virtualize
    the profiling interrupt); on real Windows hardware, wpr + WPA work
    with `swift build -Xswiftc -debug-info-format=codeview -Xlinker
