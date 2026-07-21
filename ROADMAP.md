@@ -289,20 +289,30 @@ reviewers stop discovering them by surprise):
 
 ## Engine performance
 
-### Metal GPUDMap: zero-copy frame upload (Mac)
+### Metal GPUDMap: zero-copy frame upload (Mac) — needs storage refactor
 
-At 45 MP the Metal dmap's `warp` bucket (25–49 s across runs on the
-60-frame Fluorite stack) is dominated by the 727 MB/frame
-`copyMemory` into `rawBuf`, not the warp kernel — ~44 GB of pure
-memcpy per fuse on unified memory that shouldn't need copying at all.
-Candidate: `makeBuffer(bytesNoCopy:)` over the decoded frame's own
-storage. The catch is its page-alignment contract (base AND length)
-— `[Float]` array storage of this size is page-aligned in practice
-but the length isn't page-multiple, so this likely needs ImageBuffer
-to allocate its pixel storage page-rounded (or a decode-into-MTLBuffer
-path). Do it measured: buckets before/after, output must stay
-byte-identical, and CPU↔GPU parity ≥ 90 dB. Mac-only benefit (wgpu
-uploads go through `wgpuQueueWriteBuffer` — different mechanics).
+At 45 MP the Metal dmap's `warp` bucket is 25–49 s across runs on the
+60-frame Fluorite stack. Two findings from the 2026-07-21 attempt
+(implemented, measured, reverted):
+
+- `makeBuffer(bytesNoCopy:)` over `ImageBuffer.pixels` is structurally
+  impossible: a Swift `[Float]`'s elements live at offset **32** past
+  the storage object's base (verified empirically at every size — the
+  ContiguousArrayStorage header), so the base is never page-aligned
+  and `malloc_size` on the interior pointer is 0. Zero-copy requires
+  ImageBuffer to own page-aligned raw storage instead of `[Float]` —
+  a cross-cutting refactor of the engine's central type (or a
+  decode-into-MTLBuffer path on the GPU route only).
+- The bucket is NOT mostly the memcpy: 727 MB/frame at memory speed is
+  ~1–2 s per fuse, yet the bucket swings 25–49 s between identical-code
+  runs on the (VM-loaded, memory-pressured) dev Mac — it's dominated by
+  system-level pressure servicing the 4–5 GB working set. Re-measure on
+  quiet hardware before investing in the refactor; the honest expected
+  win is bounded by whatever a quiet run shows above ~2 s.
+
+Do it measured if at all: buckets before/after, output byte-identical,
+CPU↔GPU parity ≥ 90 dB. Mac-only benefit (wgpu uploads go through
+`wgpuQueueWriteBuffer` — different mechanics).
 
 ### wgpu compute backend (plan Phase 4, in progress)
 
