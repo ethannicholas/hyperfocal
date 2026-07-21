@@ -289,7 +289,21 @@ reviewers stop discovering them by surprise):
 
 ## Engine performance
 
-### Metal GPUDMap: zero-copy frame upload (Mac) — needs storage refactor
+### Metal GPUDMap: zero-copy frame upload (Mac) — blocked on toolchain
+
+The ImageBuffer storage refactor (PixelStorage: page-aligned CoW
+storage satisfying the bytesNoCopy contract) was built 2026-07-21 —
+whole tree compiled, outputs bit-identical, bench flat — and REVERTED:
+it awakens a Swift 6.2.3/Xcode 26 arm64 -O miscompile *class* where
+throwing functions touching the wrapper-bearing ImageBuffer return
+phantom errors on normal paths (two functions confirmed; ANY wrapper
+struct triggers it, even one wrapping [Float]). Full diagnosis,
+3-minute repro, and the preserved PixelStorage source:
+`Docs/research/2026-07-21-pixelstorage-toolchain-bug.md`. Retried on
+Swift 6.3.3 (Xcode 26.5) same day: NOT fixed, and the guilty-function
+set moves between compiler versions — next step is UB-hunting
+(exclusivity-checked -O build, TSan, UncheckedSendable audit) before
+blaming the toolchain; see the doc's updated path-forward.
 
 At 45 MP the Metal dmap's `warp` bucket is 25–49 s across runs on the
 60-frame Fluorite stack. Two findings from the 2026-07-21 attempt
