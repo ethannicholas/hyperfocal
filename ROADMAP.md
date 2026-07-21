@@ -141,6 +141,27 @@ Windows residuals to close (each independently landable):
      HYPERFOCAL_SPILL_FP16=1 (landed) forces the degraded tier on
      tiny stacks for controlled A/Bs (measures ~79.5 dB vs no-spill).
    - **energy 16 s** (post-grid-energy), select/regularize/render ~7 s.
+   **45 MP RAW reference** (the real workload: `~/Desktop/Fluorite DNG`,
+   10 × 45 MP, dev VM, 2026-07-21): **dmap 295 s** end to end after the
+   two changes that stack measured out — (a) registration gray now
+   decodes RAW at LibRaw half-size (124 s → 30 s registration;
+   old-vs-new outputs 46.61 dB over the aligned intersection, canvas
+   within 2 px, zero rejects — validated on the very stack that failed
+   flat-1200), and (b) the spill margin is proportional
+   (max(2 GB, spill/2)): the flat 2 GB margin let a 7.3 GB fp32 spill
+   drive the volume to 97% full where write latency collapses — 2124 s
+   vs 469 s forced-fp16, for outputs fp16 matches at **95.9 dB on real
+   45 MP content** (far better than the 79.5 dB synth
+   characterization). Remaining 45 MP walls, in order: warp ~86 s
+   (memory-pressure-inflated: ~2× the bench rate; 4.9 GB peak on
+   8 GB), spill io ~48 s + render-src ~33 s (fp16), energy ~28 s,
+   decode-blocked ~44 s (LibRaw full demosaic ×1 for fusion —
+   prefetch can't fully hide ~11 s/frame on 2 cores), registration
+   30 s. Frames-at-once memory (not time) is the likelier next lever
+   at this size. Note the byte-reduction dead-end verdict below was
+   measured on the 11 MP JPEG stack; at 45 MP the io term is 3× larger
+   and fp16 is auto-selected — re-evaluate `spill-rgb` there if spill
+   io stays a top bucket on real hardware.
    `compare` now handles two differently-cropped outputs of the same
    scene (Metrics.psnrIntersection) — use it for registration A/Bs.
    Ablation taps: HYPERFOCAL_SIFT_NFEATURES / HYPERFOCAL_SIFT_CONTRAST
