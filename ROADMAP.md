@@ -118,12 +118,15 @@ Windows residuals to close (each independently landable):
    `dmap phases (cpu)` buckets. The grid-energy change (energy =
    box-downsample |Laplacian| by `DMapFusion.energyGridFactor`, blur at
    σ/factor, bilinear-upsample — CPU + MSL + WGSL + both GPU
-   orchestrators moved together) measured energy 88.6→37.2 s on the VM;
-   all gates green there too (dmap parity 117.2 dB). Remaining walls:
-   **warp ~72-87 s** (shared per-pixel floor with pmax), **spill write
-   ~22 s + render-src ~29 s** (fp16 convert + I/O), energy's residual
-   37 s (the full-res box-down + upsample passes). Regularize is ~4 s —
-   not a target. pmax same day: 181 s total (fusion 95 s). Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
+   orchestrators moved together) plus async spill writes put dmap at
+   **196 s** on a quiet run (energy ~16 s, spill staging ~6 s with the
+   ~41 s of I/O overlapped under compute — HYPERFOCAL_SPILL_DEBUG=1
+   splits convert vs I/O and showed the fp16 convert is free).
+   Remaining walls: **warp ~65-71 s** (shared per-pixel floor with
+   pmax; the last big rock), **render-src ~17 s** (read I/O with
+   nothing to hide behind — render is ~2 s), energy ~16 s, and
+   registration's ~72 s (detect ~40). Regularize is ~3 s — not a
+   target. pmax same day: 181 s total (fusion 95 s). Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
    status (Mac, Fluorite stack): 1600 bound + 2000 cap verified
