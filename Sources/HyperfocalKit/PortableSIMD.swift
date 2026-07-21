@@ -26,6 +26,33 @@ import simd
 //   cold code; per-pixel loops must use pointwiseMin/pointwiseMax
 //   directly (see Warp.applyLanczos3).
 
+// Concrete SIMD4<Float> min/max for per-pixel loops, all platforms. On this
+// Mac toolchain (Swift 6.2, -O) the stdlib's GENERIC pointwiseMin/Max leaves
+// its guts witness-dispatched even in release — `FloatingPoint.maximum` and
+// `SIMDStorage.subscript` through witness tables, measured 33% of the warp's
+// samples (Instruments, 2026-07-21) — while Apple's `simd` module functions
+// are concrete and lower to single vector instructions. Off-Apple the
+// generic specializes fine (their 41 ns/px split was measured WITH
+// pointwiseMin), so the shim keeps it. Concrete + @inlinable means it
+// inlines cross-file even in per-file debug builds (the header contract).
+@inlinable
+public func hfMin(_ a: SIMD4<Float>, _ b: SIMD4<Float>) -> SIMD4<Float> {
+    #if canImport(simd)
+    return simd.simd_min(a, b)
+    #else
+    return pointwiseMin(a, b)
+    #endif
+}
+
+@inlinable
+public func hfMax(_ a: SIMD4<Float>, _ b: SIMD4<Float>) -> SIMD4<Float> {
+    #if canImport(simd)
+    return simd.simd_max(a, b)
+    #else
+    return pointwiseMax(a, b)
+    #endif
+}
+
 /// A 3×3 `Float` matrix matching `simd_float3x3`'s semantics for the
 /// operations the engine uses: `init(rows:)` builds the matrix whose i-th row
 /// is `rows[i]`, `M * v` is the row·vector product, `A * B` is the standard

@@ -123,6 +123,13 @@ Windows residuals to close (each independently landable):
      inits are unspecialized generics, ~250 ns/call), taps ~7,
      homography/divides/clamp/store ~19. Dead ends recorded in
      WarpBench.swift. Don't expect more here without changing outputs.
+     Mac Instruments finding (2026-07-21, transfers if the Windows
+     toolchain shows the same): the stdlib's GENERIC pointwiseMin/Max
+     stayed witness-dispatched at -O — 33% of warp samples — fixed
+     bit-identically with concrete hfMin/hfMax (PortableSIMD),
+     13.0 → 8.2 ns/px on the Mac bench. Re-run `debug-bench warp` on
+     the VM: if pointwiseMin was witness-bound there too, the 41 ns/px
+     floor just moved.
    - **dmap spill round-trip**: io 41.6 s overlapped under compute
      (fp16, convert free) + render-src 18.3 s reading it back.
      **Byte-reduction is a measured dead end on this VM** (2026-07-21):
@@ -281,6 +288,21 @@ reviewers stop discovering them by surprise):
   native queueSummaryPresenter styling differs.
 
 ## Engine performance
+
+### Metal GPUDMap: zero-copy frame upload (Mac)
+
+At 45 MP the Metal dmap's `warp` bucket (25–49 s across runs on the
+60-frame Fluorite stack) is dominated by the 727 MB/frame
+`copyMemory` into `rawBuf`, not the warp kernel — ~44 GB of pure
+memcpy per fuse on unified memory that shouldn't need copying at all.
+Candidate: `makeBuffer(bytesNoCopy:)` over the decoded frame's own
+storage. The catch is its page-alignment contract (base AND length)
+— `[Float]` array storage of this size is page-aligned in practice
+but the length isn't page-multiple, so this likely needs ImageBuffer
+to allocate its pixel storage page-rounded (or a decode-into-MTLBuffer
+path). Do it measured: buckets before/after, output must stay
+byte-identical, and CPU↔GPU parity ≥ 90 dB. Mac-only benefit (wgpu
+uploads go through `wgpuQueueWriteBuffer` — different mechanics).
 
 ### wgpu compute backend (plan Phase 4, in progress)
 

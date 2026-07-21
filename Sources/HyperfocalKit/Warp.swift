@@ -62,7 +62,13 @@ public enum Warp {
 
     @inline(__always)
     static func lanczos3Fast(_ x: Float, _ table: UnsafePointer<Float>) -> Float {
-        let ax = min(abs(x) * (Float(lanczos3TableSize) / 3), Float(lanczos3TableSize))
+        // Bit-mask abs: generic abs() dispatched through a Numeric.magnitude
+        // witness (6% of warp samples) and even the concrete .magnitude
+        // getter stayed an outlined call at -O on the Mac toolchain. The
+        // mask is two integer ops, inlined unconditionally, and exact for
+        // every input including -0 and NaN.
+        let ax = min(Float(bitPattern: x.bitPattern & 0x7FFF_FFFF)
+                     * (Float(lanczos3TableSize) / 3), Float(lanczos3TableSize))
         let i = Int(ax)
         let f = ax - Float(i)
         return table[i] + (table[i + 1] - table[i]) * f
@@ -145,13 +151,14 @@ public enum Warp {
                             let b = sraw.loadUnaligned(fromByteOffset: ia + 16, as: SIMD4<Float>.self)
                             let c = sraw.loadUnaligned(fromByteOffset: ic, as: SIMD4<Float>.self)
                             let d = sraw.loadUnaligned(fromByteOffset: ic + 16, as: SIMD4<Float>.self)
-                            // pointwiseMin/Max, never the simd_* shims: a
-                            // cross-file generic call here — even @inlinable —
-                            // doesn't specialize in per-file debug builds and
-                            // measured 1089 vs 35 ns/px (see PortableSIMD.swift).
-                            let lo = pointwiseMin(pointwiseMin(a, b), pointwiseMin(c, d))
-                            let hi = pointwiseMax(pointwiseMax(a, b), pointwiseMax(c, d))
-                            sample = pointwiseMin(pointwiseMax(sample, lo), hi)
+                            // hfMin/hfMax (concrete, PortableSIMD): the generic
+                            // simd_* shims don't specialize cross-file (1089 vs
+                            // 35 ns/px), and on the Mac toolchain even the
+                            // stdlib's generic pointwiseMin/Max stayed
+                            // witness-dispatched at -O — 33% of warp samples.
+                            let lo = hfMin(hfMin(a, b), hfMin(c, d))
+                            let hi = hfMax(hfMax(a, b), hfMax(c, d))
+                            sample = hfMin(hfMax(sample, lo), hi)
                         } else {
                             for ky in 0..<6 {
                                 let ty = min(max(y0 - 2 + ky, 0), sh - 1)
@@ -177,9 +184,9 @@ public enum Warp {
                             let b = SIMD4<Float>(s[ib], s[ib + 1], s[ib + 2], s[ib + 3])
                             let c = SIMD4<Float>(s[ic], s[ic + 1], s[ic + 2], s[ic + 3])
                             let d = SIMD4<Float>(s[id], s[id + 1], s[id + 2], s[id + 3])
-                            let lo = pointwiseMin(pointwiseMin(a, b), pointwiseMin(c, d))
-                            let hi = pointwiseMax(pointwiseMax(a, b), pointwiseMax(c, d))
-                            sample = pointwiseMin(pointwiseMax(sample, lo), hi)
+                            let lo = hfMin(hfMin(a, b), hfMin(c, d))
+                            let hi = hfMax(hfMax(a, b), hfMax(c, d))
+                            sample = hfMin(hfMax(sample, lo), hi)
                         }
                         let inside = sx >= -0.5 && sx <= Float(sw) - 0.5
                             && sy >= -0.5 && sy <= Float(sh) - 0.5

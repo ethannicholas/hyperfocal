@@ -1014,14 +1014,22 @@ public enum DMapFusion {
                                 var total: Float = 0
                                 var dy = -radius
                                 while dy <= radius {
-                                    let yy = min(max(y + dy, 0), height - 1)
+                                    // Ternary clamps: Swift.min/max(Int,_)
+                                    // stay outlined specialized calls per tap
+                                    // at -O on the Mac toolchain (profiled
+                                    // 2026-07-21); ternaries compile to csel.
+                                    let y0 = y + dy
+                                    let yy = y0 < 0 ? 0 : (y0 >= height ? height - 1 : y0)
                                     var dx = -radius
                                     while dx <= radius {
-                                        let xx = min(max(x + dx, 0), width - 1)
+                                        let x0 = x + dx
+                                        let xx = x0 < 0 ? 0 : (x0 >= width ? width - 1 : x0)
                                         let j = yy * width + xx
                                         let w = wp[j]
                                         if w > 1e-3 {
-                                            hist[min(max(Int(vp[j] + 0.5), 0), bins - 1)] += w
+                                            let b0 = Int(vp[j] + 0.5)
+                                            let b = b0 < 0 ? 0 : (b0 >= bins ? bins - 1 : b0)
+                                            hist[b] += w
                                             total += w
                                         }
                                         dx += step

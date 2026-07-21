@@ -741,7 +741,10 @@ public final class RetouchSession: ObservableObject {
                             var out = dstV[pi] * (1 - alpha) + sv * alpha
                             out.w = 1
                             dstV[pi] = out
-                            let scaled = pointwiseMin(pointwiseMax(out, .zero), .one)
+                            // hfMin/hfMax: the stdlib generic stays witness-
+                            // dispatched at -O on the Mac toolchain (see
+                            // PortableSIMD's contract).
+                            let scaled = hfMin(hfMax(out, .zero), .one)
                                 * 255 + SIMD4<Float>(repeating: 0.5)
                             bytesV[pi] = SIMD4<UInt8>(scaled)
                             if paintsDepth {
