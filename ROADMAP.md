@@ -304,49 +304,20 @@ File-level: pmax 97.6/102.4 dB CPU↔GPU, dmap 121.4 dB (depth 105.7);
 ci-gate needed no recalibration — GPU-path ground-truth PSNR matches
 the CPU baselines to two decimals (39.11 dmap / 38.66 pmax). Remaining:
 
-1. Decide packaging: wgpu-native ships as a prebuilt DLL/so — vendor per
-   platform, or fetch in CI like Qt/vcpkg (deployment story joins the
-   CLI-DLL residual above).
+1. Packaging (decided 2026-07-21): fetch the pinned wgpu-native release
+   at build/CI time, verified by sha256 — the aqt/vcpkg pattern the
+   project already uses; no binaries in the repo. Implement the fetch
+   script + CI wiring. While in there, evaluate statically linking
+   `libwgpu_native.a` (ships in the same release archives) for the CLI
+   and shell — it would remove wgpu from the runtime-DLL deployment
+   story entirely (the CLI-DLL residual above keeps the rest).
 
-### GPUDMap pass 1: overlap upload with GPU work — measure first
-
-GPUPyramid overlaps frame N+1's decode wait and upload memcpy with frame
-N's GPU work (ping-pong upload buffers, deferred wait — and note its
-`gpu` bucket in the `pyramid phases:` -v line therefore reads
-*blocked-on-GPU*, not GPU execution). GPUDMap pass 1 still serializes
-upload → warp → wait per frame, and it's a harder port: the exposure
-gain is measured from the *warped* frame mid-frame (`meanLuminance`
-between the warp and argmax command buffers), a genuine CPU dependency
-the pyramid path doesn't have. GPUDMap has no phase-bucket logging at
-all yet — add GPUPyramid-style buckets and measure the blocked-on-GPU
-share on a 45 MP NEF stack first; fusion at 45 MP is RAW-decode-bound,
-so build nothing until the measurement says there's something to hide.
-Done = buckets in -v output, and either the overlap ported (output
-byte-identical, blocked-on-GPU ≈ 0) or this item deleted because the
-measurement showed nothing worth hiding.
-
-### Retouch stamp cost at large brush radii — verify feel, then close
-
-The engine-side fixes landed 2026-07-19 (all in `RetouchSession`, so
-both shells inherit them): stroke arc-length carry so stamps land
-every `spacing` along the path instead of ≥ once per mouse event (the
-dominant cost — per-event stamping did ~65× the intended work at max
-radius), per-row chord bounds + core sqrt skip, SIMD4 blend with
-parallel rows (serial under 128 rows), and memcpy undo-tile capture.
-Measured on a 45 MP synth stack via the probe's bench harness
-(`HYPERFOCAL_BENCH_STROKE=1 retouch-probe <frames…>`, VM-loaded
-machine): max-radius 4954 px drag 36.3 s → 0.56 s; warm click 54 →
-45 ms; steady-state stamp ≈ 5 ms snapshot + 20 ms paint (paint is
-memory-bound, not compute-bound — SIMD alone moved nothing until rows
-were parallelized). Remaining:
-
-- **Feel-check in the native app** (the item's done criterion): a
-  max-radius drag on a 45 MP stack should feel continuous. Note the
-  first stamp after a source-frame load pays a one-time cold-page
-  cost (~0.4 s at 45 MP in the bench); if that reads as a real-world
-  stutter, pre-warm the working/display buffers on session start.
-- If more is ever needed: parallelize `snapshotTiles`' 49-tile copy,
-  or accumulate a per-segment coverage mask and composite once.
+(macOS note, decided 2026-07-21: `HYPERFOCAL_WGPU=1` is legal on macOS
+— production Mac builds keep Metal and never set it, but the parity
+suite runs through wgpu's Metal backend, so cross-engine WGSL changes
+can be gated on a Mac before they reach Windows/Linux. Copy
+`libwgpu_native.dylib` beside the built CLI, or point DYLD_LIBRARY_PATH
+at `$WGPU_ROOT/lib`, for `debug-wgpu` runs.)
 
 ### Research-informed fusion follow-ons
 

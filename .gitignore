@@ -1,4 +1,5 @@
 .build
+.build-wgpu
 dist
 xcuserdata
 Hyperfocal.xcodeproj

@@ -45,22 +45,26 @@ func pkgExists(_ pkg: String) -> Bool {
 
 // Opt-in wgpu compute backend (cross-platform-plan Phase 4): build with
 // HYPERFOCAL_WGPU=1 and a wgpu-native prebuilt release at WGPU_ROOT
-// (default: a `wgpu-native` checkout beside this repo). Off Apple only —
-// macOS keeps Metal. Opt-in like the OpenCV A/B: the backend is under
-// construction and must not gate anyone's build. Every target that imports
-// HyperfocalKit rebuilds the CWgpu Clang module with its own flags, so the
-// include path rides on all of them (wgpuXcc).
+// (default: a `wgpu-native` checkout beside this repo). Opt-in like the
+// OpenCV A/B: the backend is under construction and must not gate anyone's
+// build. Legal on macOS too (decided 2026-07-21) — production Mac builds
+// keep Metal (this env is never set for them), but the parity suite runs
+// through wgpu's Metal backend, which lets cross-engine WGSL changes be
+// gated on a Mac before they reach Windows/Linux (that run caught the
+// plane_upsample/pyr_upsample binding collision the day it was written).
+// Explicit env opt-in only — no auto-detection, so a merely-present
+// wgpu-native checkout can't contaminate app builds (the OpenCV lesson).
+// Every target that imports HyperfocalKit rebuilds the CWgpu Clang module
+// with its own flags, so the include path rides on all of them (wgpuXcc).
 var wgpuEnabled = false
 var wgpuRoot = ""
 var wgpuXcc: [SwiftSetting] = []
-#if !os(macOS)
 if ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU"] == "1" {
     wgpuEnabled = true
     wgpuRoot = ProcessInfo.processInfo.environment["WGPU_ROOT"]
         ?? FileManager.default.currentDirectoryPath + "/../wgpu-native"
     wgpuXcc = [.unsafeFlags(["-Xcc", "-I\(wgpuRoot)/include"])]
 }
-#endif
 
 #if os(Windows)
 // vcpkg supplies every C library on Windows (no pkg-config; see

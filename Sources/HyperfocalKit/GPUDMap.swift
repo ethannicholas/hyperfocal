@@ -137,6 +137,20 @@ public enum GPUDMap {
         let wantSpill = FrameSpill.wanted(options.spillEnabled)
         var spill: FrameSpill?
         var tSpillWrite = 0.0, tSpillRead = 0.0
+        // Wall-clock phase buckets (GPUPyramid's discipline: optimization
+        // must start from measurements, not vibes). `gpu` buckets are time
+        // *blocked on* command buffers — the spill write overlaps the score
+        // buffer, so pass 1's reads lower than true GPU execution. `warp`
+        // is the serialized upload+warp+wait: the exposure gain is measured
+        // from the warped frame mid-frame, a real CPU dependency the
+        // pyramid path doesn't have (see the overlap ROADMAP item).
+        var tDecodeWait = 0.0, tWarp = 0.0, tMean = 0.0, tGPU = 0.0
+        var tReadback = 0.0, tRenderWait = 0.0, tRenderGPU = 0.0, tRenderPreview = 0.0
+        func bucket(_ total: inout Double, _ body: () throws -> Void) rethrows {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            try body()
+            total += CFAbsoluteTimeGetCurrent() - t0
+        }
 
         func downloadPreview() -> ImageBuffer {
             var preview = ImageBuffer(width: pw, height: ph)
@@ -176,7 +190,9 @@ public enum GPUDMap {
         }
         for _ in 0..<frameCount {
             try cancellation?.checkCancelled()
-            let (fi, img) = try prefetcher.next()
+            var next: (Int, ImageBuffer)! = nil
+            try bucket(&tDecodeWait) { next = try prefetcher.next() }
+            let (fi, img) = next!
             if fi == 0 {
                 srcWidth = img.width
                 srcHeight = img.height
@@ -226,13 +242,17 @@ public enum GPUDMap {
                   let warpEncoder = warpCmd.makeComputeCommandEncoder() else {
                 throw StackError.metal("cannot create command buffer")
             }
-            let input = uploadAndWarp(img, frameIndex: fi, encoder: warpEncoder)
-            warpEncoder.endEncoding()
-            warpCmd.commit()
-            warpCmd.waitUntilCompleted()
+            var input: MTLBuffer! = nil
+            bucket(&tWarp) {
+                input = uploadAndWarp(img, frameIndex: fi, encoder: warpEncoder)
+                warpEncoder.endEncoding()
+                warpCmd.commit()
+                warpCmd.waitUntilCompleted()
+            }
             if let error = warpCmd.error { throw StackError.metal("warp: \(error)") }
 
-            let mean = meanChannels(buffer: input, pixelCount: pixelCount)
+            var mean = SIMD3<Float>(repeating: 1)
+            bucket(&tMean) { mean = meanChannels(buffer: input, pixelCount: pixelCount) }
             if fi == 0 { meanRGB0 = mean }
             // Scalar luminance gain for the scoring side (energy plane, guide);
             // the per-channel gains are for the render (see DMapFusion).
@@ -358,7 +378,7 @@ public enum GPUDMap {
                 }
                 tSpillWrite += CFAbsoluteTimeGetCurrent() - t0
             }
-            cmd.waitUntilCompleted()
+            bucket(&tGPU) { cmd.waitUntilCompleted() }
             if let error = cmd.error { throw StackError.metal("depth pass: \(error)") }
             var plane = [Float](UnsafeBufferPointer(
                 start: sharpBuf.contents().assumingMemoryBound(to: Float.self), count: sw * sh))
@@ -375,15 +395,20 @@ public enum GPUDMap {
             luminancePlanes.append(lumPlane)
             log?("depth pass \(fi + 1)/\(frameCount)")
             if let progress {
-                progress(FusionProgress(stage: .depth,
-                                        fraction: Double(fi + 1) / Double(frameCount),
-                                        preview: downloadPreview(),
-                                        previewFullWidth: width, previewFullHeight: height,
-                                        sourceFrameIndex: fi,
-                                        sourcePreview: img.downsampledNearest(maxSide: 1200),
-                                        sourceFullWidth: img.width, sourceFullHeight: img.height))
+                bucket(&tReadback) {
+                    progress(FusionProgress(stage: .depth,
+                                            fraction: Double(fi + 1) / Double(frameCount),
+                                            preview: downloadPreview(),
+                                            previewFullWidth: width, previewFullHeight: height,
+                                            sourceFrameIndex: fi,
+                                            sourcePreview: img.downsampledNearest(maxSide: 1200),
+                                            sourceFullWidth: img.width, sourceFullHeight: img.height))
+                }
             }
         }
+        log?(String(format: "dmap phases (gpu) pass 1: decode-wait %.2fs, warp %.2fs, "
+                    + "mean %.2fs, gpu %.2fs, preview %.2fs, spill-write %.2fs",
+                    tDecodeWait, tWarp, tMean, tGPU, tReadback, tSpillWrite))
 
         // Winner-frame luminance guide, written by the argmax kernel, then
         // low-passed (same separable blur as the CPU path — see
@@ -498,7 +523,9 @@ public enum GPUDMap {
                     sourceH = height
                 }
             } else {
-                let (idx, img) = try renderPrefetcher!.next()
+                var next: (Int, ImageBuffer)! = nil
+                try bucket(&tRenderWait) { next = try renderPrefetcher!.next() }
+                let (idx, img) = next!
                 fi = idx
                 input = uploadAndWarp(img, frameIndex: fi, encoder: encoder)
                 if progress != nil {
@@ -529,20 +556,26 @@ public enum GPUDMap {
 
             encoder.endEncoding()
             cmd.commit()
-            cmd.waitUntilCompleted()
+            bucket(&tRenderGPU) { cmd.waitUntilCompleted() }
             if let error = cmd.error { throw StackError.metal("render pass: \(error)") }
             log?("render pass \(fi + 1)/\(frameCount)")
             renderedCount += 1
             if let progress {
-                progress(FusionProgress(stage: .render,
-                                        fraction: Double(renderedCount) / Double(renderIndices.count),
-                                        preview: downloadPreview(),
-                                        previewFullWidth: width, previewFullHeight: height,
-                                        sourceFrameIndex: fi,
-                                        sourcePreview: sourcePreview,
-                                        sourceFullWidth: sourceW, sourceFullHeight: sourceH))
+                bucket(&tRenderPreview) {
+                    progress(FusionProgress(stage: .render,
+                                            fraction: Double(renderedCount) / Double(renderIndices.count),
+                                            preview: downloadPreview(),
+                                            previewFullWidth: width, previewFullHeight: height,
+                                            sourceFrameIndex: fi,
+                                            sourcePreview: sourcePreview,
+                                            sourceFullWidth: sourceW, sourceFullHeight: sourceH))
+                }
             }
         }
+        log?(String(format: "dmap phases (gpu) render: %@ %.2fs, gpu (incl. upload+warp) %.2fs, "
+                    + "preview %.2fs",
+                    spill != nil ? "spill-read" : "decode-wait",
+                    spill != nil ? tSpillRead : tRenderWait, tRenderGPU, tRenderPreview))
         if spill != nil {
             let frameGB = Double(pixelCount) * 16 / Double(1 << 30)
             log?(String(format: "spill: wrote %.1f GB in %.2fs, read %.1f GB in %.2fs",
