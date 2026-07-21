@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -974,6 +975,70 @@ static hf_status decodeJPEGGray8(const char* path,
     return hf_ok;
 }
 
+// Registration gray fast path for RAW: LibRaw half-size decode — each RGGB
+// quad becomes one pixel, skipping demosaic interpolation entirely (measured
+// ~11 s/frame of full-process decode on 45 MP DNGs, most of the registration
+// pass). White balance / no_auto_bright / white-level scaling match
+// hf_decode_raw so cross-frame luminance ratios (the exposure-outlier check)
+// mean the same thing; gamma stays LibRaw's default BT.709 curve so the
+// gray's tonal distribution matches the JPEG gray path (gamma-encoded), not
+// the fusion decode's linear light. Returns hf_err_format when the frame is
+// too small for the caller's scale policy — the caller falls back to the
+// full-resolution path.
+static hf_status decodeRAWGray8Half(const char* path, int min_longest,
+                                    int* out_full_w, int* out_full_h, int* out_denom,
+                                    int* out_w, int* out_h, uint8_t** out_gray) {
+    const auto t0 = std::chrono::steady_clock::now();
+    // Heap-allocated deliberately: LibRaw is hundreds of KB of struct, this
+    // static function inlines into hf_decode_gray8_scaled, and the fallback
+    // path there calls hf_decode_raw (its own stack LibRaw) — two LibRaw
+    // frames overflowed the ~512 KB worker-thread stack (0xC00000FD,
+    // reproduced on the FULLGRAY ablation path 2026-07-21).
+    auto rawp = std::make_unique<LibRaw>();
+    LibRaw& raw = *rawp;
+    raw.imgdata.params.use_camera_wb = 1;
+    raw.imgdata.params.output_bps = 8;
+    raw.imgdata.params.no_auto_bright = 1;
+    raw.imgdata.params.adjust_maximum_thr = 0;
+    raw.imgdata.params.half_size = 1;
+    if (raw.open_file(path) != LIBRAW_SUCCESS) return hf_err_open;
+    // Visible raw dims (stable at open time; iwidth/iheight shift with
+    // processing flags like half_size itself).
+    const int fullW = raw.imgdata.sizes.width, fullH = raw.imgdata.sizes.height;
+    const int longest = fullW > fullH ? fullW : fullH;
+    if (longest / 2 < min_longest) { raw.recycle(); return hf_err_format; }
+    if (raw.unpack() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
+    if (raw.dcraw_process() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
+    int st = 0;
+    libraw_processed_image_t* img = raw.dcraw_make_mem_image(&st);
+    if (!img || img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3 || img->bits != 8) {
+        if (img) LibRaw::dcraw_clear_mem(img);
+        raw.recycle();
+        return hf_err_decode;
+    }
+    const int w = img->width, h = img->height;
+    uint8_t* gray = (uint8_t*)std::malloc((size_t)w * h);
+    if (!gray) { LibRaw::dcraw_clear_mem(img); raw.recycle(); return hf_err_decode; }
+    const uint8_t* d = img->data;
+    for (size_t i = 0, px = (size_t)w * h; i < px; i++) {
+        // Rec.709 weights in 16-bit fixed point (sum = 65536).
+        gray[i] = (uint8_t)((13933u * d[i * 3 + 0] + 46871u * d[i * 3 + 1]
+                             + 4732u * d[i * 3 + 2] + 32768u) >> 16);
+    }
+    LibRaw::dcraw_clear_mem(img);
+    raw.recycle();
+    if (decodeDebug())
+        fprintf(stderr, "decodeRAWGray8Half %dx%d (full %dx%d): %.0fms\n",
+                w, h, fullW, fullH, msSince(t0));
+    // Report full dims as 2x the produced plane: the caller maps registration
+    // coordinates back through the exact decode factor, so the reported full
+    // size must be consistent with that factor, not with LibRaw's own
+    // (possibly odd) full-process dims.
+    *out_full_w = w * 2; *out_full_h = h * 2; *out_denom = 2;
+    *out_w = w; *out_h = h; *out_gray = gray;
+    return hf_ok;
+}
+
 extern "C" hf_status hf_decode_gray8_scaled(const char* path, int is_raw,
                                             int min_longest, int scale_floor_denom,
                                             int* out_full_w, int* out_full_h,
@@ -983,6 +1048,12 @@ extern "C" hf_status hf_decode_gray8_scaled(const char* path, int is_raw,
         return decodeJPEGGray8(path, min_longest, scale_floor_denom,
                                out_full_w, out_full_h, out_denom,
                                out_w, out_h, out_gray);
+    if (is_raw && min_longest > 0 && scale_floor_denom > 0) {
+        hf_status s = decodeRAWGray8Half(path, min_longest,
+                                         out_full_w, out_full_h, out_denom,
+                                         out_w, out_h, out_gray);
+        if (s != hf_err_format) return s;  // hf_err_format: too small — fall through
+    }
     int w = 0, h = 0; float* rgba = nullptr;
     hf_status s = is_raw ? hf_decode_raw(path, &w, &h, &rgba)
                          : hf_decode(path, &w, &h, &rgba);
