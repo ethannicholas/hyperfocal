@@ -79,6 +79,16 @@ public enum Warp {
     /// Warp into a preallocated RGBA buffer — the CPU fusion workspace's
     /// level 0. Skips the per-frame output allocation (a zeroed ~180 MB at
     /// 11 MP, page-faulted on first touch) and the copy that followed it.
+    ///
+    /// Interior tap loop runs as three SIMD8 pair loads + FMAs per row
+    /// (2026-07-20): 18 loads instead of 36 and the horizontal sum grouped
+    /// (even taps + odd taps) instead of left-to-right. That reassociation
+    /// moves the result by ~1 ulp — measured 151.2 dB vs the tap-at-a-time
+    /// loop on the bench scene (`debug-bench warp`), far above every parity
+    /// floor. Scalar LUT weights are deliberate: the vectorized variant
+    /// measured SLOWER (16.6 vs 9.0 ns/set — and any SIMD8<Int32> conversion
+    /// init is an unspecialized generic at ~250 ns/call; see
+    /// PortableSIMD.swift's contract before "improving" this).
     static func applyLanczos3(_ src: ImageBuffer, outputToSource H: simd_float3x3,
                               outWidth: Int, outHeight: Int, into dst: inout [Float]) {
         precondition(dst.count == outWidth * outHeight * 4)
@@ -110,18 +120,23 @@ public enum Warp {
                         // Interior fast path: the whole 6×6 footprint (and the
                         // 2×2 anti-ring footprint) is in bounds, so the taps
                         // are contiguous vector loads with no per-tap clamps.
-                        // Same taps, same weights, same summation order as the
-                        // border path — bit-identical where both could run.
                         if x0 >= 2 && x0 + 3 < sw && y0 >= 2 && y0 + 3 < sh {
+                            let w01 = SIMD8<Float>(lowHalf: SIMD4<Float>(repeating: wx[0]),
+                                                   highHalf: SIMD4<Float>(repeating: wx[1]))
+                            let w23 = SIMD8<Float>(lowHalf: SIMD4<Float>(repeating: wx[2]),
+                                                   highHalf: SIMD4<Float>(repeating: wx[3]))
+                            let w45 = SIMD8<Float>(lowHalf: SIMD4<Float>(repeating: wx[4]),
+                                                   highHalf: SIMD4<Float>(repeating: wx[5]))
                             for ky in 0..<6 {
                                 let rowBase = (y0 - 2 + ky) * sw + (x0 - 2)
-                                var row = SIMD4<Float>()
-                                for kx in 0..<6 {
-                                    let v = sraw.loadUnaligned(fromByteOffset: (rowBase + kx) << 4,
-                                                               as: SIMD4<Float>.self)
-                                    row += v * wx[kx]
-                                }
-                                acc += row * wy[ky]
+                                let p01 = sraw.loadUnaligned(fromByteOffset: rowBase << 4,
+                                                             as: SIMD8<Float>.self)
+                                let p23 = sraw.loadUnaligned(fromByteOffset: (rowBase + 2) << 4,
+                                                             as: SIMD8<Float>.self)
+                                let p45 = sraw.loadUnaligned(fromByteOffset: (rowBase + 4) << 4,
+                                                             as: SIMD8<Float>.self)
+                                let row8 = p01 * w01 + p23 * w23 + p45 * w45
+                                acc += (row8.lowHalf + row8.highHalf) * wy[ky]
                             }
                             sample = acc / (sumX * sumY)
                             let ia = (y0 * sw + x0) << 4

@@ -18,7 +18,8 @@ private let subcommandList: [ParsableCommand.Type] = {
     var list: [ParsableCommand.Type] =
         [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
          DebugAlign.self, DebugChain.self,
-         DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self]
+         DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self,
+         DebugBench.self]
     #if HYPERFOCAL_HAVE_WGPU
     list.append(DebugWgpu.self)  // wgpu A/B builds (off in-tree on Apple)
     #endif
@@ -28,7 +29,8 @@ private let subcommandList: [ParsableCommand.Type] = {
 private let subcommandList: [ParsableCommand.Type] = {
     var list: [ParsableCommand.Type] =
         [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
-         DebugChain.self, DebugWarp.self, DebugDiff.self, DebugBoost.self]
+         DebugChain.self, DebugWarp.self, DebugDiff.self, DebugBoost.self,
+         DebugBench.self]
     #if HYPERFOCAL_HAVE_WGPU
     list.append(DebugWgpu.self)
     #endif
@@ -73,6 +75,23 @@ struct DebugWgpu: ParsableCommand {
     }
 }
 #endif
+
+struct DebugBench: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "debug-bench",
+        abstract: "Engine microbenchmarks (numbers only comparable within one machine+run).",
+        shouldDisplay: false)
+
+    @Argument(help: "Which bench: warp") var name: String = "warp"
+    @Option var iterations: Int = 7
+
+    func run() throws {
+        switch name {
+        case "warp": WarpBench.run(iterations: iterations)
+        default: throw ValidationError("unknown bench '\(name)'")
+        }
+    }
+}
 
 @main
 struct Hyperfocal: ParsableCommand {
