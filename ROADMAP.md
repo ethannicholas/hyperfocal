@@ -111,18 +111,19 @@ Windows residuals to close (each independently landable):
    ground-truth-passing, so the next real step is a cheaper detector or
    registering from a ¼-scale JPEG decode (libjpeg scaled decode) which
    would also shrink the gray/gradient glue (~15 s); (c) build ~19 s.
-   **DMap** (shell default; 301 s vs pmax's 166 on the CLI sample
-   stack): the CPU path spills (adaptive fp16 when fp32 won't fit),
-   prefetches decode, warps into a reused canvas, and reports
-   `dmap phases (cpu)` buckets. Remaining walls after the grid-energy
-   change (landed 2026-07-20: energy = box-downsample |Laplacian| by
-   `DMapFusion.energyGridFactor`, blur at σ/factor, bilinear-upsample —
-   CPU + MSL + WGSL + both GPU orchestrators moved together; Mac A/B
-   measured energy 3.66→0.33 s on a 3600×2400×15 stack, output 88 dB
-   vs the old field, all parity gates re-measured green — re-measure
-   the VM's end-to-end numbers): **warp ~72 s** (shared per-pixel
-   floor with pmax), **spill write ~21 s + render-src ~23 s** (fp16
-   convert + I/O). Regularize is ~4 s — not a target. Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
+   **DMap** (shell default; VM re-measured post-grid-energy 2026-07-20:
+   **271 s** total — registration 77 s, fusion 191 s; was 341 at the
+   day's baseline): the CPU path spills (adaptive fp16 when fp32 won't
+   fit), prefetches decode, warps into a reused canvas, and reports
+   `dmap phases (cpu)` buckets. The grid-energy change (energy =
+   box-downsample |Laplacian| by `DMapFusion.energyGridFactor`, blur at
+   σ/factor, bilinear-upsample — CPU + MSL + WGSL + both GPU
+   orchestrators moved together) measured energy 88.6→37.2 s on the VM;
+   all gates green there too (dmap parity 117.2 dB). Remaining walls:
+   **warp ~72-87 s** (shared per-pixel floor with pmax), **spill write
+   ~22 s + render-src ~29 s** (fp16 convert + I/O), energy's residual
+   37 s (the full-res box-down + upsample passes). Regularize is ~4 s —
+   not a target. pmax same day: 181 s total (fusion 95 s). Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
    HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
    buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
    status (Mac, Fluorite stack): 1600 bound + 2000 cap verified
