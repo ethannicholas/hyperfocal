@@ -48,8 +48,17 @@ public final class FrameSpill {
         Double(DispatchTime.now().uptimeNanoseconds) / 1e9
     }
 
-    /// Free space the spill must leave untouched on the temp volume.
-    private static let margin: Int64 = 2 << 30
+    /// Free space the spill must leave untouched on the temp volume: 2 GB,
+    /// or half the spill's own size for large spills. The flat 2 GB floor
+    /// let a 7.3 GB fp32 spill "fit" a volume with 9.3 GB free (Fluorite
+    /// 45 MP × 10 on the dev VM, 2026-07-21) — driving the volume to 97%
+    /// full, where write latency collapses: that fuse took 2124 s against
+    /// 469 s forced-fp16, for an output the fp16 tier matches at 95.9 dB.
+    /// Proportional headroom demotes exactly those barely-fits cases while
+    /// roomy volumes keep the bit-identical fp32 tier.
+    private static func margin(for spillBytes: Int64) -> Int64 {
+        max(2 << 30, spillBytes / 2)
+    }
 
     /// Resolves the HYPERFOCAL_DMAP_SPILL override against the caller's
     /// setting (the app's Settings toggle / CLI flag): "1" forces the spill
@@ -69,7 +78,8 @@ public final class FrameSpill {
     public static func shortfall(frameBytes: Int,
                                  frameCount: Int) -> (needed: Int64, available: Int64)? {
         let slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
-        let needed = Int64(slotBytes) * Int64(frameCount) + margin
+        let spillBytes = Int64(slotBytes) * Int64(frameCount)
+        let needed = spillBytes + margin(for: spillBytes)
         #if canImport(Darwin)
         guard let capacity = (try? FileManager.default.temporaryDirectory.resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
@@ -286,12 +296,22 @@ public final class FrameSpill {
     private let writeQueue = DispatchQueue(label: "hyperfocal.spill.write")
     private let stagingFree = DispatchSemaphore(value: 2)
     private var asyncError: Error?
+    // Staging buffers recycle through this pool (bounded by the semaphore's
+    // in-flight cap of 2). Allocating per frame was measured at 36 s of the
+    // Fluorite 45 MP run's critical path: a fresh zeroed 726 MB array per
+    // frame is 7 GB of page-zeroing churn on an 8 GB machine.
+    private var stagingPool: [[UInt8]] = []
 
     func writeAsync(frame: Int, from ptr: UnsafeRawPointer) {
         stagingFree.wait()
         let t0 = FrameSpill.now()
         let payloadBytes = halfPrecision ? frameBytes / 2 : frameBytes
-        var staged = [UInt8](repeating: 0, count: payloadBytes)
+        scratchLock.lock()
+        var staged = stagingPool.popLast() ?? []
+        scratchLock.unlock()
+        if staged.count < payloadBytes {
+            staged = [UInt8](repeating: 0, count: payloadBytes)
+        }
         staged.withUnsafeMutableBytes { sb in
             if halfPrecision {
                 let count = frameBytes / 4
@@ -321,6 +341,7 @@ public final class FrameSpill {
             }
             scratchLock.lock()
             tIO += FrameSpill.now() - t1
+            stagingPool.append(staged)
             scratchLock.unlock()
             stagingFree.signal()
         }
