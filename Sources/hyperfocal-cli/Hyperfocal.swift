@@ -629,11 +629,17 @@ struct Compare: ParsableCommand {
         if a.width == b.width && a.height == b.height {
             let value = Metrics.psnr(a, b, margin: margin)
             print(String(format: "PSNR: %.2f dB (margin %d)", value, margin))
-        } else {
-            // Different sizes: the smaller is a crop of the larger (common-
-            // coverage cropped output vs full-size reference) — find it.
+        } else if (a.width >= b.width) == (a.height >= b.height) {
+            // One contains the other: the smaller is a crop of the larger
+            // (common-coverage cropped output vs full-size reference) — find it.
             let result = Metrics.psnrBestOffset(a, b, margin: margin)
             print(String(format: "PSNR: %.2f dB (margin %d, crop offset %d,%d)",
+                         result.psnr, margin, result.dx, result.dy))
+        } else {
+            // Neither contains the other (two different common-coverage
+            // crops of the same scene): align and compare the intersection.
+            let result = Metrics.psnrIntersection(a, b, margin: margin)
+            print(String(format: "PSNR: %.2f dB (margin %d, intersection shift %d,%d)",
                          result.psnr, margin, result.dx, result.dy))
         }
     }
