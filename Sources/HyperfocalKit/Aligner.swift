@@ -153,12 +153,19 @@ public enum Aligner {
         // luminance mean rides along for the exposure check.
         let decoded = try boundedConcurrentMap(count: n, concurrency: registrationConcurrency) { i -> (GrayImage, GrayStats, Float, RegistrationFrame) in
             try cancellation?.checkCancelled()
-            let g = try ImageFile.loadGray8(url: urls[i])
+            // JPEGs decode at a DCT-domain reduction on the CImaging path
+            // (decodeFactor 2 or 4) — gradient, stats, and SIFT prep all run
+            // on the reduced plane; transforms map back to full-res through
+            // the factor. Apple (and non-JPEG) decode full, factor 1.
+            let rg = try ImageFile.loadGray8Registration(
+                url: urls[i], minLongest: registrationDecodeMinLongest,
+                scaleFloorDenom: registrationScaleFloorDenom)
+            let g = rg.image
             let (gradient, lumMean) = gradientImage(g)
-            let stats = grayStats(gradient)
+            let stats = grayStats(gradient, decodeFactor: rg.decodeFactor)
             // Per-frame registration prep (SIFT detection on the OpenCV
             // path) happens here, once — pairs only match.
-            let regFrame = try prepareForRegistration(gradient)
+            let regFrame = try prepareForRegistration(gradient, decodeFactor: rg.decodeFactor)
             log?("decoded frame \(i)")
             bump(frameIndex: i, frame: preview(of: g), pass: .decode)
             return (gradient, stats, lumMean, regFrame)
@@ -543,6 +550,19 @@ public enum Aligner {
         return max(1200, longest / 5)
     }
 
+    /// Registration gray-decode scale policy (the CImaging JPEG path): the
+    /// decoded longest side must stay >= max(1000, full/5). 1000 is the
+    /// ground-truth-passing step below the 1200 SIFT bound (50.17 dB vs
+    /// 50.26, 2026-07-20 ablation), so a 4000-px frame decodes 1/4 to 1000
+    /// and SIFT runs there; the /5 term mirrors the bound's scale floor so
+    /// large frames can never decode below the scale the 45 MP A/B
+    /// validated (1/4 itself is a gentler reduction than the floor's 5x,
+    /// and 1/8 can never satisfy L/8 >= L/5). Note HYPERFOCAL_REGISTER_MAXSIDE
+    /// ablations above the decoded size need HYPERFOCAL_REGISTER_FULLGRAY=1
+    /// too — SIFT can't run above the decode scale.
+    static let registrationDecodeMinLongest = 1000
+    static let registrationScaleFloorDenom = 5
+
     /// Area-average downscale of an 8-bit gray plane by `scale` (0<scale<1) —
     /// enough to feed SIFT; not the fusion sampler.
     static func boxDownscale(_ img: GrayImage, scale: Float) -> GrayImage {
@@ -672,12 +692,16 @@ public enum Aligner {
     /// Vision registers gray images directly — no per-frame preparation to
     /// cache, so the "prepared frame" is the gradient image itself (the
     /// OpenCV branch detects SIFT here instead; see its RegistrationFrame).
+    /// `decodeFactor` is always 1 here (Apple decodes full-resolution).
     typealias RegistrationFrame = GrayImage
-    static func prepareForRegistration(_ gradient: GrayImage) throws -> RegistrationFrame {
+    static func prepareForRegistration(_ gradient: GrayImage, decodeFactor: Int) throws -> RegistrationFrame {
         gradient
     }
 
-    static func grayStats(_ img: GrayImage, factor: Int = 4) -> GrayStats {
+    static func grayStats(_ img: GrayImage, decodeFactor: Int = 1) -> GrayStats {
+        // Residual planes target ~1/4 of full resolution; a reduced decode
+        // (never on Apple) already covers part of that.
+        let factor = max(1, 4 / decodeFactor)
         let cg = cgImage(from: img)
         let pw = max(1, cg.width / factor), ph = max(1, cg.height / factor)
         var bytes = [UInt8](repeating: 0, count: pw * ph)
@@ -693,7 +717,8 @@ public enum Aligner {
         var sum = 0
         for b in bytes { sum += Int(b) }
         return GrayStats(mean: Float(sum) / Float(max(bytes.count, 1)),
-                         plane: bytes, width: pw, height: ph, factor: factor)
+                         plane: bytes, width: pw, height: ph,
+                         factor: factor * decodeFactor)
     }
 
 #else  // Linux/Windows — OpenCV registration + a plain box downscale.
@@ -707,19 +732,27 @@ public enum Aligner {
     /// and pairs match handles.
     final class RegistrationFrame {
         let handle: OpaquePointer
-        let scale: Float          // downscale applied before detection
-        let width: Int, height: Int   // original (gradient) dimensions
+        let scale: Float          // detect scale relative to FULL-res coords
+        let width: Int, height: Int   // gradient (decoded-scale) dimensions
 
-        init(gray: GrayImage) throws {
+        init(gray: GrayImage, decodeFactor: Int) throws {
             // Bound SIFT's input (openCVRegisterMaxSide) and map the
             // homography back — same downscale-for-registration wrapper the
             // macOS A/B path validated; full-res SIFT on 45 MP frames needs
-            // ~7.5 GB and often finds no model.
-            let longest = max(gray.width, gray.height)
-            let maxSide = openCVRegisterMaxSide(longest: longest)
-            scale = longest > maxSide
-                ? Float(maxSide) / Float(longest) : 1
-            let small = scale < 1 ? boxDownscale(gray, scale: scale) : gray
+            // ~7.5 GB and often finds no model. The gray may itself be a
+            // reduced decode (decodeFactor 2/4): the bound is judged against
+            // the FULL frame size (scale-floor semantics), any further box
+            // downscale happens from the decoded plane, and `scale` composes
+            // both stages so register() maps straight to full-res coords.
+            let longestScaled = max(gray.width, gray.height)
+            // Ceil-rounded decode dims overshoot the true full longest by at
+            // most decodeFactor-1 px — irrelevant to the bound choice.
+            let longestFull = longestScaled * decodeFactor
+            let maxSide = openCVRegisterMaxSide(longest: longestFull)
+            let further: Float = longestScaled > maxSide
+                ? Float(maxSide) / Float(longestScaled) : 1
+            let small = further < 1 ? boxDownscale(gray, scale: further) : gray
+            scale = further / Float(decodeFactor)
             let h = small.pixels.withUnsafeBufferPointer {
                 hf_sift_detect(CInt(small.width), CInt(small.height), $0.baseAddress)
             }
@@ -732,8 +765,8 @@ public enum Aligner {
         deinit { hf_sift_free(handle) }
     }
 
-    static func prepareForRegistration(_ gradient: GrayImage) throws -> RegistrationFrame {
-        try RegistrationFrame(gray: gradient)
+    static func prepareForRegistration(_ gradient: GrayImage, decodeFactor: Int) throws -> RegistrationFrame {
+        try RegistrationFrame(gray: gradient, decodeFactor: decodeFactor)
     }
 
     static func register(moving: RegistrationFrame, fixed: RegistrationFrame) throws -> simd_float3x3 {
@@ -754,8 +787,19 @@ public enum Aligner {
         return upscaleHomography(hs, scale: moving.scale)
     }
 
-    static func grayStats(_ img: GrayImage, factor: Int = 4) -> GrayStats {
+    static func grayStats(_ img: GrayImage, decodeFactor: Int = 1) -> GrayStats {
+        // Residual planes target ~1/4 of full resolution; a reduced decode
+        // already covers part (or, at 1/4, all) of that.
+        let factor = max(1, 4 / decodeFactor)
         let w = img.width, h = img.height
+        if factor == 1 {
+            // The decoded plane IS the residual plane — no further downscale.
+            var sum = 0
+            for b in img.pixels { sum += Int(b) }
+            return GrayStats(mean: Float(sum) / Float(max(w * h, 1)),
+                             plane: img.pixels, width: w, height: h,
+                             factor: decodeFactor)
+        }
         let pw = max(1, w / factor), ph = max(1, h / factor)
         var bytes = [UInt8](repeating: 0, count: pw * ph)
         img.pixels.withUnsafeBufferPointer { src in
@@ -781,7 +825,8 @@ public enum Aligner {
         var sum = 0
         for b in bytes { sum += Int(b) }
         return GrayStats(mean: Float(sum) / Float(max(bytes.count, 1)),
-                         plane: bytes, width: pw, height: ph, factor: factor)
+                         plane: bytes, width: pw, height: ph,
+                         factor: factor * decodeFactor)
     }
 
 #endif

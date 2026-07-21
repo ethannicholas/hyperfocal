@@ -54,6 +54,19 @@ hf_status hf_raw_neutral_xy(const char* path, double* out_x, double* out_y);
 hf_status hf_decode_gray8(const char* path, int is_raw,
                           int* out_w, int* out_h, uint8_t** out_gray);
 
+// As hf_decode_gray8, but JPEGs may decode at a DCT-domain 1/2 or 1/4 scale:
+// the largest reduction whose longest side stays >= max(min_longest,
+// full_longest / scale_floor_denom). Other formats (and min_longest <= 0)
+// decode at full resolution. *out_denom is the reduction actually applied
+// (1, 2 or 4; scaled dims are ceil(full/denom)); *out_full_w/h are the
+// file's full dimensions so the caller can map registration coordinates
+// back to full-res frames.
+hf_status hf_decode_gray8_scaled(const char* path, int is_raw,
+                                 int min_longest, int scale_floor_denom,
+                                 int* out_full_w, int* out_full_h,
+                                 int* out_denom,
+                                 int* out_w, int* out_h, uint8_t** out_gray);
+
 // Pixel dimensions from the header without a full decode. is_raw selects RAW.
 hf_status hf_pixel_size(const char* path, int is_raw, int* out_w, int* out_h);
 

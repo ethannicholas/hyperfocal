@@ -39,6 +39,18 @@ public enum ImageFile {
         rawExtensions.contains(url.pathExtension.lowercased())
     }
 
+    /// A gray plane decoded for registration, possibly at a reduced scale
+    /// (JPEG DCT-domain 1/2 or 1/4 on the CImaging path). `decodeFactor` is
+    /// full-resolution pixels per gray pixel (1, 2, or 4 — scaled dims are
+    /// ceil(full / factor)); registration maps its homographies back to
+    /// full-res coordinates through it.
+    public struct RegistrationGray {
+        public let image: GrayImage
+        public let fullWidth: Int
+        public let fullHeight: Int
+        public let decodeFactor: Int
+    }
+
 #if canImport(CoreGraphics)
 
     /// The pipeline's working color space. `ImageBuffer` floats are untagged;
@@ -166,6 +178,17 @@ public enum ImageFile {
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         }
         return GrayImage(width: w, height: h, pixels: bytes)
+    }
+
+    /// Registration gray decode on Apple stays full-resolution (Vision's cost
+    /// profile never made the scaled decode worth platform churn); the seam
+    /// exists so shared Aligner code compiles against one shape. See the
+    /// CImaging overload for the reduced-scale semantics.
+    public static func loadGray8Registration(url: URL, minLongest: Int,
+                                             scaleFloorDenom: Int) throws -> RegistrationGray {
+        let g = try loadGray8(url: url)
+        return RegistrationGray(image: g, fullWidth: g.width, fullHeight: g.height,
+                                decodeFactor: 1)
     }
 
     /// Small Float32 RGBA buffer from any CGImage (grayscale included), drawn at
@@ -429,6 +452,33 @@ public enum ImageFile {
         defer { hf_free(ptr) }
         let bytes = Array(UnsafeBufferPointer(start: ptr, count: Int(w) * Int(h)))
         return GrayImage(width: Int(w), height: Int(h), pixels: bytes)
+    }
+
+    /// Registration gray decode: JPEGs come back at the largest DCT-domain
+    /// reduction (1/2 or 1/4) whose longest side stays >= max(minLongest,
+    /// full / scaleFloorDenom) — most of the IDCT is skipped, and gradient/
+    /// stats/SIFT all run on 1/4 to 1/16 the pixels. Other formats decode
+    /// full-resolution (decodeFactor 1). HYPERFOCAL_REGISTER_FULLGRAY=1
+    /// disables the reduction for A/B isolation.
+    public static func loadGray8Registration(url: URL, minLongest: Int,
+                                             scaleFloorDenom: Int) throws -> RegistrationGray {
+        let disabled = ProcessInfo.processInfo
+            .environment["HYPERFOCAL_REGISTER_FULLGRAY"] == "1"
+        var fw: CInt = 0, fh: CInt = 0, denom: CInt = 0
+        var w: CInt = 0, h: CInt = 0
+        var ptr: UnsafeMutablePointer<UInt8>? = nil
+        let status = hf_decode_gray8_scaled(url.path, isRAW(url) ? 1 : 0,
+                                            disabled ? 0 : CInt(minLongest),
+                                            CInt(scaleFloorDenom),
+                                            &fw, &fh, &denom, &w, &h, &ptr)
+        guard status == hf_ok, let ptr, w > 0, h > 0 else {
+            throw ImageFileError.cannotLoad("\(url.path) (gray decode status \(status.rawValue))")
+        }
+        defer { hf_free(ptr) }
+        let bytes = Array(UnsafeBufferPointer(start: ptr, count: Int(w) * Int(h)))
+        return RegistrationGray(image: GrayImage(width: Int(w), height: Int(h), pixels: bytes),
+                                fullWidth: Int(fw), fullHeight: Int(fh),
+                                decodeFactor: Int(denom))
     }
 
     /// Small Float32 RGBA buffer from a `GrayImage`, sampled down — the

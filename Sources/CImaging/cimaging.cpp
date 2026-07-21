@@ -914,6 +914,8 @@ extern "C" hf_status hf_decode(const char* path, int* out_w, int* out_h, float**
 // per 11 MP frame for) is irrelevant to it; the exposure-outlier check
 // compares these means *across frames*, where the encoding cancels.
 static hf_status decodeJPEGGray8(const char* path,
+                                 int min_longest, int scale_floor_denom,
+                                 int* out_full_w, int* out_full_h, int* out_denom,
                                  int* out_w, int* out_h, uint8_t** out_gray) {
     const auto t0 = std::chrono::steady_clock::now();
     FILE* fp = std::fopen(path, "rb");
@@ -928,6 +930,23 @@ static hf_status decodeJPEGGray8(const char* path,
     jpeg_stdio_src(&cinfo, fp);
     jpeg_read_header(&cinfo, TRUE);
     cinfo.out_color_space = JCS_RGB;
+    // Registration wants a reduced plane anyway: let libjpeg's DCT-domain
+    // scaler produce it and skip most of the IDCT. Largest reduction in
+    // {4, 2} whose longest side stays >= max(min_longest,
+    // full_longest / scale_floor_denom) — the caller's registration scale
+    // policy (Aligner: 1000, 5).
+    const int fullW = (int)cinfo.image_width, fullH = (int)cinfo.image_height;
+    int denom = 1;
+    if (min_longest > 0 && scale_floor_denom > 0) {
+        const int L = fullW > fullH ? fullW : fullH;
+        double target = (double)L / scale_floor_denom;
+        if (target < min_longest) target = min_longest;
+        for (int d = 4; d > 1; d /= 2) {
+            if ((double)L / d >= target) { denom = d; break; }
+        }
+        cinfo.scale_num = 1;
+        cinfo.scale_denom = (unsigned)denom;
+    }
     jpeg_start_decompress(&cinfo);
     int w = cinfo.output_width, h = cinfo.output_height;
     gray = (uint8_t*)std::malloc((size_t)w * h);
@@ -948,15 +967,22 @@ static hf_status decodeJPEGGray8(const char* path,
     jpeg_destroy_decompress(&cinfo);
     std::fclose(fp);
     if (decodeDebug())
-        fprintf(stderr, "decodeJPEGGray8 %dx%d: %.0fms\n", w, h, msSince(t0));
+        fprintf(stderr, "decodeJPEGGray8 %dx%d (full %dx%d, 1/%d): %.0fms\n",
+                w, h, fullW, fullH, denom, msSince(t0));
+    *out_full_w = fullW; *out_full_h = fullH; *out_denom = denom;
     *out_w = w; *out_h = h; *out_gray = gray;
     return hf_ok;
 }
 
-extern "C" hf_status hf_decode_gray8(const char* path, int is_raw,
-                                     int* out_w, int* out_h, uint8_t** out_gray) {
+extern "C" hf_status hf_decode_gray8_scaled(const char* path, int is_raw,
+                                            int min_longest, int scale_floor_denom,
+                                            int* out_full_w, int* out_full_h,
+                                            int* out_denom,
+                                            int* out_w, int* out_h, uint8_t** out_gray) {
     if (!is_raw && sniff(path) == C_JPEG)
-        return decodeJPEGGray8(path, out_w, out_h, out_gray);
+        return decodeJPEGGray8(path, min_longest, scale_floor_denom,
+                               out_full_w, out_full_h, out_denom,
+                               out_w, out_h, out_gray);
     int w = 0, h = 0; float* rgba = nullptr;
     hf_status s = is_raw ? hf_decode_raw(path, &w, &h, &rgba)
                          : hf_decode(path, &w, &h, &rgba);
@@ -970,8 +996,16 @@ extern "C" hf_status hf_decode_gray8(const char* path, int is_raw,
         gray[i] = (uint8_t)(clamp01(v) * 255.0f + 0.5f);
     }
     std::free(rgba);
+    *out_full_w = w; *out_full_h = h; *out_denom = 1;
     *out_w = w; *out_h = h; *out_gray = gray;
     return hf_ok;
+}
+
+extern "C" hf_status hf_decode_gray8(const char* path, int is_raw,
+                                     int* out_w, int* out_h, uint8_t** out_gray) {
+    int fw = 0, fh = 0, denom = 1;
+    return hf_decode_gray8_scaled(path, is_raw, 0, 0, &fw, &fh, &denom,
+                                  out_w, out_h, out_gray);
 }
 
 extern "C" hf_status hf_pixel_size(const char* path, int is_raw, int* out_w, int* out_h) {
