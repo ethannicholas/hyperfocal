@@ -97,53 +97,59 @@ Windows residuals to close (each independently landable):
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
 4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
-   JPEGs, 2-core Windows VM, 2026-07-20): ~2.8 min end to end —
-   registration 72 s (SIFT bound 1200, cap 2000; detect ~0.5 s/frame),
-   pmax fusion 88 s (phase buckets: warp ~60 s, build ~19 s, select
-   ~4 s — at standalone cost since the sRGB decode fast path stopped
-   stealing cores). < 2 min end-to-end is demonstrably achievable on
-   the same 2 cores (measured against commercial stackers on this VM);
-   the remaining ~45 s is spread thin: (a) **warp ~60 s** is at its
-   measured per-pixel floor — a Chebyshev-weights variant was tried and
-   reverted (equal to the LUT within VM noise; tap loads dominate), so
-   further means restructuring the 6×6 tap loop's memory access;
-   (b) **SIFT detect ~40 s** — the bound is at 1200 with 1000 also
-   ground-truth-passing, so the next real step is a cheaper detector or
-   registering from a ¼-scale JPEG decode (libjpeg scaled decode) which
-   would also shrink the gray/gradient glue (~15 s); (c) build ~19 s.
-   **DMap** (shell default; VM re-measured post-grid-energy 2026-07-20:
-   **271 s** total — registration 77 s, fusion 191 s; was 341 at the
-   day's baseline): the CPU path spills (adaptive fp16 when fp32 won't
-   fit), prefetches decode, warps into a reused canvas, and reports
-   `dmap phases (cpu)` buckets. The grid-energy change (energy =
-   box-downsample |Laplacian| by `DMapFusion.energyGridFactor`, blur at
-   σ/factor, bilinear-upsample — CPU + MSL + WGSL + both GPU
-   orchestrators moved together) plus async spill writes put dmap at
-   **196 s** on a quiet run (energy ~16 s, spill staging ~6 s with the
-   ~41 s of I/O overlapped under compute — HYPERFOCAL_SPILL_DEBUG=1
-   splits convert vs I/O and showed the fp16 convert is free).
-   Remaining walls: **warp ~65-71 s** (shared per-pixel floor with
-   pmax; the last big rock), **render-src ~17 s** (read I/O with
-   nothing to hide behind — render is ~2 s), energy ~16 s, and
-   registration's ~72 s (detect ~40). Regularize is ~3 s — not a
-   target. pmax same day: 181 s total (fusion 95 s). Ablation taps: HYPERFOCAL_SIFT_NFEATURES /
-   HYPERFOCAL_SIFT_CONTRAST / HYPERFOCAL_REGISTER_MAXSIDE + `-v` phase
-   buckets + HYPERFOCAL_REGISTER_DEBUG / HYPERFOCAL_DECODE_DEBUG. 45 MP A/B
-   status (Mac, Fluorite stack): 1600 bound + 2000 cap verified
-   quality-neutral 2026-07-20; **1200 FAILED the same bar at 45 MP**
-   (1600↔1200 only 30.4 dB bound-isolated, crop grew, diff shows
-   misalignment signatures), so the bound is now a scale floor —
-   max(1200, longest/5), keeping 1200's detect cost for ≤6000 px
-   frames and restoring the validated scale at 45 MP (re-validated
-   35.2 dB vs 1600; details in Aligner.openCVRegisterMaxSide's
-   comment). Sampling
-   profilers cannot run in the dev VM (hypervisor doesn't virtualize
-   the profiling interrupt); on real Windows hardware, wpr + WPA work
-   with `swift build -Xswiftc -debug-info-format=codeview -Xlinker
-   /DEBUG`. Before touching any per-pixel loop, read
-   PortableSIMD.swift's performance contract: cross-file generic calls
-   don't specialize in per-file debug builds — that trap cost 55x in
-   the warp until 2026-07-20.
+   JPEGs, 2-core Windows VM, 2026-07-21, quiet runs): **dmap 173-182 s,
+   pmax 132 s** end to end (from 271/181 the day before — the
+   registration ¼-scale JPEG gray decode landed: gradient/stats/SIFT
+   prep all run on the DCT-domain reduced plane, policy longest ≥
+   max(1000, full/5); validation battery in commit 829a67e — 6-frame
+   A/B 55.95 dB, jittered-synth truth 45.87 vs 45.81, identical
+   bad-frame behavior, same canvas; HYPERFOCAL_REGISTER_FULLGRAY=1
+   restores the full decode for ablation). < 2 min end-to-end is the
+   bar (measured against commercial stackers on this VM); pmax is 12 s
+   from it, dmap ~55 s. Current decomposition:
+   - **Registration 46-48 s** = SIFT detect 32 s (82 × ~430 ms at
+     1024×683, cvthreads 2 — DoG pyramid dominates, so the 2000-kp cap
+     is NOT the wall) + match 14 s (81 × ~165 ms at 2000 kp) + decode/
+     gradient glue ~2.5 s (was ~15 before the ¼ decode).
+     HYPERFOCAL_SIFT_NFEATURES=1200 measured 2026-07-21: match halves
+     (−7 s), detect ~unchanged, synth truth dips 45.87 → 45.52 dB —
+     land only with a fresh 45 MP Mac A/B (the 2000 cap is what that
+     A/B validated). A genuinely cheaper detector is the bigger prize.
+   - **Warp**: 59 s in pmax, 70.8 s in dmap — the ~12 s delta is the
+     async spill I/O taxing compute. The loop itself is at its
+     practical floor: SIMD8 pair taps landed 2026-07-20 (151.2 dB vs
+     old, ~4%); measured cost split at 41 ns/px on `debug-bench warp`:
+     weights ~16 (scalar LUT beats vectorized — SIMD8<Int32> conversion
+     inits are unspecialized generics, ~250 ns/call), taps ~7,
+     homography/divides/clamp/store ~19. Dead ends recorded in
+     WarpBench.swift. Don't expect more here without changing outputs.
+   - **dmap spill round-trip**: io 41.6 s overlapped under compute
+     (fp16, convert free) + render-src 18.3 s reading it back. Next
+     candidate: spill RGB-only (drop the alpha plane, −25% both ways,
+     ~−14 s) — but first verify what render does with warped alpha
+     inside the common-coverage crop (fractional only at sub-pixel
+     borders; margin-32 PSNR gates would hide an edge regression, so
+     check edges explicitly).
+   - **energy 16 s** (post-grid-energy), select/regularize/render ~7 s.
+   `compare` now handles two differently-cropped outputs of the same
+   scene (Metrics.psnrIntersection) — use it for registration A/Bs.
+   Ablation taps: HYPERFOCAL_SIFT_NFEATURES / HYPERFOCAL_SIFT_CONTRAST
+   / HYPERFOCAL_REGISTER_MAXSIDE (needs FULLGRAY=1 to ablate above the
+   decode scale) + `-v` phase buckets + HYPERFOCAL_REGISTER_DEBUG /
+   HYPERFOCAL_DECODE_DEBUG / HYPERFOCAL_SPILL_DEBUG. 45 MP A/B status
+   (Mac, Fluorite stack): 1600 bound + 2000 cap verified quality-
+   neutral 2026-07-20; **1200 FAILED the same bar at 45 MP**, so the
+   bound is a scale floor — max(1200, longest/5) — and the decode
+   policy's /5 term mirrors it (a 45 MP JPEG decodes ½ to 2048, then
+   boxes to 1638; details in Aligner.openCVRegisterMaxSide's comment
+   and the registrationDecodeMinLongest comment). Sampling profilers
+   cannot run in the dev VM (hypervisor doesn't virtualize the
+   profiling interrupt); on real Windows hardware, wpr + WPA work with
+   `swift build -Xswiftc -debug-info-format=codeview -Xlinker /DEBUG`.
+   Before touching any per-pixel loop, read PortableSIMD.swift's
+   performance contract: cross-file generic calls don't specialize in
+   per-file debug builds — that trap cost 55x in the warp until
+   2026-07-20.
 
 Deferred within Phase 1 (stubs in place, not on the gate path): rocking export
 (`RockingAnimation.write` throws on Linux — FFmpeg/giflib backend pending) and
