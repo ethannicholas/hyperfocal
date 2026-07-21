@@ -105,7 +105,13 @@ public final class FrameSpill {
     /// does, the spill runs at half precision (logged).
     init?(frameBytes: Int, frameCount: Int, log: ((String) -> Void)? = nil) {
         self.frameBytes = frameBytes
-        if FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) == nil {
+        if ProcessInfo.processInfo.environment["HYPERFOCAL_SPILL_FP16"] == "1" {
+            // Test tap: exercise the degraded tier on stacks that would
+            // comfortably fit fp32 (synth A/Bs measure it at ~75-80 dB).
+            halfPrecision = true
+            slotBytes = (frameBytes / 2 + 0x3FFF) & ~0x3FFF
+            log?("frame spill: fp16 forced by HYPERFOCAL_SPILL_FP16")
+        } else if FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) == nil {
             halfPrecision = false
             slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
         } else if FrameSpill.shortfall(frameBytes: frameBytes / 2,

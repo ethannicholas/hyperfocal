@@ -124,12 +124,22 @@ Windows residuals to close (each independently landable):
      homography/divides/clamp/store ~19. Dead ends recorded in
      WarpBench.swift. Don't expect more here without changing outputs.
    - **dmap spill round-trip**: io 41.6 s overlapped under compute
-     (fp16, convert free) + render-src 18.3 s reading it back. Next
-     candidate: spill RGB-only (drop the alpha plane, −25% both ways,
-     ~−14 s) — but first verify what render does with warped alpha
-     inside the common-coverage crop (fractional only at sub-pixel
-     borders; margin-32 PSNR gates would hide an edge regression, so
-     check edges explicitly).
+     (fp16, convert free) + render-src 18.3 s reading it back.
+     **Byte-reduction is a measured dead end on this VM** (2026-07-21):
+     an RGB + 8-bit-alpha slot layout (13 B/px fp32 / 7 B/px fp16,
+     bit-identical fp32 round trip proven, alpha exact at the 0/1
+     every real source produces) ran a 4-run interleaved A/B — write
+     io did NOT drop (~41-48 s regardless of bytes; the VM's write
+     path is cache/flush-governed, not bandwidth-proportional),
+     render-src reads did scale (−1.3 to −4.4 s), but the strided
+     pack cost +3 s of convert and warp inflated +4-9 s alongside it
+     (2-core memory-bandwidth interference). Net slightly negative →
+     reverted, same bar as the Chebyshev revert. The full change is
+     parked in the local `spill-rgb` stash on the Windows VM: its
+     −19% fp32 footprint (lossless tier fits smaller disks) may still
+     pay on real hardware — measure there before resurrecting.
+     HYPERFOCAL_SPILL_FP16=1 (landed) forces the degraded tier on
+     tiny stacks for controlled A/Bs (measures ~79.5 dB vs no-spill).
    - **energy 16 s** (post-grid-energy), select/regularize/render ~7 s.
    `compare` now handles two differently-cropped outputs of the same
    scene (Metrics.psnrIntersection) — use it for registration A/Bs.
