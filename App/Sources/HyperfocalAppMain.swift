@@ -162,8 +162,10 @@ struct HyperfocalApp: App {
                 // it's pointing the app at a folder of frames.
                 Button("New Project…") { model.openFrames() }
                     .keyboardShortcut("n", modifiers: .command)
+                    .disabled(model.phase.isRunning)
                 Button("Open Project…") { model.openProjectPanel() }
                     .keyboardShortcut("o", modifiers: .command)
+                    .disabled(model.phase.isRunning)
                 Button("Add Stack Folder…") { model.addStackFolderPanel() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(model.phase.isRunning)

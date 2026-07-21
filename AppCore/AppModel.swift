@@ -472,6 +472,17 @@ public final class AppModel: ObservableObject {
     private var fusedSettings: FuseSettings?
 
     private var fusionCancellation: CancellationToken?
+    /// Monotonic fusion ownership: every write-back from a fusion task
+    /// (completion, failure, previews, dialogs) is gated on the generation
+    /// it was started with, so a cancelled fusion's late results land in
+    /// the void instead of stomping whatever the user did next. Bumped by
+    /// every fuse() and by cancelFusion().
+    private var fusionGeneration = 0
+    /// The still-draining engine run after a cancel (uninterruptible
+    /// decode/GPU steps finish at their own pace, in the background). A
+    /// new fuse awaits it before starting engine work: two concurrent
+    /// 45 MP pipelines are a memory-pressure risk, not a feature.
+    private var drainingFusion: Task<Void, Never>?
 
     // Noise-floor preview: while the slider is dragged, the output pane shows
     // the depth map the new floor would produce — the *actual* regularizer
@@ -848,10 +859,18 @@ public final class AppModel: ObservableObject {
     /// (application(_:open:) via the app delegate); window drops route here
     /// too. Same replace-the-project confirmation as File > Open Project.
     func openExternal(urls: [URL]) {
-        guard !phase.isRunning,
-              let project = urls.first(where: {
-                  $0.pathExtension.lowercased() == ProjectStore.fileExtension
-              }) else { return }
+        guard let project = urls.first(where: {
+            $0.pathExtension.lowercased() == ProjectStore.fileExtension
+        }) else { return }
+        // Arrives from outside the app (Finder, Dock), where menu
+        // disablement can't gate it — a silent return here reads as
+        // "the app ignored my double-click".
+        guard !phase.isRunning else {
+            dialogs?.notify(message: "A stack is still processing",
+                            informative: "Cancel it or let it finish before opening another project.",
+                            warning: false)
+            return
+        }
         guard confirmDiscardingUnsavedWork(message: "Open a different project?",
                                            confirmTitle: "Open Project") else { return }
         openProject(from: project)
@@ -1058,6 +1077,7 @@ public final class AppModel: ObservableObject {
     }
 
     private func runOpenProjectPanel() {
+        guard !phase.isRunning else { return }  // backstop; see runOpenFramesPanel
         guard confirmDiscardingUnsavedWork(message: "Open a different project?",
                                            confirmTitle: "Open Project") else { return }
         guard let url = dialogs?.chooseProjectToOpen() else { return }
@@ -1613,6 +1633,10 @@ public final class AppModel: ObservableObject {
     }
 
     private func runOpenFramesPanel() {
+        // Backstop for the menu disablement (both shells): starting a new
+        // project mid-run would dead-end in loadStacks' guard AFTER the
+        // user picked a folder — the worst kind of silent no-op.
+        guard !phase.isRunning else { return }
         guard confirmDiscardingUnsavedWork(message: "Start a new project?",
                                            confirmTitle: "New Project") else { return }
         let urls = dialogs?.chooseFrames(message: "Choose a stack: a folder of frames, or the frames themselves (focus order = name order).") ?? []
@@ -1640,11 +1664,17 @@ public final class AppModel: ObservableObject {
     /// never need to warn. A dropped project file is the exception — that
     /// means "open this project", which replaces and therefore confirms.
     public func addStacks(urls: [URL]) {
-        guard !phase.isRunning else { return }
         if urls.contains(where: {
             $0.pathExtension.lowercased() == ProjectStore.fileExtension
         }) {
-            openExternal(urls: urls)
+            openExternal(urls: urls)  // guards + speaks for itself
+            return
+        }
+        // Drops can't be menu-disabled either (see openExternal).
+        guard !phase.isRunning else {
+            dialogs?.notify(message: "A stack is still processing",
+                            informative: "Cancel it or let it finish before adding stacks.",
+                            warning: false)
             return
         }
         loadStacks(from: urls, replacing: false)
@@ -2345,6 +2375,10 @@ public final class AppModel: ObservableObject {
         // an unattended queue must keep moving, so they exclude silently (the
         // summary reports it).
         let dialogs = self.dialogs
+        let cancellation = CancellationToken()
+        fusionCancellation = cancellation
+        fusionGeneration += 1
+        let generation = fusionGeneration
         let prompt = badFramePrompt ?? (batchMode ? { _ in true } : { lines in
             DispatchQueue.main.sync {
                 MainActor.assumeIsolated {
@@ -2360,13 +2394,28 @@ public final class AppModel: ObservableObject {
             }
         })
         config.badFrameHandler = { issues in
+            // A cancelled fusion must never pop a modal from the grave —
+            // its results are discarded, so any answer is fine.
+            if cancellation.isCancelled { return Set(issues.map(\.index)) }
             let lines = issues.map { "\(urls[$0.index].lastPathComponent): \($0.summary)" }
             return prompt(lines) ? Set(issues.map(\.index)) : []
         }
         let cache = alignmentCache
-        let cancellation = CancellationToken()
-        fusionCancellation = cancellation
-        Task.detached(priority: .userInitiated) { [weak self] in
+        let previousDrain = drainingFusion
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
+            // One engine run at a time: a just-cancelled fusion may still be
+            // draining to its next cancellation checkpoint (uninterruptible
+            // decode/GPU work). Overlapping full pipelines on 45 MP stacks
+            // is a memory-pressure risk, so wait it out — typically well
+            // under a frame's worth of time.
+            if let previousDrain {
+                await MainActor.run { [weak self] in
+                    guard let self, generation == self.fusionGeneration else { return }
+                    self.stageText = "Waiting for the previous fusion to stop…"
+                }
+                await previousDrain.value
+            }
+            if cancellation.isCancelled { return }  // cancelled while waiting
             do {
                 let result = try StackPipeline.fuseResult(urls: urls, configuration: config,
                                                           alignmentCache: cache,
@@ -2391,8 +2440,8 @@ public final class AppModel: ObservableObject {
                         guard let self else { return }
                         // After Cancel, in-flight work (decodes already
                         // running when the token flipped) still reports —
-                        // those updates must not overwrite "Cancelling…"
-                        // or the cancel looks ignored.
+                        // the UI is already back to idle, and a late
+                        // progress tick must not resurrect the busy state.
                         guard !cancellation.isCancelled else { return }
                         self.stageText = update.stage.rawValue
                         self.updateStageETA(stage: update.stage,
@@ -2420,7 +2469,12 @@ public final class AppModel: ObservableObject {
                 let resultCG = try Preview.image(from: output.image)
                 let depthCG = try Preview.image(from: output.depthMap)
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    // Generation gate: if the user cancelled (and possibly
+                    // started something new), this result belongs to a
+                    // fusion nobody wants — drop everything.
+                    guard let self, generation == self.fusionGeneration else { return }
+                    self.fusionCancellation = nil
+                    self.drainingFusion = nil
                     // Flag bad frames and clear the checkboxes of excluded ones
                     // (they stay listed — re-checking opts back in). fuseURLs
                     // must be what was actually fused: retouch sources, saves,
@@ -2456,7 +2510,13 @@ public final class AppModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    // Stale generation = this fusion was cancelled and the
+                    // model may already be running someone else's work (or a
+                    // fresh project) — the CancellationError unwind must not
+                    // touch anything. cancelFusion() already restored the UI.
+                    guard let self, generation == self.fusionGeneration else { return }
+                    self.fusionCancellation = nil
+                    self.drainingFusion = nil
                     self.processingSource = nil
                     self.processingSourceLabel = nil
                     self.progressive = nil
@@ -2468,6 +2528,7 @@ public final class AppModel: ObservableObject {
                 }
             }
         }
+        drainingFusion = task
     }
 
     /// A failed fuse must be unmissable: the previous result stays in the
@@ -2652,10 +2713,31 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// Cancel is immediate from the user's point of view: the UI returns to
+    /// the idle (loaded/empty) state right here, and the engine run drains
+    /// to its next cancellation checkpoint in the background —
+    /// uninterruptible steps (a RAW decode, a submitted GPU command buffer)
+    /// simply finish unobserved. Every write-back from that run is
+    /// generation-gated, so nothing it produces (results, previews, the
+    /// bad-frame dialog) can land afterward; the one thing that still
+    /// serializes on the drain is starting the *next* engine run (see
+    /// `drainingFusion`). Scans (frame loading) set no cancellation token
+    /// and remain uncancellable, as before.
     public func cancelFusion() {
-        fusionCancellation?.cancel()
-        stageText = "Cancelling…"
+        guard let cancellation = fusionCancellation, phase.isRunning else { return }
+        cancellation.cancel()
+        fusionCancellation = nil
+        fusionGeneration += 1  // orphan every write-back of the draining run
+        phase = frames.isEmpty ? .empty : .loaded
+        stageText = ""
         stageETA = nil
+        stageFraction = 0
+        progressive = nil
+        progressiveIsData = false
+        progressiveNominalSize = nil
+        processingSource = nil
+        processingSourceLabel = nil
+        processingSourceNominalSize = nil
     }
 
     // MARK: - Retouching

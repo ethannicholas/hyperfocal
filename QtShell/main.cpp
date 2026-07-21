@@ -409,11 +409,16 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 // forward slashes: the bridge echoes them that way, while a
                 // Windows runner passes the out path with backslashes.
                 state->projectFile = state->outPath + ".hyperfocal";
-                state->projectOK =
-                    shell->saveProject(QUrl::fromLocalFile(state->projectFile))
-                    && !shell->hasUnsavedWork()
-                    && QDir::fromNativeSeparators(shell->projectPath())
+                const bool saved =
+                    shell->saveProject(QUrl::fromLocalFile(state->projectFile));
+                const bool clean = !shell->hasUnsavedWork();
+                const bool pathSet = QDir::fromNativeSeparators(shell->projectPath())
                         == QDir::fromNativeSeparators(state->projectFile);
+                state->projectOK = saved && clean && pathSet;
+                if (!state->projectOK)
+                    qWarning() << "selftest project: save" << saved
+                               << "clean" << clean << "path" << pathSet
+                               << shell->projectPath();
                 if (state->projectOK)
                     shell->openStack(QUrl::fromLocalFile(state->projectFile));
                 advance(8);
@@ -426,6 +431,11 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     && stacks[0].toMap().value(QStringLiteral("status"))
                            .toInt() == 2;
                 if (!reloaded && ++state->stageTicks < 40) return;
+                if (!reloaded)
+                    qWarning() << "selftest project: reload failed —"
+                               << stacks.size() << "stacks, status"
+                               << (stacks.isEmpty() ? -1
+                                   : stacks[0].toMap().value(QStringLiteral("status")).toInt());
                 state->projectOK = state->projectOK && reloaded;
                 // New Project must REPLACE the stacks (hf_load_stack
                 // keeps drop/add semantics) — in the batch variant this
@@ -440,6 +450,9 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const bool replaced = shell->stacks().size() == 1;
                 if (!replaced && ++state->stageTicks < 40) return;
+                if (!replaced)
+                    qWarning() << "selftest project: new-project replace failed —"
+                               << shell->stacks().size() << "stacks";
                 state->projectOK = state->projectOK && replaced;
                 break;
             }

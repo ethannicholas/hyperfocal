@@ -889,6 +889,71 @@ Task { @MainActor in
     try? FileManager.default.removeItem(at: sabotageDir)
     print("probe: bad-frame model flow OK")
 
+    // 5c. Immediate cancel: cancelFusion returns the model to idle in the
+    // same turn (no "Cancelling…" limbo), actions taken while the orphaned
+    // engine run drains work normally, the orphan's write-backs (results,
+    // phase, bad-frame prompt) land in the void, and the next fuse
+    // serializes behind the drain and completes.
+    let cancelDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("probe-cancel-\(ProcessInfo.processInfo.processIdentifier)")
+    try? FileManager.default.createDirectory(at: cancelDir, withIntermediateDirectories: true)
+    let (_, cancelURLs) = try! SynthStack.generate(
+        options: SynthStack.Options(width: 400, height: 300, frames: 5,
+                                    maxBlur: 4, breathing: 0.01, jitter: 2,
+                                    flicker: 0, scene: .plane),
+        outDir: cancelDir)
+    let cancelModel = AppModel()
+    var cancelPrompted = false
+    cancelModel.badFramePrompt = { _ in cancelPrompted = true; return true }
+    cancelModel.ingest(urls: Array(urls))
+    ticks = 0
+    while cancelModel.phase.isRunning && ticks < 100 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    cancelModel.fuse()
+    guard cancelModel.phase == .running else {
+        print("probe: CANCEL SETUP: FUSE DID NOT START (\(cancelModel.phase))"); exit(1)
+    }
+    cancelModel.cancelFusion()
+    guard cancelModel.phase == .loaded, cancelModel.stageText.isEmpty,
+          cancelModel.progressive == nil else {
+        print("probe: CANCEL NOT IMMEDIATE (\(cancelModel.phase) '\(cancelModel.stageText)')")
+        exit(1)
+    }
+    // Act during the drain: replace the project with a different stack —
+    // exactly the flow that used to dead-end silently under "Cancelling…".
+    cancelModel.ingest(urls: cancelURLs)
+    ticks = 0
+    while cancelModel.phase.isRunning && ticks < 100 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard cancelModel.frames.count == cancelURLs.count else {
+        print("probe: LOAD DURING DRAIN DID NOT LAND (\(cancelModel.frames.count) frames)")
+        exit(1)
+    }
+    // Give the orphaned fusion time to drain and (if gating were broken)
+    // land: nothing may change — no result, no phase flip, no prompt.
+    try? await Task.sleep(nanoseconds: 3_000_000_000)
+    guard cancelModel.phase == .loaded, cancelModel.result == nil, !cancelPrompted else {
+        print("probe: ORPHANED FUSION LANDED (\(cancelModel.phase), "
+            + "result=\(cancelModel.result != nil), prompted=\(cancelPrompted))")
+        exit(1)
+    }
+    // The next fuse waits out any remaining drain, then completes.
+    cancelModel.fuse()
+    ticks = 0
+    while cancelModel.phase != .done && ticks < 600 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard cancelModel.phase == .done, cancelModel.result != nil else {
+        print("probe: FUSE AFTER CANCEL FAILED (\(cancelModel.phase))"); exit(1)
+    }
+    try? FileManager.default.removeItem(at: cancelDir)
+    print("probe: immediate cancel + act-during-drain OK")
+
     // 6. Session auto-split + batch queue: two capture-time-stamped stacks in
     // one list split at the gap, batch-fuse serially, and export two results.
     let pid = ProcessInfo.processInfo.processIdentifier

@@ -37,6 +37,7 @@ ApplicationWindow {
             Action {
                 text: "New Project…"
                 shortcut: StandardKey.New
+                enabled: !Shell.isRunning
                 // Confirm before the picker, like native; the chosen
                 // folder REPLACES the project (Add Stack Folder adds).
                 onTriggered: {
@@ -47,11 +48,13 @@ ApplicationWindow {
             Action {
                 text: "Open Project…"
                 shortcut: StandardKey.Open
+                enabled: !Shell.isRunning
                 onTriggered: openProjectDialog.open()
             }
             Action {
                 text: "Add Stack Folder…"
                 shortcut: "Ctrl+Shift+N"
+                enabled: !Shell.isRunning
                 onTriggered: openDialog.open()
             }
             MenuSeparator {}
