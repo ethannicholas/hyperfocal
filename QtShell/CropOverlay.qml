@@ -281,6 +281,39 @@ Item {
                 if (overlay.fits(cand2, overlay.angle)) {
                     overlay.crop = cand2
                     overlay.push()
+                } else {
+                    // A fast drag jumps many px between events, so the raw
+                    // candidate can overshoot the canvas while sizes between
+                    // it and the current crop still fit. Bisect the size
+                    // toward the target (the rotate stop's idiom) so the
+                    // handle lands as close to the mouse as containment
+                    // allows instead of freezing at the last in-bounds event.
+                    var loW = overlay.crop.width, loH = overlay.crop.height
+                    var hiW = newW, hiH = newH
+                    for (var k2 = 0; k2 < 20; ++k2) {
+                        var midW = (loW + hiW) / 2, midH = (loH + hiH) / 2
+                        var mlx = hx * midW / 2, mly = hy * midH / 2
+                        var mcx = ax + mlx * cosA - mly * sinA
+                        var mcy = ay + mlx * sinA + mly * cosA
+                        if (overlay.fits(Qt.rect(Math.round(mcx - midW / 2),
+                                                 Math.round(mcy - midH / 2),
+                                                 Math.round(midW), Math.round(midH)),
+                                         overlay.angle)) {
+                            loW = midW; loH = midH
+                        } else {
+                            hiW = midW; hiH = midH
+                        }
+                    }
+                    var flx = hx * loW / 2, fly = hy * loH / 2
+                    var fcx = ax + flx * cosA - fly * sinA
+                    var fcy = ay + flx * sinA + fly * cosA
+                    var fcand = Qt.rect(Math.round(fcx - loW / 2),
+                                        Math.round(fcy - loH / 2),
+                                        Math.round(loW), Math.round(loH))
+                    if (overlay.fits(fcand, overlay.angle)) {
+                        overlay.crop = fcand
+                        overlay.push()
+                    }
                 }
             } else {
                 // Rotate about the center: incremental unwrapped angle,

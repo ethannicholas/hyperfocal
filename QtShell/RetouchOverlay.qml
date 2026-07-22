@@ -49,6 +49,15 @@ Item {
         cursorShape: Qt.CrossCursor
 
         onPressed: function(mouse) {
+            // Ctrl+drag pans instead of painting: refusing the press hands
+            // the drag to the pane underneath. Trackpads have no easy
+            // middle button, and Windows/Linux get no two-finger pan
+            // (pixel deltas never arrive through the wheel path there) —
+            // this is the retouch-mode pan gesture for them.
+            if (mouse.modifiers & Qt.ControlModifier) {
+                mouse.accepted = false
+                return
+            }
             var p = pane.mapToImage(Qt.point(mouse.x, mouse.y))
             overlay.lastPoint = p
             Shell.retouchHover(p.x, p.y)
@@ -72,10 +81,13 @@ Item {
         }
         onWheel: function(wheel) {
             // ⌥-scroll resizes the brush (native pow(1.015, -deltaY));
-            // plain scrolls fall through to the pane's pan/zoom.
+            // plain scrolls fall through to the pane's pan/zoom. Some
+            // Windows input stacks deliver Alt+scroll on the horizontal
+            // axis — take whichever axis carries the motion.
             if (wheel.modifiers & Qt.AltModifier) {
-                Shell.retouchAdjustBrush(
-                    Math.pow(1.015, -wheel.angleDelta.y / 8))
+                var d = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y
+                                                 : wheel.angleDelta.x
+                Shell.retouchAdjustBrush(Math.pow(1.015, -d / 8))
                 circle.sync()
                 wheel.accepted = true
             } else {

@@ -29,7 +29,11 @@ quint64 tileKey(int level, int tx, int ty) {
 
 PaneItem::PaneItem(QQuickItem *parent) : QQuickItem(parent) {
     setFlag(ItemHasContents);
-    setAcceptedMouseButtons(Qt::LeftButton);
+    // Middle button pans too (the handlers are button-agnostic): in
+    // retouch mode left-drag paints, and Windows/Linux get no trackpad
+    // pixel-delta pan, so a drag-pan that works in every mode needs a
+    // button the overlays never claim.
+    setAcceptedMouseButtons(Qt::LeftButton | Qt::MiddleButton);
     // Zoomed in, the tiles extend past the pane; the painted item clipped
     // implicitly, the scene graph must be told.
     setClip(true);

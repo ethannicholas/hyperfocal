@@ -263,21 +263,7 @@ circle under the canPaint rule; the selftest paints a stroke and
 proves edits→dirty-epoch→"Undo Stroke"→revert→exit. Remaining polish,
 in priority order:
 
-1. **Crop drag handles**: Dragging a crop handle out of bounds should
-   move it as close to the mouse location as possible. Instead, the
-   handle simply stops moving as soon as the mouse crosses out of
-   bounds; since the mouse can move many pixels in the space of a
-   single frame, this leaves the crop rectangle resistant to reaching
-   the image bounds.
-2. **Trackpad gestures**: On the Windows VM on a Mac, the Mac-native
-   trackpad gestures for panning and zooming do not work. Perhaps some
-   of this is simply that Windows doesn't have as rich of a trackpad
-   interface as macOS does, but I see no obvious reason that Alt + two
-   finger pan shouldn't affect brush size as it does under macOS. And
-   if we cannot make two finger panning work as it does on macOS, we
-   will need another gesture to pan the image around in retouching
-   mode, such as a modifier key + drag.
-3. **Crop rotation cursors** (from Ethan's 2026-07-19 review; not
+1. **Crop rotation cursors** (from Ethan's 2026-07-19 review; not
    urgent): proper rotation cursors matching the native macOS
    sector-oriented rotate cursors (Qt has no built-in rotate cursor —
    needs custom cursor images quantized to the 8 sectors like
@@ -293,6 +279,14 @@ reviewers stop discovering them by surprise):
   non-native chrome on macOS).
 - Batch-fuse and bulk-export summaries arrive as notice dialogs — the
   native queueSummaryPresenter styling differs.
+- Trackpad two-finger pan is macOS-only: on Windows/Linux, trackpad
+  scrolls arrive as wheel angle deltas (no pixel deltas, incl. through
+  VMware), indistinguishable from a mouse wheel, so plain scroll zooms
+  there. Pan instead by left-drag (non-retouch) or, in retouch mode,
+  middle-drag / Ctrl+drag (the overlay refuses Ctrl presses so the
+  pane's drag-pan takes them). ⌥-scroll brush sizing reads whichever
+  wheel axis carries the motion (some Windows stacks put Alt+scroll on
+  the horizontal axis).
 
 ## Engine performance
 
