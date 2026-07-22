@@ -10,18 +10,29 @@
 
 $ErrorActionPreference = 'Stop'
 
-# Swift: the installer records its PATH additions in the user registry, which
-# an already-running shell won't have picked up.
+# Swift: the installer records its PATH additions in the registry — the user
+# hive for a per-user install, the machine hive for an elevated/CI install —
+# which an already-running shell won't have picked up. Check both.
 if (-not (Get-Command swift -ErrorAction SilentlyContinue)) {
-    $userPath = (Get-ItemProperty HKCU:\Environment -ErrorAction SilentlyContinue).Path
-    if ($userPath) {
-        $swiftDirs = ($userPath -split ';') | Where-Object { $_ -match 'Swift' }
-        if ($swiftDirs) { $env:Path = ($swiftDirs -join ';') + ';' + $env:Path }
+    $regPaths = @(
+        (Get-ItemProperty HKCU:\Environment -ErrorAction SilentlyContinue).Path,
+        (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -ErrorAction SilentlyContinue).Path
+    )
+    foreach ($regPath in $regPaths) {
+        if (-not $regPath) { continue }
+        $swiftDirs = ($regPath -split ';') | Where-Object { $_ -match 'Swift' }
+        if ($swiftDirs) {
+            $env:Path = ($swiftDirs -join ';') + ';' + $env:Path
+            break
+        }
     }
 }
 if (-not $env:SDKROOT) {
-    $sdkRoot = (Get-ItemProperty HKCU:\Environment -ErrorAction SilentlyContinue).SDKROOT
-    if ($sdkRoot) { $env:SDKROOT = $sdkRoot }
+    foreach ($hive in @('HKCU:\Environment',
+                        'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment')) {
+        $sdkRoot = (Get-ItemProperty $hive -ErrorAction SilentlyContinue).SDKROOT
+        if ($sdkRoot) { $env:SDKROOT = $sdkRoot; break }
+    }
 }
 
 if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {

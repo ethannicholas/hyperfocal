@@ -65,5 +65,15 @@ jobs:
         shell: pwsh
         run: |
           . Scripts\windows-env.ps1
-          & 'C:\Program Files\Git\bin\bash.exe' Scripts/ci-gate.sh
-          if ($LASTEXITCODE) { exit 1 }
+          # On failure, surface the log tail as ::error:: annotations — they
+          # land in the public check-runs API, the only log channel readable
+          # without repo-admin credentials (job-log download is 403 even on
+          # public repos).
+          & 'C:\Program Files\Git\bin\bash.exe' Scripts/ci-gate.sh 2>&1 |
+              Tee-Object -FilePath gate.log
+          if ($LASTEXITCODE) {
+            Get-Content gate.log -Tail 10 | ForEach-Object {
+              Write-Host "::error::$_"
+            }
+            exit 1
+          }
