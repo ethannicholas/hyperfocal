@@ -132,8 +132,9 @@ struct ContentView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityIdentifier("stack.row.\(stack.name).disclose")
-                                    .accessibilityLabel(
-                                        "\(expanded ? "Collapse" : "Expand") \(stack.name)")
+                                    .accessibilityLabel(expanded
+                                        ? "Collapse \(stack.name)"
+                                        : "Expand \(stack.name)")
                                     StackRow(stack: stack,
                                              isSelected: stack.id == model.selectedStackID,
                                              status: model.status(of: stack),
@@ -216,7 +217,7 @@ struct ContentView: View {
     /// automatable. `trailing` stays a sibling outside the button: nesting
     /// buttons inside a button label breaks hit-testing.
     private func sectionHeader<T: View>(
-        _ title: String, _ section: AppModel.SidebarSection,
+        _ title: LocalizedStringKey, _ section: AppModel.SidebarSection,
         @ViewBuilder trailing: () -> T
     ) -> some View {
         HStack(spacing: 5) {
@@ -242,14 +243,14 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("section.\(section.rawValue)")
-            .accessibilityLabel("\(title) section")
+            .accessibilityLabel(Text(title))
             .accessibilityValue(model.isCollapsed(section) ? "collapsed" : "expanded")
             trailing()
         }
         .padding(.bottom, model.isCollapsed(section) ? 12 : 0)
     }
 
-    private func sectionHeader(_ title: String,
+    private func sectionHeader(_ title: LocalizedStringKey,
                                _ section: AppModel.SidebarSection) -> some View {
         sectionHeader(title, section) { EmptyView() }
     }
@@ -493,13 +494,13 @@ struct ContentView: View {
                     loading: model.inputPreviewLoading && !model.phase.isRunning,
                     emptyHint: model.inputPreviewError
                         ?? (model.frames.isEmpty
-                            ? "Start a new project to begin"
-                            : "Select a frame in the Stack list"),
+                            ? String(localized: "Start a new project to begin")
+                            : String(localized: "Select a frame in the Stack list")),
                     tone: model.tone,
                     header: { EmptyView() }
                 )
                 PreviewPane(
-                    title: "Output",
+                    title: String(localized: "Output"),
                     paneID: "output.pane",
                     image: outputImage,
                     nominalSize: model.displayCrop?.size ?? model.outputNominalSize,
@@ -507,7 +508,8 @@ struct ContentView: View {
                     sourceCanvas: model.outputNominalSize,
                     sourceAngle: model.displayCropAngle,
                     loading: false,
-                    emptyHint: model.canFuse ? "Press “Fuse Stack”" : "No output yet",
+                    emptyHint: model.canFuse ? String(localized: "Press “Fuse Stack”")
+                        : String(localized: "No output yet"),
                     tone: outputPaneShowsData ? ToneSettings() : model.tone,
                     eventOverlay: model.cropMode ? AnyView(CropOverlay(
                         viewport: model.viewport,
@@ -518,7 +520,7 @@ struct ContentView: View {
                     header: {
                         Picker("", selection: $model.outputMode) {
                             ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
-                                Text(mode.rawValue).tag(mode)
+                                Text(mode.displayName).tag(mode)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -582,8 +584,9 @@ struct ContentView: View {
 
     private var inputPaneTitle: String {
         if showProcessingSource, let label = model.processingSourceLabel { return label }
-        guard let url = model.inputPreviewURL else { return "Input" }
-        return url.lastPathComponent + (model.inputPreviewAligned ? " (aligned)" : "")
+        guard let url = model.inputPreviewURL else { return String(localized: "Input") }
+        return url.lastPathComponent
+            + (model.inputPreviewAligned ? String(localized: " (aligned)") : "")
     }
 
     private var inputPaneImage: CGImage? {
@@ -625,14 +628,14 @@ struct RetouchPreviewArea: View {
         let nominal = crop?.size ?? session.nominalSize
         HStack(spacing: 1) {
             PreviewPane(
-                title: "Source: \(session.sourceName)  ↑/↓ cycle · space picks sharpest",
+                title: String(localized: "Source: \(session.sourceName)  ↑/↓ cycle · space picks sharpest"),
                 image: session.sourceDisplay,
                 nominalSize: nominal,
                 sourceOrigin: crop?.origin ?? .zero,
                 sourceCanvas: session.nominalSize,
                 sourceAngle: cropAngle,
                 loading: session.sourceLoading,
-                emptyHint: session.sourceError ?? "Loading source…",
+                emptyHint: session.sourceError ?? String(localized: "Loading source…"),
                 loadingStatus: session.sourceStatus,
                 brushCursor: brushCursor,
                 tone: tone,
@@ -640,8 +643,8 @@ struct RetouchPreviewArea: View {
             )
             PreviewPane(
                 title: outputMode == .depth
-                    ? "Retouched Depth — drag to paint from source"
-                    : "Retouched Output — drag to paint from source",
+                    ? String(localized: "Retouched Depth — drag to paint from source")
+                    : String(localized: "Retouched Output — drag to paint from source"),
                 image: nil,
                 nominalSize: nominal,
                 loading: false,
@@ -661,7 +664,7 @@ struct RetouchPreviewArea: View {
                 header: {
                     Picker("", selection: $outputMode) {
                         ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            Text(mode.displayName).tag(mode)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -804,7 +807,7 @@ struct ZoomBar: View {
 
     private var label: String {
         switch viewport.mode {
-        case .fit: return "Fit"
+        case .fit: return String(localized: "Fit")
         case .scale(let s): return ViewportState.percentLabel(s)
         }
     }
@@ -1691,7 +1694,7 @@ struct RetouchOverlay: NSViewRepresentable {
 // MARK: - Labeled slider with help
 
 struct LabeledSlider: View {
-    let label: String
+    let label: LocalizedStringKey
     /// Accessibility identifier for the slider (`<id>.value` names the value
     /// text). See CLAUDE.md for the `area.control` naming convention.
     var id: String? = nil
@@ -1700,7 +1703,7 @@ struct LabeledSlider: View {
     let format: String
     /// Multiplier applied to the value for display only (e.g. 100 for percent).
     var displayScale: Double = 1
-    let help: String
+    let help: LocalizedStringKey
     var onEditingChanged: ((Bool) -> Void)? = nil
 
     /// A hair below zero formats as "-0.00" (drag the slider back toward
@@ -1773,7 +1776,7 @@ struct CropControls: View {
         HStack {
             Picker("Aspect Ratio", selection: $model.cropAspect) {
                 ForEach(AppModel.CropAspect.allCases, id: \.self) { aspect in
-                    Text(aspect.rawValue).tag(aspect)
+                    Text(aspect.displayName).tag(aspect)
                 }
             }
             .accessibilityIdentifier("edit.crop-aspect")

@@ -6,6 +6,7 @@ options:
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
+  developmentLanguage: en
 
 packages:
   HyperfocalKit:
@@ -54,6 +55,11 @@ targets:
       - Resources/crop-rotate-0@2x.png
       - Resources/crop-rotate-1.png
       - Resources/crop-rotate-1@2x.png
+      # String catalog (hand-maintained JSON; keys are the English strings).
+      # SwiftUI literals resolve automatically; String-typed plumbing goes
+      # through String(localized:)/NSLocalizedString — see AppCore/
+      # Localization.swift for the enum displayName seam.
+      - Resources/Localizable.xcstrings
     dependencies:
       - package: HyperfocalKit
         product: HyperfocalKit

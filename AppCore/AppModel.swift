@@ -822,9 +822,11 @@ public final class AppModel: ObservableObject {
         guard !phase.isRunning, let stack = selectedStack else { return }
         stash(into: stack)
         if stack.result != nil, hasUnsavedWork,
-           !runConfirmAlert(message: "Close the stack “\(stack.name)”?",
-                            informative: "Any unsaved work in it will be lost.",
-                            confirmTitle: "Close Stack") {
+           !runConfirmAlert(message: String(format: NSLocalizedString(
+                                "Close the stack “%@”?", comment: ""), stack.name),
+                            informative: NSLocalizedString(
+                                "Any unsaved work in it will be lost.", comment: ""),
+                            confirmTitle: NSLocalizedString("Close Stack", comment: "")) {
             return
         }
         let index = stacks.firstIndex { $0.id == stack.id } ?? 0
@@ -843,8 +845,9 @@ public final class AppModel: ObservableObject {
     /// File > Close Project: back to the freshly launched empty state.
     public func closeProject() {
         guard !phase.isRunning else { return }
-        guard confirmDiscardingUnsavedWork(message: "Close this project?",
-                                           confirmTitle: "Close Project") else { return }
+        guard confirmDiscardingUnsavedWork(
+            message: NSLocalizedString("Close this project?", comment: ""),
+            confirmTitle: NSLocalizedString("Close Project", comment: "")) else { return }
         clearProject()
     }
 
@@ -866,13 +869,14 @@ public final class AppModel: ObservableObject {
         // disablement can't gate it — a silent return here reads as
         // "the app ignored my double-click".
         guard !phase.isRunning else {
-            dialogs?.notify(message: "A stack is still processing",
-                            informative: "Cancel it or let it finish before opening another project.",
+            dialogs?.notify(message: NSLocalizedString("A stack is still processing", comment: ""),
+                            informative: NSLocalizedString("Cancel it or let it finish before opening another project.", comment: ""),
                             warning: false)
             return
         }
-        guard confirmDiscardingUnsavedWork(message: "Open a different project?",
-                                           confirmTitle: "Open Project") else { return }
+        guard confirmDiscardingUnsavedWork(
+            message: NSLocalizedString("Open a different project?", comment: ""),
+            confirmTitle: NSLocalizedString("Open Project", comment: "")) else { return }
         openProject(from: project)
     }
 
@@ -958,7 +962,7 @@ public final class AppModel: ObservableObject {
     public func confirmDiscardingUnsavedWork(message: String, confirmTitle: String) -> Bool {
         guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return true }
         return runConfirmAlert(message: message,
-                               informative: "Any unsaved work will be lost.",
+                               informative: NSLocalizedString("Any unsaved work will be lost.", comment: ""),
                                confirmTitle: confirmTitle)
     }
 
@@ -989,7 +993,7 @@ public final class AppModel: ObservableObject {
         if let confirmAlertOverride { return confirmAlertOverride(message) }
         return dialogs?.confirm(message: message, informative: informative,
                                 confirmTitle: confirmTitle,
-                                cancelTitle: "Cancel", warning: false) ?? false
+                                cancelTitle: NSLocalizedString("Cancel", comment: ""), warning: false) ?? false
     }
 
     /// Warns before fusing when the fusion disk cache is enabled but the
@@ -1009,11 +1013,11 @@ public final class AppModel: ObservableObject {
                                                frameCount: urls.count) else { return true }
         let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         return runConfirmAlert(
-            message: "Not enough disk space for the fusion cache",
-            informative: "Fusion normally uses a disk cache to improve performance. This stack "
-                + " needs about \(fmt(short.needed)) and the disk has \(fmt(short.available)) "
-                + "free. Fusion will be slower without a disk cache.",
-            confirmTitle: "Fuse Anyway")
+            message: NSLocalizedString("Not enough disk space for the fusion cache", comment: ""),
+            informative: String(format: NSLocalizedString(
+                "Fusion normally uses a disk cache to improve performance. This stack needs about %@ and the disk has %@ free. Fusion will be slower without a disk cache.",
+                comment: ""), fmt(short.needed), fmt(short.available)),
+            confirmTitle: NSLocalizedString("Fuse Anyway", comment: ""))
     }
 
     /// Quit-time confirm; true = terminate. Bool (not AppKit's
@@ -1021,9 +1025,9 @@ public final class AppModel: ObservableObject {
     /// it at the delegate edge.
     func confirmTermination() -> Bool {
         guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return true }
-        return runConfirmAlert(message: "Are you sure you want to quit?",
-                               informative: "Unsaved data will be lost.",
-                               confirmTitle: "Quit")
+        return runConfirmAlert(message: NSLocalizedString("Are you sure you want to quit?", comment: ""),
+                               informative: NSLocalizedString("Unsaved data will be lost.", comment: ""),
+                               confirmTitle: NSLocalizedString("Quit", comment: ""))
     }
 
     /// File > Save: writes straight back to the project's file; a
@@ -1066,7 +1070,7 @@ public final class AppModel: ObservableObject {
             // still valid, and .failed would disable Save itself (plus
             // export and retouch) until a pointless re-fuse. Report and
             // leave the session exactly as it was.
-            dialogs?.notify(message: "Couldn't save the project",
+            dialogs?.notify(message: NSLocalizedString("Couldn't save the project", comment: ""),
                             informative: error.localizedDescription, warning: true)
             return false
         }
@@ -1078,8 +1082,9 @@ public final class AppModel: ObservableObject {
 
     private func runOpenProjectPanel() {
         guard !phase.isRunning else { return }  // backstop; see runOpenFramesPanel
-        guard confirmDiscardingUnsavedWork(message: "Open a different project?",
-                                           confirmTitle: "Open Project") else { return }
+        guard confirmDiscardingUnsavedWork(
+            message: NSLocalizedString("Open a different project?", comment: ""),
+            confirmTitle: NSLocalizedString("Open Project", comment: "")) else { return }
         guard let url = dialogs?.chooseProjectToOpen() else { return }
         openProject(from: url)
     }
@@ -1094,7 +1099,7 @@ public final class AppModel: ObservableObject {
     func openProject(from url: URL) {
         guard !phase.isRunning else { return }
         phase = .running
-        stageText = "Restoring project…"
+        stageText = NSLocalizedString("Restoring project…", comment: "")
         stageFraction = 0
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
@@ -1130,7 +1135,8 @@ public final class AppModel: ObservableObject {
             } catch {
                 await MainActor.run { [weak self] in
                     guard let self else { return }
-                    self.phase = .failed("project restore failed: \(error.localizedDescription)")
+                    self.phase = .failed(String(format: NSLocalizedString(
+                        "project restore failed: %@", comment: ""), error.localizedDescription))
                 }
             }
         }
@@ -1238,19 +1244,20 @@ public final class AppModel: ObservableObject {
 
     private func offerAccessRegrant(for roots: [URL]) {
         let folders = roots.count == 1
-            ? "the folder “\(roots[0].lastPathComponent)”"
-            : "\(roots.count) folders"
+            ? String(format: NSLocalizedString("the folder “%@”", comment: ""),
+                     roots[0].lastPathComponent)
+            : String(format: NSLocalizedString("%lld folders", comment: ""), roots.count)
         let proceed: Bool
         if let accessPromptOverride {
             proceed = accessPromptOverride(roots.count)
         } else {
             proceed = dialogs?.confirm(
-                message: "Hyperfocal doesn’t have permission to read this project’s images",
-                informative: "macOS grants access folder by folder, and the permission "
-                    + "this project saved couldn’t be restored. Grant access to \(folders) to load "
-                    + "the images — saving the project afterward keeps the access for next time. "
-                    + "Fused results are intact either way.",
-                confirmTitle: "Grant Access…", cancelTitle: "Not Now",
+                message: NSLocalizedString("Hyperfocal doesn’t have permission to read this project’s images", comment: ""),
+                informative: String(format: NSLocalizedString(
+                    "macOS grants access folder by folder, and the permission this project saved couldn’t be restored. Grant access to %@ to load the images — saving the project afterward keeps the access for next time. Fused results are intact either way.",
+                    comment: ""), folders),
+                confirmTitle: NSLocalizedString("Grant Access…", comment: ""),
+                cancelTitle: NSLocalizedString("Not Now", comment: ""),
                 warning: true) ?? false
         }
         guard proceed else { return }
@@ -1286,10 +1293,12 @@ public final class AppModel: ObservableObject {
                 // just return the same answer forever.
                 guard accessGrantPicker == nil else { break }
                 guard dialogs?.confirm(
-                    message: "That folder doesn’t contain the project’s images",
-                    informative: "The images are in “\(root.path)”. Choose that folder, "
-                        + "or any folder that contains it.",
-                    confirmTitle: "Try Again", cancelTitle: "Skip",
+                    message: NSLocalizedString("That folder doesn’t contain the project’s images", comment: ""),
+                    informative: String(format: NSLocalizedString(
+                        "The images are in “%@”. Choose that folder, or any folder that contains it.",
+                        comment: ""), root.path),
+                    confirmTitle: NSLocalizedString("Try Again", comment: ""),
+                    cancelTitle: NSLocalizedString("Skip", comment: ""),
                     warning: true) == true else { break }
             }
         }
@@ -1486,9 +1495,9 @@ public final class AppModel: ObservableObject {
 
         var noun: String {
             switch self {
-            case .tone: return "Tone Adjustment"
-            case .crop: return "Crop"
-            case .included: return "Frame Selection"
+            case .tone: return NSLocalizedString("Tone Adjustment", comment: "")
+            case .crop: return NSLocalizedString("Crop", comment: "")
+            case .included: return NSLocalizedString("Frame Selection", comment: "")
             }
         }
     }
@@ -1502,10 +1511,16 @@ public final class AppModel: ObservableObject {
     public var canUndoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !undoHistory.isEmpty }
     public var canRedoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !redoHistory.isEmpty }
     public var undoMenuTitle: String {
-        retouchMode ? "Undo Stroke" : undoHistory.last.map { "Undo \($0.noun)" } ?? "Undo"
+        retouchMode ? NSLocalizedString("Undo Stroke", comment: "")
+            : undoHistory.last.map {
+                String(format: NSLocalizedString("Undo %@", comment: ""), $0.noun)
+            } ?? NSLocalizedString("Undo", comment: "")
     }
     public var redoMenuTitle: String {
-        retouchMode ? "Redo Stroke" : redoHistory.last.map { "Redo \($0.noun)" } ?? "Redo"
+        retouchMode ? NSLocalizedString("Redo Stroke", comment: "")
+            : redoHistory.last.map {
+                String(format: NSLocalizedString("Redo %@", comment: ""), $0.noun)
+            } ?? NSLocalizedString("Redo", comment: "")
     }
 
     public func undoEdit() {
@@ -1637,9 +1652,10 @@ public final class AppModel: ObservableObject {
         // project mid-run would dead-end in loadStacks' guard AFTER the
         // user picked a folder — the worst kind of silent no-op.
         guard !phase.isRunning else { return }
-        guard confirmDiscardingUnsavedWork(message: "Start a new project?",
-                                           confirmTitle: "New Project") else { return }
-        let urls = dialogs?.chooseFrames(message: "Choose a stack: a folder of frames, or the frames themselves (focus order = name order).") ?? []
+        guard confirmDiscardingUnsavedWork(
+            message: NSLocalizedString("Start a new project?", comment: ""),
+            confirmTitle: NSLocalizedString("New Project", comment: "")) else { return }
+        let urls = dialogs?.chooseFrames(message: NSLocalizedString("Choose a stack: a folder of frames, or the frames themselves (focus order = name order).", comment: "")) ?? []
         guard !urls.isEmpty else { return }
         ingest(urls: urls)
     }
@@ -1650,7 +1666,7 @@ public final class AppModel: ObservableObject {
 
     private func runAddStackFolderPanel() {
         guard !phase.isRunning else { return }
-        let urls = dialogs?.chooseStackFolders(message: "Add stack folders to the project — each folder of frames becomes its own stack.") ?? []
+        let urls = dialogs?.chooseStackFolders(message: NSLocalizedString("Add stack folders to the project — each folder of frames becomes its own stack.", comment: "")) ?? []
         guard !urls.isEmpty else { return }
         loadStacks(from: urls, replacing: false)
     }
@@ -1672,8 +1688,8 @@ public final class AppModel: ObservableObject {
         }
         // Drops can't be menu-disabled either (see openExternal).
         guard !phase.isRunning else {
-            dialogs?.notify(message: "A stack is still processing",
-                            informative: "Cancel it or let it finish before adding stacks.",
+            dialogs?.notify(message: NSLocalizedString("A stack is still processing", comment: ""),
+                            informative: NSLocalizedString("Cancel it or let it finish before adding stacks.", comment: ""),
                             warning: false)
             return
         }
@@ -1694,7 +1710,7 @@ public final class AppModel: ObservableObject {
             grantedRoots += urls
         }
         phase = .running
-        stageText = "Scanning frames…"
+        stageText = NSLocalizedString("Scanning frames…", comment: "")
         stageFraction = 0
         let orderByCaptureTime = orderByCaptureTime
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -1776,13 +1792,13 @@ public final class AppModel: ObservableObject {
                                         dates: frames.map { dates[$0] },
                                         byCaptureTime: byCaptureTime) {
         case .mismatch:
-            return "Capture order and filename order disagree. Frames fuse in"
-                + " capture order — right for a rolled-over file counter, but if"
-                + " this folder mixes frames from different stacks, split them"
-                + " before fusing."
+            return NSLocalizedString(
+                "Capture order and filename order disagree. Frames fuse in capture order — right for a rolled-over file counter, but if this folder mixes frames from different stacks, split them before fusing.",
+                comment: "")
         case .undated:
-            return "These frames carry no capture times, so they fuse in"
-                + " filename order. Make sure filenames follow focus order."
+            return NSLocalizedString(
+                "These frames carry no capture times, so they fuse in filename order. Make sure filenames follow focus order.",
+                comment: "")
         case nil:
             return nil
         }
@@ -1845,9 +1861,13 @@ public final class AppModel: ObservableObject {
     private func askSplitChoice(name: String, burstCount: Int) -> Bool {
         if let splitChoicePrompt { return splitChoicePrompt(name, burstCount) }
         return dialogs?.confirm(
-            message: "“\(name)” looks like \(burstCount) separate stacks",
-            informative: "Capture times show \(burstCount) bursts separated by more than \(Int(StackSplitter.defaultGap)) seconds. Load them as separate stacks, or keep each folder as one stack?\n\nThis choice applies to every folder in this load.",
-            confirmTitle: "Separate Stacks", cancelTitle: "One Stack per Folder",
+            message: String(format: NSLocalizedString(
+                "“%@” looks like %lld separate stacks", comment: ""), name, burstCount),
+            informative: String(format: NSLocalizedString(
+                "Capture times show %lld bursts separated by more than %lld seconds. Load them as separate stacks, or keep each folder as one stack?\n\nThis choice applies to every folder in this load.",
+                comment: ""), burstCount, Int(StackSplitter.defaultGap)),
+            confirmTitle: NSLocalizedString("Separate Stacks", comment: ""),
+            cancelTitle: NSLocalizedString("One Stack per Folder", comment: ""),
             warning: false) ?? false
     }
 
@@ -1938,10 +1958,13 @@ public final class AppModel: ObservableObject {
             guard let self else { return }
             var failures = [String]()
             for (i, stack) in pending.enumerated() {
-                self.batchStatus = "Stack \(i + 1) of \(pending.count) · "
+                self.batchStatus = String(
+                    format: NSLocalizedString("Stack %lld of %lld · ", comment: ""),
+                    i + 1, pending.count)
                 self.selectStack(stack.id)
                 guard self.canFuse else {
-                    failures.append("\(stack.name): fewer than 2 included frames")
+                    failures.append(String(format: NSLocalizedString(
+                        "%@: fewer than 2 included frames", comment: ""), stack.name))
                     continue
                 }
                 self.fuse()
@@ -1951,7 +1974,8 @@ public final class AppModel: ObservableObject {
                 if case .failed(let message) = self.phase {
                     failures.append("\(stack.name): \(message)")
                 } else if self.phase != .done {
-                    failures.append("Cancelled at \(stack.name).")
+                    failures.append(String(format: NSLocalizedString(
+                        "Cancelled at %@.", comment: ""), stack.name))
                     break
                 }
             }
@@ -1962,7 +1986,7 @@ public final class AppModel: ObservableObject {
                 if let presenter = self.queueSummaryPresenter {
                     presenter(summary)
                 } else {
-                    self.dialogs?.notify(message: "Some stacks didn't fuse",
+                    self.dialogs?.notify(message: NSLocalizedString("Some stacks didn't fuse", comment: ""),
                                          informative: summary, warning: false)
                 }
             }
@@ -1978,14 +2002,14 @@ public final class AppModel: ObservableObject {
     private func runExportAllPanel() {
         guard fusedStackCount > 0, !phase.isRunning else { return }
         guard let dir = dialogs?.chooseExportDirectory(
-            message: "Every fused stack is written to this folder.") else { return }
+            message: NSLocalizedString("Every fused stack is written to this folder.", comment: "")) else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let summary = await self.exportAllFused(to: dir)
             if let presenter = self.queueSummaryPresenter {
                 presenter(summary)
             } else {
-                self.dialogs?.notify(message: "Export finished",
+                self.dialogs?.notify(message: NSLocalizedString("Export finished", comment: ""),
                                      informative: summary, warning: false)
             }
         }
@@ -2024,8 +2048,12 @@ public final class AppModel: ObservableObject {
                 lines.append("\(stack.name): \(error.localizedDescription)")
             }
         }
-        return "\(count) stack\(count == 1 ? "" : "s") exported to “\(directory.lastPathComponent)”.\n\n"
-            + lines.joined(separator: "\n")
+        let headline = count == 1
+            ? String(format: NSLocalizedString("1 stack exported to “%@”.", comment: ""),
+                     directory.lastPathComponent)
+            : String(format: NSLocalizedString("%lld stacks exported to “%@”.", comment: ""),
+                     count, directory.lastPathComponent)
+        return headline + "\n\n" + lines.joined(separator: "\n")
     }
 
     /// Export Aligned Frames is offered when the selected stack has
@@ -2045,14 +2073,14 @@ public final class AppModel: ObservableObject {
     private func runExportAlignedPanel() {
         guard canExportAligned else { return }
         guard let dir = dialogs?.chooseExportDirectory(
-            message: "The selected frames are written to this folder, aligned to the fused canvas.") else { return }
+            message: NSLocalizedString("The selected frames are written to this folder, aligned to the fused canvas.", comment: "")) else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let summary = await self.exportAlignedFrames(to: dir)
             if let presenter = self.queueSummaryPresenter {
                 presenter(summary)
             } else {
-                self.dialogs?.notify(message: "Export finished",
+                self.dialogs?.notify(message: NSLocalizedString("Export finished", comment: ""),
                                      informative: summary, warning: false)
             }
         }
@@ -2068,7 +2096,7 @@ public final class AppModel: ObservableObject {
     public func exportAlignedFrames(to directory: URL) async -> String {
         let alignedURLs = fuseURLs
         guard let transforms = alignmentCache.transforms(for: alignedURLs) else {
-            return "No alignment yet — fuse the stack (with alignment on) first."
+            return NSLocalizedString("No alignment yet — fuse the stack (with alignment on) first.", comment: "")
         }
         let targets = frames.filter { selection.contains($0) && alignedURLs.contains($0) }
         let ext = exportFormat.fileExtension
@@ -2102,8 +2130,12 @@ public final class AppModel: ObservableObject {
                 lines.append("\(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
-        return "\(count) aligned frame\(count == 1 ? "" : "s") exported to “\(directory.lastPathComponent)”.\n\n"
-            + lines.joined(separator: "\n")
+        let headline = count == 1
+            ? String(format: NSLocalizedString("1 aligned frame exported to “%@”.", comment: ""),
+                     directory.lastPathComponent)
+            : String(format: NSLocalizedString("%lld aligned frames exported to “%@”.", comment: ""),
+                     count, directory.lastPathComponent)
+        return headline + "\n\n" + lines.joined(separator: "\n")
     }
 
     /// Rocking animation needs a fused result AND its depth plane (DMap
@@ -2152,7 +2184,7 @@ public final class AppModel: ObservableObject {
             }.value
             return true
         } catch {
-            dialogs?.notify(message: "Couldn't export the animation",
+            dialogs?.notify(message: NSLocalizedString("Couldn't export the animation", comment: ""),
                             informative: error.localizedDescription, warning: true)
             return false
         }
@@ -2287,7 +2319,7 @@ public final class AppModel: ObservableObject {
             }()
             let error: String? = decoded != nil ? nil
                 : FileManager.default.fileExists(atPath: url.path)
-                    ? "Can't decode \(url.lastPathComponent)"
+                    ? String(format: NSLocalizedString("Can't decode %@", comment: ""), url.lastPathComponent)
                     : "\(url.lastPathComponent) is missing"
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
@@ -2318,7 +2350,7 @@ public final class AppModel: ObservableObject {
         // current result and phase untouched.
         guard preflightDiskCache(urls: includedFrames) else { return }
         phase = .running
-        stageText = "Starting…"
+        stageText = NSLocalizedString("Starting…", comment: "")
         stageFraction = 0
         stageETA = nil
         stageTimerStage = nil
@@ -2343,10 +2375,12 @@ public final class AppModel: ObservableObject {
         let missing = urls.filter { !FileManager.default.fileExists(atPath: $0.path) }
         if !missing.isEmpty {
             let names = missing.prefix(4).map(\.lastPathComponent).joined(separator: ", ")
-            let extra = missing.count > 4 ? " and \(missing.count - 4) more" : ""
-            reportFuseFailure("\(missing.count) of \(urls.count) source images are missing "
-                + "(moved, renamed, or deleted?): \(names)\(extra). Restore them, or uncheck "
-                + "them in the Stack list and re-fuse.")
+            let extra = missing.count > 4
+                ? String(format: NSLocalizedString(" and %lld more", comment: ""), missing.count - 4)
+                : ""
+            reportFuseFailure(String(format: NSLocalizedString(
+                "%lld of %lld source images are missing (moved, renamed, or deleted?): %@%@. Restore them, or uncheck them in the Stack list and re-fuse.",
+                comment: ""), missing.count, urls.count, names, extra))
             return
         }
         fuseURLs = urls
@@ -2384,11 +2418,12 @@ public final class AppModel: ObservableObject {
                 MainActor.assumeIsolated {
                     dialogs?.confirm(
                         message: lines.count == 1
-                            ? "1 frame looks bad" : "\(lines.count) frames look bad",
+                            ? NSLocalizedString("1 frame looks bad", comment: "")
+                            : String(format: NSLocalizedString("%lld frames look bad", comment: ""), lines.count),
                         informative: lines.joined(separator: "\n")
-                            + "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.",
-                        confirmTitle: "Exclude and Continue",
-                        cancelTitle: "Keep All Frames",
+                            + NSLocalizedString("\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.", comment: ""),
+                        confirmTitle: NSLocalizedString("Exclude and Continue", comment: ""),
+                        cancelTitle: NSLocalizedString("Keep All Frames", comment: ""),
                         warning: false) ?? true
                 }
             }
@@ -2411,7 +2446,7 @@ public final class AppModel: ObservableObject {
             if let previousDrain {
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.fusionGeneration else { return }
-                    self.stageText = "Waiting for the previous fusion to stop…"
+                    self.stageText = NSLocalizedString("Waiting for the previous fusion to stop…", comment: "")
                 }
                 await previousDrain.value
             }
@@ -2443,7 +2478,7 @@ public final class AppModel: ObservableObject {
                         // the UI is already back to idle, and a late
                         // progress tick must not resurrect the busy state.
                         guard !cancellation.isCancelled else { return }
-                        self.stageText = update.stage.rawValue
+                        self.stageText = NSLocalizedString(update.stage.rawValue, comment: "")
                         self.updateStageETA(stage: update.stage,
                                             fraction: update.fraction)
                         // One monotonic bar across the whole fuse: each stage
@@ -2547,7 +2582,7 @@ public final class AppModel: ObservableObject {
             fuseFailureAlertOverride(message)
             return
         }
-        dialogs?.notify(message: "Fuse failed", informative: message, warning: true)
+        dialogs?.notify(message: NSLocalizedString("Fuse failed", comment: ""), informative: message, warning: true)
     }
 
     /// Maps a per-stage fraction into the fuse's single progress span.
@@ -2578,9 +2613,11 @@ public final class AppModel: ObservableObject {
     static func etaLabel(_ seconds: Double) -> String? {
         guard seconds.isFinite, seconds >= 3 else { return nil }
         if seconds < 90 {
-            return "~\(max(5, Int((seconds / 5).rounded()) * 5))s left"
+            return String(format: NSLocalizedString("~%llds left", comment: ""),
+                          max(5, Int((seconds / 5).rounded()) * 5))
         }
-        return "~\(Int((seconds / 60).rounded())) min left"
+        return String(format: NSLocalizedString("~%lld min left", comment: ""),
+                      Int((seconds / 60).rounded()))
     }
 
     static func overallProgress(_ stage: FusionProgress.Stage,
@@ -2835,7 +2872,7 @@ public final class AppModel: ObservableObject {
         // whichever frame happens to be first or selected.
         let base = (fuseURLs.first ?? frames.first)?
             .deletingLastPathComponent().lastPathComponent ?? "stacked"
-        let suffix = outputMode == .depth ? " depth" : ""
+        let suffix = outputMode == .depth ? NSLocalizedString(" depth", comment: "") : ""
         guard let url = dialogs?.chooseSaveExport(
             suggestedName: "\(base)\(suffix).\(exportFormat.fileExtension)") else { return }
         writeExport(to: url)
@@ -2970,7 +3007,7 @@ public final class AppModel: ObservableObject {
         } catch {
             // Same rule as saveProjectPanel: a failed write doesn't
             // invalidate the fused result, so don't touch `phase`.
-            dialogs?.notify(message: "Couldn't export the image",
+            dialogs?.notify(message: NSLocalizedString("Couldn't export the image", comment: ""),
                             informative: error.localizedDescription, warning: true)
             return false
         }

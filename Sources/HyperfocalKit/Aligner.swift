@@ -185,8 +185,10 @@ public enum Aligner {
             if factor < 0.5 || factor > 2 {
                 flagged.insert(i)
                 let summary = factor < 1
-                    ? String(format: "%.1f× darker than the stack", 1 / max(factor, 1e-3))
-                    : String(format: "%.1f× brighter than the stack", factor)
+                    ? String(format: NSLocalizedString("%.1f× darker than the stack", comment: ""),
+                             1 / max(factor, 1e-3))
+                    : String(format: NSLocalizedString("%.1f× brighter than the stack", comment: ""),
+                             factor)
                 issues.append(FrameQualityIssue(
                     index: i, kind: .exposureOutlier(factor: factor), summary: summary))
             }
@@ -306,8 +308,10 @@ public enum Aligner {
                 ? .registrationFailed
                 : .misaligned(residualRatio: worst ?? .infinity)
             let summary = anyFailed && worst == nil
-                ? "alignment failed"
-                : String(format: "misaligned (%.1f× the stack's typical frame difference)", worst ?? 0)
+                ? NSLocalizedString("alignment failed", comment: "")
+                : String(format: NSLocalizedString(
+                    "misaligned (%.1f× the stack's typical frame difference)", comment: ""),
+                    worst ?? 0)
             issues.append(FrameQualityIssue(index: kept[ki], kind: kind, summary: summary))
             flagged.insert(kept[ki])
         }

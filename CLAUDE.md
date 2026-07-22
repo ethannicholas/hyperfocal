@@ -87,6 +87,15 @@ one up.
   `RetouchSession`, and they co-paint the depth plane (frame → its index,
   eraser → session-start depth, PMax → untouched); the model folds session
   depth back into `resultDepth` via `mergeRetouchDepth()` at every consumer.
+- The app is localized (10 languages, `App/Resources/Localizable.xcstrings`
+  — hand-maintained JSON, keys are the English strings). Every new
+  user-facing string needs a catalog entry: SwiftUI literals localize
+  automatically; String-typed plumbing uses `String(localized:)` in the
+  app layer and `NSLocalizedString` in AppCore/Kit (Linux-safe; headless
+  consumers fall back to the English key). Option enums whose rawValues
+  persist to UserDefaults must NEVER localize the rawValue — display goes
+  through the `DisplayNamed` seam (`AppCore/Localization.swift`) and
+  NSPopUpButton reverse-lookup is index-based, not title-based.
 - Bundle ID `com.ethannicholas.hyperfocal` (lowercase — the capitalized
   form collides case-insensitively in Apple's App ID registry), team
   `Y3GFBT2WQ2`.

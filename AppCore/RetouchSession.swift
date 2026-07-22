@@ -146,9 +146,10 @@ public final class RetouchSession: ObservableObject {
     private var resultImageCache: PlatformImage?
 
     public var sourceName: String {
-        isPMaxSource ? "PMax blend layer"
-            : isResultSource ? "Original result (eraser)"
-            : "\(urls[sourceIndex].lastPathComponent) (aligned)"
+        isPMaxSource ? NSLocalizedString("PMax blend layer", comment: "")
+            : isResultSource ? NSLocalizedString("Original result (eraser)", comment: "")
+            : String(format: NSLocalizedString("%@ (aligned)", comment: ""),
+                     urls[sourceIndex].lastPathComponent)
     }
 
     /// The three kinds of brush source, for the "Retouch from" radio group.
@@ -363,8 +364,10 @@ public final class RetouchSession: ObservableObject {
                 self.sourceLoading = false
                 self.sourceError = loaded == nil
                     ? (FileManager.default.fileExists(atPath: url.path)
-                        ? "Couldn't load \(url.lastPathComponent)"
-                        : "\(url.lastPathComponent) is missing")
+                        ? String(format: NSLocalizedString("Couldn't load %@", comment: ""),
+                                 url.lastPathComponent)
+                        : String(format: NSLocalizedString("%@ is missing", comment: ""),
+                                 url.lastPathComponent))
                     : nil
                 if loaded != nil {
                     self.prefetchNeighbors(of: clamped)
@@ -412,7 +415,7 @@ public final class RetouchSession: ObservableObject {
         sourceDisplay = nil
         sourceLoading = true
         sourceError = nil
-        sourceStatus = "Building PMax layer…"
+        sourceStatus = NSLocalizedString("Building PMax layer…", comment: "")
         let generation = sourceLoadGeneration
         let source = stackSource
         let cancel = CancellationToken()
@@ -429,7 +432,8 @@ public final class RetouchSession: ObservableObject {
                         .flatMap { try? Preview.image(from: $0) }
                     Task { @MainActor [weak self] in
                         guard let self, generation == self.sourceLoadGeneration else { return }
-                        self.sourceStatus = "Building PMax layer… \(Int(fraction * 100))%"
+                        self.sourceStatus = String(format: NSLocalizedString(
+                            "Building PMax layer… %lld%%", comment: ""), Int(fraction * 100))
                         if let image { self.sourceDisplay = image }
                     }
                 }, cancellation: cancel)
@@ -449,7 +453,8 @@ public final class RetouchSession: ObservableObject {
                 self.sourceDisplay = loaded?.image
                 self.sourceLoading = false
                 self.sourceStatus = nil
-                self.sourceError = loaded == nil ? "Couldn't build the PMax layer" : nil
+                self.sourceError = loaded == nil
+                    ? NSLocalizedString("Couldn't build the PMax layer", comment: "") : nil
             }
         }
     }

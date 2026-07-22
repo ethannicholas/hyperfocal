@@ -84,8 +84,8 @@ final class MacDialogService: DialogService {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = root
-        panel.message = "Grant access to “\(root.lastPathComponent)” — \(root.path)"
-        panel.prompt = "Grant Access"
+        panel.message = String(localized: "Grant access to “\(root.lastPathComponent)” — \(root.path)")
+        panel.prompt = String(localized: "Grant Access")
         return panel.runModal() == .OK ? panel.url : nil
     }
 
@@ -95,7 +95,7 @@ final class MacDialogService: DialogService {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
-        panel.prompt = "Export Here"
+        panel.prompt = String(localized: "Export Here")
         panel.message = message
         panel.accessoryView = ExportOptionsView(model: model, panel: nil)
         panel.isAccessoryViewDisclosed = true
@@ -159,14 +159,14 @@ final class AnimationOptionsView: NSView {
         self.panel = panel
         super.init(frame: .zero)
 
-        func configure<Choice: RawRepresentable & CaseIterable>(
+        func configure<Choice: DisplayNamed>(
             _ popup: NSPopUpButton, _ kind: Choice.Type, selected: Choice,
             id: String, tip: String
-        ) where Choice.RawValue == String {
+        ) {
             for choice in Choice.allCases {
-                popup.addItem(withTitle: choice.rawValue)
+                popup.addItem(withTitle: choice.displayName)
             }
-            popup.selectItem(withTitle: selected.rawValue)
+            popup.selectItem(withTitle: selected.displayName)
             popup.target = self
             popup.action = #selector(changed(_:))
             popup.setAccessibilityIdentifier(id)
@@ -174,30 +174,30 @@ final class AnimationOptionsView: NSView {
         }
         configure(formatPopup, AnimationFormat.self, selected: model.animationFormat,
                   id: "export.animation-format",
-                  tip: "MP4 plays once unless the player is told to loop (no video format carries a loop flag players honor). GIF loops forever everywhere, at the cost of larger files and reduced colors.")
+                  tip: String(localized: "MP4 plays once unless the player is told to loop (no video format carries a loop flag players honor). GIF loops forever everywhere, at the cost of larger files and reduced colors."))
         configure(pathPopup, AnimationPath.self, selected: model.animationPath,
                   id: "export.animation-path",
-                  tip: "How the viewpoint moves. Rocking sweeps side to side (or up and down); Circle orbits, which reads most strongly 3D — no structure can hide parallel to the motion.")
+                  tip: String(localized: "How the viewpoint moves. Rocking sweeps side to side (or up and down); Circle orbits, which reads most strongly 3D — no structure can hide parallel to the motion."))
         configure(strengthPopup, AnimationStrength.self, selected: model.animationStrength,
                   id: "export.animation-strength",
-                  tip: "How far the view moves: peak parallax at the depth extremes, as a fraction of the video width (Subtle 0.5%, Medium 1%, Strong 2%).")
+                  tip: String(localized: "How far the view moves: peak parallax at the depth extremes, as a fraction of the video width (Subtle 0.5%, Medium 1%, Strong 2%)."))
         configure(durationPopup, AnimationDuration.self, selected: model.animationDuration,
                   id: "export.animation-duration",
-                  tip: "One full cycle of the motion; the file loops seamlessly.")
+                  tip: String(localized: "One full cycle of the motion; the file loops seamlessly."))
         configure(fpsPopup, AnimationFPS.self, selected: model.animationFPS,
                   id: "export.animation-fps",
-                  tip: "Frames per second. 30 suits sharing; 60 is silkier and larger; 24 is filmic.")
+                  tip: String(localized: "Frames per second. 30 suits sharing; 60 is silkier and larger; 24 is filmic."))
 
         // Container-ish options first, motion options last. (No depth
         // direction option on purpose: negated disparity is exactly a
         // half-cycle phase shift of these symmetric loops — provably
         // invisible; see RockingAnimation.Options.)
         let rows: [(String, NSControl)] = [
-            ("Format:", formatPopup),
-            ("Frame rate:", fpsPopup),
-            ("Duration:", durationPopup),
-            ("Path:", pathPopup),
-            ("Strength:", strengthPopup),
+            (String(localized: "Format:"), formatPopup),
+            (String(localized: "Frame rate:"), fpsPopup),
+            (String(localized: "Duration:"), durationPopup),
+            (String(localized: "Path:"), pathPopup),
+            (String(localized: "Strength:"), strengthPopup),
         ]
         let labels = rows.map { NSTextField(labelWithString: $0.0) }
         for label in labels { label.sizeToFit() }
@@ -231,24 +231,33 @@ final class AnimationOptionsView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("unused") }
 
+    /// Selection → case by position: popup titles are localized display
+    /// names, so they can no longer round-trip through rawValue.
+    private func selected<Choice: DisplayNamed>(
+        _ popup: NSPopUpButton, _ kind: Choice.Type) -> Choice? {
+        let index = popup.indexOfSelectedItem
+        let all = Array(Choice.allCases)
+        guard all.indices.contains(index) else { return nil }
+        return all[index]
+    }
+
     @objc private func changed(_ sender: NSPopUpButton) {
         guard let model else { return }
-        let title = sender.titleOfSelectedItem ?? ""
         switch sender {
         case formatPopup:
-            guard let format = AnimationFormat(rawValue: title) else { return }
+            guard let format = selected(sender, AnimationFormat.self) else { return }
             model.animationFormat = format
             if let type = UTType(filenameExtension: format.fileExtension) {
                 panel?.allowedContentTypes = [type]
             }
         case pathPopup:
-            model.animationPath = AnimationPath(rawValue: title) ?? model.animationPath
+            model.animationPath = selected(sender, AnimationPath.self) ?? model.animationPath
         case strengthPopup:
-            model.animationStrength = AnimationStrength(rawValue: title) ?? model.animationStrength
+            model.animationStrength = selected(sender, AnimationStrength.self) ?? model.animationStrength
         case durationPopup:
-            model.animationDuration = AnimationDuration(rawValue: title) ?? model.animationDuration
+            model.animationDuration = selected(sender, AnimationDuration.self) ?? model.animationDuration
         case fpsPopup:
-            model.animationFPS = AnimationFPS(rawValue: title) ?? model.animationFPS
+            model.animationFPS = selected(sender, AnimationFPS.self) ?? model.animationFPS
         default:
             break
         }
@@ -272,26 +281,26 @@ final class ExportOptionsView: NSView {
     /// always carries linear P3, and a disabled popup frozen on the
     /// previous choice would read as "DNG uses sRGB and you can't
     /// change it".
-    private static let dngSpaceTitle = "Linear Display P3"
+    private static let dngSpaceTitle = String(localized: "Linear Display P3")
 
     init(model: AppModel, panel: NSSavePanel?) {
         self.model = model
         self.panel = panel
         super.init(frame: .zero)
         for format in ExportFormat.allCases {
-            formatPopup.addItem(withTitle: format.rawValue)
+            formatPopup.addItem(withTitle: format.displayName)
         }
-        formatPopup.selectItem(withTitle: model.exportFormat.rawValue)
+        formatPopup.selectItem(withTitle: model.exportFormat.displayName)
         formatPopup.target = self
         formatPopup.action = #selector(formatChanged)
         formatPopup.setAccessibilityIdentifier("export.format")
         for space in ExportColorSpace.allCases {
-            spacePopup.addItem(withTitle: space.rawValue)
+            spacePopup.addItem(withTitle: space.displayName)
         }
         spacePopup.target = self
         spacePopup.action = #selector(spaceChanged)
         spacePopup.setAccessibilityIdentifier("export.color-space")
-        spacePopup.toolTip = "The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw."
+        spacePopup.toolTip = String(localized: "The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw.")
 
         // Fixed frames, NO Auto Layout: sandboxed save panels are remote,
         // and the bridge polls the accessory's constraint-based fitting
@@ -300,8 +309,8 @@ final class ExportOptionsView: NSView {
         // (~30% CPU). Plain frames give the bridge a constant answer.
         // Width is computed with the widest spacePopup contents (the DNG
         // placeholder) present so refresh() never changes any frame.
-        let labelFormat = NSTextField(labelWithString: "Format:")
-        let labelSpace = NSTextField(labelWithString: "Color space:")
+        let labelFormat = NSTextField(labelWithString: String(localized: "Format:"))
+        let labelSpace = NSTextField(labelWithString: String(localized: "Color space:"))
         spacePopup.addItem(withTitle: Self.dngSpaceTitle)
         for control in [labelFormat, labelSpace, formatPopup, spacePopup] {
             control.sizeToFit()
@@ -347,8 +356,10 @@ final class ExportOptionsView: NSView {
     required init?(coder: NSCoder) { fatalError("unused") }
 
     @objc private func formatChanged() {
-        guard let model, let format = ExportFormat(
-            rawValue: formatPopup.titleOfSelectedItem ?? "") else { return }
+        let all = ExportFormat.allCases
+        guard let model, all.indices.contains(formatPopup.indexOfSelectedItem)
+        else { return }
+        let format = all[formatPopup.indexOfSelectedItem]
         model.exportFormat = format
         if let type = UTType(filenameExtension: format.fileExtension) {
             panel?.allowedContentTypes = [type]
@@ -357,9 +368,10 @@ final class ExportOptionsView: NSView {
     }
 
     @objc private func spaceChanged() {
-        guard let model, let space = ExportColorSpace(
-            rawValue: spacePopup.titleOfSelectedItem ?? "") else { return }
-        model.exportColorSpace = space
+        let all = ExportColorSpace.allCases
+        guard let model, all.indices.contains(spacePopup.indexOfSelectedItem)
+        else { return }
+        model.exportColorSpace = all[spacePopup.indexOfSelectedItem]
     }
 
     private func refresh() {
@@ -375,7 +387,7 @@ final class ExportOptionsView: NSView {
             if let placeholder = spacePopup.item(withTitle: Self.dngSpaceTitle) {
                 spacePopup.removeItem(at: spacePopup.index(of: placeholder))
             }
-            spacePopup.selectItem(withTitle: model.exportColorSpace.rawValue)
+            spacePopup.selectItem(withTitle: model.exportColorSpace.displayName)
         }
     }
 }
