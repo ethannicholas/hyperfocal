@@ -234,6 +234,15 @@ only when the remaining-scalar fingerprint moved — a single coarse
 signal made every fusion progress tick rebuild both sidebar ListViews
 and froze the UI.
 
+Chrome follows the OS light/dark setting on every platform — the design
+rule is that the system appearance is the source of truth and forcing a
+scheme is a bug. The shell derives every chrome color from the live
+scheme (Main.qml's `theme` object over
+`Application.styleHints.colorScheme`; verified in both Windows app
+modes); the native app has always taken it from SwiftUI's semantic
+colors. Image wells stay a neutral dark surround in both schemes in
+both shells — the photo-tool convention, deliberate, not an oversight.
+
 The shell keeps its own settings store (`HYPERFOCAL_SETTINGS_SUITE`,
 set to `org.hyperfocal.qtshell-settings` in main.cpp before any hf_*
 call) — nothing bleeds between the shells' persisted state.
@@ -270,17 +279,6 @@ in priority order:
    ContentView.swift:2093-2103); (Hotkey menu items landed
    2026-07-19: Edit carries Crop/Swap Orientation/Accept/Cancel.)
 
-**Native macOS app: respect the system appearance** (Mac session task;
-design rule set 2026-07-22): the OS light/dark setting is the source of
-truth — hardcoding a scheme is a bug wherever it appears. The Qt shell
-now derives every chrome color from the live system scheme
-(Main.qml's `theme` object over `Application.styleHints.colorScheme`;
-verified in both Windows app modes). The native app hardcodes dark
-(e.g. `.black` pane surrounds, fixed label grays in ContentView.swift)
-and needs the same treatment: route chrome colors through the SwiftUI
-environment colorScheme / semantic colors, keeping the image wells a
-neutral surround in both schemes (near-black dark / light gray light,
-the photo-tool convention the shell adopted).
 
 **Known deviations & placeholders** in already-built Qt features —
 the running list of "works, but not the native way" (new
