@@ -47,19 +47,23 @@ jobs:
       - name: Install imaging ports
         shell: pwsh
         run: |
-          # Runner images ship a vcpkg; fall back to a clone if absent.
-          if (-not $env:VCPKG_INSTALLATION_ROOT -or -not (Test-Path "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe")) {
-            git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
-            & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-            $env:VCPKG_INSTALLATION_ROOT = 'C:\vcpkg'
-          }
-          Add-Content $env:GITHUB_ENV "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT"
+          # Always a fresh clone: the runner's VCPKG_INSTALLATION_ROOT is
+          # VS's bundled vcpkg (manifest-mode-only; classic installs never
+          # land there — iteration 3's preflight notice proved tiffio.h
+          # absent at that root). The binary-archive cache lives under
+          # LOCALAPPDATA, so a warm cache still makes this step fast.
+          git clone --depth 1 https://github.com/microsoft/vcpkg C:\hf-vcpkg
+          & C:\hf-vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE) { throw "vcpkg bootstrap failed" }
+          Add-Content $env:GITHUB_ENV "VCPKG_ROOT=C:\hf-vcpkg"
           # The dev box's exact port set (vcpkg list, 2026-07-22).
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet arm64-windows `
+          & C:\hf-vcpkg\vcpkg.exe install --triplet arm64-windows `
               --clean-after-build `
               zlib liblzma 'tiff[jpeg,lzma,zip]' libpng 'libjpeg-turbo[jpeg8]' `
               lcms 'libraw[dng-lossy]' exiv2 'opencv4[calib3d]'
           if ($LASTEXITCODE) { throw "vcpkg install failed" }
+          $tiff = 'C:\hf-vcpkg\installed\arm64-windows\include\tiffio.h'
+          if (-not (Test-Path $tiff)) { throw "ports installed but $tiff is missing" }
 
       - name: ci-gate
         shell: pwsh
