@@ -60,6 +60,14 @@ if(WIN32)
         "${CMAKE_CURRENT_SOURCE_DIR}/../Scripts/windows-utf8.manifest")
 endif()
 
+# Warnings are errors for the shell's own sources (first-party C++ only —
+# vendored/generated code is not held to this). MSVC-scoped today: the one
+# compiler this was verified clean against; extend per-compiler after a
+# clean local build elsewhere.
+if(MSVC)
+    target_compile_options(hyperfocal-qt PRIVATE /WX)
+endif()
+
 qt_add_qml_module(hyperfocal-qt
     URI Hyperfocal
     VERSION 1.0

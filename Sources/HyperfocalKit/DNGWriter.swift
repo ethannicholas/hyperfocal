@@ -179,7 +179,13 @@ public enum DNGWriter {
     /// (nil stays nil).
     private static func withCStrings<R>(_ strings: [String?],
                                         _ body: ([UnsafePointer<CChar>?]) -> R) -> R {
+        // _strdup is the conformant CRT spelling on Windows; plain strdup
+        // there is a deprecation warning.
+        #if os(Windows)
+        let duped = strings.map { $0.flatMap { _strdup($0) } }
+        #else
         let duped = strings.map { $0.flatMap { strdup($0) } }
+        #endif
         defer { duped.forEach { $0.map { free($0) } } }
         return body(duped.map { $0.map { UnsafePointer($0) } })
     }

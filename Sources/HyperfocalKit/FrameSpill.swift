@@ -327,10 +327,14 @@ public final class FrameSpill {
         scratchLock.lock()
         tConvert += FrameSpill.now() - t0
         scratchLock.unlock()
+        // Immutable binding for the closure: `var staged` captured in
+        // concurrently-executing code is a Swift 6 error. Same storage, no
+        // copy — the pool round-trip keeps it uniquely referenced.
+        let payload = staged
         writeQueue.async { [self] in
             let t1 = FrameSpill.now()
             do {
-                try staged.withUnsafeBytes {
+                try payload.withUnsafeBytes {
                     try writeRaw(frame: frame, from: $0.baseAddress!,
                                  byteCount: payloadBytes)
                 }
@@ -341,7 +345,7 @@ public final class FrameSpill {
             }
             scratchLock.lock()
             tIO += FrameSpill.now() - t1
-            stagingPool.append(staged)
+            stagingPool.append(payload)
             scratchLock.unlock()
             stagingFree.signal()
         }

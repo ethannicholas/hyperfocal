@@ -484,11 +484,20 @@ public enum Aligner {
         min(4, max(1, ProcessInfo.processInfo.activeProcessorCount - 1))
     }
 
+    /// Lock-guarded results box for `boundedConcurrentMap`: a reference the
+    /// operations capture immutably (captured `var`s in concurrently-
+    /// executing code are Swift 6 errors; the lock provides the actual
+    /// synchronization, exactly as before).
+    private final class ConcurrentMapState<T> {
+        var results: [T?]
+        var firstError: Error?
+        let lock = NSLock()
+        init(count: Int) { results = [T?](repeating: nil, count: count) }
+    }
+
     static func boundedConcurrentMap<T>(count: Int, concurrency: Int,
                                         _ body: @escaping (Int) throws -> T) throws -> [T] {
-        var results = [T?](repeating: nil, count: count)
-        var firstError: Error? = nil
-        let lock = NSLock()
+        let state = ConcurrentMapState<T>(count: count)
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = concurrency
         queue.qualityOfService = .userInitiated
@@ -496,19 +505,19 @@ public enum Aligner {
             queue.addOperation {
                 do {
                     let value = try body(i)
-                    lock.lock()
-                    results[i] = value
-                    lock.unlock()
+                    state.lock.lock()
+                    state.results[i] = value
+                    state.lock.unlock()
                 } catch {
-                    lock.lock()
-                    if firstError == nil { firstError = error }
-                    lock.unlock()
+                    state.lock.lock()
+                    if state.firstError == nil { state.firstError = error }
+                    state.lock.unlock()
                 }
             }
         }
         queue.waitUntilAllOperationsAreFinished()
-        if let firstError { throw firstError }
-        return results.map { $0! }
+        if let firstError = state.firstError { throw firstError }
+        return state.results.map { $0! }
     }
 
     // MARK: - Platform primitives (decode-adjacent: downscale, register, preview)

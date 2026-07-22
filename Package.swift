@@ -95,8 +95,21 @@ var hyperfocalKitDeps: [Target.Dependency] = ["CDNGSDK"]
 var extraTargets: [Target] = []
 var extraProducts: [Product] = []
 
+// Warnings are errors on the first-party Swift targets (Kit, AppCore,
+// Bridge, CLI). Scoped per build host because this #if evaluates on the
+// building machine and the three active toolchains (Windows 6.3.3, Xcode,
+// Linux 6.1) warn differently: Windows is enforced (verified clean
+// 2026-07-22 — Sendable captures, strdup, replaceItemAt all fixed); a
+// Mac/Linux session should extend the #if to its own OS after one clean
+// local build rather than discover breakage from another platform's flag.
+#if os(Windows)
+let warningsAsErrors: [SwiftSetting] = [.unsafeFlags(["-warnings-as-errors"])]
+#else
+let warningsAsErrors: [SwiftSetting] = []
+#endif
+
 // HyperfocalKit's own build settings, extended per-platform below.
-var kitSwiftSettings: [SwiftSetting] = [
+var kitSwiftSettings: [SwiftSetting] = warningsAsErrors + [
     // The engine's per-pixel loops are ~30-50x slower at -Onone — a 45MP depth
     // regularization goes from ~30s to tens of minutes. Keep the engine
     // optimized even in Debug builds; the app layer stays debuggable.
@@ -132,7 +145,7 @@ appCoreDeps.append(.product(name: "OpenCombine", package: "OpenCombine",
 appCoreDeps.append("CZlib")
 extraTargets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
 #endif
-var appCoreSwiftSettings: [SwiftSetting] = [.unsafeFlags(["-enable-testing"])]
+var appCoreSwiftSettings: [SwiftSetting] = warningsAsErrors + [.unsafeFlags(["-enable-testing"])]
 #if os(Windows)
 // CZlib's <zlib.h> and the link path both come from vcpkg.
 appCoreSwiftSettings.append(.unsafeFlags(
@@ -156,7 +169,7 @@ extraTargets.append(
         name: "HyperfocalBridge",
         dependencies: ["AppCore", "HyperfocalKit"],
         path: "Bridge",
-        swiftSettings: wgpuXcc
+        swiftSettings: warningsAsErrors + wgpuXcc
     )
 )
 extraProducts.append(
@@ -289,7 +302,7 @@ dngLinkerSettings.insert(.unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]), at: 0)
 #endif
 
 var kitLinkerSettings: [LinkerSetting] = []
-var cliSwiftSettings: [SwiftSetting] = []
+var cliSwiftSettings: [SwiftSetting] = warningsAsErrors
 var cliLinkerSettings: [LinkerSetting] = []
 #if os(Windows)
 // UTF-8 active code page for the process (Windows residual 1): the C

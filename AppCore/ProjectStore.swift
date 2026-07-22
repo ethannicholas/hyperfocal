@@ -7,6 +7,9 @@ import zlib
 #else
 import CZlib
 #endif
+#if os(Windows)
+import WinSDK   // MoveFileExW: the atomic-replace primitive for saves
+#endif
 import HyperfocalKit
 
 /// Serializes a project to a single zip file (Name.hyperfocal): a JSON
@@ -194,7 +197,26 @@ enum ProjectStore {
         // staged new one (the old delete-then-move destroyed the previous
         // save if the move failed).
         if fm.fileExists(atPath: url.path) {
+            #if os(Windows)
+            // FileManager.replaceItemAt is unimplemented on Windows (its
+            // deprecation message says so). MoveFileExW REPLACE_EXISTING is
+            // the platform's replace primitive, atomic on one volume — and
+            // the temp is staged beside the target for exactly that reason.
+            let ok = temp.path.withCString(encodedAs: UTF16.self) { src in
+                url.path.withCString(encodedAs: UTF16.self) { dst in
+                    MoveFileExW(src, dst, DWORD(MOVEFILE_REPLACE_EXISTING))
+                }
+            }
+            guard ok else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [
+                    NSFilePathErrorKey: url.path,
+                    NSLocalizedDescriptionKey:
+                        "replacing the project failed (Win32 error \(GetLastError()))",
+                ])
+            }
+            #else
             _ = try fm.replaceItemAt(url, withItemAt: temp)
+            #endif
         } else {
             try fm.moveItem(at: temp, to: url)
         }
