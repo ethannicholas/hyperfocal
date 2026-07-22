@@ -79,24 +79,18 @@ debug bridge under the release shell the dev loop instead.
 
 Windows residuals to close (each independently landable):
 
-1. **Non-ASCII paths on Windows.** CImaging opens files with
-   `fopen`/`TIFFOpen`/`LibRaw::open_file(char*)`, which Windows
-   interprets in the ANSI codepage while Swift hands over UTF-8 —
-   frames in folders with non-ASCII names will fail to open. Fix is
-   either an app-manifest UTF-8 codepage opt-in or `_wfopen`-family
-   conversions in the shim.
-2. **Windows CI runner** (plan Phase 1 names Windows CI): ci-gate.sh
+1. **Windows CI runner** (plan Phase 1 names Windows CI): ci-gate.sh
    already passes under Git Bash with the environment from
    `Scripts/windows-env.ps1`; needs a GitHub Actions windows job (or
    self-hosted arm64 runner) and possibly Windows-calibrated floors —
    measured margins above the shared floors (2026-07-20): dmap ≥ 0.4 dB,
    pmax 0.25 dB (38.55 vs floor 38.3; the registration gray-path fast
    path shifted the crop by a pixel, which moved pmax from 38.66).
-3. **CLI DLL deployment.** The exe finds vcpkg's DLLs via PATH
+2. **CLI DLL deployment.** The exe finds vcpkg's DLLs via PATH
    (windows-env.ps1 prepends `installed\<triplet>\bin`); distributing
    the CLI needs the DLL set copied beside the exe or a static-triplet
    build decision.
-4. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
+3. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
    JPEGs, 2-core Windows VM, 2026-07-21, quiet runs): **dmap 173-182 s,
    pmax 132 s** end to end (from 271/181 the day before — the
    registration ¼-scale JPEG gray decode landed: gradient/stats/SIFT

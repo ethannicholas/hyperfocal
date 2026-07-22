@@ -695,8 +695,37 @@ hf_status encodeJPEG(const char* path, int w, int h,
 // ---------------------------------------------------------------------------
 // RAW (LibRaw)
 // ---------------------------------------------------------------------------
+
+#if defined(_WIN32)
+// LibRaw's open_file(char*) converts the path with a CRT-locale mbstowcs
+// internally, which ignores the process's UTF-8 active code page — the
+// manifest that fixes every other char* file API here (fopen, TIFFOpen,
+// exiv2, the DNG SDK) doesn't reach it, so non-ASCII paths fail. Read the
+// file through fopen (ACP-aware under the manifest) and hand LibRaw the
+// bytes. `bytes` must outlive every use of `raw` — open_buffer keeps the
+// pointer.
+static int hfRawOpen(LibRaw& raw, const char* path, std::vector<uint8_t>& bytes) {
+    FILE* fp = std::fopen(path, "rb");
+    if (!fp) return LIBRAW_IO_ERROR;
+    _fseeki64(fp, 0, SEEK_END);
+    const long long size = _ftelli64(fp);
+    if (size <= 0) { std::fclose(fp); return LIBRAW_IO_ERROR; }
+    _fseeki64(fp, 0, SEEK_SET);
+    bytes.resize((size_t)size);
+    const bool ok = std::fread(bytes.data(), 1, (size_t)size, fp) == (size_t)size;
+    std::fclose(fp);
+    if (!ok) return LIBRAW_IO_ERROR;
+    return raw.open_buffer(bytes.data(), bytes.size());
+}
+#else
+static int hfRawOpen(LibRaw& raw, const char* path, std::vector<uint8_t>&) {
+    return raw.open_file(path);
+}
+#endif
+
 extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, float** out_rgba) {
     LibRaw raw;
+    std::vector<uint8_t> rawBytes;
     raw.imgdata.params.use_camera_wb = 1;
     raw.imgdata.params.output_bps = 16;
     raw.imgdata.params.output_color = 4;   // ProPhoto — wide enough to hold P3
@@ -711,7 +740,7 @@ extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, flo
     // brightness gain that broke DNG round-trips by ~1.14x linear (measured)
     // and would wobble exposure across a focus ramp.
     raw.imgdata.params.adjust_maximum_thr = 0;
-    if (raw.open_file(path) != LIBRAW_SUCCESS) return hf_err_open;
+    if (hfRawOpen(raw, path, rawBytes) != LIBRAW_SUCCESS) return hf_err_open;
     if (raw.unpack() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
     if (raw.dcraw_process() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
     int st = 0;
@@ -802,7 +831,8 @@ double illuminantCCT(int code) {
 // vector (measured Δxy ≈ 0.06 against this solve on a Z 9 DNG).
 extern "C" hf_status hf_raw_neutral_xy(const char* path, double* out_x, double* out_y) {
     LibRaw raw;
-    if (raw.open_file(path) != LIBRAW_SUCCESS) return hf_err_open;
+    std::vector<uint8_t> rawBytes;
+    if (hfRawOpen(raw, path, rawBytes) != LIBRAW_SUCCESS) return hf_err_open;
     const float* mul = raw.imgdata.color.cam_mul;   // as-shot WB multipliers
     if (!(mul[0] > 0 && mul[1] > 0 && mul[2] > 0)) { raw.recycle(); return hf_err_format; }
     // A neutral patch under the shot's illuminant records 1/mul per channel
@@ -1001,7 +1031,8 @@ static hf_status decodeRAWGray8Half(const char* path, int min_longest,
     raw.imgdata.params.no_auto_bright = 1;
     raw.imgdata.params.adjust_maximum_thr = 0;
     raw.imgdata.params.half_size = 1;
-    if (raw.open_file(path) != LIBRAW_SUCCESS) return hf_err_open;
+    std::vector<uint8_t> rawBytes;
+    if (hfRawOpen(raw, path, rawBytes) != LIBRAW_SUCCESS) return hf_err_open;
     // Visible raw dims (stable at open time; iwidth/iheight shift with
     // processing flags like half_size itself).
     const int fullW = raw.imgdata.sizes.width, fullH = raw.imgdata.sizes.height;
@@ -1082,7 +1113,8 @@ extern "C" hf_status hf_decode_gray8(const char* path, int is_raw,
 extern "C" hf_status hf_pixel_size(const char* path, int is_raw, int* out_w, int* out_h) {
     if (is_raw) {
         LibRaw raw;
-        if (raw.open_file(path) != LIBRAW_SUCCESS) return hf_err_open;
+        std::vector<uint8_t> rawBytes;
+        if (hfRawOpen(raw, path, rawBytes) != LIBRAW_SUCCESS) return hf_err_open;
         *out_w = raw.imgdata.sizes.iwidth;
         *out_h = raw.imgdata.sizes.iheight;
         raw.recycle();

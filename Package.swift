@@ -290,6 +290,18 @@ dngLinkerSettings.insert(.unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]), at: 0)
 
 var kitLinkerSettings: [LinkerSetting] = []
 var cliSwiftSettings: [SwiftSetting] = []
+var cliLinkerSettings: [LinkerSetting] = []
+#if os(Windows)
+// UTF-8 active code page for the process (Windows residual 1): the C
+// imaging stack opens files through ANSI char* APIs; this manifest makes
+// them interpret the UTF-8 paths Swift passes. Absolute path — the linker
+// runs with a build-directory cwd.
+cliLinkerSettings.append(.unsafeFlags([
+    "-Xlinker", "/MANIFEST:EMBED",
+    "-Xlinker", "/MANIFESTINPUT:" + FileManager.default.currentDirectoryPath
+        + "\\Scripts\\windows-utf8.manifest",
+]))
+#endif
 if wgpuEnabled {
     extraTargets.append(.systemLibrary(name: "CWgpu", path: "Sources/CWgpu"))
     hyperfocalKitDeps.append("CWgpu")
@@ -358,7 +370,8 @@ var targets: [Target] = [
             "HyperfocalKit",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
-        swiftSettings: cliSwiftSettings
+        swiftSettings: cliSwiftSettings,
+        linkerSettings: cliLinkerSettings
     ),
 ]
 targets.append(contentsOf: extraTargets)

@@ -51,6 +51,15 @@ endif()
 
 qt_add_executable(hyperfocal-qt main.cpp)
 
+# UTF-8 active code page for the process (ROADMAP Windows residual 1): the
+# C imaging stack under the bridge opens files through ANSI char* APIs; the
+# manifest makes them interpret the UTF-8 paths the shell hands over. MSVC
+# link merges .manifest sources automatically.
+if(WIN32)
+    target_sources(hyperfocal-qt PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../Scripts/windows-utf8.manifest")
+endif()
+
 qt_add_qml_module(hyperfocal-qt
     URI Hyperfocal
     VERSION 1.0
