@@ -512,12 +512,50 @@ ApplicationWindow {
     // ToneFilteredPaneView's color-cube-on-layer, mirrored. The PaneItem
     // stays on top (hideSource hides its direct rendering) so it keeps
     // receiving wheel/drag events.
+    // Style-independent activity spinner: the platform styles' native
+    // BusyIndicator is an asset (macOS: animated webp) that renders
+    // blank when Qt lacks the image plugin — a drawn arc can't fail.
+    component Spinner: Canvas {
+        id: spin
+        property color color: theme.textSecondary
+        property int thickness: 3
+        width: 28
+        height: 28
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.reset()
+            ctx.strokeStyle = String(spin.color)
+            ctx.lineWidth = spin.thickness
+            ctx.lineCap = "round"
+            ctx.beginPath()
+            ctx.arc(width / 2, height / 2,
+                    (Math.min(width, height) - spin.thickness) / 2,
+                    0, Math.PI * 1.5)
+            ctx.stroke()
+        }
+        onColorChanged: requestPaint()
+        RotationAnimation on rotation {
+            from: 0
+            to: 360
+            duration: 900
+            loops: Animation.Infinite
+            running: spin.visible
+        }
+    }
+
     component TonedPane: ColumnLayout {
         id: toned
         property bool inputSource: false
         property bool dataDisplay: false
         property string title: ""
         property string hint: ""
+        // Decode-in-flight feedback, the native PreviewPane's two loading
+        // states: an empty pane centers a spinner (in place of the hint);
+        // a pane that already shows an image gets a floating badge while
+        // the replacement decodes (big frames take seconds and the pane
+        // serves the previous image until the new one lands).
+        property bool loading: false
+        property bool hasImage: false
         readonly property PaneItem item: paneItem
         // Overlays (crop, progress) reparent here so they align exactly
         // with the image area, not the title strip.
@@ -580,8 +618,28 @@ ApplicationWindow {
                 anchors.centerIn: parent
                 text: toned.hint
                 visible: toned.hint !== ""
+                    && !(toned.loading && !toned.hasImage)
                 color: theme.textFaint
                 font.pixelSize: 13
+            }
+            Spinner {
+                anchors.centerIn: parent
+                visible: toned.loading && !toned.hasImage
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                visible: toned.loading && toned.hasImage
+                width: badge.width + 20
+                height: badge.height + 16
+                radius: 8
+                color: "#c0282828"
+                Spinner {
+                    id: badge
+                    anchors.centerIn: parent
+                    width: 20
+                    height: 20
+                    color: "#e0e0e0"  // dark card regardless of scheme
+                }
             }
         }
     }
@@ -1338,6 +1396,12 @@ ApplicationWindow {
                         : Shell.frames.length === 0
                             ? "Open a stack to begin"
                             : "Select a frame in the Stack list"
+                    // Mid-fuse the pane cycles processing sources — the
+                    // spinner would just flicker (native gates the same
+                    // way); the retouch source keeps its own status label.
+                    loading: !Shell.retouchMode && Shell.inputLoading
+                        && !Shell.isRunning
+                    hasImage: Shell.hasInput
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     // While retouching, this pane shows the SOURCE layer
