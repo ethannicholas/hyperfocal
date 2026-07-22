@@ -289,6 +289,9 @@ int hf_stack_order_warning(int index, char *buf, int cap);
 // " (aligned)"), or the cycling processing source mid-fuse. The pane
 // tones it with the same LUT as the output, matching the native app.
 int hf_select_frame(int index);
+// Any stack's frame, like clicking its nested tree row — a frame in
+// another stack switches stack selection with it (no-op while running).
+int hf_select_stack_frame(int stack, int frame);
 int hf_selected_frame(void);                        // index, -1 = none
 int hf_input_size(int32_t *w, int32_t *h);
 int hf_input_epoch(void);

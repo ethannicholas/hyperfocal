@@ -157,6 +157,23 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 qWarning() << "selftest batch state: pending"
                            << shell->pendingStackCount() << "stacks" << stacks;
             }
+            // Nested-tree selection (hf_select_stack_frame): a frame of
+            // the OTHER stack must switch stack selection with it, then
+            // hop back — the flat-list selectFrame below then continues
+            // on the original stack (whose rows the frames cache holds).
+            const int orig = qMax(0, shell->selectedStack());
+            const int other = orig == 0 ? 1 : 0;
+            shell->selectStackFrame(other, 0);
+            bool crossOK = shell->selectedStack() == other
+                           && shell->selectedFrame() == 0;
+            shell->selectStackFrame(orig, 0);
+            crossOK = crossOK && shell->selectedStack() == orig;
+            if (!crossOK) {
+                qWarning() << "selftest cross-stack select: selected stack"
+                           << shell->selectedStack() << "frame"
+                           << shell->selectedFrame();
+            }
+            state->batchOK = state->batchOK && crossOK;
         }
         // Moving a fusion slider must mark the result stale (canFuse back
         // on) — the staleness contract the sidebar depends on.

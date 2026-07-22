@@ -134,6 +134,7 @@ public:
     Q_INVOKABLE void setSlider(const QString &id, double value);
     Q_INVOKABLE void setFrameIncluded(int index, bool included);
     Q_INVOKABLE void selectFrame(int index);
+    Q_INVOKABLE void selectStackFrame(int stack, int frame);
     /// Crop, result-canvas px + degrees (the UITest set-crop semantics:
     /// w/h <= 0 clears). displayCrop is empty when none presents.
     Q_INVOKABLE void setCrop(double x, double y, double w, double h,

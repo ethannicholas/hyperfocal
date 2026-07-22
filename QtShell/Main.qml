@@ -890,11 +890,20 @@ ApplicationWindow {
                                     stackDelegate.index, index, checked)
                             }
                             Label {
+                                // Click selects the frame, like the flat
+                                // list — the input pane follows (another
+                                // stack's frame switches stacks with it).
                                 text: modelData.name
                                 color: modelData.included ? theme.textPrimary
                                                           : theme.textFaint
+                                font.bold: stackDelegate.index === Shell.selectedStack
+                                           && index === Shell.selectedFrame
                                 elide: Text.ElideMiddle
                                 Layout.fillWidth: true
+                                TapHandler {
+                                    onTapped: Shell.selectStackFrame(
+                                        stackDelegate.index, index)
+                                }
                             }
                             Label {
                                 text: "⚠"

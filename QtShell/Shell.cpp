@@ -281,6 +281,10 @@ int Shell::selectedFrame() const { return hf_selected_frame(); }
 
 void Shell::selectFrame(int index) { hf_select_frame(index); }
 
+void Shell::selectStackFrame(int stack, int frame) {
+    hf_select_stack_frame(stack, frame);
+}
+
 void Shell::setCrop(double x, double y, double w, double h, double angle) {
     hf_set_crop(x, y, w, h, angle);
 }

@@ -1727,6 +1727,22 @@ public func hf_select_frame(_ index: Int32) -> Int32 {
     }
 }
 
+/// Select frame `frame` of stack `stack`, like clicking its nested tree
+/// row — a frame in another stack switches stack selection with it
+/// (selectionChanged's cross-stack rule; a no-op while running).
+@_cdecl("hf_select_stack_frame")
+public func hf_select_stack_frame(_ stack: Int32, _ frame: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(stack)) else { return 0 }
+        let frames = model.listedFrames(of: model.stacks[Int(stack)])
+        guard frames.indices.contains(Int(frame)) else { return 0 }
+        model.selection = [frames[Int(frame)]]
+        model.selectionChanged()
+        return 1
+    }
+}
+
 /// Index of the selected frame, -1 when none (or multi-selection).
 @_cdecl("hf_selected_frame")
 public func hf_selected_frame() -> Int32 {
