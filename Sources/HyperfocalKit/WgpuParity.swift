@@ -556,8 +556,14 @@ public enum WgpuParity {
             c.report("pyr_select", cpuFused + cpuBest,
                      try c.read(gpuFused, n * 4) + c.read(gpuBest, n))
 
-            let cpuEnergy = (0..<n).map { i -> Float in
-                (0..<3).reduce(Float(0)) { $0 + abs(fine[i * 4 + $1] - upBuf[i * 4 + $1]) }
+            // Explicit loop, not map+reduce: the closure form type-checks
+            // too slowly for the compiler's expression budget on some
+            // machines (same math as the select loop above).
+            var cpuEnergy = [Float](repeating: 0, count: n)
+            for i in 0..<n {
+                var e: Float = 0
+                for ch in 0..<3 { e += abs(fine[i * 4 + ch] - upBuf[i * 4 + ch]) }
+                cpuEnergy[i] = e
             }
             let oe = try engine.makeBuffer(floats: n)
             try engine.run("pyr_band_energy",

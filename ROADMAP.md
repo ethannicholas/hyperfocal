@@ -380,13 +380,17 @@ File-level: pmax 97.6/102.4 dB CPU↔GPU, dmap 121.4 dB (depth 105.7);
 ci-gate needed no recalibration — GPU-path ground-truth PSNR matches
 the CPU baselines to two decimals (39.11 dmap / 38.66 pmax). Remaining:
 
-1. Packaging (decided 2026-07-21): fetch the pinned wgpu-native release
-   at build/CI time, verified by sha256 — the aqt/vcpkg pattern the
-   project already uses; no binaries in the repo. Implement the fetch
-   script + CI wiring. While in there, evaluate statically linking
-   `libwgpu_native.a` (ships in the same release archives) for the CLI
-   and shell — it would remove wgpu from the runtime-DLL deployment
-   story entirely (the CLI-DLL residual above keeps the rest).
+1. Static-link rollout. `Scripts/fetch-wgpu.sh` (pinned tag + per-asset
+   sha256, idempotent, macOS/Linux/Git-Bash) and the CI llvmpipe parity
+   job landed 2026-07-21; `HYPERFOCAL_WGPU_STATIC=1` links the release
+   archive's `libwgpu_native.a` and is proven on macOS (full parity, no
+   DYLD_LIBRARY_PATH, zero wgpu load commands — note `-lwgpu_native`
+   picks the dylib when both files exist, hence the archive-path link).
+   Remaining: verify static on Linux (the CI job currently runs the
+   dylib + LD_LIBRARY_PATH path; first llvmpipe run may also need
+   floor calibration, WARP-style) and on Windows (the MSVC archives
+   ship import + static libs — pick the static one), then fold wgpu
+   out of the CLI-DLL-deployment residual above.
 
 (macOS note, decided 2026-07-21: `HYPERFOCAL_WGPU=1` is legal on macOS
 — production Mac builds keep Metal and never set it, but the parity
