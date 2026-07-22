@@ -300,10 +300,19 @@ phantom errors on normal paths (two functions confirmed; ANY wrapper
 struct triggers it, even one wrapping [Float]). Full diagnosis,
 3-minute repro, and the preserved PixelStorage source:
 `Docs/research/2026-07-21-pixelstorage-toolchain-bug.md`. Retried on
-Swift 6.3.3 (Xcode 26.5) same day: NOT fixed, and the guilty-function
-set moves between compiler versions — next step is UB-hunting
-(exclusivity-checked -O build, TSan, UncheckedSendable audit) before
-blaming the toolchain; see the doc's updated path-forward.
+Swift 6.3.3 (Xcode 26.5) same day: NOT fixed. UB-hunting ran later the
+same day and came back clean (exclusivity-checked -O, TSan ALL PASS,
+UncheckedSendable audit); root cause found: swift-frontend's ISel emits
+invalid SSA (malformed swifterror PHIs around ObjC error-bridged calls)
+— `-verify-machineinstrs` rejects even the PRISTINE tree — and
+downstream passes either ICE on it (RegisterCoalescer / RAGreedy) or
+silently mis-join, leaving a pixel pointer in the error register x21 on
+a normal return. Workarounds were tried the same evening and exhausted
+(fuse split, accessor inlining, pass flags, CLI reshaping): the victim
+set just moves; details in the doc's Update 3. Blocked on a toolchain
+fix — filed as swiftlang/swift#90874 (2026-07-21); watch it, and
+re-test each new toolchain with the seconds-fast CLI repro (`fuse
+<synth> --method pmax --engine gpu` on the reapplied refactor).
 
 At 45 MP the Metal dmap's `warp` bucket is 25–49 s across runs on the
 60-frame Fluorite stack. Two findings from the 2026-07-21 attempt
