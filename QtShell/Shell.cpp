@@ -12,7 +12,9 @@
 #include <QLabel>
 #include <QIcon>
 #include <QMessageBox>
+#include <algorithm>
 #include <utility>
+#include <vector>
 #include <QPushButton>
 
 namespace {
@@ -661,6 +663,22 @@ bool Shell::hasDisplay() const {
 }
 
 int Shell::displayEpoch() const { return hf_display_epoch(); }
+
+double Shell::displayTileMean(int cx, int cy) const {
+    int32_t w = 0, h = 0;
+    if (!hf_display_size(&w, &h) || w <= 0 || h <= 0) return -1;
+    const int ts = 16;
+    const int x = std::clamp(cx - ts / 2, 0, int(w) - ts);
+    const int y = std::clamp(cy - ts / 2, 0, int(h) - ts);
+    if (x < 0 || y < 0) return -1;   // display smaller than one tile
+    std::vector<uint8_t> rgba(size_t(ts) * ts * 4);
+    if (!hf_display_tile(0, x, y, ts, ts, rgba.data(), rgba.size()))
+        return -1;
+    long long sum = 0;
+    for (int i = 0; i < ts * ts; i++)
+        sum += rgba[i * 4] + rgba[i * 4 + 1] + rgba[i * 4 + 2];
+    return double(sum) / (ts * ts * 3);
+}
 
 int Shell::displayWidth() const {
     int32_t w = 0, h = 0;

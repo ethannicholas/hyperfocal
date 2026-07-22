@@ -237,11 +237,23 @@ public final class RetouchSession: ObservableObject {
 
     // MARK: - Display access
 
+    /// Bumped on every display-plane mutation (strokes, undo/redo tile
+    /// restores, revert); the portable depth-view cache keys on it.
+    private var displayGeneration = 0
+    #if !canImport(CoreGraphics)
+    private var depthDisplayCache: (generation: Int, image: PlatformImage)?
+    #endif
+
     /// Zero-copy image over the live display bytes, valid within `body`
-    /// only. Off Apple platforms there is no retouch pane yet — nil.
+    /// only. Off Apple the wrapper class shares the byte array (CoW) for
+    /// the call's duration — the portable spelling of the same contract;
+    /// nothing retains the wrapper past the call, so the session's later
+    /// writes never trigger a copy. (Serving nil here blacked out the Qt
+    /// pane on the first stroke: tiles refetch through this accessor once
+    /// the dirty epoch bumps.)
     public func withDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
         #if !canImport(CoreGraphics)
-        return body(nil)
+        return body(PlatformImage(width: width, height: height, rgba: displayPixels))
         #else
         let w = width, h = height
         return displayPixels.withUnsafeMutableBytes { raw -> R in
@@ -264,10 +276,28 @@ public final class RetouchSession: ObservableObject {
     }
 
     /// Zero-copy grayscale image over the live depth-view bytes, valid
-    /// within `body` only. Off Apple platforms: nil (no retouch pane).
+    /// within `body` only. Off Apple, PlatformImage is RGBA-only, so the
+    /// gray plane expands once per display generation into a cached
+    /// wrapper — per-tile expansion would redo the full frame for every
+    /// tile the pane fetches.
     public func withDepthDisplayCGImage<R>(_ body: (PlatformImage?) -> R) -> R {
         #if !canImport(CoreGraphics)
-        return body(nil)
+        if depthDisplayCache?.generation != displayGeneration {
+            var rgba = [UInt8](repeating: 255, count: width * height * 4)
+            depthDisplayPixels.withUnsafeBufferPointer { src in
+                rgba.withUnsafeMutableBufferPointer { dst in
+                    for i in 0..<(width * height) {
+                        let v = src[i]
+                        dst[i * 4] = v
+                        dst[i * 4 + 1] = v
+                        dst[i * 4 + 2] = v
+                    }
+                }
+            }
+            depthDisplayCache = (displayGeneration,
+                                 PlatformImage(width: width, height: height, rgba: rgba))
+        }
+        return body(depthDisplayCache!.image)
         #else
         let w = width, h = height
         return depthDisplayPixels.withUnsafeMutableBytes { raw -> R in
@@ -670,6 +700,7 @@ public final class RetouchSession: ObservableObject {
         Self.convertDepthToBytes(from: workingDepth, scale: depthDisplayScale,
                                  into: &depthDisplayPixels, width: width,
                                  rows: 0..<height)
+        displayGeneration &+= 1
         onDisplayDirty?(CGRect(x: 0, y: 0, width: width, height: height))
         onEdited?()
     }
@@ -782,6 +813,7 @@ public final class RetouchSession: ObservableObject {
             }
         }
         if paintsDepth { depthDirty = true }
+        displayGeneration &+= 1
         onDisplayDirty?(CGRect(x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1))
     }
 
@@ -866,6 +898,7 @@ public final class RetouchSession: ObservableObject {
                 }
             }
         }
+        displayGeneration &+= 1
         onDisplayDirty?(CGRect(x: r.x0, y: r.y0, width: r.w, height: r.h))
     }
 

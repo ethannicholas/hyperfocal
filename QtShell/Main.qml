@@ -24,6 +24,32 @@ ApplicationWindow {
     }
     color: "#1b1b1b"
 
+    // The shell's dark scheme as a real Controls palette. macOS follows
+    // the system dark appearance, but Windows/Linux default to a light
+    // palette — flat Buttons (All/None/Reset), RadioButton and CheckBox
+    // text rendered near-black on the dark background. Window-scoped so
+    // every control inherits; explicit on all platforms so the three
+    // shells render identically.
+    palette {
+        window: "#1b1b1b"
+        windowText: "#d5d5d5"
+        base: "#242424"
+        alternateBase: "#2c2c2c"
+        text: "#d5d5d5"
+        button: "#3a3a3a"
+        buttonText: "#d5d5d5"
+        highlight: "#3a6ea5"
+        highlightedText: "#ffffff"
+        placeholderText: "#8a8a8a"
+        mid: "#4a4a4a"
+        dark: "#666666"
+        disabled {
+            text: "#6f6f6f"
+            buttonText: "#6f6f6f"
+            windowText: "#6f6f6f"
+        }
+    }
+
     onClosing: function(close) {
         // The native unsaved-work gate, through the same message-box
         // path as every other confirm (synchronous, full-size, icon).
@@ -597,6 +623,19 @@ ApplicationWindow {
             Shell.collapsedSections.indexOf(section) >= 0
         Layout.fillWidth: true
         spacing: 6
+        // Headers are always as tall as their trailing flat buttons
+        // (Reset, All/None) would make them, so a button appearing or
+        // disappearing never shifts the layout. The ghost is invisible:
+        // layouts skip it (no cell, no spacing), but its implicitHeight
+        // still reports the style's real button height.
+        Layout.minimumHeight: heightGhost.implicitHeight
+        Button {
+            id: heightGhost
+            visible: false
+            flat: true
+            text: "X"
+            font.pixelSize: 11
+        }
         Item {
             // Native's chevron.right/chevron.down: a real chevron,
             // rotating to point down when expanded (the triangle

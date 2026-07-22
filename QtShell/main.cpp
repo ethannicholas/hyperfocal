@@ -395,7 +395,17 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 const QImage now = grab();
                 if (now == state->strokePre && ++state->stageTicks < 12)
                     return;
+                // And the display must still serve REAL pixels: a grab
+                // diff can't tell a painted stroke from a blacked-out
+                // pane (a nil session accessor once failed every
+                // post-stroke tile fetch — Windows retouch went solid
+                // black while this stage passed). The probe fetches a
+                // center tile through the pane's own channel: -1 = fetch
+                // failed, ~0 = the pane went black.
+                const double centerMean = shell->displayTileMean(
+                    shell->displayWidth() / 2, shell->displayHeight() / 2);
                 state->retouchOK = state->retouchOK
+                    && centerMean > 1.0
                     && !now.isNull() && now != state->strokePre
                     && shell->undo()
                     && shell->retouchHasEdits()

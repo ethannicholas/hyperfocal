@@ -124,6 +124,12 @@ public:
     Q_INVOKABLE int displayEpoch() const;
     Q_INVOKABLE int displayWidth() const;
     Q_INVOKABLE int displayHeight() const;
+    /// Mean RGB (0-255) of a small display tile centered at (cx, cy) in
+    /// display pixels, fetched through the same channel the pane uses;
+    /// -1 when the tile fetch fails. Selftest probe: "the display serves
+    /// real pixels here" — a window grab can't tell a painted stroke
+    /// from a blacked-out pane (both differ from the pre-stroke grab).
+    Q_INVOKABLE double displayTileMean(int cx, int cy) const;
     Q_INVOKABLE double slider(const QString &id) const;
     Q_INVOKABLE void setSlider(const QString &id, double value);
     Q_INVOKABLE void setFrameIncluded(int index, bool included);

@@ -263,15 +263,13 @@ circle under the canPaint rule; the selftest paints a stroke and
 proves edits→dirty-epoch→"Undo Stroke"→revert→exit. Remaining polish,
 in priority order:
 
-1. **Reset** buttons missing: Fusion and Tone are supposed to have
-   buttons for resetting to default settings.
-2. **Crop drag handles**: Dragging a crop handle out of bounds should
+1. **Crop drag handles**: Dragging a crop handle out of bounds should
    move it as close to the mouse location as possible. Instead, the
    handle simply stops moving as soon as the mouse crosses out of
    bounds; since the mouse can move many pixels in the space of a
    single frame, this leaves the crop rectangle resistant to reaching
    the image bounds.
-3. **Trackpad gestures**: On the Windows VM on a Mac, the Mac-native
+2. **Trackpad gestures**: On the Windows VM on a Mac, the Mac-native
    trackpad gestures for panning and zooming do not work. Perhaps some
    of this is simply that Windows doesn't have as rich of a trackpad
    interface as macOS does, but I see no obvious reason that Alt + two
@@ -279,13 +277,7 @@ in priority order:
    if we cannot make two finger panning work as it does on macOS, we
    will need another gesture to pan the image around in retouching
    mode, such as a modifier key + drag.
-4. **Incorrect colors**: On Windows, the Source Image etc.
-   labels under Retouch From, as well as the "All" and "None" buttons
-   in the stacks panel, are black and nearly impossible to read
-   against the dark gray background.
-5. **Retouch broken on Windows**: Upon the first retouching brush
-   stroke, the output turns solid black and remains that way.
-6. **Crop rotation cursors** (from Ethan's 2026-07-19 review; not
+3. **Crop rotation cursors** (from Ethan's 2026-07-19 review; not
    urgent): proper rotation cursors matching the native macOS
    sector-oriented rotate cursors (Qt has no built-in rotate cursor —
    needs custom cursor images quantized to the 8 sectors like
