@@ -1,0 +1,69 @@
+# Windows CI (ROADMAP Windows residual: CI runner): the same gate a dev
+# machine runs — Scripts/windows-env.ps1 for the environment, then
+# Scripts/ci-gate.sh under Git Bash. Runs on GitHub's arm64 Windows
+# runners (free for public repos), matching the arm64-windows triplet the
+# port is developed against.
+#
+# Iteration trigger: pushes to the ci-windows branch (plus manual
+# dispatch). Promote to main pushes/PRs once the gate is green and the
+# vcpkg cache is warm — the first cold run builds OpenCV and friends from
+# source and can take well over an hour.
+name: windows
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci-windows]
+
+jobs:
+  ci-gate:
+    runs-on: windows-11-arm
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Swift toolchain
+        shell: pwsh
+        run: |
+          $url = 'https://download.swift.org/swift-6.3.3-release/windows10-arm64/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-windows10-arm64.exe'
+          curl.exe -sSL -o "$env:TEMP\swift-installer.exe" $url
+          # WiX bundle: quiet install registers PATH/SDKROOT in HKCU, which
+          # Scripts/windows-env.ps1 reads — the same discovery path a dev
+          # shell uses after the GUI installer.
+          $p = Start-Process -Wait -PassThru -FilePath "$env:TEMP\swift-installer.exe" `
+              -ArgumentList '/quiet','/norestart'
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            throw "Swift installer exited $($p.ExitCode)"
+          }
+
+      # vcpkg binary cache: the imaging stack (OpenCV above all) is a long
+      # source build on arm64; archives make later runs restore in minutes.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-arm64-windows-${{ hashFiles('.github/workflows/windows.yml') }}
+          restore-keys: vcpkg-arm64-windows-
+
+      - name: Install imaging ports
+        shell: pwsh
+        run: |
+          # Runner images ship a vcpkg; fall back to a clone if absent.
+          if (-not $env:VCPKG_INSTALLATION_ROOT -or -not (Test-Path "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe")) {
+            git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
+            & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+            $env:VCPKG_INSTALLATION_ROOT = 'C:\vcpkg'
+          }
+          Add-Content $env:GITHUB_ENV "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT"
+          # The dev box's exact port set (vcpkg list, 2026-07-22).
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet arm64-windows `
+              --clean-after-build `
+              zlib liblzma 'tiff[jpeg,lzma,zip]' libpng 'libjpeg-turbo[jpeg8]' `
+              lcms 'libraw[dng-lossy]' exiv2 'opencv4[calib3d]'
+          if ($LASTEXITCODE) { throw "vcpkg install failed" }
+
+      - name: ci-gate
+        shell: pwsh
+        run: |
+          . Scripts\windows-env.ps1
+          & 'C:\Program Files\Git\bin\bash.exe' Scripts/ci-gate.sh
+          if ($LASTEXITCODE) { exit 1 }
