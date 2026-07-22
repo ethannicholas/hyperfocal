@@ -86,11 +86,7 @@ Windows residuals to close (each independently landable):
    measured margins above the shared floors (2026-07-20): dmap ≥ 0.4 dB,
    pmax 0.25 dB (38.55 vs floor 38.3; the registration gray-path fast
    path shifted the crop by a pixel, which moved pmax from 38.66).
-2. **CLI DLL deployment.** The exe finds vcpkg's DLLs via PATH
-   (windows-env.ps1 prepends `installed\<triplet>\bin`); distributing
-   the CLI needs the DLL set copied beside the exe or a static-triplet
-   build decision.
-3. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
+2. **Fusion throughput on modest hardware.** Reference point (82 × 11 MP
    JPEGs, 2-core Windows VM, 2026-07-21, quiet runs): **dmap 173-182 s,
    pmax 132 s** end to end (from 271/181 the day before — the
    registration ¼-scale JPEG gray decode landed: gradient/stats/SIFT
