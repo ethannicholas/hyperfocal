@@ -10,8 +10,17 @@ import Hyperfocal
 
 ApplicationWindow {
     id: window
-    width: 1280
-    height: 800
+    // Preferred size, clamped to the screen's *available* area — that
+    // excludes the Windows taskbar / Linux panel, which a bare 1280x800
+    // does not: on a short VM display the window ran under the taskbar
+    // and the sidebar footer (Export) was unreachable.
+    width: Math.min(1280, Screen.desktopAvailableWidth - 40)
+    height: Math.min(800, Screen.desktopAvailableHeight - 40)
+    // Placement is left to the window manager: it accounts for the frame
+    // (an explicit y positions the *client* area, which hangs the title
+    // bar off the top edge) and it already keeps windows in the work area.
+    minimumWidth: Math.min(900, Screen.desktopAvailableWidth)
+    minimumHeight: Math.min(560, Screen.desktopAvailableHeight)
     visible: true
     // Project name + dirty marker, the native titlebar behavior.
     title: {
