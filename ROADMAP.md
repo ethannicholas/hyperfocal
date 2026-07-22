@@ -117,13 +117,16 @@ Windows residuals to close (each independently landable):
      inits are unspecialized generics, ~250 ns/call), taps ~7,
      homography/divides/clamp/store ~19. Dead ends recorded in
      WarpBench.swift. Don't expect more here without changing outputs.
-     Mac Instruments finding (2026-07-21, transfers if the Windows
-     toolchain shows the same): the stdlib's GENERIC pointwiseMin/Max
-     stayed witness-dispatched at -O — 33% of warp samples — fixed
-     bit-identically with concrete hfMin/hfMax (PortableSIMD),
-     13.0 → 8.2 ns/px on the Mac bench. Re-run `debug-bench warp` on
-     the VM: if pointwiseMin was witness-bound there too, the 41 ns/px
-     floor just moved.
+     Mac Instruments finding (2026-07-21): the stdlib's GENERIC
+     pointwiseMin/Max stayed witness-dispatched at -O — 33% of warp
+     samples — fixed bit-identically with concrete hfMin/hfMax
+     (PortableSIMD), 13.0 → 8.2 ns/px on the Mac bench. **VM
+     re-measured 2026-07-22: neutral there** — best 43.4 ns/px on a
+     noisy day vs the 40.4-41.4 quiet floor, i.e. unchanged within the
+     VM's noise band; consistent with the 2026-07-19 Windows finding
+     that concrete-typed pointwiseMin already specialized on Swift
+     6.3.3/Windows (the witness-dispatch trap was toolchain-specific).
+     The 41 ns/px floor and its cost split stand on the VM.
    - **dmap spill round-trip**: io 41.6 s overlapped under compute
      (fp16, convert free) + render-src 18.3 s reading it back.
      **Byte-reduction is a measured dead end on this VM** (2026-07-21):
