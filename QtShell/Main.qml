@@ -22,7 +22,7 @@ ApplicationWindow {
         }
         return name + (Shell.hasUnsavedWork ? " — Edited" : "")
     }
-    color: "#1b1b1b"
+    color: theme.window
 
     // Window-scoped default font: unsized control text (menus, buttons,
     // radio labels) otherwise takes the style's fallback size — Fusion's
@@ -31,33 +31,55 @@ ApplicationWindow {
     // clipped at the edge.
     font.pixelSize: 13
 
-    // The shell's dark scheme as a real Controls palette. macOS follows
-    // the system dark appearance, but Windows/Linux default to a light
-    // palette — flat Buttons (All/None/Reset), RadioButton and CheckBox
-    // text rendered near-black on the dark background. Window-scoped so
-    // every control inherits; explicit on all platforms so the three
-    // shells render identically.
+    // The chrome follows the OS light/dark appearance, live (the design
+    // rule: the system setting is the source of truth — never hardcode a
+    // scheme). Every chrome color routes through here; Unknown falls
+    // back to dark, the shell's historical look.
+    QtObject {
+        id: theme
+        readonly property bool dark:
+            Application.styleHints.colorScheme !== Qt.Light
+        readonly property color window: dark ? "#1b1b1b" : "#f2f2f2"
+        // The image wells: a neutral surround for color judgment in both
+        // schemes (photo-tool convention: near-black / light gray).
+        readonly property color well: dark ? "black" : "#dedede"
+        readonly property color textPrimary: dark ? "#d5d5d5" : "#1d1d1d"
+        readonly property color textSecondary: dark ? "#b5b5b5" : "#444444"
+        readonly property color textDim: dark ? "#8a8a8a" : "#6a6a6a"
+        readonly property color textFaint: dark ? "#777777" : "#9e9e9e"
+        readonly property color warn: dark ? "#e0c04a" : "#8a6d00"
+        readonly property color ok: dark ? "#6fbf73" : "#2e7d32"
+        readonly property color cardFill:
+            dark ? Qt.rgba(1, 1, 1, 0.055) : Qt.rgba(0, 0, 0, 0.05)
+        readonly property color cardBorder:
+            dark ? Qt.rgba(1, 1, 1, 0.07) : Qt.rgba(0, 0, 0, 0.09)
+        readonly property color headerBar: dark ? "#242424" : "#e4e4e4"
+    }
+
+    // The scheme as a real Controls palette so Fusion (Windows/Linux)
+    // derives every control face from it; window-scoped so every control
+    // inherits, and identical across the three shells.
     palette {
-        window: "#1b1b1b"
-        windowText: "#d5d5d5"
-        base: "#242424"
-        alternateBase: "#2c2c2c"
-        text: "#d5d5d5"
-        button: "#3a3a3a"
-        buttonText: "#d5d5d5"
+        window: theme.window
+        windowText: theme.textPrimary
+        base: theme.dark ? "#242424" : "#ffffff"
+        alternateBase: theme.dark ? "#2c2c2c" : "#ececec"
+        text: theme.textPrimary
+        button: theme.dark ? "#3a3a3a" : "#e4e4e4"
+        buttonText: theme.textPrimary
         highlight: "#3a6ea5"
         highlightedText: "#ffffff"
         // Filled/checked control faces (highlighted Buttons, checked
-        // toggles). The OS accent is a light blue that swallows light
-        // text — pin a medium blue that carries white legibly.
+        // toggles): a medium blue that carries white legibly in both
+        // schemes (the OS accents vary too much to trust).
         accent: "#3a6ea5"
-        placeholderText: "#8a8a8a"
-        mid: "#4a4a4a"
-        dark: "#666666"
+        placeholderText: theme.textDim
+        mid: theme.dark ? "#4a4a4a" : "#b0b0b0"
+        dark: theme.dark ? "#666666" : "#909090"
         disabled {
-            text: "#6f6f6f"
-            buttonText: "#6f6f6f"
-            windowText: "#6f6f6f"
+            text: theme.dark ? "#6f6f6f" : "#a8a8a8"
+            buttonText: theme.dark ? "#6f6f6f" : "#a8a8a8"
+            windowText: theme.dark ? "#6f6f6f" : "#a8a8a8"
         }
     }
 
@@ -375,7 +397,7 @@ ApplicationWindow {
             Label {
                 text: "Version " + Shell.appVersion()
                       + " (" + Shell.appBuild() + ")"
-                color: "#b5b5b5"
+                color: theme.textSecondary
                 font.pixelSize: 11
                 Layout.alignment: Qt.AlignHCenter
             }
@@ -392,7 +414,7 @@ ApplicationWindow {
                       + "license by Adobe Systems Incorporated. See "
                       + "NOTICE.md in the source distribution for all "
                       + "third-party credits."
-                color: "#8a8a8a"
+                color: theme.textDim
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
                 Layout.preferredWidth: 300
@@ -400,7 +422,7 @@ ApplicationWindow {
             }
             Label {
                 text: "© 2026 Ethan Nicholas"
-                color: "#8a8a8a"
+                color: theme.textDim
                 font.pixelSize: 11
                 Layout.alignment: Qt.AlignHCenter
             }
@@ -501,7 +523,7 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: Math.max(26, headerSlot.implicitHeight + 4)
-            color: "#242424"
+            color: theme.headerBar
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 8
@@ -510,7 +532,7 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     text: toned.title
-                    color: "#b5b5b5"
+                    color: theme.textSecondary
                     font.pixelSize: 12
                     horizontalAlignment: Text.AlignLeft
                     elide: Text.ElideMiddle
@@ -528,7 +550,7 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            Rectangle { anchors.fill: parent; color: "black"; z: -1 }
+            Rectangle { anchors.fill: parent; color: theme.well; z: -1 }
             ShaderEffect {
                 anchors.fill: parent
                 property variant source: ShaderEffectSource {
@@ -549,7 +571,7 @@ ApplicationWindow {
                 anchors.centerIn: parent
                 text: toned.hint
                 visible: toned.hint !== ""
-                color: "#777777"
+                color: theme.textFaint
                 font.pixelSize: 13
             }
         }
@@ -573,7 +595,7 @@ ApplicationWindow {
             // clipped at the sidebar edge.
             Label {
                 text: label
-                color: "#b5b5b5"
+                color: theme.textSecondary
                 font.pixelSize: 12
                 Layout.fillWidth: true
                 elide: Text.ElideRight
@@ -581,7 +603,7 @@ ApplicationWindow {
             Label {
                 id: valueLabel
                 text: format.arg(control.value.toFixed(decimals))
-                color: "#8a8a8a"
+                color: theme.textDim
                 font.pixelSize: 12
                 // Monospace keeps the value from jittering during drags;
                 // Menlo is macOS-only (its Windows fallback rendered wide).
@@ -624,8 +646,8 @@ ApplicationWindow {
         default property alias content: cardColumn.data
         Layout.fillWidth: true
         implicitHeight: cardColumn.implicitHeight + 20
-        color: Qt.rgba(1, 1, 1, 0.055)
-        border.color: Qt.rgba(1, 1, 1, 0.07)
+        color: theme.cardFill
+        border.color: theme.cardBorder
         border.width: 1
         radius: 8
         ColumnLayout {
@@ -675,13 +697,13 @@ ApplicationWindow {
                 id: chevronGlyph
                 anchors.centerIn: parent
                 text: "\u276f"
-                color: "#9a9a9a"
+                color: theme.textDim
                 font.pixelSize: 12
                 font.bold: true
                 rotation: header.collapsed ? 0 : 90
             }
         }
-        Label { text: header.title; color: "#d5d5d5"; font.bold: true }
+        Label { text: header.title; color: theme.textPrimary; font.bold: true }
         // The subtitle doubles as the row's flexing element (it elides
         // under pressure). This keeps the header compressible: a
         // ColumnLayout whose set width is below any child's minimum lays
@@ -690,7 +712,7 @@ ApplicationWindow {
         // Fusion's wider buttons, clipping every card at the edge.
         Label {
             text: header.subtitle
-            color: "#8a8a8a"
+            color: theme.textDim
             font.pixelSize: 11
             Layout.fillWidth: true
             elide: Text.ElideRight
@@ -744,7 +766,7 @@ ApplicationWindow {
             Label {
                 text: "Stacks"
                 visible: stackList.count > 1
-                color: "#d5d5d5"
+                color: theme.textPrimary
                 font.bold: true
             }
             ListView {
@@ -780,7 +802,7 @@ ApplicationWindow {
                         Text {
                             anchors.centerIn: parent
                             text: "\u276f"
-                            color: "#9a9a9a"
+                            color: theme.textDim
                             font.pixelSize: 10
                             font.bold: true
                             rotation: stackDelegate.modelData.expanded
@@ -802,9 +824,9 @@ ApplicationWindow {
                         // Native: the title alone dims when the stack
                         // is excluded from batch fuse; glyphs, count,
                         // and chevron keep their normal colors.
-                        color: !modelData.enabled ? "#777777"
-                             : index === Shell.selectedStack ? "#ffffff"
-                                                             : "#a5a5a5"
+                        color: !modelData.enabled ? theme.textFaint
+                             : index === Shell.selectedStack
+                               ? theme.textPrimary : theme.textSecondary
                         font.bold: index === Shell.selectedStack
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
@@ -817,7 +839,7 @@ ApplicationWindow {
                         // Load-time frame-order warning badge.
                         text: "△"
                         visible: modelData.orderWarning !== ""
-                        color: "#e0c04a"
+                        color: theme.warn
                         ToolTip.visible: orderHover.hovered
                         ToolTip.text: modelData.orderWarning
                         HoverHandler { id: orderHover }
@@ -828,14 +850,14 @@ ApplicationWindow {
                         text: modelData.status === 1 ? "…"
                             : modelData.status === 2 ? "✓"
                             : modelData.status === 3 ? "⚠" : ""
-                        color: modelData.status === 3 ? "#e0c04a" : "#6fbf73"
+                        color: modelData.status === 3 ? theme.warn : theme.ok
                         ToolTip.visible: modelData.status === 3 && hover.hovered
                         ToolTip.text: modelData.failure
                         HoverHandler { id: hover }
                     }
                     Label {
                         text: stackDelegate.modelData.frameCount
-                        color: "#8a8a8a"
+                        color: theme.textDim
                         font.pixelSize: 11
                     }
                     }
@@ -860,15 +882,15 @@ ApplicationWindow {
                             }
                             Label {
                                 text: modelData.name
-                                color: modelData.included ? "#d5d5d5"
-                                                          : "#777777"
+                                color: modelData.included ? theme.textPrimary
+                                                          : theme.textFaint
                                 elide: Text.ElideMiddle
                                 Layout.fillWidth: true
                             }
                             Label {
                                 text: "⚠"
                                 visible: modelData.issue !== ""
-                                color: "#e0c04a"
+                                color: theme.warn
                                 ToolTip.visible: nestedIssueHover.hovered
                                 ToolTip.text: modelData.issue
                                 HoverHandler { id: nestedIssueHover }
@@ -930,7 +952,7 @@ ApplicationWindow {
                 visible: stackList.count === 0 && frameList.count === 0
                          && !stackHeader.collapsed
                 text: "Drop a folder of frames here, or:"
-                color: "#8a8a8a"
+                color: theme.textDim
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
             }
@@ -969,7 +991,7 @@ ApplicationWindow {
                     Label {
                         // Click selects the frame — the input pane follows.
                         text: modelData.name
-                        color: modelData.included ? "#d5d5d5" : "#777777"
+                        color: modelData.included ? theme.textPrimary : theme.textFaint
                         font.bold: index === Shell.selectedFrame
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
@@ -979,7 +1001,7 @@ ApplicationWindow {
                         // Fuse-time issue badge (misfire/misalignment).
                         text: "⚠"
                         visible: modelData.issue !== ""
-                        color: "#e0c04a"
+                        color: theme.warn
                         ToolTip.visible: issueHover.hovered
                         ToolTip.text: modelData.issue
                         HoverHandler { id: issueHover }
@@ -1121,12 +1143,12 @@ ApplicationWindow {
                 // "Crop" sub-header — the native CropControls placement.
                 Label {
                     visible: Shell.cropMode
-                    text: "Crop"; color: "#d5d5d5"; font.bold: true
+                    text: "Crop"; color: theme.textPrimary; font.bold: true
                 }
                 RowLayout {
                     visible: Shell.cropMode
                     Layout.fillWidth: true
-                    Label { text: "Aspect Ratio"; color: "#b5b5b5" }
+                    Label { text: "Aspect Ratio"; color: theme.textSecondary }
                     ComboBox {
                         Layout.fillWidth: true
                         model: ["Original", "Custom", "1:1", "3:2", "5:4",
@@ -1169,7 +1191,7 @@ ApplicationWindow {
 
                 Label {
                     visible: Shell.retouchMode
-                    text: "Retouching"; color: "#d5d5d5"; font.bold: true
+                    text: "Retouching"; color: theme.textPrimary; font.bold: true
                 }
                 SidebarSlider {
                     visible: Shell.retouchMode
@@ -1188,7 +1210,7 @@ ApplicationWindow {
                     spacing: 2
                     Label {
                         text: "Retouch from"
-                        color: "#b5b5b5"
+                        color: theme.textSecondary
                         font.pixelSize: 12
                     }
                     RadioButton {
@@ -1236,7 +1258,7 @@ ApplicationWindow {
                           + Shell.displayCrop.height
                           + (Shell.displayCropAngle !== 0
                              ? ", " + Shell.displayCropAngle.toFixed(1) + "°" : "")
-                    color: "#8a8a8a"
+                    color: theme.textDim
                     font.pixelSize: 11
                     elide: Text.ElideRight
                 }
@@ -1326,7 +1348,7 @@ ApplicationWindow {
                             : Shell.retouchSourceStatus !== ""
                                 ? Shell.retouchSourceStatus
                                 : "Loading source…"
-                        color: "#b5b5b5"
+                        color: theme.textSecondary
                         font.pixelSize: 13
                         padding: 8
                         background: Rectangle { color: "#c0282828"; radius: 6 }
@@ -1410,7 +1432,7 @@ ApplicationWindow {
                                 spacing: 8
                                 Label {
                                     text: Shell.stageText
-                                    color: "#b5b5b5"
+                                    color: theme.textSecondary
                                     font.pixelSize: 12
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
@@ -1418,7 +1440,7 @@ ApplicationWindow {
                                 Label {
                                     text: Shell.stageEta
                                     visible: text !== ""
-                                    color: "#8a8a8a"
+                                    color: theme.textDim
                                     font.pixelSize: 12
                                 }
                                 Button {
@@ -1438,7 +1460,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.margins: 6
                 Item { Layout.fillWidth: true }
-                Label { text: "Zoom:"; color: "#b5b5b5"; font.pixelSize: 12 }
+                Label { text: "Zoom:"; color: theme.textSecondary; font.pixelSize: 12 }
                 ToolButton {
                     id: zoomMenuButton
                     text: (outputPane.item.fitted ? "Fit"

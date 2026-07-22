@@ -515,15 +515,13 @@ int main(int argc, char *argv[]) {
         qputenv("HYPERFOCAL_SETTINGS_SUITE", "org.hyperfocal.qtshell-settings");
     QApplication app(argc, argv);  // QtWidgets: modal QMessageBox dialogs
     app.setWindowIcon(QIcon(QStringLiteral(":/AppIcon.png")));
-    // The shell is a dark-designed UI. Windows/Linux platform styles draw
-    // filled control faces (accent buttons, checked toggles) from their
-    // own baked light theme — measured to ignore both the QML palette's
-    // accent and the forced color scheme — leaving light text illegible
-    // on light faces. Fusion is the one Controls style that derives every
-    // face from the palette, so it renders the window palette's dark
-    // scheme faithfully; macOS keeps its native style (it follows the
-    // dark system appearance the shell was designed against).
-    app.styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+    // The OS light/dark appearance is the source of truth (never force a
+    // scheme): the QML theme object derives every chrome color from
+    // QStyleHints::colorScheme, live. Windows/Linux use Fusion because
+    // the platform styles draw filled control faces (accent buttons,
+    // checked toggles) from their own baked theme, ignoring the QML
+    // palette — Fusion derives every face from it; macOS keeps its
+    // native style, which follows the system appearance already.
 #ifndef Q_OS_MACOS
     QQuickStyle::setStyle(QStringLiteral("Fusion"));
 #endif
