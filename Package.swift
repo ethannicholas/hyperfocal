@@ -118,11 +118,17 @@ var kitSwiftSettings: [SwiftSetting] = [
 // surface is defined by real shell clients (the bridge).
 // Off Apple, ObservableObject/@Published come from OpenCombine.
 var appCoreDeps: [Target.Dependency] = ["HyperfocalKit"]
+// ObservableObject/@Published come from OpenCombine off Apple platforms.
+// This is a build-time platform condition, NOT a manifest #if: package
+// dependencies must be identical on every platform or each OS rewrites
+// Package.resolved to its own view (the pin ping-pongs mac↔linux).
+appCoreDeps.append(.product(name: "OpenCombine", package: "OpenCombine",
+                            condition: .when(platforms: [.linux, .windows, .android])))
 #if !os(macOS)
-appCoreDeps.append(.product(name: "OpenCombine", package: "OpenCombine"))
 // `import zlib` is an Apple-SDK module; elsewhere ProjectStore's crc32 comes
 // from a minimal system-library shim over <zlib.h>. vcpkg's zlib names its
 // import library z.lib, so the modulemap's `link "z"` holds on Windows too.
+// (Local targets don't affect Package.resolved, so this #if is fine.)
 appCoreDeps.append("CZlib")
 extraTargets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
 #endif
@@ -355,17 +361,13 @@ let package = Package(
         .library(name: "HyperfocalKit", targets: ["HyperfocalKit"]),
         .executable(name: "hyperfocal-cli", targets: ["hyperfocal-cli"]),
     ] + extraProducts,
-    dependencies: {
-        var deps: [Package.Dependency] = [
-            .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
-        ]
-        #if !os(macOS)
-        // ObservableObject/@Published for AppCore off Apple platforms.
-        deps.append(.package(url: "https://github.com/OpenCombine/OpenCombine.git",
-                             from: "0.14.0"))
-        #endif
-        return deps
-    }(),
+    // Unconditional on every platform (see the OpenCombine note above):
+    // a #if here makes each OS resolve a different dependency set and
+    // rewrite Package.resolved with its own pins.
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+        .package(url: "https://github.com/OpenCombine/OpenCombine.git", from: "0.14.0"),
+    ],
     targets: targets,
     cxxLanguageStandard: .cxx17
 )
