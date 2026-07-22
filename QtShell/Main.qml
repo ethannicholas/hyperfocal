@@ -24,6 +24,13 @@ ApplicationWindow {
     }
     color: "#1b1b1b"
 
+    // Window-scoped default font: unsized control text (menus, buttons,
+    // radio labels) otherwise takes the style's fallback size — Fusion's
+    // is larger than the platform styles', which inflated control minimum
+    // widths until the sidebar cards overflowed their 260px column and
+    // clipped at the edge.
+    font.pixelSize: 13
+
     // The shell's dark scheme as a real Controls palette. macOS follows
     // the system dark appearance, but Windows/Linux default to a light
     // palette — flat Buttons (All/None/Reset), RadioButton and CheckBox
@@ -40,6 +47,10 @@ ApplicationWindow {
         buttonText: "#d5d5d5"
         highlight: "#3a6ea5"
         highlightedText: "#ffffff"
+        // Filled/checked control faces (highlighted Buttons, checked
+        // toggles). The OS accent is a light blue that swallows light
+        // text — pin a medium blue that carries white legibly.
+        accent: "#3a6ea5"
         placeholderText: "#8a8a8a"
         mid: "#4a4a4a"
         dark: "#666666"
@@ -554,14 +565,29 @@ ApplicationWindow {
         spacing: 2
         Layout.fillWidth: true
         RowLayout {
+            id: valueRow
             Layout.fillWidth: true
-            Label { text: label; color: "#b5b5b5"; font.pixelSize: 12 }
-            Item { Layout.fillWidth: true }
+            // The title flexes and elides; the value keeps its natural
+            // width. With a fixed spacer instead, wider style fonts
+            // (Fusion on Windows) overflowed the row and the value was
+            // clipped at the sidebar edge.
             Label {
+                text: label
+                color: "#b5b5b5"
+                font.pixelSize: 12
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+            }
+            Label {
+                id: valueLabel
                 text: format.arg(control.value.toFixed(decimals))
                 color: "#8a8a8a"
                 font.pixelSize: 12
-                font.family: "Menlo"
+                // Monospace keeps the value from jittering during drags;
+                // Menlo is macOS-only (its Windows fallback rendered wide).
+                font.family: Qt.platform.os === "osx" ? "Menlo"
+                           : Qt.platform.os === "windows" ? "Consolas"
+                           : "monospace"
             }
         }
         Slider {
@@ -656,13 +682,19 @@ ApplicationWindow {
             }
         }
         Label { text: header.title; color: "#d5d5d5"; font.bold: true }
+        // The subtitle doubles as the row's flexing element (it elides
+        // under pressure). This keeps the header compressible: a
+        // ColumnLayout whose set width is below any child's minimum lays
+        // EVERYTHING out at that minimum — one incompressible header made
+        // the whole sidebar overflow its 260px column by 19px under
+        // Fusion's wider buttons, clipping every card at the edge.
         Label {
             text: header.subtitle
-            visible: header.subtitle !== ""
             color: "#8a8a8a"
             font.pixelSize: 11
+            Layout.fillWidth: true
+            elide: Text.ElideRight
         }
-        Item { Layout.fillWidth: true; implicitHeight: 1 }
         RowLayout { id: trailingRow; spacing: 6 }
         TapHandler { onTapped: Shell.toggleSection(header.section) }
     }
@@ -696,7 +728,11 @@ ApplicationWindow {
             }
 
         ColumnLayout {
-            width: sidebarScroll.availableWidth
+            // Explicit arithmetic, not availableWidth: Fusion's ScrollView
+            // reports availableWidth without the right padding, which ran
+            // the cards to the clipped 280px edge (slider values cut off).
+            width: sidebarScroll.width - sidebarScroll.leftPadding
+                   - sidebarScroll.rightPadding
             // Stretch to the viewport when content fits, so the Export
             // button stays pinned to the bottom.
             height: Math.max(implicitHeight, sidebarScroll.availableHeight)
@@ -860,6 +896,14 @@ ApplicationWindow {
                     enabled: !Shell.isRunning
                     flat: true
                     font.pixelSize: 11
+                    // Tight header buttons: Fusion's Button background
+                    // imposes a large minimum implicit width (~80px) that
+                    // crowded the header row until the whole sidebar
+                    // column overflowed; size these to their text.
+                    leftPadding: 8
+                    rightPadding: 8
+                    Layout.preferredWidth: implicitContentWidth
+                                           + leftPadding + rightPadding
                     onClicked: Shell.setAllFramesIncluded(true)
                 }
                 Button {
@@ -868,6 +912,14 @@ ApplicationWindow {
                     enabled: !Shell.isRunning
                     flat: true
                     font.pixelSize: 11
+                    // Tight header buttons: Fusion's Button background
+                    // imposes a large minimum implicit width (~80px) that
+                    // crowded the header row until the whole sidebar
+                    // column overflowed; size these to their text.
+                    leftPadding: 8
+                    rightPadding: 8
+                    Layout.preferredWidth: implicitContentWidth
+                                           + leftPadding + rightPadding
                     onClicked: Shell.setAllFramesIncluded(false)
                 }
             }
@@ -945,6 +997,14 @@ ApplicationWindow {
                     enabled: !Shell.isRunning
                     flat: true
                     font.pixelSize: 11
+                    // Tight header buttons: Fusion's Button background
+                    // imposes a large minimum implicit width (~80px) that
+                    // crowded the header row until the whole sidebar
+                    // column overflowed; size these to their text.
+                    leftPadding: 8
+                    rightPadding: 8
+                    Layout.preferredWidth: implicitContentWidth
+                                           + leftPadding + rightPadding
                     onClicked: Shell.resetFusion()
                 }
             }
@@ -995,6 +1055,14 @@ ApplicationWindow {
                     visible: !Shell.toneNeutral
                     flat: true
                     font.pixelSize: 11
+                    // Tight header buttons: Fusion's Button background
+                    // imposes a large minimum implicit width (~80px) that
+                    // crowded the header row until the whole sidebar
+                    // column overflowed; size these to their text.
+                    leftPadding: 8
+                    rightPadding: 8
+                    Layout.preferredWidth: implicitContentWidth
+                                           + leftPadding + rightPadding
                     onClicked: Shell.resetTone()
                 }
             }
