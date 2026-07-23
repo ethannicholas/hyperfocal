@@ -43,14 +43,26 @@ void applyAlertIcon(QMessageBox &box) {
     if (!icon.isNull()) box.setIconPixmap(icon.pixmap(48, 48));
 }
 
+// AppCore speaks NSAlert's shape: `message` is the short headline,
+// `informative` the detail. Qt has no headline slot — it has a window
+// title plus body text — so the headline becomes the title and the
+// detail becomes the body (QMessageBox's 3-arg ctor is title, text).
+// Passing the headline as BOTH (the original mapping) printed it twice:
+// once in the title bar, again as the body's first line. Informative is
+// never empty from AppCore; the fallback keeps a bare-headline caller
+// from producing an empty box.
+QString alertBody(const QString &message, const QString &informative) {
+    return informative.isEmpty() ? message : informative;
+}
+
 int shellConfirm(const char *message, const char *informative,
                  const char *confirmTitle, const char *cancelTitle,
                  int warning, void *) {
     if (qEnvironmentVariableIsSet("HFQT_AUTOCONFIRM")) return 1;
     QMessageBox box(warning ? QMessageBox::Warning : QMessageBox::Question,
-                    QString::fromUtf8(message), QString::fromUtf8(message));
+                    QString::fromUtf8(message),
+                    alertBody(QString::fromUtf8(message), QString::fromUtf8(informative)));
     applyAlertIcon(box);
-    box.setInformativeText(QString::fromUtf8(informative));
     QAbstractButton *confirm = box.addButton(QString::fromUtf8(confirmTitle),
                                              QMessageBox::AcceptRole);
     box.addButton(QString::fromUtf8(cancelTitle), QMessageBox::RejectRole);
@@ -62,9 +74,9 @@ void shellNotify(const char *message, const char *informative, int warning,
                  void *) {
     if (qEnvironmentVariableIsSet("HFQT_AUTOCONFIRM")) return;
     QMessageBox box(warning ? QMessageBox::Warning : QMessageBox::Information,
-                    QString::fromUtf8(message), QString::fromUtf8(message));
+                    QString::fromUtf8(message),
+                    alertBody(QString::fromUtf8(message), QString::fromUtf8(informative)));
     applyAlertIcon(box);
-    box.setInformativeText(QString::fromUtf8(informative));
     box.exec();
 }
 
@@ -728,9 +740,8 @@ bool Shell::gpuAvailable() const { return hf_gpu_available() != 0; }
 bool Shell::confirmQuit() {
     QMessageBox box(QMessageBox::Warning,
                     QStringLiteral("Are you sure you want to quit?"),
-                    QStringLiteral("Are you sure you want to quit?"));
+                    QStringLiteral("Unsaved data will be lost."));
     applyAlertIcon(box);
-    box.setInformativeText(QStringLiteral("Unsaved data will be lost."));
     QAbstractButton *quit = box.addButton(QStringLiteral("Quit"),
                                           QMessageBox::AcceptRole);
     box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
