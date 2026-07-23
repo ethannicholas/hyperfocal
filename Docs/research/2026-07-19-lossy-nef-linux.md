@@ -35,8 +35,8 @@ HE/HE* is intoPIX **TicoRAW**, patented and licensed per-SDK. LibRaw
 ([no ETA since 2022](https://www.libraw.org/node/2766); 0.22 only added
 *reading* the NEFCompression makernote tag), dnglab, darktable/rawspeed,
 and RawTherapee all lack it for licensing reasons, not technical ones.
-Commercial support exists (Adobe, DxO, Capture One — all licensed
-TicoRAW) but none of those ship Linux products. The intoPIX SDK is a
+Commercial support exists (Adobe and other TicoRAW licensees) but none
+of those ship Linux products. The intoPIX SDK is a
 commercial license incompatible with an open-source project.
 
 Affected bucket: Nikon HE/HE* (Z 8 / Z 9 / Z6III / Zf / ZR …) is the
@@ -46,7 +46,7 @@ LibRaw, so a generic detector needs no format list.
 
 ## The deferred design (if this is ever picked back up)
 
-Helicon Focus's approach, adapted: shell out to **Adobe DNG Converter**
+The commercial-stacker approach, adapted: shell out to **Adobe DNG Converter**
 (freeware, HE support since 2022, headless CLI: `-c -p0 -mp -d <outdir>
 <files…>`) running under Wine — a well-trodden community workflow
 ([RawPedia](https://rawpedia.rawtherapee.com/How_to_convert_raw_formats_to_DNG),

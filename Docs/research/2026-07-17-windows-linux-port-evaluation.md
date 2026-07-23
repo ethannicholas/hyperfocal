@@ -126,8 +126,8 @@ backend deferred until measurement demands it.
 ### Plan B — Mac native + one Qt UI for Windows/Linux  ← **chosen**
 - ✅ Mac app untouched; one new UI covers both new platforms; Qt's
   custom-widget path suits the pane rendering (GPU LUT shader ≈ the CI
-  color cube); market-normal (Helicon Focus is Qt, Zerene is Java —
-  non-native is expected in this niche).
+  color cube); market-normal (competing focus stackers ship non-native,
+  cross-platform-toolkit UIs — non-native is expected in this niche).
 - ❌ Language seam: Swift AppCore ↔ C++/QML UI needs a C-ABI bridge
   (design work, prototype first). Win/Linux app is non-native in feel.
   Qt LGPL dynamic-linking constraint on a paid app.
