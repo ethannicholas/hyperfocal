@@ -419,10 +419,11 @@ ApplicationWindow {
                 onLinkActivated: link => Qt.openUrlExternally(link)
             }
             Label {
-                text: "Includes the Adobe DNG SDK — DNG technology under "
-                      + "license by Adobe Systems Incorporated. See "
-                      + "NOTICE.md in the source distribution for all "
-                      + "third-party credits."
+                text: "Includes the Adobe DNG SDK (DNG technology under "
+                      + "license by Adobe Systems Incorporated) and the Qt "
+                      + "framework under the GNU LGPL v3, plus other "
+                      + "open-source libraries. See NOTICE.md for all "
+                      + "third-party credits and licenses."
                 color: theme.textDim
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
