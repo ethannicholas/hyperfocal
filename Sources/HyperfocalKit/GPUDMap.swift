@@ -449,6 +449,7 @@ public enum GPUDMap {
         // Peak concentration from the retained planes — the identical
         // computation the CPU path runs, so both engines gate the same pixels.
         let concentration = DMapFusion.peakConcentrationPlane(planes: sharpnessPlanes)
+        var despillInputs: Despill.DespillInputs? = nil
         let depth = try regularizeDepth(engine: engine, bestEBuf: bestEBuf,
                                         bestIdxBuf: bestIdxBuf,
                                         concentration: concentration,
@@ -458,7 +459,8 @@ public enum GPUDMap {
                                         guide: guide, guideBuf: guideBuf,
                                         width: width, height: height,
                                         frameCount: frameCount, options: options,
-                                        log: log, cancellation: cancellation) {
+                                        log: log, cancellation: cancellation,
+                                        despillOut: { despillInputs = $0 }) {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         }
 
@@ -604,15 +606,17 @@ public enum GPUDMap {
             p.baseAddress!.update(from: rawBuf.contents().assumingMemoryBound(to: Float.self),
                                   count: pixelCount * 4)
         }
-        return DMapFusion.Output(image: out,
-                                 depthMap: DMapFusion.depthImage(from: depth, width: width,
-                                                                 height: height,
-                                                                 frameCount: frameCount),
-                                 depth: depth,
-                                 sharpness: FrameSharpness(fullWidth: width, fullHeight: height,
-                                                           factor: DMapFusion.sharpnessDownsample,
-                                                           planes: sharpnessPlanes),
-                                 gains: gains)
+        var output = DMapFusion.Output(image: out,
+                                       depthMap: DMapFusion.depthImage(from: depth, width: width,
+                                                                       height: height,
+                                                                       frameCount: frameCount),
+                                       depth: depth,
+                                       sharpness: FrameSharpness(fullWidth: width, fullHeight: height,
+                                                                 factor: DMapFusion.sharpnessDownsample,
+                                                                 planes: sharpnessPlanes),
+                                       gains: gains)
+        output.despill = despillInputs
+        return output
     }
 
     /// Alpha-weighted per-channel mean of an RGBA float buffer, stride-
@@ -671,6 +675,7 @@ public enum GPUDMap {
                                 options: DMapFusion.Options,
                                 log: ((String) -> Void)?,
                                 cancellation: CancellationToken?,
+                                despillOut: ((Despill.DespillInputs) -> Void)? = nil,
                                 progress: ((Double) -> Void)? = nil) throws -> [Float] {
         let pixelCount = width * height
         let confidencePipeline = try engine.pipeline("confidence_map")
@@ -782,6 +787,15 @@ public enum GPUDMap {
                 _ = coeff.spillStrength.withUnsafeBufferPointer {
                     memcpy(spillSBuf.contents(), $0.baseAddress!, gridCount * 4)
                 }
+            }
+            if options.prepareDespill, let despillOut,
+               let di = Despill.computeInputs(luminancePlanes: luminancePlanes,
+                                              spillStrength: coeff.spillStrength,
+                                              spillWidth: coeff.gridWidth,
+                                              spillHeight: coeff.gridHeight,
+                                              width: width, height: height,
+                                              factor: coeff.factor, log: log) {
+                despillOut(di)
             }
             let applyPipeline = try engine.pipeline("guided_apply_blend")
             try run("guided apply") { encoder in

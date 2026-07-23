@@ -407,6 +407,7 @@ public enum WgpuDMap {
         // Peak concentration from the retained planes — the identical
         // computation the CPU path runs, so both engines gate the same pixels.
         let concentration = DMapFusion.peakConcentrationPlane(planes: sharpnessPlanes)
+        var despillInputs: Despill.DespillInputs? = nil
         let depth = try regularizeDepth(engine: engine, bestEBuf: bestEBuf,
                                         bestIdxBuf: bestIdxBuf,
                                         concentration: concentration,
@@ -416,7 +417,8 @@ public enum WgpuDMap {
                                         guide: guide, guideBuf: guideBuf,
                                         width: width, height: height,
                                         frameCount: frameCount, options: options,
-                                        log: log, cancellation: cancellation) {
+                                        log: log, cancellation: cancellation,
+                                        despillOut: { despillInputs = $0 }) {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         }
 
@@ -553,15 +555,17 @@ public enum WgpuDMap {
             try engine.download(rawBuf, into: $0.baseAddress!,
                                 byteCount: pixelCount * 16)
         }
-        return DMapFusion.Output(image: out,
-                                 depthMap: DMapFusion.depthImage(from: depth, width: width,
-                                                                 height: height,
-                                                                 frameCount: frameCount),
-                                 depth: depth,
-                                 sharpness: FrameSharpness(fullWidth: width, fullHeight: height,
-                                                           factor: DMapFusion.sharpnessDownsample,
-                                                           planes: sharpnessPlanes),
-                                 gains: gains)
+        var output = DMapFusion.Output(image: out,
+                                       depthMap: DMapFusion.depthImage(from: depth, width: width,
+                                                                       height: height,
+                                                                       frameCount: frameCount),
+                                       depth: depth,
+                                       sharpness: FrameSharpness(fullWidth: width, fullHeight: height,
+                                                                 factor: DMapFusion.sharpnessDownsample,
+                                                                 planes: sharpnessPlanes),
+                                       gains: gains)
+        output.despill = despillInputs
+        return output
     }
 
     /// The regularization chain (confidence → weighted median → guided filter
@@ -580,6 +584,7 @@ public enum WgpuDMap {
                                 options: DMapFusion.Options,
                                 log: ((String) -> Void)?,
                                 cancellation: CancellationToken?,
+                                despillOut: ((Despill.DespillInputs) -> Void)? = nil,
                                 progress: ((Double) -> Void)? = nil) throws -> [Float] {
         let pixelCount = width * height
 
@@ -683,6 +688,15 @@ public enum WgpuDMap {
                 coeff.spillStrength.withUnsafeBytes {
                     engine.upload($0.baseAddress!, byteCount: $0.count, to: spillSBuf)
                 }
+            }
+            if options.prepareDespill, let despillOut,
+               let di = Despill.computeInputs(luminancePlanes: luminancePlanes,
+                                              spillStrength: coeff.spillStrength,
+                                              spillWidth: coeff.gridWidth,
+                                              spillHeight: coeff.gridHeight,
+                                              width: width, height: height,
+                                              factor: coeff.factor, log: log) {
+                despillOut(di)
             }
             try run("guided apply") { batch in
                 if !hasSpill {

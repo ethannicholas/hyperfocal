@@ -61,12 +61,19 @@ public enum DMapFusion {
         /// trade). The temp file is width×height×16 bytes per frame, so
         /// users short on disk can turn it off and accept the slower fuse.
         public var spillEnabled: Bool
+        /// Retain the grid planes the render-stage rim despill consumes
+        /// (`Despill.DespillInputs`) on the fused `Output`. Off by default —
+        /// the planes are cheap but pointless work unless a despill pass will
+        /// run. The `fuse` CLI turns it on when `--despill` > 0 (or the
+        /// input-dump env is set); the app leaves it off until it wires up a
+        /// despill control.
+        public var prepareDespill: Bool
 
         public init(sharpnessSigma: Float = 10, blendRadius: Float = 1, noiseFloor: Float = 0.05,
                     medianRadius: Int = 20, normalizeExposure: Bool = true,
                     peakConcentration: Float = 0.5,
                     guidedRadius: Float = 128, guidedEps: Float = 1e-3,
-                    spillEnabled: Bool = true) {
+                    spillEnabled: Bool = true, prepareDespill: Bool = false) {
             self.sharpnessSigma = sharpnessSigma
             self.blendRadius = blendRadius
             self.noiseFloor = noiseFloor
@@ -76,6 +83,7 @@ public enum DMapFusion {
             self.guidedRadius = guidedRadius
             self.guidedEps = guidedEps
             self.spillEnabled = spillEnabled
+            self.prepareDespill = prepareDespill
         }
     }
 
@@ -98,6 +106,11 @@ public enum DMapFusion {
         /// rendering. Retouch sources must apply the same gains or stamps
         /// carry the original flicker into the normalized result.
         public let gains: [SIMD3<Float>]?
+        /// Grid planes the render-stage rim despill consumes, retained only
+        /// when `Options.prepareDespill` is set. Produced by shared code from
+        /// each engine's (≈90 dB-parity) luminance planes + guide, so a
+        /// despilled result inherits that parity rather than re-deriving it.
+        public var despill: Despill.DespillInputs? = nil
     }
 
     public static func fuse(frameCount: Int, options: Options = Options(),
@@ -356,6 +369,7 @@ public enum DMapFusion {
         dumpGuide(guidePlane)
 
         let concentration = peakConcentrationPlane(planes: sharpnessPlanes)
+        var despillInputs: Despill.DespillInputs? = nil
         let depth = regularizeDepth(bestEnergy: bestEnergy, bestIndex: bestIndex,
                                     concentration: concentration,
                                     concentrationWidth: (width + sharpnessDownsample - 1)
@@ -366,6 +380,7 @@ public enum DMapFusion {
                                     guide: guidePlane.isEmpty ? nil : guidePlane,
                                     width: width, height: height,
                                     frameCount: frameCount, options: options, log: log,
+                                    despillOut: { despillInputs = $0 },
                                     progress: {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         })
@@ -505,14 +520,16 @@ public enum DMapFusion {
             }
         }
 
-        return Output(image: out,
-                      depthMap: depthImage(from: depth, width: width, height: height,
-                                           frameCount: frameCount),
-                      depth: depth,
-                      sharpness: FrameSharpness(fullWidth: width, fullHeight: height,
-                                                factor: Self.sharpnessDownsample,
-                                                planes: sharpnessPlanes),
-                      gains: gains)
+        var output = Output(image: out,
+                            depthMap: depthImage(from: depth, width: width, height: height,
+                                                 frameCount: frameCount),
+                            depth: depth,
+                            sharpness: FrameSharpness(fullWidth: width, fullHeight: height,
+                                                      factor: Self.sharpnessDownsample,
+                                                      planes: sharpnessPlanes),
+                            gains: gains)
+        output.despill = despillInputs
+        return output
     }
 
     /// Debug hook for the winner-luminance guide plane: honors
@@ -835,6 +852,7 @@ public enum DMapFusion {
                                        width: Int, height: Int, frameCount: Int,
                                        options: Options, log: ((String) -> Void)? = nil,
                                        isStale: (@Sendable () -> Bool)? = nil,
+                                       despillOut: ((Despill.DespillInputs) -> Void)? = nil,
                                        progress: ((Double) -> Void)? = nil) -> [Float] {
         // Confidence: soft threshold against a noise floor derived from the image's
         // own energy distribution (robust to overall scene contrast), times a
@@ -946,6 +964,15 @@ public enum DMapFusion {
                                                consensus: consensus.isEmpty ? nil : consensus,
                                                width: width, height: height,
                                                frameCount: frameCount)
+            if options.prepareDespill, let despillOut,
+               let di = Despill.computeInputs(luminancePlanes: luminancePlanes ?? [],
+                                              spillStrength: coeff.spillStrength,
+                                              spillWidth: coeff.gridWidth,
+                                              spillHeight: coeff.gridHeight,
+                                              width: width, height: height,
+                                              factor: coeff.factor, log: log) {
+                despillOut(di)
+            }
         } else {
             // No guide (caller retained none) or no signal anywhere: keep the
             // median depth, just clamped.

@@ -19,7 +19,7 @@ private let subcommandList: [ParsableCommand.Type] = {
         [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
          DebugAlign.self, DebugChain.self,
          DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self,
-         DebugBench.self]
+         DebugBench.self, DebugDespill.self]
     #if HYPERFOCAL_HAVE_WGPU
     list.append(DebugWgpu.self)  // wgpu A/B builds (off in-tree on Apple)
     #endif
@@ -30,7 +30,7 @@ private let subcommandList: [ParsableCommand.Type] = {
     var list: [ParsableCommand.Type] =
         [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
          DebugChain.self, DebugWarp.self, DebugDiff.self, DebugBoost.self,
-         DebugBench.self]
+         DebugBench.self, DebugDespill.self]
     #if HYPERFOCAL_HAVE_WGPU
     list.append(DebugWgpu.self)
     #endif
@@ -277,6 +277,12 @@ struct Fuse: ParsableCommand {
     @Option(help: "DMap: also write the regularized depth map to this path.")
     var depthMap: String? = nil
 
+    @Option(help: ArgumentHelp("Rim despill strength 0…1: remove the defocus-spill glow "
+            + "hugging the subject's silhouette (0 = off, the default). DMap only; "
+            + "display-referred outputs (.tif/.png/.jpg) only — linear .dng is left "
+            + "untouched. Override for A/B with HYPERFOCAL_DESPILL."))
+    var despill: Float = 0
+
     @Flag(name: .shortAndLong, help: "Print progress.")
     var verbose: Bool = false
 
@@ -342,12 +348,22 @@ struct Fuse: ParsableCommand {
             print("common-coverage canvas: \(w)x\(h)")
         }
 
+        // Rim despill (render-stage post-process). The env override lets A/B
+        // runs re-aim intensity without re-parsing; the input dump lets the
+        // hidden `debug-despill` command tune thresholds without re-fusing.
+        let env = ProcessInfo.processInfo.environment
+        let despillAmount = Float(env["HYPERFOCAL_DESPILL"] ?? "") ?? despill
+        let despillDumpDir = env["HYPERFOCAL_DESPILL_DUMP"]
+        let outputIsDNG = URL(fileURLWithPath: output).pathExtension.lowercased() == "dng"
+
         var result: ImageBuffer? = nil
         var depth: ImageBuffer? = nil
+        var despillInputs: Despill.DespillInputs? = nil
         let fuseTime = try clock.measure {
             switch fusion.method {
             case .dmap:
-                let opts = fusion.dmapOptions
+                var opts = fusion.dmapOptions
+                opts.prepareDespill = despillAmount > 0 || despillDumpDir != nil
                 let useGPU = try fusion.resolveUseGPU()
                 let out: DMapFusion.Output
                 #if canImport(Metal)
@@ -373,6 +389,7 @@ struct Fuse: ParsableCommand {
                 #endif
                 result = out.image
                 depth = out.depthMap
+                despillInputs = out.despill
             case .pmax:
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),
@@ -380,6 +397,25 @@ struct Fuse: ParsableCommand {
             }
         }
         print("fused (\(fusion.method.rawValue)) \(source.count) frames in \(fuseTime)")
+
+        if let dir = despillDumpDir {
+            if let di = despillInputs {
+                DespillDump.write(di, toDir: dir)
+                print("wrote despill inputs to \(dir)")
+            } else {
+                print("note: no despill inputs to dump (--method dmap required)")
+            }
+        }
+        if despillAmount > 0 {
+            if outputIsDNG {
+                print("note: despill skipped — linear .dng is left untouched by design")
+            } else if var img = result, let di = despillInputs {
+                Despill.apply(to: &img, inputs: di, intensity: despillAmount, log: { print($0) })
+                result = img
+            } else {
+                print("note: --despill needs --method dmap")
+            }
+        }
 
         if let path = depthMap {
             if let depth {
@@ -694,6 +730,12 @@ struct DebugSource: ParsableCommand {
     @Argument(help: "Stack frames, in focus order.")
     var inputs: [String]
 
+    @Option(help: "Comma-separated frame indices to decode+warp and write as TIFFs.")
+    var dumpFrames: String?
+
+    @Option(help: "Directory for --dump-frames output (aligned_<idx>.tif).")
+    var dumpDir: String = "."
+
     func run() throws {
         let urls = inputs.map { URL(fileURLWithPath: $0) }
         let clock = ContinuousClock()
@@ -704,6 +746,16 @@ struct DebugSource: ParsableCommand {
         print("registered \(urls.count) frames in \(registerTime)")
         let source = StackPipeline.makeSource(urls: urls, transforms: transforms) { print("  \($0)") }
         print("output canvas: \(source.outputWidth ?? -1)x\(source.outputHeight ?? -1)")
+        if let dumpFrames {
+            for idx in dumpFrames.split(separator: ",").compactMap({ Int($0) }) {
+                let frame = try source.frame(at: idx)
+                let url = URL(fileURLWithPath: dumpDir)
+                    .appendingPathComponent("aligned_\(idx).tif")
+                try ImageFile.save(frame, to: url)
+                print("wrote \(url.path)")
+            }
+            return
+        }
         let mid = urls.count / 2
         var frame: ImageBuffer? = nil
         let loadTime = try clock.measure {
@@ -818,3 +870,71 @@ struct DebugAlign: ParsableCommand {
 }
 
 #endif
+
+// MARK: - Rim despill tuning tools
+
+/// Serializes `Despill.DespillInputs` to a directory (three raw Float32 grid
+/// planes + a `gw gh factor` meta line) so the render-stage despill can be
+/// tuned with `debug-despill` in seconds, without paying for a re-fuse. Written
+/// by `fuse` when HYPERFOCAL_DESPILL_DUMP names a directory.
+enum DespillDump {
+    static func write(_ di: Despill.DespillInputs, toDir dir: String) {
+        let base = URL(fileURLWithPath: dir)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        func f32(_ a: [Float], _ name: String) {
+            a.withUnsafeBufferPointer {
+                try? Data(buffer: $0).write(to: base.appendingPathComponent(name))
+            }
+        }
+        f32(di.perCellFloor, "perCellFloor.f32")
+        f32(di.spillStrength, "spillStrength.f32")
+        try? "\(di.gridWidth) \(di.gridHeight) \(di.factor)\n"
+            .write(to: base.appendingPathComponent("meta.txt"), atomically: true, encoding: .utf8)
+    }
+
+    static func read(fromDir dir: String) throws -> Despill.DespillInputs {
+        let base = URL(fileURLWithPath: dir)
+        let meta = try String(contentsOf: base.appendingPathComponent("meta.txt"), encoding: .utf8)
+        let parts = meta.split(whereSeparator: { $0 == " " || $0 == "\n" }).compactMap { Int($0) }
+        guard parts.count >= 3 else { throw ValidationError("malformed despill meta.txt") }
+        func f32(_ name: String) throws -> [Float] {
+            let d = try Data(contentsOf: base.appendingPathComponent(name))
+            return d.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        }
+        return Despill.DespillInputs(gridWidth: parts[0], gridHeight: parts[1], factor: parts[2],
+                                     perCellFloor: try f32("perCellFloor.f32"),
+                                     spillStrength: try f32("spillStrength.f32"))
+    }
+}
+
+/// Applies the rim despill to an already-fused image using dumped inputs — the
+/// fast tuning loop. All spatial thresholds come from HYPERFOCAL_DESPILL_*
+/// env vars (see `Despill.apply`), so a sweep is a shell loop over env + this
+/// command, seconds each, no re-fuse. Fuse the baseline with `--color-space p3`
+/// so the loaded image matches the working buffer the inputs were built from.
+struct DebugDespill: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "debug-despill",
+        abstract: "Apply rim despill to a fused image from dumped inputs (fast tuning).",
+        shouldDisplay: false)
+
+    @Option(help: "Directory of dumped despill inputs (from HYPERFOCAL_DESPILL_DUMP).")
+    var dump: String
+
+    @Option(help: "Fused input image (pre-despill).")
+    var image: String
+
+    @Option(name: .shortAndLong, help: "Output image path.")
+    var output: String
+
+    @Option(help: "Despill strength 0…1.")
+    var despill: Float = 1
+
+    func run() throws {
+        var img = try ImageFile.load(url: URL(fileURLWithPath: image))
+        let inputs = try DespillDump.read(fromDir: dump)
+        Despill.apply(to: &img, inputs: inputs, intensity: despill, log: { print($0) })
+        try ImageFile.save(img, to: URL(fileURLWithPath: output))
+        print("wrote \(output)")
+    }
+}
