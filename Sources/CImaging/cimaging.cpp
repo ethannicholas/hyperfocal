@@ -35,7 +35,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>   // findTransformECC
 
-#include <exiv2/exiv2.hpp>
+#include "easyexif/exif.h"   // BSD-2 EXIF reader (JPEG + TIFF-based raws)
 
 // MSVC's UCRT spells POSIX timegm as _mkgmtime (same contract: UTC-naive
 // struct tm → epoch).
@@ -700,7 +700,7 @@ hf_status encodeJPEG(const char* path, int w, int h,
 // LibRaw's open_file(char*) converts the path with a CRT-locale mbstowcs
 // internally, which ignores the process's UTF-8 active code page — the
 // manifest that fixes every other char* file API here (fopen, TIFFOpen,
-// exiv2, the DNG SDK) doesn't reach it, so non-ASCII paths fail. Read the
+// the DNG SDK) doesn't reach it, so non-ASCII paths fail. Read the
 // file through fopen (ACP-aware under the manifest) and hand LibRaw the
 // bytes. `bytes` must outlive every use of `raw` — open_buffer keeps the
 // pointer.
@@ -1171,39 +1171,125 @@ extern "C" hf_status hf_encode_jpeg8(const char* path, int w, int h,
 }
 
 // ---------------------------------------------------------------------------
-// EXIF (exiv2)
+// EXIF (easyexif for JPEG + TIFF-based raws; LibRaw fallback for the rest)
 // ---------------------------------------------------------------------------
+// exiv2 (GPL) was dropped here for licensing reasons — it made the shipped
+// binary GPL, which app-store DRM can't honor (see the licensing audit). The
+// permissive easyexif (BSD-2) reads the handful of fields we need directly, and
+// LibRaw (already linked) covers any raw easyexif can't (e.g. Canon CR3).
 namespace {
-std::string exifString(const Exiv2::ExifData& d, const char* key) {
-    auto it = d.findKey(Exiv2::ExifKey(key));
-    if (it == d.end()) return std::string();
-    return it->toString();
+
+// The fields both EXIF entry points care about, decoupled from the reader.
+struct ExifMeta {
+    std::string dateTimeOriginal, subSec, dateTime, make, model, lens;
+    double exposure = NAN, fnumber = NAN, focal = NAN;
+    int iso = -1;
+};
+
+// Read up to maxBytes of a file (ACP-aware fopen under the process manifest,
+// like hfRawOpen). EXIF lives in the header — a bounded prefix keeps stack
+// splitting from re-reading whole 45 MP raws per frame.
+std::vector<uint8_t> readPrefix(const char* path, size_t maxBytes) {
+    std::vector<uint8_t> buf;
+    FILE* f = fopen(path, "rb");
+    if (!f) return buf;
+    buf.resize(maxBytes);
+    size_t n = fread(buf.data(), 1, maxBytes, f);
+    fclose(f);
+    buf.resize(n);
+    return buf;
 }
+
+void gmTime(time_t t, struct tm& out) {
+#ifdef _WIN32
+    gmtime_s(&out, &t);
+#else
+    gmtime_r(&t, &out);
+#endif
+}
+
+// Fill `out` from a permissive read. Returns false if nothing could be parsed.
+bool parseExifMeta(const char* path, ExifMeta& out) {
+    static const size_t kPrefix = 4 * 1024 * 1024;
+    std::vector<uint8_t> bytes = readPrefix(path, kPrefix);
+    if (bytes.size() < 8) return false;
+
+    easyexif::EXIFInfo info;
+    int rc = PARSE_EXIF_ERROR_NO_JPEG;
+    if (bytes[0] == 0xFF && bytes[1] == 0xD8) {
+        rc = info.parseFrom(bytes.data(), (unsigned)bytes.size());
+    } else if ((bytes[0] == 'I' && bytes[1] == 'I' && bytes[2] == 0x2A && bytes[3] == 0x00) ||
+               (bytes[0] == 'M' && bytes[1] == 'M' && bytes[2] == 0x00 && bytes[3] == 0x2A)) {
+        // TIFF-based (NEF/DNG/ARW/ORF/…): easyexif's segment parser wants the
+        // "Exif\0\0" marker a JPEG APP1 carries; the TIFF offsets are relative
+        // to the header that follows it, so prepend the marker and hand it the
+        // TIFF bytes unchanged.
+        std::vector<uint8_t> seg;
+        seg.reserve(bytes.size() + 6);
+        static const uint8_t kExifHdr[6] = {'E', 'x', 'i', 'f', 0, 0};
+        seg.insert(seg.end(), kExifHdr, kExifHdr + 6);
+        seg.insert(seg.end(), bytes.begin(), bytes.end());
+        rc = info.parseFromEXIFSegment(seg.data(), (unsigned)seg.size());
+    }
+    if (rc == PARSE_EXIF_SUCCESS) {
+        out.dateTimeOriginal = info.DateTimeOriginal;
+        out.subSec = info.SubSecTimeOriginal;
+        out.dateTime = info.DateTime;
+        out.make = info.Make;
+        out.model = info.Model;
+        out.lens = info.LensInfo.Model;
+        if (info.ExposureTime > 0) out.exposure = info.ExposureTime;
+        if (info.FNumber > 0) out.fnumber = info.FNumber;
+        if (info.FocalLength > 0) out.focal = info.FocalLength;
+        if (info.ISOSpeedRatings > 0) out.iso = (int)info.ISOSpeedRatings;
+        return true;
+    }
+
+    // Fallback for raws easyexif can't parse (non-TIFF containers like CR3):
+    // LibRaw metadata from the same prefix — header parse only, no unpack.
+    // Heap-allocated (LibRaw is large; keep it off the worker stack).
+    auto rawp = std::make_unique<LibRaw>();
+    if (rawp->open_buffer(bytes.data(), bytes.size()) != LIBRAW_SUCCESS) return false;
+    const auto& id = rawp->imgdata.idata;
+    const auto& ot = rawp->imgdata.other;
+    out.make = id.make;
+    out.model = id.model;
+    out.lens = rawp->imgdata.lens.Lens;
+    if (ot.timestamp > 0) {
+        struct tm g = {};
+        gmTime(ot.timestamp, g);
+        char b[32];
+        snprintf(b, sizeof b, "%04d:%02d:%02d %02d:%02d:%02d",
+                 g.tm_year + 1900, g.tm_mon + 1, g.tm_mday,
+                 g.tm_hour, g.tm_min, g.tm_sec);
+        out.dateTimeOriginal = b;
+    }
+    if (ot.shutter > 0) out.exposure = ot.shutter;
+    if (ot.aperture > 0) out.fnumber = ot.aperture;
+    if (ot.focal_len > 0) out.focal = ot.focal_len;
+    if (ot.iso_speed > 0) out.iso = (int)ot.iso_speed;
+    rawp->recycle();
+    return true;
+}
+
 } // namespace
 
 extern "C" hf_status hf_exif_capture_epoch(const char* path, double* out_epoch) {
-    try {
-        auto image = Exiv2::ImageFactory::open(path);
-        if (!image.get()) return hf_err_open;
-        image->readMetadata();
-        const Exiv2::ExifData& exif = image->exifData();
-        if (exif.empty()) return hf_err_format;
-        std::string dt = exifString(exif, "Exif.Photo.DateTimeOriginal");
-        if (dt.empty()) dt = exifString(exif, "Exif.Image.DateTime");
-        if (dt.empty()) return hf_err_format;
-        // "YYYY:MM:DD HH:MM:SS"
-        struct tm tmv = {};
-        if (sscanf(dt.c_str(), "%d:%d:%d %d:%d:%d",
-                   &tmv.tm_year, &tmv.tm_mon, &tmv.tm_mday,
-                   &tmv.tm_hour, &tmv.tm_min, &tmv.tm_sec) != 6) return hf_err_format;
-        tmv.tm_year -= 1900; tmv.tm_mon -= 1;
-        time_t t = timegm(&tmv);   // UTC-naive, matching StackSplitter.exifFormatter
-        double epoch = (double)t;
-        std::string sub = exifString(exif, "Exif.Photo.SubSecTimeOriginal");
-        if (!sub.empty()) { double frac = std::atof(("0." + sub).c_str()); epoch += frac; }
-        *out_epoch = epoch;
-        return hf_ok;
-    } catch (...) { return hf_err_open; }
+    ExifMeta m;
+    if (!parseExifMeta(path, m)) return hf_err_open;
+    std::string dt = !m.dateTimeOriginal.empty() ? m.dateTimeOriginal : m.dateTime;
+    if (dt.empty()) return hf_err_format;
+    // "YYYY:MM:DD HH:MM:SS"
+    struct tm tmv = {};
+    if (sscanf(dt.c_str(), "%d:%d:%d %d:%d:%d",
+               &tmv.tm_year, &tmv.tm_mon, &tmv.tm_mday,
+               &tmv.tm_hour, &tmv.tm_min, &tmv.tm_sec) != 6) return hf_err_format;
+    tmv.tm_year -= 1900; tmv.tm_mon -= 1;
+    time_t t = timegm(&tmv);   // UTC-naive, matching StackSplitter.exifFormatter
+    double epoch = (double)t;
+    if (!m.subSec.empty()) { double frac = std::atof(("0." + m.subSec).c_str()); epoch += frac; }
+    *out_epoch = epoch;
+    return hf_ok;
 }
 
 extern "C" hf_status hf_exif_source_meta(const char* path,
@@ -1223,34 +1309,19 @@ extern "C" hf_status hf_exif_source_meta(const char* path,
         std::strncpy(dst, s.c_str(), cap - 1);
         dst[cap - 1] = 0;
     };
-    try {
-        auto image = Exiv2::ImageFactory::open(path);
-        if (!image.get()) return hf_ok;
-        image->readMetadata();
-        const Exiv2::ExifData& exif = image->exifData();
-        if (exif.empty()) return hf_ok;
-        put(make, make_cap, exifString(exif, "Exif.Image.Make"));
-        put(model, model_cap, exifString(exif, "Exif.Image.Model"));
-        std::string lensName = exifString(exif, "Exif.Photo.LensModel");
-        put(lens, lens_cap, lensName);
-        put(datetime, datetime_cap, exifString(exif, "Exif.Photo.DateTimeOriginal"));
-        auto num = [&](const char* key, double& out) {
-            auto it = exif.findKey(Exiv2::ExifKey(key));
-            if (it != exif.end()) out = it->toFloat();
-        };
-        num("Exif.Photo.ExposureTime", nums->exposure_time);
-        num("Exif.Photo.FNumber", nums->f_number);
-        num("Exif.Photo.FocalLength", nums->focal_length_mm);
-        auto iso = exif.findKey(Exiv2::ExifKey("Exif.Photo.ISOSpeedRatings"));
-        // exiv2 0.28 renamed toLong() to toInt64(); Ubuntu 24.04 (the CI
-        // container's base) still ships 0.27.
-#if EXIV2_TEST_VERSION(0, 28, 0)
-        if (iso != exif.end()) nums->iso = (int)iso->toInt64();
-#else
-        if (iso != exif.end()) nums->iso = (int)iso->toLong();
-#endif
-        return hf_ok;
-    } catch (...) { return hf_ok; }
+    // Best-effort: always hf_ok, empty fields when metadata is absent.
+    ExifMeta m;
+    if (parseExifMeta(path, m)) {
+        put(make, make_cap, m.make);
+        put(model, model_cap, m.model);
+        put(lens, lens_cap, m.lens);
+        put(datetime, datetime_cap, m.dateTimeOriginal);
+        nums->exposure_time = m.exposure;
+        nums->f_number = m.fnumber;
+        nums->focal_length_mm = m.focal;
+        nums->iso = m.iso;
+    }
+    return hf_ok;
 }
 
 // ---------------------------------------------------------------------------

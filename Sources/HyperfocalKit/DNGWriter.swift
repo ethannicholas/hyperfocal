@@ -60,7 +60,7 @@ public enum DNGWriter {
             meta.neutralXY = filter.neutralChromaticity
         }
         #else
-        // exiv2 reads the same EXIF fields; the as-shot neutral comes from
+        // easyexif reads the same EXIF fields; the as-shot neutral comes from
         // LibRaw's white-balance multipliers via the camera matrix.
         if ImageFile.isRAW(url) {
             var x = 0.0, y = 0.0

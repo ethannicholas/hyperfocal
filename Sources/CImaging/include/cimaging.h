@@ -1,6 +1,6 @@
 // C-ABI imaging shim for the non-Apple (Linux/Windows) engine build. Wraps
 // libtiff / libjpeg-turbo / libpng / LibRaw (decode+encode), lcms2 (Display-P3
-// color management), exiv2 (EXIF), and OpenCV (homography registration) behind
+// color management), easyexif (EXIF), and OpenCV (homography registration) behind
 // a flat `extern "C"` surface Swift can call — the same role CDNGSDK's shim
 // plays for the DNG SDK. All pixel buffers are interleaved RGBA Float32 in
 // Display P3 (P3 primaries, sRGB transfer), row 0 = top, values in [0,1],
@@ -81,7 +81,7 @@ hf_status hf_encode_png16(const char* path, int w, int h,
 hf_status hf_encode_jpeg8(const char* path, int w, int h,
                           const float* rgba, const char* colorspace);
 
-// ---- EXIF (exiv2) ----------------------------------------------------------
+// ---- EXIF (easyexif + LibRaw fallback) -------------------------------------
 // Capture time as a Unix epoch (seconds, UTC-naive) with sub-second precision
 // folded in; returns hf_err_* and leaves *out_epoch untouched if absent.
 hf_status hf_exif_capture_epoch(const char* path, double* out_epoch);

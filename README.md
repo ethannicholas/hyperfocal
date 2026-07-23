@@ -100,7 +100,7 @@ To install the prerequisite libraries on Ubuntu:
 
 ```sh
 sudo apt install swiftlang build-essential pkg-config \
-    libraw-dev liblcms2-dev libexiv2-dev libjpeg-turbo8-dev \
+    libraw-dev liblcms2-dev libjpeg-turbo8-dev \
     libtiff-dev libpng-dev zlib1g-dev libopencv-dev cmake \
     qt6-base-dev qt6-declarative-dev qt6-shadertools-dev
 ```
@@ -142,7 +142,7 @@ Prerequisites (installable via winget except vcpkg and Qt):
 git clone https://github.com/microsoft/vcpkg.git ..\vcpkg
 ..\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 ..\vcpkg\vcpkg install zlib tiff libpng libjpeg-turbo lcms `
-    "libraw[dng-lossy]" exiv2 "opencv4[core,calib3d]" --triplet arm64-windows
+    "libraw[dng-lossy]" "opencv4[core,calib3d]" --triplet arm64-windows
 ```
 
 Windows **Developer Mode** must be enabled (Settings → System → For

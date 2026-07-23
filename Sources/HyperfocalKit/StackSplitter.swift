@@ -32,8 +32,8 @@ public enum StackSplitter {
         }
         return date
         #else
-        // exiv2 reads DateTimeOriginal (+ SubSecTimeOriginal) and returns it as
-        // a UTC-naive epoch — matching exifFormatter's GMT, timezone-free basis.
+        // easyexif reads DateTimeOriginal (+ SubSecTimeOriginal) and returns it
+        // as a UTC-naive epoch — matching exifFormatter's GMT, timezone-free basis.
         var epoch: Double = 0
         guard hf_exif_capture_epoch(url.path, &epoch) == hf_ok else { return nil }
         return Date(timeIntervalSince1970: epoch)

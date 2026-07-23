@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!-- Opts the process into the UTF-8 active code page (Windows 10 1903+),
      so the ANSI char* file APIs the C imaging stack uses - fopen, TIFFOpen,
-     LibRaw::open_file, exiv2, the DNG SDK's dng_file_stream - interpret the
+     LibRaw::open_file, easyexif's fopen, the DNG SDK's dng_file_stream - interpret the
      UTF-8 paths Swift hands them. Without it those calls go through the
      legacy ANSI code page and frames in non-ASCII-named folders fail to
      open (ROADMAP Windows residual 1). Embedded at link time on every

@@ -60,7 +60,7 @@ jobs:
           & C:\hf-vcpkg\vcpkg.exe install --triplet arm64-windows `
               --clean-after-build `
               zlib liblzma 'tiff[jpeg,lzma,zip]' libpng 'libjpeg-turbo[jpeg8]' `
-              lcms 'libraw[dng-lossy]' exiv2 'opencv4[calib3d]'
+              lcms 'libraw[dng-lossy]' 'opencv4[calib3d]'
           if ($LASTEXITCODE) { throw "vcpkg install failed" }
           $tiff = 'C:\hf-vcpkg\installed\arm64-windows\include\tiffio.h'
           if (-not (Test-Path $tiff)) { throw "ports installed but $tiff is missing" }

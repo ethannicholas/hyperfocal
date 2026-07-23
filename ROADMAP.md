@@ -38,7 +38,8 @@ gate — dmap **39.1 dB** (≥ 38.7), pmax **38.6 dB** (≥ 38.3), measured with
 standard gate invocation (verify skill; default params, `--color-space p3`). The engine's Apple
 paths stay behind `#if canImport(<Framework>)`; Linux decode/encode/EXIF/
 registration go through a C-ABI shim (`Sources/CImaging` over libtiff /
-libpng / libjpeg-turbo / LibRaw / lcms2 / exiv2 / OpenCV) wired into
+libpng / libjpeg-turbo / LibRaw / lcms2 / OpenCV, EXIF via vendored
+easyexif) wired into
 `Package.swift` via pkg-config. TIFF/PNG/JPEG round-trips verified; the
 registration seam moved off `CGImage` to a portable `GrayImage`. macOS
 re-verified after the bring-up: `retouch-probe` ALL PASS, synth baselines
@@ -46,7 +47,7 @@ unchanged (plane 38.71/38.26, object 41.29), UI suite green — the
 `GrayImage` seam is byte-identical on the Apple/Vision path.
 
 System deps (Ubuntu): `swiftlang build-essential pkg-config libraw-dev
-liblcms2-dev libexiv2-dev libjpeg-turbo8-dev libtiff-dev libpng-dev
+liblcms2-dev libjpeg-turbo8-dev libtiff-dev libpng-dev
 zlib1g-dev libopencv-dev` (+ `libavformat/avcodec/avutil/swscale-dev
 libgif-dev` for the later rocking backend).
 

@@ -110,7 +110,7 @@ no user-visible change.
 - Backend seams in the engine edges, selected at build time:
   decode/encode (`ImageFile`: ImageIO/CIRAW on Mac; LibRaw +
   libjpeg-turbo/libtiff/libpng + lcms2 elsewhere), EXIF
-  (`StackSplitter`/`DNGWriter`: ImageIO on Mac, exiv2 elsewhere),
+  (`StackSplitter`/`DNGWriter`: ImageIO on Mac, vendored easyexif elsewhere),
   `simd_float3x3` shim, `FrameSpill` Win32 variant, DNG SDK
   `qWinOS`/`qLinux` flags (already supported by the vendored SDK).
 - CI: Linux (container) and Windows builds running the synth →
