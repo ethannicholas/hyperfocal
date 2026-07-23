@@ -740,8 +740,16 @@ extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, flo
     // brightness gain that broke DNG round-trips by ~1.14x linear (measured)
     // and would wobble exposure across a focus ramp.
     raw.imgdata.params.adjust_maximum_thr = 0;
-    if (hfRawOpen(raw, path, rawBytes) != LIBRAW_SUCCESS) return hf_err_open;
-    if (raw.unpack() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
+    // Capture LibRaw's specific code so an unsupported pixel layout (e.g. Nikon
+    // High-Efficiency NEFs, or a camera newer than this LibRaw) surfaces as
+    // hf_err_format — the signal ImageFile uses to try the DNG-Converter
+    // fallback — distinct from a genuine open/decode error.
+    int oc = hfRawOpen(raw, path, rawBytes);
+    if (oc == LIBRAW_FILE_UNSUPPORTED) { raw.recycle(); return hf_err_format; }
+    if (oc != LIBRAW_SUCCESS) return hf_err_open;
+    int uc = raw.unpack();
+    if (uc == LIBRAW_FILE_UNSUPPORTED) { raw.recycle(); return hf_err_format; }
+    if (uc != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
     if (raw.dcraw_process() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
     int st = 0;
     libraw_processed_image_t* img = raw.dcraw_make_mem_image(&st);
@@ -1032,13 +1040,20 @@ static hf_status decodeRAWGray8Half(const char* path, int min_longest,
     raw.imgdata.params.adjust_maximum_thr = 0;
     raw.imgdata.params.half_size = 1;
     std::vector<uint8_t> rawBytes;
-    if (hfRawOpen(raw, path, rawBytes) != LIBRAW_SUCCESS) return hf_err_open;
+    // See hf_decode_raw: an unsupported layout must return hf_err_format so the
+    // scaled-gray fall-through re-runs hf_decode_raw (which also returns
+    // hf_err_format), letting the Swift side trigger the DNG-Converter fallback.
+    int oc = hfRawOpen(raw, path, rawBytes);
+    if (oc == LIBRAW_FILE_UNSUPPORTED) { raw.recycle(); return hf_err_format; }
+    if (oc != LIBRAW_SUCCESS) return hf_err_open;
     // Visible raw dims (stable at open time; iwidth/iheight shift with
     // processing flags like half_size itself).
     const int fullW = raw.imgdata.sizes.width, fullH = raw.imgdata.sizes.height;
     const int longest = fullW > fullH ? fullW : fullH;
     if (longest / 2 < min_longest) { raw.recycle(); return hf_err_format; }
-    if (raw.unpack() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
+    int uc = raw.unpack();
+    if (uc == LIBRAW_FILE_UNSUPPORTED) { raw.recycle(); return hf_err_format; }
+    if (uc != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
     if (raw.dcraw_process() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
     int st = 0;
     libraw_processed_image_t* img = raw.dcraw_make_mem_image(&st);

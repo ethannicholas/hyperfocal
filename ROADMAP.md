@@ -53,8 +53,9 @@ libgif-dev` for the later rocking backend).
 Real-frame RAW decode, color, and the as-shot neutral are verified on
 Linux (2026-07-19: real DNG stack; DNG round-trip 93 dB; exported
 AsShotNeutral closed-loop). Verification used DNGs deliberately — lossy
-(High Efficiency) NEFs can't be decoded by any open-source library and
-the workaround is punted; see
+(High Efficiency) NEFs can't be decoded by any open-source library.
+**Windows converts them automatically (2026-07-23)** via the Adobe DNG
+Converter (`RawConverter`); the Linux/Wine path is still punted — see
 `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
 
 The Windows bring-up landed too (2026-07-19): `swift build` and

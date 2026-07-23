@@ -1,6 +1,21 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Adobe DNG Converter could not convert this file: %@": {
+      "comment": "Shown when the Adobe DNG Converter runs but produces no output (Windows raw fallback)."
+    },
+    "Can’t open this camera’s raw files": {
+      "comment": "Alert headline when an undecodable raw needs the Adobe DNG Converter (Windows raw fallback)."
+    },
+    "Converting %@ via Adobe DNG Converter…": {
+      "comment": "Progress shown while transcoding an unsupported raw file to DNG (Windows raw fallback)."
+    },
+    "Download": {
+      "comment": "Button that opens the Adobe DNG Converter download page (Windows raw fallback)."
+    },
+    "This camera's raw files need the free Adobe DNG Converter, which isn't installed. Download it from %@": {
+      "comment": "Shown when an undecodable raw is opened without the Adobe DNG Converter installed (Windows raw fallback)."
+    },
     "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.": {
       "localizations": {
         "de": {

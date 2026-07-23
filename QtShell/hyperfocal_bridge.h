@@ -35,6 +35,10 @@ typedef int (*hf_confirm_cb)(const char *message, const char *informative,
                              const char *cancel_title, int warning, void *ctx);
 typedef void (*hf_notify_cb)(const char *message, const char *informative,
                              int warning, void *ctx);
+// Guided-install notice: a two-button alert whose default button opens
+// `url` in the browser. Used when the Adobe DNG Converter is missing.
+typedef void (*hf_guide_cb)(const char *message, const char *informative,
+                            const char *url, void *ctx);
 
 // Drain the Swift main queue once, non-blocking (no-op on Apple
 // platforms, where the Cocoa event loop already pumps it). Call
@@ -51,6 +55,9 @@ void hf_set_changed_callback(hf_changed_cb cb, void *ctx);
 // synchronously — a modal event loop there matches the AppKit shell).
 void hf_set_dialog_callbacks(hf_confirm_cb confirm, hf_notify_cb notify,
                              void *ctx);
+
+// Install the guided-download handler; NULL clears just this handler.
+void hf_set_guide_callback(hf_guide_cb guide, void *ctx);
 
 // Load a stack: a folder of frames or a .hyperfocal project path, like a
 // drop on the native app. 0 if refused (e.g. while a fuse runs).

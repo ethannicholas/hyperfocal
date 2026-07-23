@@ -414,11 +414,10 @@ public enum ImageFile {
     }
 
     public static func load(url: URL) throws -> ImageBuffer {
+        if isRAW(url) { return try decodeRawRGBA(url) }
         var w: CInt = 0, h: CInt = 0
         var ptr: UnsafeMutablePointer<Float>? = nil
-        let status = isRAW(url)
-            ? hf_decode_raw(url.path, &w, &h, &ptr)
-            : hf_decode(url.path, &w, &h, &ptr)
+        let status = hf_decode(url.path, &w, &h, &ptr)
         guard status == hf_ok, let ptr, w > 0, h > 0 else {
             throw ImageFileError.cannotLoad("\(url.path) (shim status \(status.rawValue))")
         }
@@ -429,9 +428,22 @@ public enum ImageFile {
     }
 
     public static func loadRAW(url: URL) throws -> ImageBuffer {
+        try decodeRawRGBA(url)
+    }
+
+    /// Decodes a raw file to RGBA via the shim, transparently falling back to an
+    /// Adobe-DNG-Converter transcode when the shim reports the pixel format
+    /// unsupported (`hf_err_format` — Nikon High-Efficiency NEFs, or a camera
+    /// newer than the installed LibRaw). The DNG is cached, so this converts once
+    /// per source across every decode path.
+    private static func decodeRawRGBA(_ url: URL) throws -> ImageBuffer {
         var w: CInt = 0, h: CInt = 0
         var ptr: UnsafeMutablePointer<Float>? = nil
-        let status = hf_decode_raw(url.path, &w, &h, &ptr)
+        var status = hf_decode_raw(url.path, &w, &h, &ptr)
+        if status == hf_err_format {
+            let dng = try RawConverter.shared.convertedDNG(for: url)
+            status = hf_decode_raw(dng.path, &w, &h, &ptr)
+        }
         guard status == hf_ok, let ptr, w > 0, h > 0 else {
             throw ImageFileError.cannotLoad("\(url.lastPathComponent): RAW decode failed (\(status.rawValue))")
         }
@@ -445,7 +457,11 @@ public enum ImageFile {
     public static func loadGray8(url: URL) throws -> GrayImage {
         var w: CInt = 0, h: CInt = 0
         var ptr: UnsafeMutablePointer<UInt8>? = nil
-        let status = hf_decode_gray8(url.path, isRAW(url) ? 1 : 0, &w, &h, &ptr)
+        var status = hf_decode_gray8(url.path, isRAW(url) ? 1 : 0, &w, &h, &ptr)
+        if status == hf_err_format, isRAW(url) {
+            let dng = try RawConverter.shared.convertedDNG(for: url)
+            status = hf_decode_gray8(dng.path, 1, &w, &h, &ptr)
+        }
         guard status == hf_ok, let ptr, w > 0, h > 0 else {
             throw ImageFileError.cannotLoad("\(url.path) (gray decode status \(status.rawValue))")
         }
@@ -467,10 +483,17 @@ public enum ImageFile {
         var fw: CInt = 0, fh: CInt = 0, denom: CInt = 0
         var w: CInt = 0, h: CInt = 0
         var ptr: UnsafeMutablePointer<UInt8>? = nil
-        let status = hf_decode_gray8_scaled(url.path, isRAW(url) ? 1 : 0,
+        var status = hf_decode_gray8_scaled(url.path, isRAW(url) ? 1 : 0,
                                             disabled ? 0 : CInt(minLongest),
                                             CInt(scaleFloorDenom),
                                             &fw, &fh, &denom, &w, &h, &ptr)
+        if status == hf_err_format, isRAW(url) {
+            let dng = try RawConverter.shared.convertedDNG(for: url)
+            status = hf_decode_gray8_scaled(dng.path, 1,
+                                            disabled ? 0 : CInt(minLongest),
+                                            CInt(scaleFloorDenom),
+                                            &fw, &fh, &denom, &w, &h, &ptr)
+        }
         guard status == hf_ok, let ptr, w > 0, h > 0 else {
             throw ImageFileError.cannotLoad("\(url.path) (gray decode status \(status.rawValue))")
         }

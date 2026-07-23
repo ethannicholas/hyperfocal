@@ -157,6 +157,17 @@ swift build -c release
 QtShell\build.ps1 -Run        # build and launch the desktop app
 ```
 
+**High-Efficiency NEFs (and other undecodable raws).** LibRaw can't decode
+Nikon High-Efficiency (HE/HE\*) NEFs or cameras newer than itself. When
+Hyperfocal hits one, it transcodes it to a cached DNG via the free
+[Adobe DNG Converter](https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html)
+and decodes that transparently — no action needed once the converter is
+installed (converted DNGs are cached in `%LOCALAPPDATA%\Hyperfocal\DNGCache`).
+If it isn't installed, the app points you to the download page. Set
+`HYPERFOCAL_DNG_CONVERTER` to the converter's `.exe` to override the standard
+install location. (macOS decodes these formats natively and needs none of
+this.)
+
 ### Getting Started
 
 Once you've gotten Hyperfocal running, take a look at the

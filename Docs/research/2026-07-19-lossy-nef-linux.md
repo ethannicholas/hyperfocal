@@ -1,9 +1,20 @@
-# Lossy (High Efficiency) NEFs on Linux — findings and punt decision
+# Lossy (High Efficiency) NEFs — findings, Windows integration, Linux punt
 
-**Decision (2026-07-19): punted.** Hyperfocal's Linux LibRaw path cannot
-decode Nikon High Efficiency NEFs, no open-source library can, and the
-only workaround (Adobe DNG Converter under Wine) adds enough moving
-parts that we're not building the integration now. Users with HE/HE*
+**Update (2026-07-23): Windows now converts automatically.** The
+`RawConverter` seam sketched below is built for **native Windows**: when
+LibRaw reports the format unsupported, Hyperfocal shells out to the Adobe
+DNG Converter, caches a losslessly-compressed Bayer DNG
+(`%LOCALAPPDATA%\Hyperfocal\DNGCache`, keyed by path+mtime+size), and
+decodes that transparently. A missing converter surfaces a guided-install
+dialog (button opens Adobe's download page); the CLI prints the same. See
+`Sources/HyperfocalKit/RawConverter.swift`. **Linux/Wine stays deferred**
+— the seam is cross-platform, so a Wine launcher plugs into
+`RawConverter.locateConverter`/`runConversion` later.
+
+**Decision (2026-07-19): punted (Linux).** Hyperfocal's Linux LibRaw path
+cannot decode Nikon High Efficiency NEFs, no open-source library can, and
+the only workaround (Adobe DNG Converter under Wine) added enough moving
+parts that we didn't build the Linux integration then. Users with HE/HE*
 files convert them to DNG externally; DNG decode through the Linux
 LibRaw path is verified working (real-frame verification for ROADMAP
 Phase 1 was done with DNGs for exactly this reason). Revisit if user

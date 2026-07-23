@@ -25,6 +25,11 @@ public protocol DialogService: AnyObject {
     /// One-button notice; returns when dismissed.
     func notify(message: String, informative: String, warning: Bool)
 
+    /// Guided-install notice: a two-button alert whose default button opens a
+    /// download page (`url`) in the user's browser. Used when a required helper
+    /// (the Adobe DNG Converter) is missing.
+    func openDownloadPage(message: String, informative: String, url: String)
+
     /// File > Open: pick one .hyperfocal project file. Nil = cancelled.
     func chooseProjectToOpen() -> URL?
 

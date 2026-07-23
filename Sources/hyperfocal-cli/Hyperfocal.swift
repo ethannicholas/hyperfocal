@@ -251,6 +251,17 @@ func vlog(_ enabled: Bool) -> (String) -> Void {
     }
 }
 
+/// Surface Adobe-DNG-Converter transcode progress on stderr (undecodable raws
+/// convert transparently before decode). No-op on Apple builds, which decode
+/// these formats natively.
+func reportRawConversionToStderr() {
+    #if !canImport(CoreGraphics)
+    RawConverter.progressHandler = { message in
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+    #endif
+}
+
 struct Fuse: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Align and fuse a focus stack into a single image.")
@@ -274,6 +285,7 @@ struct Fuse: ParsableCommand {
             throw ValidationError("need at least 2 input images")
         }
         let log = vlog(verbose)
+        reportRawConversionToStderr()
         let clock = ContinuousClock()
         let urls = inputs.map { URL(fileURLWithPath: $0) }
 
@@ -431,6 +443,7 @@ struct Batch: ParsableCommand {
             throw ValidationError("need at least 2 input images")
         }
         let log = vlog(verbose)
+        reportRawConversionToStderr()
         let urls = inputs.map { URL(fileURLWithPath: $0) }
         let groups = StackSplitter.split(urls: urls, gap: gap,
                                          orderByCaptureTime: !nameOrder)

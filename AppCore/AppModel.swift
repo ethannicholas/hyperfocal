@@ -584,6 +584,14 @@ public final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(
                 at: support.appendingPathComponent("Hyperfocal/Slabs"))
         }
+        #if !canImport(CoreGraphics)
+        // Surface Adobe-DNG-Converter transcode progress through the same stage
+        // channel the shell already shows (the next real stage update overwrites
+        // it once the converted DNG decodes).
+        RawConverter.progressHandler = { [weak self] text in
+            Task { @MainActor in self?.stageText = text }
+        }
+        #endif
     }
 
     // MARK: - Security-scoped access
@@ -2557,6 +2565,9 @@ public final class AppModel: ObservableObject {
                     self.progressive = nil
                     if error is CancellationError {
                         self.phase = self.frames.isEmpty ? .empty : .loaded
+                    } else if let e = error as? RawConverterError,
+                              case .converterMissing(let url) = e {
+                        self.reportConverterMissing(downloadURL: url, detail: "\(e)")
                     } else {
                         self.reportFuseFailure("\(error)")
                     }
@@ -2583,6 +2594,22 @@ public final class AppModel: ObservableObject {
             return
         }
         dialogs?.notify(message: NSLocalizedString("Fuse failed", comment: ""), informative: message, warning: true)
+    }
+
+    /// The fuse failed only because the Adobe DNG Converter — needed to decode
+    /// this camera's raw files — isn't installed. Instead of the generic "Fuse
+    /// failed" notice, guide the user to Adobe's download page. Same batch/probe
+    /// gating as `reportFuseFailure`.
+    func reportConverterMissing(downloadURL: String, detail: String) {
+        phase = .failed(detail)
+        guard !batchMode else { return }
+        if let fuseFailureAlertOverride {
+            fuseFailureAlertOverride(detail)
+            return
+        }
+        dialogs?.openDownloadPage(
+            message: NSLocalizedString("Can’t open this camera’s raw files", comment: ""),
+            informative: detail, url: downloadURL)
     }
 
     /// Maps a per-stage fraction into the fuse's single progress span.

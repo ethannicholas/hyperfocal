@@ -34,10 +34,13 @@ not per completed task.
 1. **RAW decode:** `CIRAWFilter` stays on macOS; LibRaw (+ lcms2 for
    Display-P3 float) on Windows/Linux. Accepted: per-platform render
    divergence; projects stay portable but re-render per-platform.
-   Known hole (decided 2026-07-19): lossy/High-Efficiency NEFs are
-   TicoRAW, undecodable by any open-source library — users convert to
-   DNG externally; integration punted, see
-   `Docs/research/2026-07-19-lossy-nef-linux.md`.
+   Lossy/High-Efficiency NEFs are TicoRAW, undecodable by any
+   open-source library. **Windows (2026-07-23): handled** — when LibRaw
+   reports the format unsupported (`hf_err_format`), `RawConverter`
+   transcodes via the Adobe DNG Converter into a persistent cache and
+   decodes the DNG transparently (guided-install dialog when the
+   converter is absent). **Linux/Wine still deferred** (the seam is
+   cross-platform); see `Docs/research/2026-07-19-lossy-nef-linux.md`.
 2. **Registration:** **settled (2026-07-18) — Vision stays on macOS,
    OpenCV (SIFT + RANSAC) is the Linux backend.** The seam moved off
    `CGImage` to a portable `GrayImage`; the OpenCV backend was built and

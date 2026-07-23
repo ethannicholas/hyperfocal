@@ -46,6 +46,18 @@ final class MacDialogService: DialogService {
         alert.runModal()
     }
 
+    func openDownloadPage(message: String, informative: String, url: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = message
+        alert.informativeText = informative
+        alert.addButton(withTitle: String(localized: "Download"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        if alert.runModal() == .alertFirstButtonReturn, let link = URL(string: url) {
+            NSWorkspace.shared.open(link)
+        }
+    }
+
     func chooseProjectToOpen() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true

@@ -158,11 +158,15 @@ public typealias HFConfirmCallback = @convention(c) (
 public typealias HFNotifyCallback = @convention(c) (
     UnsafePointer<CChar>?, UnsafePointer<CChar>?,
     Int32, UnsafeMutableRawPointer?) -> Void
+public typealias HFGuideCallback = @convention(c) (
+    UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+    UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void
 
 @MainActor
 private final class BridgeDialogs: DialogService {
     var confirmCallback: HFConfirmCallback?
     var notifyCallback: HFNotifyCallback?
+    var guideCallback: HFGuideCallback?
     var context: UnsafeMutableRawPointer?
 
     func confirm(message: String, informative: String,
@@ -185,6 +189,17 @@ private final class BridgeDialogs: DialogService {
         message.withCString { m in
             informative.withCString { i in
                 notifyCallback(m, i, warning ? 1 : 0, context)
+            }
+        }
+    }
+
+    func openDownloadPage(message: String, informative: String, url: String) {
+        guard let guideCallback else { return }
+        message.withCString { m in
+            informative.withCString { i in
+                url.withCString { u in
+                    guideCallback(m, i, u, context)
+                }
             }
         }
     }
@@ -271,6 +286,28 @@ public func hf_set_dialog_callbacks(
         let dialogs = Bridge.dialogs ?? BridgeDialogs()
         dialogs.confirmCallback = confirm
         dialogs.notifyCallback = notify
+        dialogs.context = ctx
+        Bridge.dialogs = dialogs
+        model.dialogs = dialogs
+    }
+}
+
+/// Install the shell's guided-download handler (a two-button alert whose
+/// default button opens a URL). NULL clears just this handler without tearing
+/// down the confirm/notify handlers. Registered separately from
+/// `hf_set_dialog_callbacks` so its signature can grow independently.
+@_cdecl("hf_set_guide_callback")
+public func hf_set_guide_callback(
+    _ guide: HFGuideCallback?,
+    _ ctx: UnsafeMutableRawPointer?) {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return }
+        if guide == nil {
+            Bridge.dialogs?.guideCallback = nil
+            return
+        }
+        let dialogs = Bridge.dialogs ?? BridgeDialogs()
+        dialogs.guideCallback = guide
         dialogs.context = ctx
         Bridge.dialogs = dialogs
         model.dialogs = dialogs
