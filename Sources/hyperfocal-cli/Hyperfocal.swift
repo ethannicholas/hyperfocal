@@ -528,7 +528,7 @@ struct Batch: ParsableCommand {
 
 struct Animate: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Fuse a stack (DMap) and write a Zerene-style rocking animation from its depth plane.")
+        abstract: "Fuse a stack (DMap) and write a rocking animation from its depth plane.")
 
     @Argument(help: "Input images, in focus order.")
     var inputs: [String]

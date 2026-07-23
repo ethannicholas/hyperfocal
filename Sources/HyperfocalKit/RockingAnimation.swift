@@ -5,7 +5,7 @@ import CoreGraphics
 import ImageIO
 #endif
 
-/// Zerene-style rocking animation: the fused image reprojected with a
+/// Rocking animation: the fused image reprojected with a
 /// per-pixel horizontal disparity proportional to the regularized depth
 /// plane, swept through a seamless sine cycle and written as H.264. The
 /// warp is a gather with the disparity evaluated at the *destination*
@@ -14,7 +14,7 @@ import ImageIO
 /// which reads better than any inpainting and needs none.
 public enum RockingAnimation {
 
-    /// The viewpoint's motion (Zerene's path options): a straight rock on
+    /// The viewpoint's motion (the rocking path options): a straight rock on
     /// either axis, or a circular orbit — the strongest 3D read, since no
     /// scene structure can hide parallel to the motion.
     public enum Path: String, CaseIterable, Sendable {

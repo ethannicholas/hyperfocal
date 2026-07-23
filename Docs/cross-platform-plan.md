@@ -13,8 +13,8 @@ not per completed task.
   look-and-feel is the non-negotiable constraint; nothing in this plan
   may degrade it.
 - **Windows and Linux share one Qt frontend** (C++/QML) over the shared
-  Swift core. Non-native chrome is market-normal in this niche (Helicon
-  Focus is Qt, Zerene is Java).
+  Swift core. Non-native chrome is market-normal in this niche — competing
+  focus-stacking apps ship non-native, cross-platform-toolkit UIs too.
 - **The Qt shell also builds and runs on macOS**, as a development and
   validation target only — never shipped to Mac users. This is the key
   cost-reduction move: UI feature work happens once, on a Mac

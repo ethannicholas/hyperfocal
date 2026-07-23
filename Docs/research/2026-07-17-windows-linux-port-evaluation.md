@@ -131,7 +131,7 @@ backend deferred until measurement demands it.
 - ❌ Language seam: Swift AppCore ↔ C++/QML UI needs a C-ABI bridge
   (design work, prototype first). Win/Linux app is non-native in feel.
   Qt LGPL dynamic-linking constraint on a paid app.
-- **Amendment (Ethan, 2026-07-17): the Qt shell must also build and run
+- **Amendment (2026-07-17): the Qt shell must also build and run
   on macOS** as a development/validation target (not shipped to Mac
   users). UI feature work then happens once on a Mac: implement in the
   native app, mirror in the Qt shell, validate both locally; Windows/

@@ -146,6 +146,18 @@ strategy and phases: `Docs/cross-platform-plan.md`.
 - UserDefaults suite `org.hyperfocal.settings` is deliberately decoupled
   from the bundle ID; renaming it orphans users' saved settings.
 
+## Writing conventions
+
+Apply to everything an agent writes into the repo — commit messages, code
+comments, docs, the roadmap, user-facing strings:
+
+- **Competing software:** refer to it only in general terms ("commercial
+  stackers", "other focus-stacking apps"), never by product name, and always
+  neutrally — never disparagingly.
+- **People:** don't name specific individuals. Attribute to the role or the
+  action, not the person — "a review flagged…", "manual testing showed…", "the
+  maintainer" — never "Ethan tested/said/found…".
+
 ## Verifying changes
 
 Use the project verify skill (`.claude/skills/verify/SKILL.md`): build +

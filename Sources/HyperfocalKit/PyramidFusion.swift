@@ -512,8 +512,8 @@ public enum PyramidFusion {
     /// Grit-suppression blur applied to the finest level's selection energy.
     /// At full resolution the max-selector can't distinguish focused detail
     /// from single-pixel sensor noise — the documented cause of pyramid
-    /// fusion's noise amplification (both Zerene and Helicon note it; Zerene
-    /// ships default-on "grit suppression"). Smoothing the *energy* (never
+    /// fusion's noise amplification (commercial stackers note it and ship
+    /// default-on "grit suppression"). Smoothing the *energy* (never
     /// the coefficients) makes selection favor spatially supported detail:
     /// isolated noise pixels can't win, coherent texture still does.
     static let gritSigma: Float = 1

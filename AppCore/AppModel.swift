@@ -399,7 +399,7 @@ public final class AppModel: ObservableObject {
         didSet { Self.settings.set(animationFormat.rawValue, forKey: "animationFormat") }
     }
 
-    /// The viewpoint's motion (Zerene's path options).
+    /// The viewpoint's motion (the rocking path options).
     public enum AnimationPath: String, CaseIterable {
         case horizontal = "Rock left–right"
         case vertical = "Rock up–down"
