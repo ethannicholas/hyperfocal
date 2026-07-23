@@ -300,6 +300,65 @@ reviewers stop discovering them by surprise):
   wheel axis carries the motion (some Windows stacks put Alt+scroll on
   the horizontal axis).
 
+## Release & licensing compliance
+
+A dependency-license audit (2026-07-23) cleared the release model — Hyperfocal
+is MIT, the paid Mac App Store / Microsoft Store builds are reproducible from the
+public source, and the About box links to the repo. The one blocker was fixed:
+**exiv2 (GPL, no linking exception) was replaced with vendored easyexif (BSD-2)**
+so the shipped binary is no longer GPL-encumbered. `NOTICE.md` now covers every
+shipped dependency per platform (with the verbatim libjpeg-turbo IJG and
+libtiff/Berkeley-LZW notices), `licenses/` carries the Apache-2.0/LGPL-3.0/
+GPL-3.0/CDDL-1.0 texts, and **LibRaw is used under its CDDL-1.0 arm** (documented
+in NOTICE — no LGPL relink burden). The audit found the **macOS build essentially
+clean** (Apple frameworks + the permissive Adobe DNG SDK + zlib); all remaining
+work is Windows/packaging. Residuals to close before shipping paid builds (each
+independently landable):
+
+1. **Bundle the notices into the shipped binaries.** `NOTICE.md` + `licenses/`
+   currently live only in the source tree, and both About dialogs point to
+   "NOTICE.md in the source distribution." Strict permissive-license attribution
+   — and the Qt LGPL duty to ship the GPL+LGPL texts *with* the binary — want them
+   local to the app. Add them to the Mac `.app` Resources (via `App/project.yml`,
+   then `xcodegen generate`; surface through the About/Help path) and to the
+   Windows package. Done = both installed apps carry the notices + license texts
+   without needing the repo. (Mac-side needs a Mac session — `xcodegen`/xcodebuild.)
+
+2. **Microsoft Store / MSIX packaging with Qt LGPL-3.0 compliance.** No Windows
+   packaging exists yet; build it to this checklist (dynamically-linked Qt makes
+   the app's own MIT license fine — LGPL §4 "Combined Works", and §4e
+   Installation Information does *not* apply to general-purpose PCs):
+   (a) bundle the GPL-3.0 + LGPL-3.0 texts (in `licenses/`) with the package;
+   (b) prominent in-app "uses Qt under LGPLv3" notice (done — Qt About);
+   (c) host the **exact Qt source** built against, or a written 3-year offer — a
+   bare qt.io link is explicitly insufficient per Qt's FAQ;
+   (d) ship Qt as replaceable DLLs via windeployqt — **never static-link Qt**;
+   (e) do **not** redistribute `qsb.exe` (GPLv3-only build tool) — ship only the
+   compiled `.qsb` shaders + the LGPLv3 runtime DLLs;
+   (f) because the MSIX copy in `WindowsApps` is locked, **also offer the same
+   build off-Store** (direct download) so users can substitute a modified Qt and
+   relink — the reproducible-build + public-MIT-source model already provides
+   this; state it in the compliance notice. This off-Store route is the
+   load-bearing mitigation for the one genuinely-unsettled point (MSIX vs LGPL
+   §4(d)(1) DLL-replaceability); also covers the small static `libQt6QmlBuiltins.a`
+   fragment (Qt 6.7+). Done = a Store-submittable package meeting (a)-(f) with the
+   off-Store build published.
+
+3. **DNG Converter EULA — one-time developer glance, no artifact.** When the free
+   Adobe DNG Converter is installed to test the transcode fallback, skim its
+   license once to confirm there's no anti-automation or non-commercial clause
+   (none expected — Adobe's own CLI manual endorses headless automation, and
+   shelling out to it is an established pattern among commercial stackers).
+   Hyperfocal neither bundles nor redistributes it and accepts no EULA on the
+   user's behalf, so there is **no ongoing obligation and nothing to retain**.
+   Done = confirmed once, or consciously skipped (low risk).
+
+4. **Confirm LibRaw's Adobe-DNG-SDK path is off.** The elected license is CDDL-1.0;
+   verify the vcpkg `libraw[dng-lossy]` build does not additionally enable
+   LibRaw's optional `USE_DNGSDK` integration (which would pull in a separately-
+   licensed Adobe path). vcpkg's default does not. Done = confirmed from the
+   vcpkg port features / build flags.
+
 ## Engine performance
 
 ### Metal GPUDMap: zero-copy frame upload (Mac) — blocked on toolchain
