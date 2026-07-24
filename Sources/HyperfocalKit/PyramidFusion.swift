@@ -96,6 +96,23 @@ public enum PyramidFusion {
         return current
     }
 
+    /// Reduces PMax highlight bloom: a defocused bright feature spreads a
+    /// smooth bright gradient whose coarse band would win the max-|Laplacian|
+    /// selection and leak into its dark neighbours. Gating the coarsest
+    /// `coarseLevels` band levels by focus (max-energy only where a frame has
+    /// fine-scale detail, darkest elsewhere) suppresses that without dimming
+    /// real bright features. CPU-path only for now — passing this forces the
+    /// CPU engine (the Metal/wgpu ports are a follow-up); default (nil) leaves
+    /// the standard GPU PMax untouched.
+    public struct FocusGate: Sendable {
+        public var coarseLevels: Int
+        public var threshold: Float
+        public init(coarseLevels: Int = 5, threshold: Float = 0.07) {
+            self.coarseLevels = coarseLevels
+            self.threshold = threshold
+        }
+    }
+
     /// Fuses a StackSource: frames decode (prefetched) without warping, and
     /// alignment applies on the GPU when one is available. Prefer this over
     /// the closure form for aligned sources — `source.frame` warps on the
@@ -103,7 +120,8 @@ public enum PyramidFusion {
     public static func fuse(source: StackSource, preferGPU: Bool = true,
                             log: ((String) -> Void)? = nil,
                             progress: ((Double, ImageBuffer?) -> Void)? = nil,
-                            cancellation: CancellationToken? = nil) throws -> ImageBuffer {
+                            cancellation: CancellationToken? = nil,
+                            focusGate: FocusGate? = nil) throws -> ImageBuffer {
         let warp = source.transforms.map {
             PyramidWarp(transforms: $0, outputWidth: source.outputWidth,
                         outputHeight: source.outputHeight)
@@ -111,7 +129,8 @@ public enum PyramidFusion {
         return try fuse(frameCount: source.count, preferGPU: preferGPU,
                         warp: warp, log: log, progress: progress,
                         cancellation: cancellation,
-                        decodeWorkers: FramePrefetcher.workers(for: source.urls)) { i in
+                        decodeWorkers: FramePrefetcher.workers(for: source.urls),
+                        focusGate: focusGate) { i in
             var img = try ImageFile.load(url: source.urls[i])
             if let gain = source.gains?[i], gain != SIMD3(repeating: 1) {
                 img.scaleRGB(by: gain)
@@ -138,10 +157,21 @@ public enum PyramidFusion {
                             progress: ((Double, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
                             decodeWorkers: Int? = nil,
+                            focusGate: FocusGate? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
+        // Focus-gate config (CLI/param, with env override for tuning). When on,
+        // stay on the CPU — the GPU ports are a follow-up.
+        let env = ProcessInfo.processInfo.environment
+        let fgOn = focusGate != nil || env["HYPERFOCAL_PMAX_FOCUS_GATE"] != nil
+        let fgCoarse = Int(env["HYPERFOCAL_PMAX_DARK_COARSE"] ?? "")
+            ?? focusGate?.coarseLevels ?? (fgOn ? 5 : 0)
+        let fgThreshold = Float(env["HYPERFOCAL_PMAX_FOCUS_THRESH"] ?? "")
+            ?? focusGate?.threshold ?? 0.07
+        let focusGateEnabled = fgOn && fgCoarse > 0
+        if focusGateEnabled { log?("pmax: focus-gate on (CPU path)") }
         #if canImport(Metal)
-        if preferGPU, MetalEngine.shared != nil {
+        if preferGPU, !focusGateEnabled, MetalEngine.shared != nil {
             do {
                 return try GPUPyramid.fuse(frameCount: frameCount, warp: warp,
                                            log: log, progress: progress,
@@ -153,7 +183,7 @@ public enum PyramidFusion {
         }
         #endif
         #if HYPERFOCAL_HAVE_WGPU
-        if preferGPU, let engine = WgpuEngine.shared, engine.usableForAutoSelection {
+        if preferGPU, !focusGateEnabled, let engine = WgpuEngine.shared, engine.usableForAutoSelection {
             do {
                 return try WgpuPyramid.fuse(frameCount: frameCount, warp: warp,
                                             log: log, progress: progress,
@@ -169,6 +199,28 @@ public enum PyramidFusion {
         var workspace: CPUWorkspace? = nil
         // Winner energy per band-pass level, updated as frames stream through.
         var bestEnergy: [[Float]] = []
+        // Experiment: darkest-frame base instead of a flat average. The base
+        // (coarsest Gaussian) low-pass carries the bloom halo — a bright feature
+        // defocused in some frames spreads into its dark surround, and averaging
+        // paints that spread into the low frequencies. The least-luminous frame
+        // at each base cell is the least-bloomed (spill floor logic), so keeping
+        // it kills the halo. Env-gated for A/B.
+        // Focus-gated coarse selection (see FocusGate): the bloom is a
+        // low-frequency spread that enters through the coarse band levels — a
+        // defocused bright feature's smooth bright gradient wins the
+        // max-|Laplacian| selection over the dark in-focus neighbour. On the
+        // coarsest `darkCoarse` band levels, keep max-energy only where a frame
+        // has fine-scale focus and fall back to the darkest (least-bloomed)
+        // frame elsewhere; the base uses darkest. This suppresses the bloom
+        // without dimming real bright features (blunt darkest-coarse did).
+        let darkCoarse = fgCoarse
+        let focusGate = focusGateEnabled
+        let focusThresh = fgThreshold
+        let useDarkBase = env["HYPERFOCAL_PMAX_DARKBASE"] != nil || focusGate
+        var baseBestLum: [Float] = []
+        var bandBestLum: [[Float]] = []
+        var trackB: [ImageBuffer] = []
+        var hasFocus: [[Float]] = []
         // Wall-clock phase buckets, reported through `log` at the end — the
         // GPU path's discipline: optimization here must start from
         // measurements, not vibes. `decode` is time *blocked on* the
@@ -204,6 +256,27 @@ public enum PyramidFusion {
                 bestEnergy = ws.sizes.dropLast().map {
                     [Float](repeating: -1, count: $0.w * $0.h)
                 }
+                if useDarkBase {
+                    baseBestLum = [Float](repeating: .infinity,
+                                          count: ws.sizes[levels].w * ws.sizes[levels].h)
+                }
+                bandBestLum = (0..<levels).map { l in
+                    (darkCoarse > 0 && l >= levels - darkCoarse)
+                        ? [Float](repeating: .infinity, count: ws.sizes[l].w * ws.sizes[l].h)
+                        : []
+                }
+                if focusGate {
+                    trackB = (0..<levels).map { l in
+                        (l >= levels - darkCoarse)
+                            ? ImageBuffer(width: ws.sizes[l].w, height: ws.sizes[l].h)
+                            : ImageBuffer(width: 0, height: 0)
+                    }
+                    hasFocus = (0..<levels).map { l in
+                        (l >= levels - darkCoarse)
+                            ? [Float](repeating: 0, count: ws.sizes[l].w * ws.sizes[l].h)
+                            : []
+                    }
+                }
             }
             let ws = workspace!
             let (cw, ch) = ws.sizes[0]
@@ -235,12 +308,41 @@ public enum PyramidFusion {
             t0 = now()
             ws.select0(fused: &fused![0], best: &bestEnergy[0])
             for l in 1..<levels {
-                ws.selectStreaming(level: l, fused: &fused![l], best: &bestEnergy[l])
+                if focusGate && l >= levels - darkCoarse {
+                    let focus = ws.focusDownsampled(toLevel: l)
+                    ws.selectStreamingFocusGated(level: l, focus: focus, threshold: focusThresh,
+                                                 fused: &fused![l], bestE: &bestEnergy[l],
+                                                 trackB: &trackB[l], bestDarkLum: &bandBestLum[l],
+                                                 hasFocus: &hasFocus[l])
+                } else if darkCoarse > 0 && l >= levels - darkCoarse {
+                    ws.selectStreamingDark(level: l, fused: &fused![l], bestLum: &bandBestLum[l])
+                } else {
+                    ws.selectStreaming(level: l, fused: &fused![l], best: &bestEnergy[l])
+                }
             }
-            // Base level accumulates a running sum for averaging.
-            fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
-                ws.gauss[levels].withUnsafeBufferPointer { gp in
-                    for i in 0..<gp.count { fp[i] += gp[i] }
+            if useDarkBase {
+                // Keep the least-luminous frame's base RGB at each cell.
+                fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
+                    ws.gauss[levels].withUnsafeBufferPointer { gp in
+                        baseBestLum.withUnsafeMutableBufferPointer { bl in
+                            for i in 0..<bl.count {
+                                let pi = i * 4
+                                let lum = 0.2126 * gp[pi] + 0.7152 * gp[pi + 1] + 0.0722 * gp[pi + 2]
+                                if lum < bl[i] {
+                                    bl[i] = lum
+                                    fp[pi] = gp[pi]; fp[pi + 1] = gp[pi + 1]
+                                    fp[pi + 2] = gp[pi + 2]; fp[pi + 3] = gp[pi + 3]
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Base level accumulates a running sum for averaging.
+                fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
+                    ws.gauss[levels].withUnsafeBufferPointer { gp in
+                        for i in 0..<gp.count { fp[i] += gp[i] }
+                    }
                 }
             }
             tSelect += now() - t0
@@ -248,10 +350,28 @@ public enum PyramidFusion {
             progress?(Double(fi + 1) / Double(frameCount), nil)
         }
 
-        // Average the accumulated base level.
-        let n = Float(frameCount)
-        for i in fused![levels].pixels.indices {
-            fused![levels].pixels[i] /= n
+        // Average the accumulated base level (unless darkest-base kept a winner).
+        if !useDarkBase {
+            let n = Float(frameCount)
+            for i in fused![levels].pixels.indices {
+                fused![levels].pixels[i] /= n
+            }
+        }
+        // Focus-gate merge: keep track A (max-energy among in-focus frames)
+        // where any frame was in focus, else track B (darkest, bloom-free).
+        if focusGate {
+            for l in 1..<levels where l >= levels - darkCoarse {
+                let hf = hasFocus[l]
+                fused![l].pixels.withUnsafeMutableBufferPointer { ap in
+                    trackB[l].pixels.withUnsafeBufferPointer { bp in
+                        for i in 0..<hf.count where hf[i] < 0.5 {
+                            let pi = i * 4
+                            ap[pi] = bp[pi]; ap[pi + 1] = bp[pi + 1]
+                            ap[pi + 2] = bp[pi + 2]; ap[pi + 3] = bp[pi + 3]
+                        }
+                    }
+                }
+            }
         }
         let t0 = now()
         let out = collapse(fused!)
@@ -466,6 +586,110 @@ public enum PyramidFusion {
                                         fp[pi + 1] = bp[pi + 1]
                                         fp[pi + 2] = bp[pi + 2]
                                         fp[pi + 3] = bp[pi + 3]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// This frame's fine-scale focus (the blurred level-0 selection energy)
+        /// box-downsampled to level `l` — high where the frame carries real
+        /// in-focus detail, ~0 where it is smooth/defocused/dark.
+        func focusDownsampled(toLevel l: Int) -> [Float] {
+            DMapFusion.boxDownsample(energy, width: sizes[0].w, height: sizes[0].h,
+                                     factor: 1 << l)
+        }
+
+        /// Focus-gated coarse selection. Distinguishes a bright feature's own
+        /// coarse structure from bloom (a defocused bright feature's smooth
+        /// bright gradient) by whether the frame has fine-scale detail here.
+        /// Two tracks per position: among frames in focus (focus > threshold)
+        /// keep the max-energy band (track A, `fused`/`bestE`); among defocused
+        /// frames keep the darkest (track B, `trackB`/`bestDarkLum`). `hasFocus`
+        /// records whether any frame was in focus; the caller keeps A there and
+        /// B elsewhere — so bloom can never win in a focused region, and a
+        /// featureless region falls to the least-bloomed frame.
+        func selectStreamingFocusGated(level l: Int, focus: [Float], threshold: Float,
+                                       fused: inout ImageBuffer, bestE: inout [Float],
+                                       trackB: inout ImageBuffer, bestDarkLum: inout [Float],
+                                       hasFocus: inout [Float]) {
+            let (w, h) = sizes[l]
+            let (nw, nh) = sizes[l + 1]
+            let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
+            gauss[l].withUnsafeBufferPointer { fine in
+              gauss[l + 1].withUnsafeBufferPointer { coarse in
+                fused.pixels.withUnsafeMutableBufferPointer { ap in
+                  trackB.pixels.withUnsafeMutableBufferPointer { bp in
+                    bestE.withUnsafeMutableBufferPointer { be in
+                      bestDarkLum.withUnsafeMutableBufferPointer { bd in
+                        hasFocus.withUnsafeMutableBufferPointer { hf in
+                          focus.withUnsafeBufferPointer { fo in
+                            DispatchQueue.concurrentPerform(iterations: h) { y in
+                              for x in 0..<w {
+                                let i = y * w + x
+                                let pi = i * 4
+                                let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
+                                                         x: x, y: y, scaleX: sx, scaleY: sy)
+                                let bx = fine[pi] - up.x, by = fine[pi + 1] - up.y
+                                let bz = fine[pi + 2] - up.z, bw = fine[pi + 3] - up.w
+                                if fo[i] > threshold {
+                                    let e = abs(bx) + abs(by) + abs(bz)
+                                    if e > be[i] {
+                                        be[i] = e; hf[i] = 1
+                                        ap[pi] = bx; ap[pi + 1] = by
+                                        ap[pi + 2] = bz; ap[pi + 3] = bw
+                                    }
+                                } else {
+                                    let lum = 0.2126 * fine[pi] + 0.7152 * fine[pi + 1]
+                                            + 0.0722 * fine[pi + 2]
+                                    if lum < bd[i] {
+                                        bd[i] = lum
+                                        bp[pi] = bx; bp[pi + 1] = by
+                                        bp[pi + 2] = bz; bp[pi + 3] = bw
+                                    }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        }
+
+        /// Coarse-level variant: keep the band of the frame that is DARKEST in
+        /// its Gaussian at this level (least bloomed), not the max-energy band.
+        /// A defocused bright feature spreads a smooth bright gradient whose
+        /// coarse band would win max-selection and leak into the dark neighbor;
+        /// the darkest frame there is the in-focus one, whose coarse band is ≈ 0.
+        func selectStreamingDark(level l: Int, fused: inout ImageBuffer, bestLum: inout [Float]) {
+            let (w, h) = sizes[l]
+            let (nw, nh) = sizes[l + 1]
+            let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
+            gauss[l].withUnsafeBufferPointer { fine in
+                gauss[l + 1].withUnsafeBufferPointer { coarse in
+                    fused.pixels.withUnsafeMutableBufferPointer { fp in
+                        bestLum.withUnsafeMutableBufferPointer { bl in
+                            DispatchQueue.concurrentPerform(iterations: h) { y in
+                                for x in 0..<w {
+                                    let i = y * w + x
+                                    let pi = i * 4
+                                    let lum = 0.2126 * fine[pi] + 0.7152 * fine[pi + 1]
+                                            + 0.0722 * fine[pi + 2]
+                                    if lum < bl[i] {
+                                        bl[i] = lum
+                                        let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
+                                                                 x: x, y: y, scaleX: sx, scaleY: sy)
+                                        fp[pi] = fine[pi] - up.x
+                                        fp[pi + 1] = fine[pi + 1] - up.y
+                                        fp[pi + 2] = fine[pi + 2] - up.z
+                                        fp[pi + 3] = fine[pi + 3] - up.w
                                     }
                                 }
                             }

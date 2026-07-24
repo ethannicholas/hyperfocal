@@ -289,6 +289,12 @@ struct Fuse: ParsableCommand {
             + "untouched. Override with HYPERFOCAL_BLACK_POINT."))
     var blackPoint: Float = 0
 
+    @Flag(name: .customLong("pmax-debloom"),
+          help: ArgumentHelp("PMax: gate the coarse pyramid selection by focus to suppress "
+            + "highlight bloom (defocused bright features spreading into their surroundings), "
+            + "without dimming the subject. --method pmax only; runs on the CPU engine for now."))
+    var pmaxDebloom: Bool = false
+
     @Flag(name: .shortAndLong, help: "Print progress.")
     var verbose: Bool = false
 
@@ -400,7 +406,8 @@ struct Fuse: ParsableCommand {
             case .pmax:
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),
-                                                log: log)
+                                                log: log,
+                                                focusGate: pmaxDebloom ? .init() : nil)
             }
         }
         print("fused (\(fusion.method.rawValue)) \(source.count) frames in \(fuseTime)")
