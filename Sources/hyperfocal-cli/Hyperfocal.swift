@@ -283,6 +283,12 @@ struct Fuse: ParsableCommand {
             + "untouched. Override for A/B with HYPERFOCAL_DESPILL."))
     var despill: Float = 0
 
+    @Option(help: ArgumentHelp("Black-point strength 0…1: subtract the auto-measured uniform "
+            + "backdrop veil (0 = off, the default), crushing the background toward black like "
+            + "Helicon. Independent of --despill. Display-referred outputs only — linear .dng "
+            + "untouched. Override with HYPERFOCAL_BLACK_POINT."))
+    var blackPoint: Float = 0
+
     @Flag(name: .shortAndLong, help: "Print progress.")
     var verbose: Bool = false
 
@@ -354,6 +360,7 @@ struct Fuse: ParsableCommand {
         let env = ProcessInfo.processInfo.environment
         let despillAmount = Float(env["HYPERFOCAL_DESPILL"] ?? "") ?? despill
         let despillDumpDir = env["HYPERFOCAL_DESPILL_DUMP"]
+        let blackPointAmount = Float(env["HYPERFOCAL_BLACK_POINT"] ?? "") ?? blackPoint
         let outputIsDNG = URL(fileURLWithPath: output).pathExtension.lowercased() == "dng"
 
         var result: ImageBuffer? = nil
@@ -414,6 +421,14 @@ struct Fuse: ParsableCommand {
                 result = img
             } else {
                 print("note: --despill needs --method dmap")
+            }
+        }
+        if blackPointAmount > 0 {
+            if outputIsDNG {
+                print("note: black-point skipped — linear .dng is left untouched by design")
+            } else if var img = result {
+                BlackPoint.applyExport(to: &img, intensity: blackPointAmount, log: { print($0) })
+                result = img
             }
         }
 
@@ -930,10 +945,18 @@ struct DebugDespill: ParsableCommand {
     @Option(help: "Despill strength 0…1.")
     var despill: Float = 1
 
+    @Option(help: "Black-point strength 0…1 (applied after despill).")
+    var blackPoint: Float = 0
+
     func run() throws {
         var img = try ImageFile.load(url: URL(fileURLWithPath: image))
         let inputs = try DespillDump.read(fromDir: dump)
-        Despill.apply(to: &img, inputs: inputs, intensity: despill, log: { print($0) })
+        if despill > 0 {
+            Despill.apply(to: &img, inputs: inputs, intensity: despill, log: { print($0) })
+        }
+        if blackPoint > 0 {
+            BlackPoint.applyExport(to: &img, intensity: blackPoint, log: { print($0) })
+        }
         try ImageFile.save(img, to: URL(fileURLWithPath: output))
         print("wrote \(output)")
     }
