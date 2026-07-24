@@ -3,6 +3,14 @@ import Foundation
 import simd
 #endif
 
+/// The fusion algorithm producing a stack's result. DMap (depth-map fusion)
+/// yields an image plus a depth map; PMax (Laplacian-pyramid max-coefficient)
+/// yields an image only. Shared by the CLI, the pipeline, and the app.
+public enum FusionMethod: String, Sendable, CaseIterable {
+    case dmap
+    case pmax
+}
+
 /// One-call orchestration of the full stack → fused image pipeline, shared by
 /// the CLI and the app.
 public enum StackPipeline {
@@ -11,6 +19,12 @@ public enum StackPipeline {
         public var fusion: DMapFusion.Options
         public var align: Bool
         public var preferGPU: Bool
+        /// Which fusion algorithm to run. `.dmap` (the default) produces a
+        /// depth map; `.pmax` produces an image only.
+        public var method: FusionMethod
+        /// PMax focus-gate (`--pmax-debloom`). Ignored unless `method == .pmax`;
+        /// nil leaves the standard (un-debloomed) PMax selection.
+        public var pmaxFocusGate: PyramidFusion.FocusGate?
         /// When registration flags bad frames (misfires, failed alignment),
         /// exclude them all and fuse the rest. Overridden by `badFrameHandler`.
         public var autoExcludeBadFrames: Bool
@@ -21,11 +35,15 @@ public enum StackPipeline {
 
         public init(fusion: DMapFusion.Options = DMapFusion.Options(),
                     align: Bool = true, preferGPU: Bool = true,
+                    method: FusionMethod = .dmap,
+                    pmaxFocusGate: PyramidFusion.FocusGate? = nil,
                     autoExcludeBadFrames: Bool = false,
                     badFrameHandler: (([FrameQualityIssue]) -> Set<Int>)? = nil) {
             self.fusion = fusion
             self.align = align
             self.preferGPU = preferGPU
+            self.method = method
+            self.pmaxFocusGate = pmaxFocusGate
             self.autoExcludeBadFrames = autoExcludeBadFrames
             self.badFrameHandler = badFrameHandler
         }
@@ -133,6 +151,23 @@ public enum StackPipeline {
         }
         let source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
         let output: DMapFusion.Output
+        switch configuration.method {
+        case .pmax:
+            // PMax (Laplacian-pyramid max-coefficient): image only, no depth.
+            // Alignment/exclusion above is method-independent, so both
+            // algorithms share the one registration pass.
+            let image = try PyramidFusion.fuse(
+                source: source, preferGPU: configuration.preferGPU, log: log,
+                progress: { fraction, preview in
+                    progress?(FusionProgress(stage: .render, fraction: fraction,
+                                             preview: preview,
+                                             previewFullWidth: source.outputWidth ?? (preview?.width ?? 0),
+                                             previewFullHeight: source.outputHeight ?? (preview?.height ?? 0)))
+                },
+                cancellation: cancellation, focusGate: configuration.pmaxFocusGate)
+            output = DMapFusion.Output(image: image, depthMap: ImageBuffer(width: 0, height: 0),
+                                       depth: [], sharpness: nil, gains: nil)
+        case .dmap:
         #if canImport(Metal)
         if configuration.preferGPU, MetalEngine.shared != nil {
             output = try GPUDMap.fuseWithDepth(source: source, options: configuration.fusion,
@@ -162,6 +197,7 @@ public enum StackPipeline {
                                               progress: progress,
                                               cancellation: cancellation)
         #endif
+        }
         progress?(FusionProgress(stage: .finishing, fraction: 1))
         return FuseResult(output: output, issues: issues, fusedURLs: fuseURLs)
     }

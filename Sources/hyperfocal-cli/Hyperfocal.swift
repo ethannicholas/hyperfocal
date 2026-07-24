@@ -193,10 +193,8 @@ struct FusionOptions: ParsableArguments {
 
 extension RockingAnimation.Path: ExpressibleByArgument {}
 
-enum FusionMethod: String, ExpressibleByArgument {
-    case dmap
-    case pmax
-}
+// FusionMethod lives in HyperfocalKit (shared with the pipeline + app).
+extension FusionMethod: ExpressibleByArgument {}
 
 enum Engine: String, ExpressibleByArgument {
     case auto
@@ -294,6 +292,14 @@ struct Fuse: ParsableCommand {
             + "highlight bloom (defocused bright features spreading into their surroundings), "
             + "without dimming the subject. --method pmax only (CPU or GPU)."))
     var pmaxDebloom: Bool = false
+
+    @Option(name: .customLong("pmax-coarse-levels"),
+            help: "PMax debloom: number of coarsest band levels to focus-gate (0 = off).")
+    var pmaxCoarseLevels: Int = 5
+
+    @Option(name: .customLong("pmax-focus-threshold"),
+            help: "PMax debloom: fine-scale focus threshold for the two-track select.")
+    var pmaxFocusThreshold: Float = 0.07
 
     @Flag(name: .shortAndLong, help: "Print progress.")
     var verbose: Bool = false
@@ -407,7 +413,10 @@ struct Fuse: ParsableCommand {
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),
                                                 log: log,
-                                                focusGate: pmaxDebloom ? .init() : nil)
+                                                focusGate: pmaxDebloom
+                                                    ? .init(coarseLevels: pmaxCoarseLevels,
+                                                            threshold: pmaxFocusThreshold)
+                                                    : nil)
             }
         }
         print("fused (\(fusion.method.rawValue)) \(source.count) frames in \(fuseTime)")
