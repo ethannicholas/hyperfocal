@@ -101,9 +101,9 @@ public enum PyramidFusion {
     /// selection and leak into its dark neighbours. Gating the coarsest
     /// `coarseLevels` band levels by focus (max-energy only where a frame has
     /// fine-scale detail, darkest elsewhere) suppresses that without dimming
-    /// real bright features. CPU-path only for now — passing this forces the
-    /// CPU engine (the Metal/wgpu ports are a follow-up); default (nil) leaves
-    /// the standard GPU PMax untouched.
+    /// real bright features. Runs on the Metal and wgpu paths
+    /// (`GPUPyramid`/`WgpuPyramid`) as well as the CPU streaming loop; default
+    /// (nil) leaves the standard PMax selection untouched.
     public struct FocusGate: Sendable {
         public var coarseLevels: Int
         public var threshold: Float
@@ -111,6 +111,14 @@ public enum PyramidFusion {
             self.coarseLevels = coarseLevels
             self.threshold = threshold
         }
+    }
+
+    /// Focus-gate config resolved from the CLI/param/env, handed to the GPU
+    /// paths (`GPUPyramid`/`WgpuPyramid`) so they can gate the coarsest
+    /// `coarseLevels` band levels exactly as the CPU streaming loop does.
+    struct GPUFocusGate {
+        let coarseLevels: Int
+        let threshold: Float
     }
 
     /// Fuses a StackSource: frames decode (prefetched) without warping, and
@@ -169,26 +177,31 @@ public enum PyramidFusion {
         let fgThreshold = Float(env["HYPERFOCAL_PMAX_FOCUS_THRESH"] ?? "")
             ?? focusGate?.threshold ?? 0.07
         let focusGateEnabled = fgOn && fgCoarse > 0
-        if focusGateEnabled { log?("pmax: focus-gate on (CPU path)") }
+        if focusGateEnabled { log?("pmax: focus-gate on") }
+        // Focus-gate config for the GPU paths (nil = standard PMax).
+        let gpuFocusGate = focusGateEnabled
+            ? GPUFocusGate(coarseLevels: fgCoarse, threshold: fgThreshold) : nil
         #if canImport(Metal)
-        if preferGPU, !focusGateEnabled, MetalEngine.shared != nil {
+        if preferGPU, MetalEngine.shared != nil {
             do {
                 return try GPUPyramid.fuse(frameCount: frameCount, warp: warp,
                                            log: log, progress: progress,
                                            cancellation: cancellation,
-                                           decodeWorkers: decodeWorkers, frame: frame)
+                                           decodeWorkers: decodeWorkers,
+                                           focusGate: gpuFocusGate, frame: frame)
             } catch let error as StackError {
                 log?("GPU pyramid failed (\(error)); falling back to CPU")
             }
         }
         #endif
         #if HYPERFOCAL_HAVE_WGPU
-        if preferGPU, !focusGateEnabled, let engine = WgpuEngine.shared, engine.usableForAutoSelection {
+        if preferGPU, let engine = WgpuEngine.shared, engine.usableForAutoSelection {
             do {
                 return try WgpuPyramid.fuse(frameCount: frameCount, warp: warp,
                                             log: log, progress: progress,
                                             cancellation: cancellation,
-                                            decodeWorkers: decodeWorkers, frame: frame)
+                                            decodeWorkers: decodeWorkers,
+                                            focusGate: gpuFocusGate, frame: frame)
             } catch let error as StackError {
                 log?("wgpu pyramid failed (\(error)); falling back to CPU")
             }

@@ -292,7 +292,7 @@ struct Fuse: ParsableCommand {
     @Flag(name: .customLong("pmax-debloom"),
           help: ArgumentHelp("PMax: gate the coarse pyramid selection by focus to suppress "
             + "highlight bloom (defocused bright features spreading into their surroundings), "
-            + "without dimming the subject. --method pmax only; runs on the CPU engine for now."))
+            + "without dimming the subject. --method pmax only (CPU or GPU)."))
     var pmaxDebloom: Bool = false
 
     @Flag(name: .shortAndLong, help: "Print progress.")

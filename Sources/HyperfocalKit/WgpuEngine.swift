@@ -1079,6 +1079,78 @@ public final class WgpuEngine {
         if (gid.x >= pf_p.count) { return; }
         pf_dst[gid.x] = pf_p.v;
     }
+
+    // ---- Focus-gated coarse selection (--pmax-debloom) ----
+    // Mirrors PyramidFusion.CPUWorkspace's selectStreamingFocusGated /
+    // darkest-base / merge and the MSL kernels of the same name.
+
+    struct PyrFocusParams { count: u32, threshold: f32, pad0: u32, pad1: u32 }
+
+    @group(0) @binding(0) var<storage, read> pfg_fine: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pfg_up: array<vec4f>;
+    @group(0) @binding(2) var<storage, read> pfg_focus: array<f32>;
+    @group(0) @binding(3) var<storage, read_write> pfg_fused: array<vec4f>;
+    @group(0) @binding(4) var<storage, read_write> pfg_bestE: array<f32>;
+    @group(0) @binding(5) var<storage, read_write> pfg_trackB: array<vec4f>;
+    @group(0) @binding(6) var<storage, read_write> pfg_bestDarkLum: array<f32>;
+    @group(0) @binding(7) var<storage, read_write> pfg_hasFocus: array<f32>;
+    @group(0) @binding(8) var<uniform> pfg_p: PyrFocusParams;
+
+    // Two-track select: track A (max |RGB| energy) where the focus map exceeds
+    // the threshold, track B (darkest Gaussian luminance) elsewhere. bestE
+    // starts at -1, bestDarkLum at +inf.
+    @compute @workgroup_size(256)
+    fn pyr_select_focus_gated(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pfg_p.count) { return; }
+        let f = pfg_fine[gid.x];
+        let band = f - pfg_up[gid.x];
+        if (pfg_focus[gid.x] > pfg_p.threshold) {
+            let e = abs(band.x) + abs(band.y) + abs(band.z);
+            if (e > pfg_bestE[gid.x]) {
+                pfg_bestE[gid.x] = e;
+                pfg_hasFocus[gid.x] = 1.0;
+                pfg_fused[gid.x] = band;
+            }
+        } else {
+            let lum = 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z;
+            if (lum < pfg_bestDarkLum[gid.x]) {
+                pfg_bestDarkLum[gid.x] = lum;
+                pfg_trackB[gid.x] = band;
+            }
+        }
+    }
+
+    @group(0) @binding(0) var<storage, read_write> pbd_fused: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pbd_gauss: array<vec4f>;
+    @group(0) @binding(2) var<storage, read_write> pbd_bestLum: array<f32>;
+    @group(0) @binding(3) var<uniform> pbd_p: Count1;
+
+    // Base level: keep the least-luminous (least-bloomed) frame's Gaussian.
+    // bestLum starts at +inf.
+    @compute @workgroup_size(256)
+    fn pyr_base_darkest(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pbd_p.count) { return; }
+        let g = pbd_gauss[gid.x];
+        let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
+        if (lum < pbd_bestLum[gid.x]) {
+            pbd_bestLum[gid.x] = lum;
+            pbd_fused[gid.x] = g;
+        }
+    }
+
+    @group(0) @binding(0) var<storage, read_write> pmf_fused: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pmf_trackB: array<vec4f>;
+    @group(0) @binding(2) var<storage, read> pmf_hasFocus: array<f32>;
+    @group(0) @binding(3) var<uniform> pmf_p: Count1;
+
+    // Focus-gate merge: where no frame was in focus, take track B.
+    @compute @workgroup_size(256)
+    fn pyr_merge_focus(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pmf_p.count) { return; }
+        if (pmf_hasFocus[gid.x] < 0.5) {
+            pmf_fused[gid.x] = pmf_trackB[gid.x];
+        }
+    }
     """
 }
 #endif // HYPERFOCAL_HAVE_WGPU

@@ -83,6 +83,7 @@ public enum WgpuParity {
     struct ClampParams { var maxV: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct ScaleParams { var s: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct FillParams { var v: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
+    struct PyrFocusParams { var count: UInt32; var threshold: Float; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
 
     static func luma(_ p: [Float], _ i: Int) -> Float {
         0.2126 * p[i * 4] + 0.7152 * p[i * 4 + 1] + 0.0722 * p[i * 4 + 2]
@@ -609,6 +610,96 @@ public enum WgpuParity {
             c.report("pyr_fill", [Float](repeating: -1, count: n), try c.read(df, n))
         }
 
+        // -- focus-gate kernels (--pmax-debloom) ------------------------------
+        // Bit-exact (no interpolation): all three should agree to inf/≥90 dB.
+        func san(_ a: [Float]) -> [Float] { a.map { $0.isFinite ? $0 : 0 } }
+        do {
+            // pyr_select_focus_gated: two frames streamed through the shared
+            // accumulators, so both tracks and hasFocus get exercised. bestE
+            // starts at -1, bestDarkLum at +inf (as the orchestration fills).
+            let threshold: Float = 0.1
+            let frames = [(c.rand(n * 4), c.rand(n * 4), c.rand(n, scale: 0.2)),
+                          (c.rand(n * 4), c.rand(n * 4), c.rand(n, scale: 0.2))]
+            var cpuFused = [Float](repeating: 0, count: n * 4)
+            var cpuBestE = [Float](repeating: -1, count: n)
+            var cpuTrackB = [Float](repeating: 0, count: n * 4)
+            var cpuBestDark = [Float](repeating: .infinity, count: n)
+            var cpuHasFocus = [Float](repeating: 0, count: n)
+            for (fine, up, focus) in frames {
+                for i in 0..<n {
+                    let bx = fine[i * 4] - up[i * 4], by = fine[i * 4 + 1] - up[i * 4 + 1]
+                    let bz = fine[i * 4 + 2] - up[i * 4 + 2], bw = fine[i * 4 + 3] - up[i * 4 + 3]
+                    if focus[i] > threshold {
+                        let e = abs(bx) + abs(by) + abs(bz)
+                        if e > cpuBestE[i] {
+                            cpuBestE[i] = e; cpuHasFocus[i] = 1
+                            cpuFused[i * 4] = bx; cpuFused[i * 4 + 1] = by
+                            cpuFused[i * 4 + 2] = bz; cpuFused[i * 4 + 3] = bw
+                        }
+                    } else {
+                        let lum = 0.2126 * fine[i * 4] + 0.7152 * fine[i * 4 + 1] + 0.0722 * fine[i * 4 + 2]
+                        if lum < cpuBestDark[i] {
+                            cpuBestDark[i] = lum
+                            cpuTrackB[i * 4] = bx; cpuTrackB[i * 4 + 1] = by
+                            cpuTrackB[i * 4 + 2] = bz; cpuTrackB[i * 4 + 3] = bw
+                        }
+                    }
+                }
+            }
+            let gFused = try c.buf(cpuFused.map { _ in Float(0) })
+            let gBestE = try c.buf([Float](repeating: -1, count: n))
+            let gTrackB = try c.buf([Float](repeating: 0, count: n * 4))
+            let gBestDark = try c.buf([Float](repeating: .infinity, count: n))
+            let gHasFocus = try c.buf([Float](repeating: 0, count: n))
+            for (fine, up, focus) in frames {
+                let p = PyrFocusParams(count: UInt32(n), threshold: threshold)
+                try engine.run("pyr_select_focus_gated",
+                               buffers: [try c.buf(fine), try c.buf(up), try c.buf(focus),
+                                         gFused, gBestE, gTrackB, gBestDark, gHasFocus],
+                               uniforms: bytes(of: p), gridW: n)
+            }
+            c.report("pyr_select_focus_gated",
+                     cpuFused + cpuBestE + cpuTrackB + san(cpuBestDark) + cpuHasFocus,
+                     try c.read(gFused, n * 4) + c.read(gBestE, n) + c.read(gTrackB, n * 4)
+                         + san(c.read(gBestDark, n)) + c.read(gHasFocus, n))
+
+            // pyr_base_darkest: keep the least-luminous Gaussian per cell.
+            let gaussFrames = [c.rand(n * 4), c.rand(n * 4)]
+            var cpuBaseFused = [Float](repeating: 0, count: n * 4)
+            var cpuBaseLum = [Float](repeating: .infinity, count: n)
+            for g in gaussFrames {
+                for i in 0..<n {
+                    let lum = 0.2126 * g[i * 4] + 0.7152 * g[i * 4 + 1] + 0.0722 * g[i * 4 + 2]
+                    if lum < cpuBaseLum[i] {
+                        cpuBaseLum[i] = lum
+                        for ch in 0..<4 { cpuBaseFused[i * 4 + ch] = g[i * 4 + ch] }
+                    }
+                }
+            }
+            let gbFused = try c.buf([Float](repeating: 0, count: n * 4))
+            let gbLum = try c.buf([Float](repeating: .infinity, count: n))
+            for g in gaussFrames {
+                try engine.run("pyr_base_darkest", buffers: [gbFused, try c.buf(g), gbLum],
+                               uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
+            }
+            c.report("pyr_base_darkest", cpuBaseFused + san(cpuBaseLum),
+                     try c.read(gbFused, n * 4) + san(c.read(gbLum, n)))
+
+            // pyr_merge_focus: take track B where no frame was in focus.
+            let mFused = c.rand(n * 4), mTrackB = c.rand(n * 4)
+            var mHas = c.rand(n)
+            for i in stride(from: 0, to: n, by: 3) { mHas[i] = 0 }  // force some no-focus cells
+            var cpuMerge = mFused
+            for i in 0..<n where mHas[i] < 0.5 {
+                for ch in 0..<4 { cpuMerge[i * 4 + ch] = mTrackB[i * 4 + ch] }
+            }
+            let gmFused = try c.buf(mFused)
+            try engine.run("pyr_merge_focus",
+                           buffers: [gmFused, try c.buf(mTrackB), try c.buf(mHas)],
+                           uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
+            c.report("pyr_merge_focus", cpuMerge, try c.read(gmFused, n * 4))
+        }
+
         return c.minPSNR
     }
 
@@ -716,6 +807,19 @@ public enum WgpuParity {
         let cpuWarp = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
                                              warp: warp) { frames[$0] }
         check("pyramid_warp", cpuWarp, gpuWarp, margin: 16)
+
+        // Focus-gated mode (--pmax-debloom): the coarsest band levels run the
+        // two-track select + darkest base + merge on-device. Same fusion bar
+        // (both tracks amplify fast-math ties into flips at coefficient
+        // near-equality, so agreement is tie-bounded, not precision-bounded).
+        let fg = PyramidFusion.FocusGate()
+        let gpuGated = try WgpuPyramid.fuse(
+            frameCount: frameCount,
+            focusGate: PyramidFusion.GPUFocusGate(coarseLevels: fg.coarseLevels,
+                                                  threshold: fg.threshold)) { frames[$0] }
+        let cpuGated = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
+                                              focusGate: fg) { frames[$0] }
+        check("pyramid_focus_gated", cpuGated, gpuGated, margin: 8)
         return minPSNR
     }
 

@@ -714,6 +714,78 @@ public final class MetalEngine {
         if (gid >= count) return;
         dst[gid] = v;
     }
+
+    // ---- Focus-gated coarse selection (--pmax-debloom) ----
+    // Mirrors PyramidFusion.CPUWorkspace's selectStreamingFocusGated /
+    // selectStreamingDark-base / focus-gate merge. On the coarsest band
+    // levels the bloom (a defocused bright feature's smooth bright gradient)
+    // is suppressed: where the frame carries fine-scale focus (the level-0
+    // grit energy box-downsampled to this level exceeds `threshold`) the band
+    // competes by max |RGB| energy (track A); elsewhere it competes by darkest
+    // Gaussian luminance (track B). The merge keeps track A where any frame
+    // was in focus, else track B.
+
+    struct PyrFocusParams { uint count; float threshold; };
+
+    // Two-track select. `up` is the already-upsampled coarser Gaussian (as for
+    // pyr_select); `focus` is this frame's focus map at this level. bestE
+    // starts at -1 (track A) and bestDarkLum at +inf (track B).
+    kernel void pyr_select_focus_gated(device const float4* fine [[buffer(0)]],
+                                       device const float4* up [[buffer(1)]],
+                                       device const float* focus [[buffer(2)]],
+                                       device float4* fused [[buffer(3)]],
+                                       device float* bestE [[buffer(4)]],
+                                       device float4* trackB [[buffer(5)]],
+                                       device float* bestDarkLum [[buffer(6)]],
+                                       device float* hasFocus [[buffer(7)]],
+                                       constant PyrFocusParams& p [[buffer(8)]],
+                                       uint gid [[thread_position_in_grid]]) {
+        if (gid >= p.count) return;
+        float4 f = fine[gid];
+        float4 band = f - up[gid];
+        if (focus[gid] > p.threshold) {
+            float e = fabs(band.x) + fabs(band.y) + fabs(band.z);
+            if (e > bestE[gid]) {
+                bestE[gid] = e;
+                hasFocus[gid] = 1.0;
+                fused[gid] = band;
+            }
+        } else {
+            float lum = 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z;
+            if (lum < bestDarkLum[gid]) {
+                bestDarkLum[gid] = lum;
+                trackB[gid] = band;
+            }
+        }
+    }
+
+    // Base level: keep the least-luminous (least-bloomed) frame's Gaussian at
+    // each cell instead of averaging. bestLum starts at +inf.
+    kernel void pyr_base_darkest(device float4* fused [[buffer(0)]],
+                                 device const float4* gauss [[buffer(1)]],
+                                 device float* bestLum [[buffer(2)]],
+                                 constant uint& count [[buffer(3)]],
+                                 uint gid [[thread_position_in_grid]]) {
+        if (gid >= count) return;
+        float4 g = gauss[gid];
+        float lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
+        if (lum < bestLum[gid]) {
+            bestLum[gid] = lum;
+            fused[gid] = g;
+        }
+    }
+
+    // Focus-gate merge: where no frame was in focus, take track B.
+    kernel void pyr_merge_focus(device float4* fused [[buffer(0)]],
+                                device const float4* trackB [[buffer(1)]],
+                                device const float* hasFocus [[buffer(2)]],
+                                constant uint& count [[buffer(3)]],
+                                uint gid [[thread_position_in_grid]]) {
+        if (gid >= count) return;
+        if (hasFocus[gid] < 0.5) {
+            fused[gid] = trackB[gid];
+        }
+    }
     """
 }
 
