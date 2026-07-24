@@ -65,6 +65,7 @@ class Shell : public QObject {
     Q_PROPERTY(QString animationStrength READ animationStrength WRITE setAnimationStrength NOTIFY changed)
     Q_PROPERTY(bool toneNeutral READ toneNeutral NOTIFY changed)
     Q_PROPERTY(bool fusionDefault READ fusionDefault NOTIFY changed)
+    Q_PROPERTY(QString fusionAlgorithm READ fusionAlgorithm WRITE setFusionAlgorithm NOTIFY changed)
     Q_PROPERTY(bool hasDisplay READ hasDisplay NOTIFY changed)
     Q_PROPERTY(QString projectPath READ projectPath NOTIFY changed)
     Q_PROPERTY(bool hasUnsavedWork READ hasUnsavedWork NOTIFY changed)
@@ -177,7 +178,6 @@ public:
     Q_INVOKABLE void retouchAutoPick();
     Q_INVOKABLE void retouchTogglePmax();
     Q_INVOKABLE void retouchToggleResult();
-    Q_INVOKABLE void retouchCancelPmax();
     Q_INVOKABLE bool beginCrop();
     Q_INVOKABLE bool acceptCrop();
     Q_INVOKABLE bool cancelCrop();
@@ -200,6 +200,8 @@ public:
     Q_INVOKABLE void setAllFramesIncluded(bool included);
     bool toneNeutral() const;
     bool fusionDefault() const;
+    QString fusionAlgorithm() const;
+    void setFusionAlgorithm(const QString &name);
     int fusedStackCount() const;
     bool canExportAligned() const;
     bool canAnimate() const;

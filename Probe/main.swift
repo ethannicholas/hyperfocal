@@ -90,7 +90,7 @@ if ProcessInfo.processInfo.environment["HYPERFOCAL_BENCH_STROKE"] != nil {
         let result = try! source.frame(at: 0)
         let (w, h) = (result.width, result.height)
         print("bench: \(w)x\(h), \(urls.count) frames")
-        let session = RetouchSession(result: result,
+        let session = RetouchSession(result: result, method: .dmap,
                                      depth: [Float](repeating: 0, count: w * h),
                                      sharpness: nil, source: source)
         var ticks = 0
@@ -162,7 +162,7 @@ print("probe: fused \(output.image.width)x\(output.image.height)")
 Task { @MainActor in
     // 1. Retouch session source loading.
     let source = StackPipeline.makeSource(urls: Array(urls), transforms: cache.transforms(for: Array(urls)))
-    let session = RetouchSession(result: output.image, depth: output.depth,
+    let session = RetouchSession(result: output.image, method: .dmap, depth: output.depth,
                                  sharpness: output.sharpness, source: source)
     var ticks = 0
     while session.sourceLoading && ticks < 300 {
@@ -174,17 +174,16 @@ Task { @MainActor in
     }
     print("probe: retouch source loaded after ~\(Double(ticks)/10)s")
 
-    // 1a. PMax blend layer: builds on demand, becomes the brush source, and
+    // 1a. PMax result as a brush source: the model's background pass provides
+    // it (synthesized here), it becomes the brush source instantly, and
     // toggling back returns to the frame that was selected.
+    let pmaxImage = try PyramidFusion.fuse(source: source, focusGate: .init())
+    session.provideOtherResult(pmaxImage)
     let frameBefore = session.sourceIndex
     session.togglePMaxLayer()
-    ticks = 0
-    while session.sourceLoading && ticks < 600 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        ticks += 1
-    }
-    guard session.isPMaxSource, session.sourceDisplay != nil, session.sourceError == nil else {
-        print("probe: PMAX LAYER FAILED (\(session.sourceError ?? "no image"))"); exit(1)
+    guard session.isPMaxSource, !session.sourceLoading,
+          session.sourceDisplay != nil, session.sourceError == nil else {
+        print("probe: PMAX LAYER FAILED (\(session.sourceError ?? "no image / still loading"))"); exit(1)
     }
     session.togglePMaxLayer()
     guard session.sourceIndex == frameBefore else {
@@ -192,14 +191,12 @@ Task { @MainActor in
     }
     print("probe: pmax blend layer OK")
 
-    // 1a2. Leaving a *building* PMax layer for a cached frame must fully
-    // supersede the build: its progress previews (low-res forming-pyramid
-    // collapses) and its cancelled completion must not touch the pane state.
-    // Shipped bug: the cache-hit selection path didn't bump the load
-    // generation, so build stragglers passed the staleness guard — blurry
-    // 1200px source pane (or a "Couldn't build" error) over a correct
-    // full-res paint buffer.
-    let session2 = RetouchSession(result: output.image, depth: output.depth,
+    // 1a2. Selecting the alternate source before the background pass has landed
+    // shows the loading state; toggling back to a cached frame must fully
+    // supersede that wait — a late progress tick or provideOtherResult must not
+    // stomp the frame's pane. Shipped bug: the cache-hit selection path didn't
+    // bump the load generation, so stragglers passed the staleness guard.
+    let session2 = RetouchSession(result: output.image, method: .dmap, depth: output.depth,
                                   sharpness: output.sharpness, source: source)
     session2.selectSource(0)
     ticks = 0
@@ -208,68 +205,25 @@ Task { @MainActor in
         ticks += 1
     }
     guard let cachedDisplay = session2.sourceDisplay, session2.sourceError == nil else {
-        print("probe: PMAX-STOMP SETUP FRAME LOAD FAILED"); exit(1)
+        print("probe: SUPERSEDE SETUP FRAME LOAD FAILED"); exit(1)
     }
-    session2.togglePMaxLayer()   // build starts (fresh session: no pmax cache)
+    session2.togglePMaxLayer()   // not provided yet → enters the waiting state
+    guard session2.isPMaxSource, session2.sourceLoading else {
+        print("probe: ALTERNATE SOURCE DID NOT ENTER LOADING"); exit(1)
+    }
     session2.togglePMaxLayer()   // straight back to frame 0 — a cache hit
     guard session2.sourceIndex == 0, session2.sourceDisplay === cachedDisplay else {
-        print("probe: PMAX-STOMP TOGGLE-BACK LOST THE FRAME"); exit(1)
+        print("probe: SUPERSEDE TOGGLE-BACK LOST THE FRAME"); exit(1)
     }
-    // Let the superseded build run its course (progress events + cancelled
-    // or completed finish) — none of it may leak into the pane.
-    for _ in 0..<50 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        guard session2.sourceDisplay === cachedDisplay, session2.sourceError == nil,
-              session2.sourceStatus == nil, session2.sourceFloat != nil else {
-            print("probe: PMAX BUILD STOMPED A SUPERSEDING SELECTION "
-                  + "(display \(session2.sourceDisplay === cachedDisplay ? "kept" : "STOMPED"), "
-                  + "error \(session2.sourceError ?? "nil"), "
-                  + "status \(session2.sourceStatus ?? "nil"), "
-                  + "float \(session2.sourceFloat == nil ? "NIL" : "kept"))")
-            exit(1)
-        }
+    // A late progress tick + provision for the superseded wait must not leak.
+    session2.otherSourceProgress(fraction: 0.5, preview: cachedDisplay, isData: true)
+    session2.provideOtherResult(pmaxImage)
+    guard session2.sourceIndex == 0, session2.sourceDisplay === cachedDisplay,
+          session2.sourceError == nil, session2.sourceStatus == nil,
+          !session2.sourceLoading, !session2.sourceShowsData else {
+        print("probe: SUPERSEDED ALTERNATE-SOURCE WAIT LEAKED INTO THE FRAME"); exit(1)
     }
-    print("probe: superseded pmax build leaks nothing OK")
-
-    // 1a2b. User-facing PMax-build cancel (cancelPMaxBuild): falls back to
-    // the last frame source, and the cancelled build leaks nothing. The
-    // pre-cancel state is deterministic: no await between selectKind(.pmax)
-    // and the cancel, so the build's main-actor completion cannot have
-    // landed yet even if the fuse itself finished.
-    let session3 = RetouchSession(result: output.image, depth: output.depth,
-                                  sharpness: output.sharpness, source: source)
-    session3.selectSource(2)
-    ticks = 0
-    while session3.sourceLoading && ticks < 300 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        ticks += 1
-    }
-    guard let frameDisplay = session3.sourceDisplay, session3.sourceError == nil else {
-        print("probe: PMAX-CANCEL SETUP FRAME LOAD FAILED"); exit(1)
-    }
-    session3.selectKind(.pmax)
-    guard session3.sourceKind == .pmax, session3.sourceLoading else {
-        print("probe: PMAX-CANCEL BUILD NEVER STARTED"); exit(1)
-    }
-    session3.cancelPMaxBuild()
-    guard session3.sourceKind == .frame, session3.sourceIndex == 2,
-          session3.sourceDisplay === frameDisplay else {
-        print("probe: PMAX-CANCEL DID NOT RESTORE THE FRAME SOURCE "
-              + "(kind \(session3.sourceKind), index \(session3.sourceIndex))")
-        exit(1)
-    }
-    // Drain the cancelled build — none of it may leak into the pane.
-    for _ in 0..<50 {
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        guard session3.sourceDisplay === frameDisplay, session3.sourceError == nil,
-              session3.sourceStatus == nil, session3.sourceKind == .frame else {
-            print("probe: CANCELLED PMAX BUILD LEAKED "
-                  + "(error \(session3.sourceError ?? "nil"), "
-                  + "status \(session3.sourceStatus ?? "nil"))")
-            exit(1)
-        }
-    }
-    print("probe: pmax build cancel OK")
+    print("probe: superseded alternate source leaks nothing OK")
 
     // 1a3. Result (eraser) layer: a stamp from a frame changes the working
     // pixels; an eraser stamp over the same spot restores the pristine fusion
@@ -329,8 +283,8 @@ Task { @MainActor in
         print("probe: FRAME STAMP DID NOT PAINT DEPTH 0 (dirty \(session.depthDirty))")
         exit(1)
     }
-    session.toggleResultLayer()
-    guard session.isResultSource else {
+    session.toggleDMapLayer()
+    guard session.isDMapSource else {
         print("probe: ERASER LAYER NOT SELECTED"); exit(1)
     }
     // Paintable immediately — the float buffer needs no build, only the pane
@@ -364,7 +318,7 @@ Task { @MainActor in
     guard session.sourceDisplay != nil, session.sourceError == nil else {
         print("probe: ERASER PREVIEW FAILED"); exit(1)
     }
-    session.toggleResultLayer()
+    session.toggleDMapLayer()
     guard session.sourceIndex == 0 else {
         print("probe: ERASER TOGGLE DID NOT RESTORE FRAME"); exit(1)
     }
@@ -396,7 +350,7 @@ Task { @MainActor in
     }
     let ghostSource = StackSource(urls: ghostURLs,
                                   transforms: cache.transforms(for: Array(urls)))
-    let ghostSession = RetouchSession(result: output.image, depth: output.depth,
+    let ghostSession = RetouchSession(result: output.image, method: .dmap, depth: output.depth,
                                       sharpness: output.sharpness, source: ghostSource)
     ticks = 0
     while ghostSession.sourceLoading && ticks < 100 {
@@ -665,7 +619,7 @@ Task { @MainActor in
     // restores the fusion's plane, leaving the model pristine for the
     // checks below.
     let depthBeforeRetouch = model.resultDepth
-    let mw = model.result!.width, mh = model.result!.height
+    let mw = model.dmapResult!.width, mh = model.dmapResult!.height
     model.enterRetouch()
     guard let mergeSession = model.retouch else {
         print("probe: ENTER RETOUCH FAILED"); exit(1)
@@ -773,12 +727,12 @@ Task { @MainActor in
         try? await Task.sleep(nanoseconds: 100_000_000)
         ticks += 1
     }
-    guard model2.phase == .done, model2.result != nil, model2.stacks.count == 2,
+    guard model2.phase == .done, model2.dmapResult != nil, model2.stacks.count == 2,
           model2.frames.count == urls.count, !model2.hasUnsavedWork else {
         print("probe: RESTORE FAILED (\(model2.phase), frames=\(model2.frames.count))")
         exit(1)
     }
-    print("probe: project restored — frames=\(model2.frames.count), result \(model2.result!.width)x\(model2.result!.height)")
+    print("probe: project restored — frames=\(model2.frames.count), result \(model2.dmapResult!.width)x\(model2.dmapResult!.height)")
     try? FileManager.default.removeItem(at: sessionURL)
 
     // 3a2. Crop round-trips through the project, and exports honor it: the
@@ -803,8 +757,8 @@ Task { @MainActor in
     }
     guard model2.writeExport(to: cropExport),
           let fullOut = try? ImageFile.load(url: cropExport),
-          fullOut.width == model2.result!.width,
-          fullOut.height == model2.result!.height else {
+          fullOut.width == model2.dmapResult!.width,
+          fullOut.height == model2.dmapResult!.height else {
         print("probe: UNCROPPED EXPORT WRONG SIZE"); exit(1)
     }
     try? FileManager.default.removeItem(at: cropExport)
@@ -946,9 +900,9 @@ Task { @MainActor in
     // Give the orphaned fusion time to drain and (if gating were broken)
     // land: nothing may change — no result, no phase flip, no prompt.
     try? await Task.sleep(nanoseconds: 3_000_000_000)
-    guard cancelModel.phase == .loaded, cancelModel.result == nil, !cancelPrompted else {
+    guard cancelModel.phase == .loaded, cancelModel.dmapResult == nil, !cancelPrompted else {
         print("probe: ORPHANED FUSION LANDED (\(cancelModel.phase), "
-            + "result=\(cancelModel.result != nil), prompted=\(cancelPrompted))")
+            + "result=\(cancelModel.dmapResult != nil), prompted=\(cancelPrompted))")
         exit(1)
     }
     // The next fuse waits out any remaining drain, then completes.
@@ -958,7 +912,7 @@ Task { @MainActor in
         try? await Task.sleep(nanoseconds: 100_000_000)
         ticks += 1
     }
-    guard cancelModel.phase == .done, cancelModel.result != nil else {
+    guard cancelModel.phase == .done, cancelModel.dmapResult != nil else {
         print("probe: FUSE AFTER CANCEL FAILED (\(cancelModel.phase))"); exit(1)
     }
     try? FileManager.default.removeItem(at: cancelDir)
@@ -1041,11 +995,11 @@ Task { @MainActor in
     let secondID = model5.stacks[1].id
     let firstID = model5.stacks[0].id
     model5.selectStack(firstID)
-    guard model5.result != nil, model5.frames == model5.stacks[0].frames else {
+    guard model5.dmapResult != nil, model5.frames == model5.stacks[0].frames else {
         print("probe: STACK SWITCH LOST STATE"); exit(1)
     }
     model5.selectStack(secondID)
-    guard model5.result != nil else {
+    guard model5.dmapResult != nil else {
         print("probe: SECOND STACK LOST RESULT"); exit(1)
     }
     let exportSummary = await model5.exportAllFused(to: exportDir)
@@ -1069,14 +1023,14 @@ Task { @MainActor in
     }
     model5.closeSelectedStack()  // selected = second stack, fused, unsaved
     guard model5.stacks.count == 1, model5.selectedStackID == firstID,
-          model5.result != nil, confirmations.count == 1 else {
+          model5.dmapResult != nil, confirmations.count == 1 else {
         print("probe: CLOSE STACK WRONG (stacks=\(model5.stacks.count), "
               + "confirms=\(confirmations))")
         exit(1)
     }
     model5.closeProject()
     guard model5.stacks.isEmpty, model5.selectedStackID == nil,
-          model5.phase == .empty, model5.result == nil,
+          model5.phase == .empty, model5.dmapResult == nil,
           !model5.hasUnsavedWork, confirmations.count == 2 else {
         print("probe: CLOSE PROJECT WRONG (phase=\(model5.phase), "
               + "confirms=\(confirmations))")

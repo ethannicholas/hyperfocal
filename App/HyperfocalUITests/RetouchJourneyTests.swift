@@ -102,7 +102,7 @@ final class RetouchJourneyTests: XCTestCase {
 
         XCTContext.runActivity(named: "eraser mode selectable") { _ in
             app.radioGroups["retouch.source-kind"]
-                .radioButtons["Original Result (erase)"].click()
+                .radioButtons["DMap Result"].click()
             // Selection is enough here: painting-back correctness is the
             // probe's territory (RetouchSession model checks).
         }

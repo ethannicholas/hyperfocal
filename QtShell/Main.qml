@@ -1109,24 +1109,75 @@ ApplicationWindow {
             }
             SidebarCard {
                 visible: !fusionHeader.collapsed
+                // Algorithm selector: DMap (depth map) or PMax (pyramid
+                // fusion), each with an info tooltip. Only DMap carries depth;
+                // the persisted raw value is "dmap"/"pmax". Label on top with
+                // the radios below, matching the SidebarSlider layout.
+                Label {
+                    text: "Algorithm:"; color: theme.textSecondary; font.pixelSize: 12
+                }
+                Repeater {
+                    model: [
+                        { key: "dmap", label: "DMap",
+                          tip: "Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap." },
+                        { key: "pmax", label: "PMax",
+                          tip: "Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce." }
+                    ]
+                    delegate: RowLayout {
+                        Layout.fillWidth: true
+                        RadioButton {
+                            text: modelData.label
+                            checked: Shell.fusionAlgorithm === modelData.key
+                            enabled: !Shell.isRunning
+                            onClicked: Shell.fusionAlgorithm = modelData.key
+                            ToolTip.visible: hovered
+                            ToolTip.text: modelData.tip
+                        }
+                        Label {
+                            text: "ⓘ"; color: theme.textSecondary
+                            HoverHandler { id: infoHover }
+                            ToolTip.visible: infoHover.hovered
+                            ToolTip.text: modelData.tip
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                }
+                // DMap sliders (shown for the depth-map algorithm)
                 SidebarSlider {
+                    visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.sharpness"
                     label: "Sharpness σ"; from: 1; to: 16; format: "%1 px"
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
+                    visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.noise-floor"
                     label: "Noise floor"; from: 0.01; to: 1
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
+                    visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.median-radius"
                     label: "Median radius"; from: 0; to: 32; format: "%1 px"
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
+                    visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.blend-radius"
                     label: "Blend radius"; from: 0.75; to: 4
+                    enabled: !Shell.isRunning
+                }
+                // PMax debloom sliders (shown for the pyramid-fusion algorithm)
+                SidebarSlider {
+                    visible: Shell.fusionAlgorithm === "pmax"
+                    sliderId: "fusion.slider.debloom-levels"
+                    label: "Debloom levels"; from: 0; to: 8; format: "%1"
+                    enabled: !Shell.isRunning
+                }
+                SidebarSlider {
+                    visible: Shell.fusionAlgorithm === "pmax"
+                    sliderId: "fusion.slider.focus-threshold"
+                    label: "Focus threshold"; from: 0; to: 0.3
                     enabled: !Shell.isRunning
                 }
                 Button {
@@ -1301,17 +1352,10 @@ ApplicationWindow {
                         onClicked: Shell.retouchSourceKind = 1
                     }
                     RadioButton {
-                        text: "Original Result (erase)"
+                        text: "DMap Result"
                         checked: Shell.retouchSourceKind === 2
                         onClicked: Shell.retouchSourceKind = 2
                     }
-                }
-                Button {
-                    Layout.fillWidth: true
-                    visible: Shell.retouchMode && Shell.retouchSourceKind === 1
-                             && Shell.retouchSourceLoading
-                    text: "Cancel PMax Build"
-                    onClicked: Shell.retouchCancelPmax()
                 }
                 Button {
                     Layout.fillWidth: true

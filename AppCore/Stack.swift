@@ -72,16 +72,23 @@ public final class Stack: Identifiable {
     /// Does not touch the per-frame checkboxes.
     public var enabled = true
 
-    // Fusion output; `result == nil` means unfused. `result`/depth are the
-    // DMap pass (depth always comes from DMap); `pmaxResult` is the alternate
-    // PMax image (in-memory only — regenerated, not saved).
-    var result: ImageBuffer?
+    // Fusion output; both algorithms' images are peers — `resultMethod` says
+    // which one is the displayed/exported result and which is only a retouch
+    // source. Depth always comes from the DMap pass (`depthResult`/`resultDepth`),
+    // needed for depth view/export and retouch regardless of which is primary.
+    // `pmaxResult` is in-memory only (regenerated, not saved).
+    var dmapResult: ImageBuffer?
     var depthResult: ImageBuffer?
     var resultDepth: [Float] = []
     var resultSharpness: FrameSharpness?
     var resultGains: [SIMD3<Float>]?
     var pmaxResult: ImageBuffer?
     var pmaxFusedSettings: PMaxSettings?
+    /// Which algorithm produced the *displayed* result — set by the fuse that
+    /// generated it, NOT by the Fusion-panel picker (which only chooses the
+    /// next fuse). The other algorithm is generated in the background purely as
+    /// a retouch source / depth provider. nil = unfused. In-memory only.
+    var resultMethod: FusionMethod?
     // Load-time frame-order sanity warning (capture/name order disagreement
     // or missing capture times) — see AppModel.orderWarning. Persisted with
     // the project so the badge survives reopen.
@@ -121,5 +128,5 @@ public final class Stack: Identifiable {
         self.included = Set(frames)
     }
 
-    var isFused: Bool { result != nil }
+    var isFused: Bool { dmapResult != nil || pmaxResult != nil }
 }

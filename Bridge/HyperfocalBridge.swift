@@ -603,8 +603,7 @@ public func hf_retouch_mode() -> Int32 {
 public func hf_can_retouch() -> Int32 {
     MainActor.assumeIsolated {
         guard let model = Bridge.model else { return 0 }
-        return model.phase == .done && model.result != nil
-            && !model.cropMode ? 1 : 0
+        return model.canStartRetouch ? 1 : 0
     }
 }
 
@@ -756,7 +755,7 @@ public func hf_retouch_source_kind() -> Int32 {
     MainActor.assumeIsolated {
         switch Bridge.model?.retouch?.sourceKind {
         case .pmax: return 1
-        case .result: return 2
+        case .dmap: return 2
         default: return 0
         }
     }
@@ -766,7 +765,7 @@ public func hf_retouch_source_kind() -> Int32 {
 public func hf_set_retouch_source_kind(_ kind: Int32) -> Int32 {
     MainActor.assumeIsolated {
         guard let session = Bridge.model?.retouch else { return 0 }
-        session.selectKind(kind == 1 ? .pmax : kind == 2 ? .result : .frame)
+        session.selectKind(kind == 1 ? .pmax : kind == 2 ? .dmap : .frame)
         return 1
     }
 }
@@ -794,7 +793,7 @@ public func hf_retouch_toggle_pmax() {
 
 @_cdecl("hf_retouch_toggle_result")
 public func hf_retouch_toggle_result() {
-    MainActor.assumeIsolated { Bridge.model?.retouch?.toggleResultLayer() }
+    MainActor.assumeIsolated { Bridge.model?.retouch?.toggleDMapLayer() }
 }
 
 @_cdecl("hf_retouch_source_name")
@@ -831,14 +830,6 @@ public func hf_retouch_source_status(_ buffer: UnsafeMutablePointer<CChar>?,
     }
 }
 
-@_cdecl("hf_retouch_cancel_pmax")
-public func hf_retouch_cancel_pmax() -> Int32 {
-    MainActor.assumeIsolated {
-        guard let session = Bridge.model?.retouch else { return 0 }
-        session.cancelPMaxBuild()
-        return 1
-    }
-}
 
 // The retouch SOURCE pane's pixel surface, mirroring hf_input_*: the
 // selected frame slice / PMax (low-res while forming) / eraser preview.
@@ -1261,6 +1252,29 @@ public func hf_reset_fusion() -> Int32 {
     }
 }
 
+/// The primary fusion algorithm as a persisted raw value ("dmap"/"pmax").
+/// The shell shows "DMap"/"PMax"; the rawValue is what persists (never
+/// localize it — see the DisplayNamed seam).
+@_cdecl("hf_fusion_algorithm")
+public func hf_fusion_algorithm(_ buffer: UnsafeMutablePointer<CChar>?,
+                                _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.fusionMethod.rawValue, buffer, cap)
+    }
+}
+
+@_cdecl("hf_set_fusion_algorithm")
+public func hf_set_fusion_algorithm(_ name: UnsafePointer<CChar>?) -> Int32 {
+    guard let name, let string = String(validatingUTF8: name) else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              let method = FusionMethod(rawValue: string) else { return 0 }
+        model.fusionMethod = method
+        return 1
+    }
+}
+
 /// The running fuse's ETA text ("about 20 seconds left"); bytes, 0
 /// when idle or unknown — the native progress.eta label's data.
 @_cdecl("hf_stage_eta")
@@ -1299,6 +1313,12 @@ private func sliderBinding(_ id: String, model: AppModel)
         return ({ model.medianRadius }, { model.medianRadius = $0 })
     case "fusion.slider.blend-radius":
         return ({ model.blendRadius }, { model.blendRadius = $0 })
+    case "fusion.slider.debloom-levels":
+        // PMax coarse levels is an Int (0–8); round the slider's Double.
+        return ({ Double(model.pmaxCoarseLevels) },
+                { model.pmaxCoarseLevels = Int($0.rounded()) })
+    case "fusion.slider.focus-threshold":
+        return ({ model.pmaxFocusThreshold }, { model.pmaxFocusThreshold = $0 })
     case "tone.slider.exposure":
         return ({ model.tone.exposure }, { model.tone.exposure = $0 })
     case "tone.slider.contrast":

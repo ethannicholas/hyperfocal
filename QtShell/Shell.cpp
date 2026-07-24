@@ -370,7 +370,6 @@ void Shell::retouchCycleSource(int delta) { hf_retouch_cycle_source(delta); }
 void Shell::retouchAutoPick() { hf_retouch_auto_pick(); }
 void Shell::retouchTogglePmax() { hf_retouch_toggle_pmax(); }
 void Shell::retouchToggleResult() { hf_retouch_toggle_result(); }
-void Shell::retouchCancelPmax() { hf_retouch_cancel_pmax(); }
 
 QString Shell::retouchSourceName() const {
     char buffer[512];
@@ -516,6 +515,15 @@ QString Shell::exportFormat() const {
 
 void Shell::setExportFormat(const QString &name) {
     hf_set_export_format(name.toUtf8().constData());
+}
+
+QString Shell::fusionAlgorithm() const {
+    char buffer[64];
+    return QString::fromUtf8(buffer, hf_fusion_algorithm(buffer, sizeof buffer));
+}
+
+void Shell::setFusionAlgorithm(const QString &name) {
+    hf_set_fusion_algorithm(name.toUtf8().constData());
 }
 
 QString Shell::exportColorSpace() const {

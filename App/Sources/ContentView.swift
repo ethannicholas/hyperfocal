@@ -255,15 +255,59 @@ struct ContentView: View {
         sectionHeader(title, section) { EmptyView() }
     }
 
+    private func algorithmTooltip(_ method: FusionMethod) -> LocalizedStringKey {
+        switch method {
+        case .dmap:
+            return "Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap."
+        case .pmax:
+            return "Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce."
+        }
+    }
+
     private var fusionSection: some View {
         // Set-and-forget switches (alignment, GPU, exposure normalization)
         // live in Settings (⌘,); the sidebar keeps the per-stack creative
         // controls.
         Section {
             if !model.isCollapsed(.fusion) {
+            // Algorithm selector: DMap (depth map) vs PMax (pyramid fusion),
+            // each with an info tooltip. Only DMap carries depth (depth view,
+            // rocking, depth-aware retouch); the picker sets the NEXT fuse.
+            // LabeledContent puts "Algorithm:" in the Form's label column and
+            // the stacked radios in its content column — lined up with the
+            // sliders below.
+            LabeledContent("Algorithm:") {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(FusionMethod.allCases, id: \.self) { method in
+                        Button {
+                            model.fusionMethod = method
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: model.fusionMethod == method
+                                      ? "largecircle.fill.circle" : "circle")
+                                    .foregroundStyle(model.fusionMethod == method
+                                                     ? Color.accentColor : Color.secondary)
+                                Text(method.displayName).foregroundStyle(.primary)
+                                Image(systemName: "info.circle")
+                                    .foregroundStyle(.secondary).font(.caption)
+                                    .help(algorithmTooltip(method))
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("fusion.method.\(method.rawValue)")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(model.phase.isRunning)
+
             // Locked during a fuse: the run uses the values it started with,
-            // so edits mid-run would neither affect it nor be recorded.
+            // so edits mid-run would neither affect it nor be recorded. The
+            // per-algorithm sliders swap with the selected method.
             Group {
+            if model.fusionMethod == .dmap {
             LabeledSlider(
                 label: "Sharpness σ", id: "fusion.slider.sharpness", value: $model.sharpnessSigma, range: 1...16,
                 format: "%.1f px",
@@ -288,6 +332,18 @@ struct ContentView: View {
                 range: Double(DMapFusion.minBlendRadius)...4,
                 format: "%.2f",
                 help: "How many neighboring frames blend together at each pixel when rendering. Wider is smoother across focus transitions, but slightly softer.")
+            } else {
+            LabeledSlider(
+                label: "Debloom levels", id: "fusion.slider.debloom-levels",
+                value: Binding(get: { Double(model.pmaxCoarseLevels) },
+                               set: { model.pmaxCoarseLevels = Int($0.rounded()) }),
+                range: 0...8, format: "%.0f",
+                help: "How many of the coarsest pyramid levels are focus-gated to suppress highlight bloom — where an out-of-focus bright halo leaks over a sharp neighbor. 0 turns debloom off (standard PMax, more faithful on stacks without bloom); higher gates more levels, cutting more bloom.")
+            LabeledSlider(
+                label: "Focus threshold", id: "fusion.slider.focus-threshold", value: $model.pmaxFocusThreshold,
+                range: 0...0.3, format: "%.2f",
+                help: "Fine-scale focus energy a frame must exceed at a pixel to win the debloom two-track select. Higher is stricter — more of the bloomed frame is rejected in favor of the in-focus one; too high starts rejecting genuinely sharp detail.")
+            }
             }
             .disabled(model.phase.isRunning)
 
@@ -410,7 +466,7 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .keyboardShortcut("r", modifiers: [])
-                    .disabled(model.phase != .done || model.result == nil || model.cropMode)
+                    .disabled(!model.canStartRetouch)
                     .accessibilityIdentifier("retouch.start")
                 }
             }
@@ -563,7 +619,10 @@ struct ContentView: View {
     private var outputImage: CGImage? {
         if let preview = model.noiseFloorPreview { return preview }
         if model.phase.isRunning { return model.progressive }
-        return model.outputMode == .depth ? model.depthPreview : model.outputPreview
+        // Depth comes from the DMap pass; under PMax it may not exist yet, so
+        // fall back to the result image rather than showing an empty pane.
+        if model.outputMode == .depth, let depth = model.depthPreview { return depth }
+        return model.outputPreview
     }
 
     /// True when the output pane is showing a data visualization — the depth
@@ -638,7 +697,7 @@ struct RetouchPreviewArea: View {
                 emptyHint: session.sourceError ?? String(localized: "Loading source…"),
                 loadingStatus: session.sourceStatus,
                 brushCursor: brushCursor,
-                tone: tone,
+                tone: session.sourceShowsData ? ToneSettings() : tone,
                 header: { EmptyView() }
             )
             PreviewPane(
@@ -722,17 +781,11 @@ struct RetouchControls: View {
             set: { session.selectKind($0) })) {
             Text("Source Image").tag(RetouchSession.SourceKind.frame)
             Text("PMax Result").tag(RetouchSession.SourceKind.pmax)
-            Text("Original Result (erase)").tag(RetouchSession.SourceKind.result)
+            Text("DMap Result").tag(RetouchSession.SourceKind.dmap)
         }
         .pickerStyle(.radioGroup)
         .accessibilityIdentifier("retouch.source-kind")
-        .help("What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. Original Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.")
-        if session.sourceKind == .pmax && session.sourceLoading {
-            Button("Cancel PMax Build") { session.cancelPMaxBuild() }
-                .controlSize(.small)
-                .accessibilityIdentifier("retouch.pmax-cancel")
-                .help("Stop building the PMax layer and go back to the previous brush source. Selecting PMax Result again restarts the build.")
-        }
+        .help("What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. DMap Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.")
         HStack {
             Spacer()
             Button("Revert All", role: .destructive) { onReset() }
@@ -1676,7 +1729,7 @@ struct RetouchOverlay: NSViewRepresentable {
         }
         view.onBrushResize = { [weak session] in session?.adjustBrushRadius(by: $0) }
         view.onTogglePMax = { [weak session] in session?.togglePMaxLayer() }
-        view.onToggleResult = { [weak session] in session?.toggleResultLayer() }
+        view.onToggleResult = { [weak session] in session?.toggleDMapLayer() }
         return view
     }
 

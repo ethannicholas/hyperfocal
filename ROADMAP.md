@@ -49,6 +49,21 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
       angle deltas, indistinguishable from a mouse; pan via left-drag, or
       middle-/Ctrl-drag in retouch mode).
 
+## UI Improvements
+
+- Improve the experience of starting retouching. Right now it simply freezes the
+  UI for up to several seconds before being ready. If we can't speed it up, we need
+  a spinner or similar progress indicator.
+- Improve the experience of opening a project. It can take quite a while to load;
+  there should be an indicator in the UI that it is working on it beyond "most of the
+  menu items are disabled".
+- Improve the experience of saving a project. It currently beachballs for several
+  seconds with a big project.
+- Clean up the tooltips. They currently read like they were written by an LLM that
+  was very proud of what it had built and wanted everybody to understand all of the
+  details. They need to be much tighter and focused on what the user actually needs
+  to understand.
+
 ## Release & licensing compliance
 
 The 2026-07-23 dependency-license audit cleared the release model (MIT source,

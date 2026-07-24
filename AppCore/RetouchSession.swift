@@ -52,8 +52,12 @@ public final class RetouchSession: ObservableObject {
     }
     @Published public private(set) var sourceLoading = false
     @Published public private(set) var sourceError: String?
-    /// Long-build status for the loading overlay ("Building PMax layer… 40%").
+    /// Preparing-status for the loading overlay ("Preparing the PMax result… 40%").
     @Published public private(set) var sourceStatus: String?
+    /// True while `sourceDisplay` is a data visualization (a DMap secondary's
+    /// forming depth map) rather than image pixels — the pane skips tone for it,
+    /// same as the result panel's depth view.
+    @Published public private(set) var sourceShowsData = false
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     @Published public private(set) var hasEdits = false
@@ -127,67 +131,60 @@ public final class RetouchSession: ObservableObject {
     private var sourceCacheOrder: [Int] = []
     private var sourceLoadGeneration = 0
 
-    // PMax blend layer: a pyramid fusion of the whole stack, selectable as a
-    // brush source for regions where structures at different depths overlap
-    // (crossing bristles, crystals) and a single depth per pixel is wrong.
+    // The two algorithm results as brush sources — DMap and PMax, peers. The
+    // one matching the fused result (`baseMethod`) is the in-memory base and
+    // doubles as the eraser (paint the pristine fusion back exactly where a
+    // stroke overreached); the other is the model's background pass, handed
+    // over by `provideOtherResult` (or, for PMax when DMap is the base, built
+    // on demand as a fallback). PMax helps where structures at different depths
+    // overlap and a single depth per pixel is wrong.
+    let baseMethod: FusionMethod
+    /// The algorithm whose result is NOT the base — the alternate brush source.
+    var otherMethod: FusionMethod { baseMethod == .dmap ? .pmax : .dmap }
     var pmaxIndex: Int { urls.count }
     var isPMaxSource: Bool { sourceIndex == pmaxIndex }
-    private var pmaxCache: (buffer: ImageBuffer, image: PlatformImage)?
-    private var pmaxBuildCancel: CancellationToken?
+    var dmapIndex: Int { urls.count + 1 }
+    var isDMapSource: Bool { sourceIndex == dmapIndex }
+    /// True when the selected source is the fused base — instant, and it acts
+    /// as the eraser (restores original pixels + the session-start depth).
+    var isBaseSource: Bool {
+        (isPMaxSource && baseMethod == .pmax) || (isDMapSource && baseMethod == .dmap)
+    }
+    /// The non-base algorithm's image, from the model's background pass. The
+    /// base itself is always `originalResult`.
+    private var otherImage: (buffer: ImageBuffer, image: PlatformImage)?
     private var lastFrameSourceIndex = 0
-
-    // Original fused result as a brush source — the eraser: paint the pristine
-    // fusion back exactly where a stroke overreached, without undoing
-    // everything since. Free: the buffer is retained for the session anyway;
-    // only its pane preview is built (once) on first use.
-    var resultIndex: Int { urls.count + 1 }
-    var isResultSource: Bool { sourceIndex == resultIndex }
     private let originalResult: ImageBuffer
     private var resultImageCache: PlatformImage?
 
     public var sourceName: String {
-        isPMaxSource ? NSLocalizedString("PMax blend layer", comment: "")
-            : isResultSource ? NSLocalizedString("Original result (eraser)", comment: "")
-            : String(format: NSLocalizedString("%@ (aligned)", comment: ""),
-                     urls[sourceIndex].lastPathComponent)
+        if isPMaxSource { return NSLocalizedString("PMax Result", comment: "") }
+        if isDMapSource { return NSLocalizedString("DMap Result", comment: "") }
+        return String(format: NSLocalizedString("%@ (aligned)", comment: ""),
+                      urls[sourceIndex].lastPathComponent)
     }
 
-    /// The three kinds of brush source, for the "Retouch from" radio group.
+    /// The three kinds of brush source for the "Retouch from" radio group. The
+    /// two algorithm results are peers; whichever matches the fused result
+    /// doubles as the eraser.
     public enum SourceKind: Hashable {
         case frame   // an aligned source slice (↑/↓ picks which)
-        case pmax    // the PMax blend layer
-        case result  // the original fused result (eraser)
+        case dmap    // the DMap result image
+        case pmax    // the PMax result image
     }
 
     public var sourceKind: SourceKind {
-        isPMaxSource ? .pmax : isResultSource ? .result : .frame
+        isPMaxSource ? .pmax : isDMapSource ? .dmap : .frame
     }
 
     public func selectKind(_ kind: SourceKind) {
         switch kind {
         case .frame: selectSource(lastFrameSourceIndex)
+        case .dmap: selectSource(dmapIndex)
         case .pmax: selectSource(pmaxIndex)
-        case .result: selectSource(resultIndex)
         }
     }
 
-    /// User-facing cancel for the on-demand PMax build (a full pyramid fuse —
-    /// minutes at 45 MP): abandon it and fall back to the last frame source.
-    /// The layer never arrives, so keeping the PMax selection would strand an
-    /// empty pane. selectSource does the actual teardown (cancels the token,
-    /// supersedes the load generation).
-    public func cancelPMaxBuild() {
-        guard isPMaxSource, sourceLoading else { return }
-        selectSource(lastFrameSourceIndex)
-    }
-
-    deinit {
-        // A PMax build now survives navigation (it caches in the background),
-        // so a discarded session — e.g. closing the project — must still stop
-        // it, or a closed project keeps a fusion running. The token is
-        // thread-safe, so firing it from deinit is safe on any thread.
-        pmaxBuildCancel?.cancel()
-    }
 
     // Tile-based per-stroke undo. Snapshots carry the depth plane alongside
     // the pixels — strokes co-paint depth, so undo must restore both.
@@ -206,10 +203,11 @@ public final class RetouchSession: ObservableObject {
     /// (including any common-coverage crop) so aligned slices match the
     /// result. `restoredWorking` re-installs retouch edits from a saved
     /// session.
-    init(result: ImageBuffer, depth: [Float], sharpness: FrameSharpness?,
-         source: StackSource,
+    init(result: ImageBuffer, method: FusionMethod, depth: [Float],
+         sharpness: FrameSharpness?, source: StackSource,
          restoredWorking: ImageBuffer? = nil, initialSourceIndex: Int? = nil) {
         self.urls = source.urls
+        self.baseMethod = method
         self.width = result.width
         self.height = result.height
         self.originalResult = result
@@ -220,8 +218,14 @@ public final class RetouchSession: ObservableObject {
         } else {
             self.working = result
         }
-        self.workingDepth = depth
-        self.originalDepth = depth
+        // A PMax primary has no depth map; retouch still works (frames +
+        // eraser), so stand in a flat plane to keep the depth-plane machinery
+        // (co-paint, undo snapshots, live view) well-defined. The model never
+        // folds this back — `mergeRetouchDepth` runs only for a DMap primary.
+        let depthPlane = depth.isEmpty
+            ? [Float](repeating: 0, count: result.width * result.height) : depth
+        self.workingDepth = depthPlane
+        self.originalDepth = depthPlane
         // Same normalization as DMapFusion.depthImage(frameCount:) so the
         // live view matches the fusion's static depth render shade-for-shade.
         self.depthDisplayScale = 1 / Float(max(source.count, 2) - 1)
@@ -235,7 +239,7 @@ public final class RetouchSession: ObservableObject {
                             rect: CGRect(x: 0, y: 0, width: result.width, height: result.height))
         self.displayPixels = pixels
         var depthBytes = [UInt8](repeating: 0, count: result.width * result.height)
-        Self.convertDepthToBytes(from: depth, scale: depthDisplayScale,
+        Self.convertDepthToBytes(from: depthPlane, scale: depthDisplayScale,
                                  into: &depthBytes, width: result.width,
                                  rows: 0..<result.height)
         self.depthDisplayPixels = depthBytes
@@ -339,17 +343,18 @@ public final class RetouchSession: ObservableObject {
     // MARK: - Source slice management
 
     func selectSource(_ index: Int) {
-        // pmaxIndex and resultIndex are valid selections (the blend/eraser
+        sourceShowsData = false  // a fresh selection starts as image pixels
+        // pmaxIndex and dmapIndex are valid selections (the two algorithm-result
         // layers); everything else clamps to the frame list. Cycling off a
         // layer lands on a frame.
-        let clamped = index == pmaxIndex || index == resultIndex
+        let clamped = index == pmaxIndex || index == dmapIndex
             ? index : min(max(index, 0), urls.count - 1)
         if clamped == pmaxIndex {
             selectPMaxLayer()
             return
         }
-        if clamped == resultIndex {
-            selectResultLayer()
+        if clamped == dmapIndex {
+            selectDMapLayer()
             return
         }
         lastFrameSourceIndex = clamped
@@ -429,90 +434,74 @@ public final class RetouchSession: ObservableObject {
         selectSource(isPMaxSource ? lastFrameSourceIndex : pmaxIndex)
     }
 
-    public func toggleResultLayer() {
-        selectSource(isResultSource ? lastFrameSourceIndex : resultIndex)
+    public func toggleDMapLayer() {
+        selectSource(isDMapSource ? lastFrameSourceIndex : dmapIndex)
     }
 
-    /// The PMax layer is fused on demand (a full pyramid pass over the stack —
-    /// minutes at 45 MP) and cached for the session's lifetime.
+    /// Hand over the non-base algorithm's image — the model's background pass —
+    /// so selecting it as a brush source is instant (no re-fuse). No-op once a
+    /// layer is cached. If the user is waiting on it, this resolves the pane.
+    public func provideOtherResult(_ buffer: ImageBuffer) {
+        guard otherImage == nil, let image = try? Preview.image(from: buffer) else { return }
+        finishOtherSource(buffer, image)
+    }
+
+    private var otherIndex: Int { baseMethod == .pmax ? dmapIndex : pmaxIndex }
+
+    /// The single "a source is being prepared" label — one template for both
+    /// algorithms so the DMap and PMax wording can never drift apart.
+    private func preparingStatus(_ fraction: Double?) -> String {
+        let base = String(format: NSLocalizedString("Preparing the %@ result…", comment: ""),
+                          otherMethod.displayName)
+        guard let fraction else { return base }
+        return base + String(format: " %lld%%", Int((fraction * 100).rounded()))
+    }
+
+    /// Forming-preview + progress for the alternate source, from the model's
+    /// background pass. Same pane treatment as the result panel: the preview
+    /// fills in as it renders. No-op unless the user is waiting on this source.
+    public func otherSourceProgress(fraction: Double, preview: PlatformImage?, isData: Bool) {
+        guard sourceIndex == otherIndex, sourceLoading else { return }
+        sourceStatus = preparingStatus(fraction)
+        if let preview {
+            sourceDisplay = preview
+            sourceShowsData = isData
+        }
+    }
+
+    /// The alternate source finished (the model's background pass). Caches it
+    /// and, if the user is waiting on it, resolves the pane.
+    private func finishOtherSource(_ buffer: ImageBuffer, _ image: PlatformImage) {
+        if otherImage == nil { otherImage = (buffer, image) }
+        guard sourceIndex == otherIndex, sourceLoading else { return }
+        sourceLoadGeneration += 1  // supersede any stale in-flight source load
+        sourceFloat = buffer
+        sourceDisplay = image
+        sourceShowsData = false
+        sourceLoading = false
+        sourceStatus = nil
+        sourceError = nil
+    }
+
     private func selectPMaxLayer() {
-        // Same rules as selectSource: supersede stragglers even on a cache
-        // hit, and never leave a previous build running unobserved.
-        pmaxBuildCancel?.cancel()
         let changed = sourceIndex != pmaxIndex
         sourceIndex = pmaxIndex
         if changed { onSourceChanged?(pmaxIndex) }
         sourceLoadGeneration += 1
-        if let cached = pmaxCache {
-            sourceFloat = cached.buffer
-            sourceDisplay = cached.image
-            sourceLoading = false
-            sourceStatus = nil
-            sourceError = nil
-            return
-        }
-        sourceFloat = nil
-        sourceDisplay = nil
-        sourceLoading = true
-        sourceError = nil
-        sourceStatus = NSLocalizedString("Building PMax layer…", comment: "")
-        let generation = sourceLoadGeneration
-        let source = stackSource
-        let cancel = CancellationToken()
-        pmaxBuildCancel = cancel
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let loaded: (buffer: ImageBuffer, image: PlatformImage)?
-            do {
-                let fusedImage = try PyramidFusion.fuse(source: source,
-                                                        progress: { fraction, preview in
-                    // Show the forming pyramid while it builds (GPU path
-                    // emits low-res collapses; CPU sends none). Converted
-                    // off-main — these arrive from the fusion thread.
-                    let image = preview
-                        .flatMap { try? Preview.image(from: $0) }
-                    Task { @MainActor [weak self] in
-                        guard let self, generation == self.sourceLoadGeneration else { return }
-                        self.sourceStatus = String(format: NSLocalizedString(
-                            "Building PMax layer… %lld%%", comment: ""), Int(fraction * 100))
-                        if let image { self.sourceDisplay = image }
-                    }
-                }, cancellation: cancel,
-                                                        // Focus-gate the PMax blend layer: a paint
-                                                        // source carrying highlight bloom would paint
-                                                        // that bloom into the result. Runs on CPU or
-                                                        // GPU (parity ≥ standard PMax).
-                                                        focusGate: .init())
-                loaded = (fusedImage, try Preview.image(from: fusedImage))
-            } catch {
-                loaded = nil
-                if !(error is CancellationError) {
-                    FileHandle.standardError.write(
-                        Data("retouch: pmax build failed: \(error)\n".utf8))
-                }
-            }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                if let loaded { self.pmaxCache = loaded }
-                guard generation == self.sourceLoadGeneration else { return }
-                self.sourceFloat = loaded?.buffer
-                self.sourceDisplay = loaded?.image
-                self.sourceLoading = false
-                self.sourceStatus = nil
-                self.sourceError = loaded == nil
-                    ? NSLocalizedString("Couldn't build the PMax layer", comment: "") : nil
-            }
-        }
+        if baseMethod == .pmax { useBaseSource() } else { useOtherSource() }
     }
 
-    /// The eraser layer is instantly paintable (the pristine result is already
-    /// in memory); only its pane preview needs a one-time 8-bit render.
-    private func selectResultLayer() {
-        // As with frame navigation, a building PMax layer keeps going in the
-        // background (the generation bump supersedes its pane writes).
-        let changed = sourceIndex != resultIndex
-        sourceIndex = resultIndex
-        if changed { onSourceChanged?(resultIndex) }
-        sourceLoadGeneration += 1  // supersede any in-flight frame/PMax load
+    private func selectDMapLayer() {
+        let changed = sourceIndex != dmapIndex
+        sourceIndex = dmapIndex
+        if changed { onSourceChanged?(dmapIndex) }
+        sourceLoadGeneration += 1
+        if baseMethod == .dmap { useBaseSource() } else { useOtherSource() }
+    }
+
+    /// The fused base as a brush source (the eraser): instant — its buffer is
+    /// retained anyway; only the 8-bit pane preview is rendered, once.
+    private func useBaseSource() {
         sourceFloat = originalResult
         sourceStatus = nil
         sourceError = nil
@@ -536,6 +525,26 @@ public final class RetouchSession: ObservableObject {
                 self.sourceError = image == nil ? "Couldn't render the result layer" : nil
             }
         }
+    }
+
+    /// The non-base algorithm's image. Uses it if already cached; otherwise
+    /// enters the shared "Preparing the <algorithm> result…" state and waits for
+    /// the model's background pass, which feeds the forming preview via
+    /// `otherSourceProgress` and completes via `provideOtherResult`.
+    private func useOtherSource() {
+        if let other = otherImage {
+            sourceFloat = other.buffer
+            sourceDisplay = other.image
+            sourceLoading = false
+            sourceStatus = nil
+            sourceError = nil
+            return
+        }
+        sourceFloat = nil
+        sourceDisplay = nil
+        sourceLoading = true
+        sourceError = nil
+        sourceStatus = preparingStatus(nil)
     }
 
     /// Space key: measure the brush region's sharpness in *every* frame and jump
@@ -732,12 +741,13 @@ public final class RetouchSession: ObservableObject {
         snapshotTiles(x0: x0, y0: y0, x1: x1, y1: y1)
 
         let w = width
-        // The stroke's depth: a frame paints its own index (that IS the
-        // depth of the pixels being copied), the eraser paints the
-        // session-start depth back, and PMax — whose pixels have no single
-        // depth — leaves the plane alone.
-        let paintsDepth = !isPMaxSource
-        let eraseDepth = isResultSource
+        // The stroke's depth: a frame paints its own index (that IS the depth
+        // of the pixels being copied); the base result is the eraser and paints
+        // the session-start depth back; the OTHER algorithm's result — whose
+        // pixels have no matching single depth — leaves the plane alone.
+        let isAlgorithmSource = isPMaxSource || isDMapSource
+        let paintsDepth = !isAlgorithmSource || isBaseSource
+        let eraseDepth = isBaseSource
         let frameDepth = Float(min(sourceIndex, urls.count - 1))
         let dScale = depthDisplayScale
         working.pixels.withUnsafeMutableBufferPointer { dst in

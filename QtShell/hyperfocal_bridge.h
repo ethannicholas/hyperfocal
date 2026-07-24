@@ -154,7 +154,6 @@ int hf_retouch_source_name(char *buf, int cap);     // returns bytes
 int hf_retouch_source_loading(void);
 int hf_retouch_source_error(char *buf, int cap);    // returns bytes
 int hf_retouch_source_status(char *buf, int cap);   // returns bytes
-int hf_retouch_cancel_pmax(void);
 // The source pane's pixel surface (mirrors hf_input_*).
 int hf_retouch_source_size(int32_t *w, int32_t *h);
 int hf_retouch_source_epoch(void);
@@ -235,6 +234,12 @@ int hf_tone_is_neutral(void);
 int hf_reset_tone(void);
 int hf_fusion_is_default(void);
 int hf_reset_fusion(void);
+// Primary fusion algorithm, as a persisted raw value ("dmap" / "pmax");
+// the shell shows "DMap" / "PMax". The two PMax debloom sliders ride the
+// shared slider namespace ("fusion.slider.debloom-levels" 0–8,
+// "fusion.slider.focus-threshold") — no dedicated symbols.
+int hf_fusion_algorithm(char *buf, int cap);        // returns bytes
+int hf_set_fusion_algorithm(const char *name);
 
 // Sliders, addressed by the accessibility-identifier vocabulary the
 // native UITest command channel speaks (e.g. "fusion.slider.sharpness",

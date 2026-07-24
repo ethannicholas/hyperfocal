@@ -113,6 +113,31 @@ final class FuseExportJourneyTests: XCTestCase {
                 1.0, "default re-fuse should reproduce the baseline render")
         }
 
+        try XCTContext.runActivity(named: "PMax algorithm selector swaps sliders and fuses") { _ in
+            // Switching the primary algorithm to PMax replaces the DMap
+            // sliders with the two debloom sliders, and a fuse produces an
+            // exportable result; switching back to DMap restores its sliders
+            // (both results are cached, so the switch itself is instant).
+            let pmaxRadio = app.buttons["fusion.method.pmax"]
+            XCTAssertTrue(pmaxRadio.waitForExistence(timeout: 5),
+                          "fusion algorithm selector missing")
+            pmaxRadio.click()
+            XCTAssertTrue(
+                app.sliders["fusion.slider.debloom-levels"].waitForExistence(timeout: 5),
+                "PMax debloom-levels slider should appear")
+            XCTAssertFalse(app.sliders["fusion.slider.sharpness"].exists,
+                           "DMap sliders should hide under PMax")
+            app.buttons["fusion.fuse-stack"].click()
+            waitForFuseDone(app)
+            let pmax = try exportAndInspect("pmax.tif")
+            XCTAssertEqual(pmax.width, baseline.width,
+                           "PMax result must match the fused canvas")
+            app.buttons["fusion.method.dmap"].click()
+            XCTAssertTrue(
+                app.sliders["fusion.slider.sharpness"].waitForExistence(timeout: 5),
+                "DMap sliders should return when the algorithm switches back")
+        }
+
         try XCTContext.runActivity(named: "aligned source frames export") { _ in
             // Select a range of frames (click + ⇧-click spans three rows),
             // export their aligned versions through the command channel, and

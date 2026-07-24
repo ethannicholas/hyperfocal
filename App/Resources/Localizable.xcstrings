@@ -10120,133 +10120,401 @@
         }
       }
     },
-    "Original Result (erase)": {
+    "DMap Result": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Originalergebnis (Radierer)"
+            "value": "DMap-Ergebnis"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Resultado original (borrador)"
+            "value": "Resultado DMap"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Résultat original (gomme)"
+            "value": "Résultat DMap"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Risultato originale (gomma)"
+            "value": "Risultato DMap"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "元の結果（消しゴム）"
+            "value": "DMap結果"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "원본 결과(지우개)"
+            "value": "DMap 결과"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Origineel resultaat (gum)"
+            "value": "DMap-resultaat"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Resultado Original (apagar)"
+            "value": "Resultado DMap"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Исходный результат (ластик)"
+            "value": "Результат DMap"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "原始结果（擦除）"
+            "value": "DMap 结果"
           }
         }
       }
     },
-    "Original result (eraser)": {
+    "DMap result (eraser)": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Originalergebnis (Radierer)"
+            "value": "DMap-Ergebnis (Radierer)"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Resultado original (borrador)"
+            "value": "Resultado DMap (borrador)"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Résultat original (gomme)"
+            "value": "Résultat DMap (gomme)"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Risultato originale (gomma)"
+            "value": "Risultato DMap (gomma)"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "元の結果（消しゴム）"
+            "value": "DMap結果（消しゴム）"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "원본 결과(지우개)"
+            "value": "DMap 결과(지우개)"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Origineel resultaat (gum)"
+            "value": "DMap-resultaat (gum)"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Resultado original (apagador)"
+            "value": "Resultado DMap (apagador)"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Исходный результат (ластик)"
+            "value": "Результат DMap (ластик)"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "原始结果（擦除）"
+            "value": "DMap 结果（擦除）"
           }
         }
       }
+    },
+    "Debloom levels": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debloom-Stufen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niveles de debloom"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niveaux de débloom"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Livelli di debloom"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハロー抑制レベル"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "광륜 억제 레벨"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debloom-niveaus"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Níveis de debloom"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уровни подавления ореола"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "去光晕级别"
+          }
+        }
+      }
+    },
+    "Focus threshold": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fokusschwelle"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Umbral de enfoque"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seuil de netteté"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soglia di messa a fuoco"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォーカスしきい値"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "초점 임계값"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scherptedrempel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limite de foco"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Порог фокуса"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "对焦阈值"
+          }
+        }
+      }
+    },
+    "How many of the coarsest pyramid levels are focus-gated to suppress highlight bloom — where an out-of-focus bright halo leaks over a sharp neighbor. 0 turns debloom off (standard PMax, more faithful on stacks without bloom); higher gates more levels, cutting more bloom.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wie viele der gröbsten Pyramidenebenen per Fokus gefiltert werden, um Überstrahlung von Lichtern zu unterdrücken — wenn ein unscharfer heller Halo über einen scharfen Nachbarn läuft. 0 schaltet Debloom aus (Standard-PMax, treuer bei Stapeln ohne Überstrahlung); höhere Werte filtern mehr Ebenen und reduzieren mehr Überstrahlung."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cuántos de los niveles más gruesos de la pirámide se filtran por enfoque para suprimir el halo de las altas luces, cuando un halo brillante desenfocado se derrama sobre un vecino nítido. 0 desactiva el debloom (PMax estándar, más fiel en pilas sin halo); valores más altos filtran más niveles y recortan más halo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Combien des niveaux les plus grossiers de la pyramide sont filtrés par la netteté pour supprimer le halo des hautes lumières — lorsqu'un halo lumineux flou déborde sur un voisin net. 0 désactive le débloom (PMax standard, plus fidèle sur les piles sans halo) ; plus la valeur est élevée, plus de niveaux sont filtrés et plus le halo est réduit."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quanti dei livelli più grossolani della piramide vengono filtrati in base al fuoco per sopprimere l'alone delle alte luci — quando un alone luminoso sfocato deborda su un vicino nitido. 0 disattiva il debloom (PMax standard, più fedele su pile senza alone); valori più alti filtrano più livelli e riducono più alone."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハイライトのハロー（ピンぼけの明るいハローが鮮明な隣に漏れ出す現象）を抑えるため、ピラミッドの最も粗いレベルのうちいくつをフォーカスでゲートするか。0でハロー抑制をオフにします（標準のPMax。ハローのないスタックではより忠実）。値が大きいほど多くのレベルをゲートし、ハローをより多く除去します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "하이라이트 광륜(초점이 맞지 않는 밝은 광륜이 선명한 이웃 위로 번지는 현상)을 억제하기 위해 피라미드의 가장 거친 레벨 중 몇 개를 초점으로 게이트할지입니다. 0은 광륜 억제를 끕니다(표준 PMax, 광륜이 없는 스택에서 더 충실). 값이 클수록 더 많은 레벨을 게이트하여 광륜을 더 많이 제거합니다."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hoeveel van de grofste piramideniveaus op scherpte worden gefilterd om overstraling van hoge lichten te onderdrukken — wanneer een onscherpe heldere halo over een scherpe buur uitloopt. 0 zet debloom uit (standaard-PMax, getrouwer bij stapels zonder halo); hogere waarden filteren meer niveaus en verminderen meer overstraling."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quantos dos níveis mais grosseiros da pirâmide são filtrados por foco para suprimir o halo das altas luzes — quando um halo brilhante desfocado vaza sobre um vizinho nítido. 0 desativa o debloom (PMax padrão, mais fiel em pilhas sem halo); valores mais altos filtram mais níveis e reduzem mais halo."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сколько самых грубых уровней пирамиды фильтруются по фокусу для подавления ореола на светах — когда размытый яркий ореол перетекает на резкого соседа. 0 отключает подавление (стандартный PMax, точнее на стопках без ореола); большие значения фильтруют больше уровней и сильнее убирают ореол."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "为抑制高光光晕（失焦的明亮光晕漫过清晰的相邻区域）而对金字塔最粗的若干层按对焦进行门控的层数。0 关闭去光晕（标准 PMax，在无光晕的堆栈上更忠实）；数值越大门控的层数越多，去除的光晕也越多。"
+          }
+        }
+      }
+    },
+    "Fine-scale focus energy a frame must exceed at a pixel to win the debloom two-track select. Higher is stricter — more of the bloomed frame is rejected in favor of the in-focus one; too high starts rejecting genuinely sharp detail.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feinskalige Fokusenergie, die ein Einzelbild an einem Pixel überschreiten muss, um die Zwei-Spur-Auswahl von Debloom zu gewinnen. Höher ist strenger — mehr vom überstrahlten Bild wird zugunsten des scharfen verworfen; zu hoch verwirft echte scharfe Details."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Energía de enfoque a escala fina que un fotograma debe superar en un píxel para ganar la selección de dos vías del debloom. Más alto es más estricto: se rechaza más del fotograma con halo en favor del enfocado; demasiado alto empieza a rechazar detalle realmente nítido."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Énergie de netteté à fine échelle qu'une image doit dépasser sur un pixel pour gagner la sélection à deux voies du débloom. Plus haut est plus strict — une plus grande partie de l'image avec halo est rejetée au profit de l'image nette ; trop haut commence à rejeter des détails réellement nets."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Energia di fuoco a scala fine che un fotogramma deve superare in un pixel per vincere la selezione a due tracce del debloom. Più alto è più severo — viene scartata più parte del fotogramma con alone a favore di quello a fuoco; troppo alto inizia a scartare dettaglio davvero nitido."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハロー抑制の2トラック選択で勝つために、フレームが各ピクセルで超える必要のある微細スケールのフォーカスエネルギー。高いほど厳しく、ハローのあるフレームがより多く却下され、ピントの合ったフレームが優先されます。高すぎると本当に鮮明なディテールまで却下し始めます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "광륜 억제의 2트랙 선택에서 이기기 위해 프레임이 각 픽셀에서 넘어야 하는 미세 스케일 초점 에너지입니다. 높을수록 엄격하여 광륜이 있는 프레임이 더 많이 거부되고 초점이 맞은 프레임이 우선됩니다. 너무 높으면 진짜 선명한 디테일까지 거부하기 시작합니다."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fijnschalige scherpte-energie die een opname op een pixel moet overschrijden om de tweesporenkeuze van debloom te winnen. Hoger is strenger — meer van de opname met halo wordt verworpen ten gunste van de scherpe; te hoog begint echt scherpe details te verwerpen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Energia de foco em escala fina que um quadro precisa exceder em um pixel para vencer a seleção de duas vias do debloom. Mais alto é mais rígido — mais do quadro com halo é rejeitado em favor do quadro em foco; alto demais começa a rejeitar detalhe realmente nítido."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мелкомасштабная энергия фокуса, которую кадр должен превысить в пикселе, чтобы победить в двухдорожечном выборе подавления ореола. Выше — строже: больше кадра с ореолом отбрасывается в пользу резкого; слишком высоко — начинают отбрасываться действительно резкие детали."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "帧在某像素上必须超过的细尺度对焦能量，才能在去光晕的双轨选择中胜出。越高越严格 — 更多带光晕的帧被舍弃，转而采用对焦清晰的帧；过高会开始舍弃真正清晰的细节。"
+          }
+        }
+      }
+    },
+    "Preparing the %@ result…": {
+      "comment": "Retouch source pane: the alternate algorithm result is being prepared. %@ = DMap/PMax. Needs translation."
+    },
+    "Algorithm:": {
+      "comment": "Fusion panel: label above the DMap/PMax algorithm radios. Needs translation."
+    },
+    "Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap.": {
+      "comment": "Tooltip for the DMap algorithm radio. Needs translation."
+    },
+    "Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce.": {
+      "comment": "Tooltip for the PMax algorithm radio. Needs translation."
     },
     "Output": {
       "localizations": {
@@ -14856,66 +15124,66 @@
         }
       }
     },
-    "What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. Original Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.": {
+    "What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. DMap Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Woraus der Pinsel malt. Quellbild: ein beliebiges ausgerichtetes Einzelbild (↑/↓ zum Wählen, Leertaste für das schärfste unter dem Pinsel). PMax-Ergebnis: eine Pyramidenfusion des ganzen Stapels — wo sich Strukturen verschiedener Tiefen überlappen, muss sich die Tiefenkarte für eine Seite entscheiden, diese Ebene behält beide; beim ersten Gebrauch berechnet, dann zwischengespeichert. Originalergebnis: die unberührte Fusion — ein Radierer, der sie genau dort wiederherstellt, wo ein Strich zu weit ging, ohne alles Spätere rückgängig zu machen."
+            "value": "Woraus der Pinsel malt. Quellbild: ein beliebiges ausgerichtetes Einzelbild (↑/↓ zum Wählen, Leertaste für das schärfste unter dem Pinsel). PMax-Ergebnis: eine Pyramidenfusion des ganzen Stapels — wo sich Strukturen verschiedener Tiefen überlappen, muss sich die Tiefenkarte für eine Seite entscheiden, diese Ebene behält beide; beim ersten Gebrauch berechnet, dann zwischengespeichert. DMap-Ergebnis: die unberührte Fusion — ein Radierer, der sie genau dort wiederherstellt, wo ein Strich zu weit ging, ohne alles Spätere rückgängig zu machen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "De dónde pinta el pincel. Imagen de origen: cualquier imagen alineada (↑/↓ para elegir, espacio para la más nítida bajo el pincel). Resultado PMax: una fusión piramidal de toda la pila; donde se solapan estructuras a distintas profundidades, el mapa de profundidad debe elegir un lado, y esta capa conserva ambos; se genera al primer uso y luego se guarda en caché. Resultado original: la fusión intacta, un borrador que la restaura exactamente donde un trazo se pasó, sin deshacer todo lo posterior."
+            "value": "De dónde pinta el pincel. Imagen de origen: cualquier imagen alineada (↑/↓ para elegir, espacio para la más nítida bajo el pincel). Resultado PMax: una fusión piramidal de toda la pila; donde se solapan estructuras a distintas profundidades, el mapa de profundidad debe elegir un lado, y esta capa conserva ambos; se genera al primer uso y luego se guarda en caché. Resultado DMap: la fusión intacta, un borrador que la restaura exactamente donde un trazo se pasó, sin deshacer todo lo posterior."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ce que le pinceau peint. Image source : n’importe quelle image alignée (↑/↓ pour choisir, espace pour la plus nette sous le pinceau). Résultat PMax : une fusion pyramidale de toute la pile — là où des structures à différentes profondeurs se chevauchent, la carte de profondeur doit choisir un côté, et ce calque garde les deux ; calculé au premier usage, puis mis en cache. Résultat original : la fusion intacte — une gomme qui la restaure exactement là où un trait a débordé, sans annuler tout ce qui a suivi."
+            "value": "Ce que le pinceau peint. Image source : n’importe quelle image alignée (↑/↓ pour choisir, espace pour la plus nette sous le pinceau). Résultat PMax : une fusion pyramidale de toute la pile — là où des structures à différentes profondeurs se chevauchent, la carte de profondeur doit choisir un côté, et ce calque garde les deux ; calculé au premier usage, puis mis en cache. Résultat DMap : la fusion intacte — une gomme qui la restaure exactement là où un trait a débordé, sans annuler tout ce qui a suivi."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Da cosa dipinge il pennello. Immagine sorgente: qualsiasi fotogramma allineato (↑/↓ per scegliere, spazio per il più nitido sotto il pennello). Risultato PMax: una fusione piramidale dell’intera pila — dove strutture a profondità diverse si sovrappongono, la mappa di profondità deve scegliere un lato, e questo livello li conserva entrambi; generato al primo uso, poi in cache. Risultato originale: la fusione intatta — una gomma che la ripristina esattamente dove un tratto ha esagerato, senza annullare tutto il resto."
+            "value": "Da cosa dipinge il pennello. Immagine sorgente: qualsiasi fotogramma allineato (↑/↓ per scegliere, spazio per il più nitido sotto il pennello). Risultato PMax: una fusione piramidale dell’intera pila — dove strutture a profondità diverse si sovrappongono, la mappa di profondità deve scegliere un lato, e questo livello li conserva entrambi; generato al primo uso, poi in cache. Risultato DMap: la fusione intatta — una gomma che la ripristina esattamente dove un tratto ha esagerato, senza annullare tutto il resto."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ブラシの描画元です。ソース画像：任意の位置合わせ済みフレーム（↑/↓で選択、スペースでブラシ下の最も鮮明なもの）。PMax結果：スタック全体のピラミッド合成。異なる深度の構造が重なる場所では深度マップはどちらか一方を選ばざるを得ませんが、このレイヤーは両方を保持します。初回使用時に生成され、以後キャッシュされます。元の結果：手つかずの合成。ストロークが行き過ぎた場所だけを正確に復元する消しゴムで、それ以降の作業を取り消しません。"
+            "value": "ブラシの描画元です。ソース画像：任意の位置合わせ済みフレーム（↑/↓で選択、スペースでブラシ下の最も鮮明なもの）。PMax結果：スタック全体のピラミッド合成。異なる深度の構造が重なる場所では深度マップはどちらか一方を選ばざるを得ませんが、このレイヤーは両方を保持します。初回使用時に生成され、以後キャッシュされます。DMap結果：手つかずの合成。ストロークが行き過ぎた場所だけを正確に復元する消しゴムで、それ以降の作業を取り消しません。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "브러시가 무엇에서 페인트할지입니다. 소스 이미지: 정렬된 아무 프레임(↑/↓로 선택, 스페이스 바로 브러시 아래 가장 선명한 것). PMax 결과: 스택 전체의 피라미드 합성 — 서로 다른 깊이의 구조가 겹치는 곳에서 깊이 맵은 한쪽을 골라야 하지만 이 레이어는 둘 다 유지합니다. 처음 사용할 때 생성되고 이후 캐시됩니다. 원본 결과: 손대지 않은 합성 — 획이 지나친 곳만 정확히 복원하는 지우개로, 이후 작업을 취소하지 않습니다."
+            "value": "브러시가 무엇에서 페인트할지입니다. 소스 이미지: 정렬된 아무 프레임(↑/↓로 선택, 스페이스 바로 브러시 아래 가장 선명한 것). PMax 결과: 스택 전체의 피라미드 합성 — 서로 다른 깊이의 구조가 겹치는 곳에서 깊이 맵은 한쪽을 골라야 하지만 이 레이어는 둘 다 유지합니다. 처음 사용할 때 생성되고 이후 캐시됩니다. DMap 결과: 손대지 않은 합성 — 획이 지나친 곳만 정확히 복원하는 지우개로, 이후 작업을 취소하지 않습니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Waaruit het penseel schildert. Bronafbeelding: elke uitgelijnde opname (↑/↓ om te kiezen, spatie voor de scherpste onder het penseel). PMax-resultaat: een piramidefusie van de hele stapel — waar structuren op verschillende dieptes overlappen moet de dieptekaart één kant kiezen, en deze laag behoudt beide; bij eerste gebruik berekend, daarna gecachet. Origineel resultaat: de onaangeroerde samenvoeging — een gum die deze precies herstelt waar een streek te ver ging, zonder alles daarna ongedaan te maken."
+            "value": "Waaruit het penseel schildert. Bronafbeelding: elke uitgelijnde opname (↑/↓ om te kiezen, spatie voor de scherpste onder het penseel). PMax-resultaat: een piramidefusie van de hele stapel — waar structuren op verschillende dieptes overlappen moet de dieptekaart één kant kiezen, en deze laag behoudt beide; bij eerste gebruik berekend, daarna gecachet. DMap-resultaat: de onaangeroerde samenvoeging — een gum die deze precies herstelt waar een streek te ver ging, zonder alles daarna ongedaan te maken."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "De onde o pincel pinta. Imagem de Origem: qualquer imagem alinhada (↑/↓ para escolher, espaço para a mais nítida sob o pincel). Resultado PMax: uma fusão piramidal da pilha inteira — onde estruturas em profundidades diferentes se sobrepõem, o mapa de profundidade precisa escolher um lado, e esta camada mantém ambos; gerada no primeiro uso e depois armazenada em cache. Resultado Original: a fusão intocada — um apagador que a restaura exatamente onde uma pincelada passou do ponto, sem desfazer tudo desde então."
+            "value": "De onde o pincel pinta. Imagem de Origem: qualquer imagem alinhada (↑/↓ para escolher, espaço para a mais nítida sob o pincel). Resultado PMax: uma fusão piramidal da pilha inteira — onde estruturas em profundidades diferentes se sobrepõem, o mapa de profundidade precisa escolher um lado, e esta camada mantém ambos; gerada no primeiro uso e depois armazenada em cache. Resultado DMap: a fusão intocada — um apagador que a restaura exatamente onde uma pincelada passou do ponto, sem desfazer tudo desde então."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Из чего рисует кисть. Исходное изображение: любой выровненный кадр (↑/↓ — выбор, пробел — самый резкий под кистью). Результат PMax: пирамидное объединение всего стека — там, где структуры на разной глубине перекрываются, карта глубины вынуждена выбрать одну сторону, а этот слой сохраняет обе; строится при первом использовании, затем кэшируется. Исходный результат: нетронутое объединение — ластик, восстанавливающий его ровно там, где мазок зашёл слишком далеко, не отменяя всё сделанное после."
+            "value": "Из чего рисует кисть. Исходное изображение: любой выровненный кадр (↑/↓ — выбор, пробел — самый резкий под кистью). Результат PMax: пирамидное объединение всего стека — там, где структуры на разной глубине перекрываются, карта глубины вынуждена выбрать одну сторону, а этот слой сохраняет обе; строится при первом использовании, затем кэшируется. Результат DMap: нетронутое объединение — ластик, восстанавливающий его ровно там, где мазок зашёл слишком далеко, не отменяя всё сделанное после."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "画笔的绘制来源。源图像：任意已对齐图像（↑/↓ 选择，空格选画笔下最清晰的）。PMax 结果：整个堆栈的金字塔合成 — 不同深度的结构重叠处，深度图只能取其一，而该图层两者都保留；首次使用时生成，之后缓存。原始结果：未经修饰的合成 — 一块橡皮，只在笔画越界处精确还原，而不撤销之后的所有操作。"
+            "value": "画笔的绘制来源。源图像：任意已对齐图像（↑/↓ 选择，空格选画笔下最清晰的）。PMax 结果：整个堆栈的金字塔合成 — 不同深度的结构重叠处，深度图只能取其一，而该图层两者都保留；首次使用时生成，之后缓存。DMap 结果：未经修饰的合成 — 一块橡皮，只在笔画越界处精确还原，而不撤销之后的所有操作。"
           }
         }
       }

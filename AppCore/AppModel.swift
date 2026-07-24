@@ -277,6 +277,9 @@ public final class AppModel: ObservableObject {
     /// Which fusion algorithm produces the primary result. Persisted like the
     /// set-and-forget switches; the DMap result always carries the depth map,
     /// so PMax-primary stacks still fuse DMap (in the background) for depth.
+    /// The algorithm the NEXT fuse will use. Purely an input setting —
+    /// changing it never touches the currently-displayed result (that follows
+    /// `resultMethod`, set by the fuse that produced it).
     @Published public var fusionMethod: FusionMethod {
         didSet { Self.settings.set(fusionMethod.rawValue, forKey: "fusionMethod") }
     }
@@ -494,10 +497,12 @@ public final class AppModel: ObservableObject {
     /// new fuse awaits it before starting engine work: two concurrent
     /// 45 MP pipelines are a memory-pressure risk, not a feature.
     private var drainingFusion: Task<Void, Never>?
-    /// After the foreground fuse finishes, the *other* algorithm generates
-    /// here (reusing the cached registration) so switching methods is
-    /// instant. Runs sequentially (never overlapping the foreground) and is
-    /// cancelled on a new fuse, a stack switch, or project close.
+
+    /// After the foreground fuse lands, the OTHER algorithm generates here as a
+    /// retouch paint source (reusing the cached registration). It is never the
+    /// displayed result and never provides depth: a DMap secondary keeps only
+    /// its image (its depth map is discarded — depth belongs to a DMap
+    /// *primary*). Cancelled on a new fuse, a stack switch, or project close.
     private var backgroundFusionCancellation: CancellationToken?
     private var backgroundFusionTask: Task<Void, Never>?
 
@@ -739,13 +744,14 @@ public final class AppModel: ObservableObject {
         stack.frames = frames
         stack.included = included
         stack.frameIssues = frameIssues
-        stack.result = result
+        stack.dmapResult = dmapResult
         stack.depthResult = depthResult
         stack.resultDepth = resultDepth
         stack.resultSharpness = resultSharpness
         stack.resultGains = resultGains
         stack.pmaxResult = pmaxResult
         stack.pmaxFusedSettings = pmaxFusedSettings
+        stack.resultMethod = resultMethod
         stack.fuseURLs = fuseURLs
         stack.fusedSettings = fusedSettings
         stack.tone = tone
@@ -775,13 +781,14 @@ public final class AppModel: ObservableObject {
         frames = stack.frames
         included = stack.included
         frameIssues = stack.frameIssues
-        result = stack.result
+        dmapResult = stack.dmapResult
         depthResult = stack.depthResult
         resultDepth = stack.resultDepth
         resultSharpness = stack.resultSharpness
         resultGains = stack.resultGains
         pmaxResult = stack.pmaxResult
         pmaxFusedSettings = stack.pmaxFusedSettings
+        resultMethod = stack.resultMethod
         fuseURLs = stack.fuseURLs
         fusedSettings = stack.fusedSettings
         installingStack = true
@@ -811,7 +818,7 @@ public final class AppModel: ObservableObject {
         inputPreviewError = nil
         inputPixelSize = nil
         viewport.reset()
-        if stack.result != nil {
+        if stack.dmapResult != nil {
             phase = .done
         } else if let message = stack.failureMessage {
             phase = .failed(message)
@@ -842,11 +849,11 @@ public final class AppModel: ObservableObject {
     public func status(of stack: Stack) -> StackStatus {
         if stack.id == selectedStackID {
             if phase.isRunning { return .fusing }
-            if result != nil { return .fused }
+            if dmapResult != nil { return .fused }
             if case .failed(let message) = phase { return .failed(message) }
             return .unfused
         }
-        if stack.result != nil { return .fused }
+        if stack.dmapResult != nil { return .fused }
         if let message = stack.failureMessage { return .failed(message) }
         return .unfused
     }
@@ -863,7 +870,7 @@ public final class AppModel: ObservableObject {
     public func closeSelectedStack() {
         guard !phase.isRunning, let stack = selectedStack else { return }
         stash(into: stack)
-        if stack.result != nil, hasUnsavedWork,
+        if stack.dmapResult != nil, hasUnsavedWork,
            !runConfirmAlert(message: String(format: NSLocalizedString(
                                 "Close the stack “%@”?", comment: ""), stack.name),
                             informative: NSLocalizedString(
@@ -923,7 +930,7 @@ public final class AppModel: ObservableObject {
     }
 
     public var fusedStackCount: Int {
-        stacks.filter { $0.id == selectedStackID ? result != nil : $0.result != nil }.count
+        stacks.filter { $0.id == selectedStackID ? dmapResult != nil : $0.dmapResult != nil }.count
     }
 
     /// True when fusing this stack would produce something its current result
@@ -936,19 +943,22 @@ public final class AppModel: ObservableObject {
         let stackIncluded = isSelected ? included : stack.included
         let stackFuseURLs = isSelected ? fuseURLs : stack.fuseURLs
         let frameSetChanged = stackFrames.filter { stackIncluded.contains($0) } != stackFuseURLs
-        // Which result + snapshot decide staleness depends on the selected
-        // algorithm (each is generated and tracked independently).
+        // The displayed result is whatever the last fuse produced. Selecting a
+        // different algorithm in the picker always needs a fuse — the current
+        // result isn't that algorithm's. (A background pass may have that
+        // algorithm's image cached as a retouch source, but it is NOT the
+        // displayed result, so it doesn't count as fused here.)
+        let displayedMethod = isSelected ? resultMethod : stack.resultMethod
+        if fusionMethod != displayedMethod { return true }
+        if frameSetChanged { return true }
+        // Same algorithm as the result — only settings staleness can trigger it.
         if fusionMethod == .pmax {
-            guard (isSelected ? pmaxResult : stack.pmaxResult) != nil else { return true }
-            if frameSetChanged { return true }
             if let snapshot = isSelected ? pmaxFusedSettings : stack.pmaxFusedSettings,
                snapshot != currentPMaxSettings() {
                 return true
             }
             return false
         }
-        guard (isSelected ? result : stack.result) != nil else { return true }
-        if frameSetChanged { return true }
         if let snapshot = isSelected ? fusedSettings : stack.fusedSettings,
            snapshot != currentFuseSettings() {
             return true  // a new fuse would produce a different result
@@ -990,7 +1000,7 @@ public final class AppModel: ObservableObject {
                 frameURLs: stack.frames,
                 includedURLs: stack.included,
                 transforms: alignmentCache.transforms(for: stack.fuseURLs),
-                result: stack.result,
+                result: stack.dmapResult,
                 depth: stack.resultDepth,
                 sharpness: stack.resultSharpness,
                 working: stack.savedWorking,
@@ -1217,7 +1227,7 @@ public final class AppModel: ObservableObject {
                transforms.count == stack.fuseURLs.count {
                 alignmentCache.store(transforms, for: stack.fuseURLs)
             }
-            stack.result = item.payload.result
+            stack.dmapResult = item.payload.result
             stack.resultDepth = item.payload.depth
             stack.resultSharpness = item.payload.sharpness
             stack.resultGains = item.payload.gains
@@ -1390,17 +1400,30 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    public private(set) var result: ImageBuffer?
+    /// The DMap-algorithm image. A peer of `pmaxResult`, NOT a privileged
+    /// "the result" — `resultMethod`/`primaryResult` decide which is displayed.
+    /// Always generated (foreground when DMap is fused, background otherwise)
+    /// because depth and retouch need it.
+    public private(set) var dmapResult: ImageBuffer?
     private(set) var depthResult: ImageBuffer?
-    /// Alternate-algorithm (PMax) image for the selected stack; `result` is the
-    /// DMap image. The displayed/exported primary is `primaryResult` (chosen by
-    /// `fusionMethod`). In-memory only — regenerated, never saved.
+    /// The PMax-algorithm image, peer of `dmapResult`. In-memory only —
+    /// regenerated, never saved.
     public private(set) var pmaxResult: ImageBuffer?
     private var pmaxFusedSettings: PMaxSettings?
-    /// The image the panes show and export uses: PMax when it's the selected
-    /// method and available, else the DMap result.
+    /// Which algorithm produced the displayed result — set by the fuse that
+    /// made it, NOT by the `fusionMethod` picker (which only selects the next
+    /// fuse). nil until the first fuse.
+    public private(set) var resultMethod: FusionMethod?
+    /// The image the panes show and export uses: whatever the last fuse
+    /// produced (`resultMethod`), independent of the picker. Falls back to the
+    /// other algorithm's image while the background pass for this one is still
+    /// running (it never is, in practice — the foreground fuse fills it first).
     public var primaryResult: ImageBuffer? {
-        fusionMethod == .pmax ? (pmaxResult ?? result) : result
+        switch resultMethod {
+        case .pmax: return pmaxResult ?? dmapResult
+        case .dmap: return dmapResult ?? pmaxResult
+        case nil: return dmapResult ?? pmaxResult
+        }
     }
     private var inputCache: [URL: (image: PlatformImage, pixelSize: CGSize, aligned: Bool)] = [:]
     private var inputCacheOrder: [URL] = []
@@ -1484,9 +1507,9 @@ public final class AppModel: ObservableObject {
     }
     /// The active width/height constraint, orientation applied.
     public var cropAspectRatio: CGFloat? {
-        guard let result else { return nil }
+        guard let dmapResult else { return nil }
         guard let base = cropAspect.baseRatio(
-                canvas: CGSize(width: result.width, height: result.height)),
+                canvas: CGSize(width: dmapResult.width, height: dmapResult.height)),
               base != 1 || !cropPortrait else { return cropAspect == .square ? 1 : nil }
         return cropPortrait ? 1 / base : base
     }
@@ -1512,8 +1535,8 @@ public final class AppModel: ObservableObject {
     /// Shrinks (about center) and recenters a candidate crop until its
     /// four corners — rotated by cropAngle — fit inside the canvas.
     private func fittedToCanvas(_ r: CGRect) -> CGRect {
-        guard let result else { return r }
-        let canvasW = CGFloat(result.width), canvasH = CGFloat(result.height)
+        guard let dmapResult else { return r }
+        let canvasW = CGFloat(dmapResult.width), canvasH = CGFloat(dmapResult.height)
         let rad = CGFloat(cropAngle) * .pi / 180
         let cosA = abs(cos(rad)), sinA = abs(sin(rad))
         var w = r.width, h = r.height
@@ -1532,7 +1555,7 @@ public final class AppModel: ObservableObject {
     /// Re-shapes the current rect to the locked ratio about its center,
     /// preserving area, clamped to the canvas.
     private func reshapeCropToAspect() {
-        guard cropMode, result != nil, let r = cropRect,
+        guard cropMode, dmapResult != nil, let r = cropRect,
               let ratio = cropAspectRatio else { return }
         // Preserve area at the new ratio, then shrink/recenter to fit
         // (including under the current rotation).
@@ -1550,8 +1573,8 @@ public final class AppModel: ObservableObject {
     /// it too — strokes still land in full-image coordinates; only the
     /// presentation is cropped.
     public var displayCrop: CGRect? {
-        guard !cropMode, !phase.isRunning, let result else { return nil }
-        return Self.validCrop(cropRect, width: result.width, height: result.height)
+        guard !cropMode, !phase.isRunning, let dmapResult else { return nil }
+        return Self.validCrop(cropRect, width: dmapResult.width, height: dmapResult.height)
     }
 
     // MARK: - Undo history (non-stroke edits)
@@ -1657,10 +1680,10 @@ public final class AppModel: ObservableObject {
         guard canCrop, !cropMode else { return }
         cropBackup = cropRect
         cropAngleBackup = cropAngle
-        if cropRect == nil, let result {
+        if cropRect == nil, let dmapResult {
             // Fresh crops start at the full canvas (accepting it untouched
             // still means "no crop").
-            cropRect = CGRect(x: 0, y: 0, width: result.width, height: result.height)
+            cropRect = CGRect(x: 0, y: 0, width: dmapResult.width, height: dmapResult.height)
         }
         cropMode = true
         reshapeCropToAspect()
@@ -1670,10 +1693,10 @@ public final class AppModel: ObservableObject {
     public func acceptCrop() {
         guard cropMode else { return }
         // Dragging the rect out to the whole canvas means "no crop".
-        if cropAngle == 0, let result,
-           let r = Self.validCrop(cropRect, width: result.width,
-                                  height: result.height),
-           r == CGRect(x: 0, y: 0, width: result.width, height: result.height) {
+        if cropAngle == 0, let dmapResult,
+           let r = Self.validCrop(cropRect, width: dmapResult.width,
+                                  height: dmapResult.height),
+           r == CGRect(x: 0, y: 0, width: dmapResult.width, height: dmapResult.height) {
             cropRect = nil
         }
         cropMode = false
@@ -1984,13 +2007,14 @@ public final class AppModel: ObservableObject {
         included = []
         selection = []
         frameIssues = [:]
-        result = nil
+        dmapResult = nil
         depthResult = nil
         resultDepth = []
         resultSharpness = nil
         resultGains = nil
         pmaxResult = nil
         pmaxFusedSettings = nil
+        resultMethod = nil
         fuseURLs = []
         fusedSettings = nil
         installingStack = true
@@ -2103,7 +2127,7 @@ public final class AppModel: ObservableObject {
         var lines = [String]()
         var count = 0
         for stack in stacks {
-            guard let uncropped = stack.savedWorking ?? stack.result else { continue }
+            guard let uncropped = stack.savedWorking ?? stack.dmapResult else { continue }
             let image = Self.cropped(uncropped, to: stack.cropRect,
                                      angle: stack.cropAngle)
             let dest = directory.appendingPathComponent("\(stack.name).\(ext)")
@@ -2220,7 +2244,7 @@ public final class AppModel: ObservableObject {
     /// Rocking animation needs a fused result AND its depth plane (DMap
     /// fills it; a project restored without depth can't animate).
     public var canAnimate: Bool {
-        !phase.isRunning && result != nil && !resultDepth.isEmpty
+        !phase.isRunning && dmapResult != nil && !resultDepth.isEmpty
     }
 
     func exportAnimation() {
@@ -2243,7 +2267,7 @@ public final class AppModel: ObservableObject {
     /// Renders off-main; returns whether the file was written.
     public func writeAnimation(to url: URL) async -> Bool {
         mergeRetouchDepth()  // animate what the user retouched, depth included
-        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
+        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
         guard let uncropped = baseImage, !resultDepth.isEmpty else { return false }
         let image = Self.cropped(uncropped, to: cropRect, angle: cropAngle)
         let depth = Self.croppedDepth(resultDepth, width: uncropped.width,
@@ -2273,8 +2297,11 @@ public final class AppModel: ObservableObject {
     /// preview bitmap resolution, so zoom/pan stays in sync with the input pane.
     var outputNominalSize: CGSize? {
         if phase.isRunning { return progressiveNominalSize }
-        guard let result else { return nil }
-        return CGSize(width: result.width, height: result.height)
+        // The displayed result is the last-fused algorithm's — under PMax the
+        // DMap `result` is still nil until the background pass lands, so key
+        // off `primaryResult` or the pane has no canvas and shows empty.
+        guard let primaryResult else { return nil }
+        return CGSize(width: primaryResult.width, height: primaryResult.height)
     }
 
     public var inputNominalSize: CGSize? { inputPixelSize }
@@ -2611,8 +2638,12 @@ public final class AppModel: ObservableObject {
                         // the background DMap pass kicked below.
                         self.pmaxResult = output.image
                         self.pmaxFusedSettings = pmaxSettingsInUse
+                        // PMax has no depth yet; if the pane was in Depth mode
+                        // there'd be nothing to show until the background DMap
+                        // pass lands — show the image instead of an empty pane.
+                        if self.depthPreview == nil { self.outputMode = .result }
                     } else {
-                        self.result = output.image
+                        self.dmapResult = output.image
                         self.resultDepth = output.depth
                         self.resultSharpness = output.sharpness
                         self.resultGains = output.gains
@@ -2622,6 +2653,7 @@ public final class AppModel: ObservableObject {
                         self.depthResult = output.depthMap
                         if let depthCG { self.depthPreview = depthCG }
                     }
+                    self.resultMethod = method  // the fused algorithm IS the result
                     self.outputPreview = resultCG
                     self.progressive = nil
                     self.processingSource = nil
@@ -2634,22 +2666,18 @@ public final class AppModel: ObservableObject {
                         self.inputPreviewURL = nil
                         self.showInputFrame(url)
                     }
-                    // DMap primary has depth now → warm the retouch session so
-                    // Start Retouching opens with its source decoded. PMax
-                    // primary waits for the background DMap pass.
-                    if !self.batchMode && method == .dmap { self.prepareRetouch() }
-                    // Generate the other algorithm in the background so
-                    // switching methods is instant (reuses the cached
-                    // registration; batches stay single-algorithm).
+                    // Retouch is available on the primary result immediately —
+                    // depth-optional, so a PMax primary never waits for depth.
+                    if !self.batchMode { self.prepareRetouch() }
+                    // Background-generate the OTHER algorithm as a retouch paint
+                    // source (image only; a DMap secondary's depth map is
+                    // discarded — depth belongs to a DMap *primary*). It is
+                    // never the displayed result. Batches stay single-algorithm.
                     if !self.batchMode {
-                        // Fuse the same (possibly reduced) frame list the
-                        // foreground did — the alignment cache is keyed on it.
                         self.startBackgroundFusion(other: method == .dmap ? .pmax : .dmap,
                                                    generation: generation,
                                                    urls: result.fusedURLs,
-                                                   config: config,
-                                                   dmapSettings: settingsInUse,
-                                                   pmaxSettings: pmaxSettingsInUse)
+                                                   config: config)
                     }
                 }
             } catch {
@@ -2678,13 +2706,13 @@ public final class AppModel: ObservableObject {
         drainingFusion = task
     }
 
-    /// Runs the non-selected algorithm after the foreground fuse, reusing the
-    /// cached registration (no re-decode/register) so switching methods later
-    /// is instant. Sequential — it starts only once the foreground result has
-    /// landed, so the two 45 MP pipelines never overlap.
+    /// Generates the OTHER algorithm after the foreground fuse, reusing the
+    /// cached registration (no re-decode/register), purely as a retouch paint
+    /// source. Image only: a DMap secondary's depth map is dropped (depth is a
+    /// DMap-primary feature), and neither branch touches the displayed result.
+    /// Sequential — starts only once the foreground result has landed.
     private func startBackgroundFusion(other: FusionMethod, generation: Int,
-                                       urls: [URL], config: StackPipeline.Configuration,
-                                       dmapSettings: FuseSettings, pmaxSettings: PMaxSettings) {
+                                       urls: [URL], config: StackPipeline.Configuration) {
         var bg = config
         bg.method = other
         bg.badFrameHandler = nil   // registration is cached; no bad-frame prompts
@@ -2695,10 +2723,23 @@ public final class AppModel: ObservableObject {
             do {
                 let result = try StackPipeline.fuseResult(urls: urls, configuration: bg,
                                                           alignmentCache: cache, log: logFusion,
-                                                          cancellation: cancellation)
-                let output = result.output
-                let img = try Preview.image(from: output.image)
-                let depthImg = other == .dmap ? try? Preview.image(from: output.depthMap) : nil
+                                                          progress: { update in
+                    // Feed the forming preview to the retouch source pane if the
+                    // user is waiting on this algorithm (same appearance as the
+                    // result panel during a fuse). Converted off-main.
+                    let preview = update.preview.flatMap { try? Preview.image(from: $0) }
+                    let stage = update.stage, rawFraction = update.fraction
+                    // Only a DMap secondary's pre-render stages are depth maps.
+                    let isData = other == .dmap && stage != .render
+                    Task { @MainActor [weak self] in
+                        guard let self, generation == self.fusionGeneration,
+                              !cancellation.isCancelled else { return }
+                        self.retouch?.otherSourceProgress(
+                            fraction: Self.overallProgress(stage, rawFraction),
+                            preview: preview, isData: isData)
+                    }
+                }, cancellation: cancellation)
+                let image = result.output.image
                 await MainActor.run { [weak self] in
                     // Same ownership gate as the foreground: a new fuse, a stack
                     // switch, or project close bumps the generation / cancels.
@@ -2706,23 +2747,16 @@ public final class AppModel: ObservableObject {
                           !cancellation.isCancelled else { return }
                     self.backgroundFusionCancellation = nil
                     self.backgroundFusionTask = nil
+                    // Either way this IS the non-base ("other") algorithm — the
+                    // foreground fused the primary — so hand it to a live retouch
+                    // session as its alternate brush source, no rebuild.
                     if other == .pmax {
-                        self.pmaxResult = output.image
-                        self.pmaxFusedSettings = pmaxSettings
-                        if self.fusionMethod == .pmax { self.outputPreview = img }
+                        self.pmaxResult = image
                     } else {
-                        self.result = output.image
-                        self.resultDepth = output.depth
-                        self.resultSharpness = output.sharpness
-                        self.resultGains = output.gains
-                        self.fusedSettings = dmapSettings
-                        self.depthResult = output.depthMap
-                        if let depthImg { self.depthPreview = depthImg }
-                        if self.fusionMethod == .dmap { self.outputPreview = img }
-                        // Depth is available now — warm retouch for the
-                        // PMax-primary case (skip if a session already exists).
-                        if !self.batchMode && self.retouch == nil { self.prepareRetouch() }
+                        // DMap secondary: image only. Its depth is not retained.
+                        self.dmapResult = image
                     }
+                    self.retouch?.provideOtherResult(image)
                 }
             } catch {
                 // Background failure is non-fatal: the primary result stands.
@@ -2817,7 +2851,7 @@ public final class AppModel: ObservableObject {
     // MARK: - Noise floor preview
 
     public func beginNoiseFloorPreview() {
-        guard phase == .done, let sharpness = resultSharpness, let result,
+        guard phase == .done, let sharpness = resultSharpness, let dmapResult,
               !sharpness.planes.isEmpty else { return }
         noiseFloorPreviewActive = true
         if noiseFloorPreviewData != nil {
@@ -2829,7 +2863,7 @@ public final class AppModel: ObservableObject {
         let epoch = noiseFloorPreviewDataEpoch
         let sw = sharpness.width, sh = sharpness.height
         let planes = sharpness.planes
-        let resultImage = result
+        let resultImage = dmapResult
         // Off-main: the one-time build scans every retained plane and reduces
         // them — seconds of work on a deep stack, and grabbing the slider
         // must not beachball. Ticks arriving before it lands are dropped;
@@ -2959,8 +2993,15 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Retouching
 
+    /// Retouch edits the fused result (`primaryResult`). A DMap primary adds
+    /// depth-plane co-painting; a PMax primary has no depth and retouches
+    /// depth-lessly (frames + eraser) — either way it needs no wait.
+    public var canStartRetouch: Bool {
+        primaryResult != nil && phase == .done && !cropMode
+    }
+
     public func enterRetouch() {
-        guard result != nil, phase == .done, !resultDepth.isEmpty else { return }
+        guard canStartRetouch else { return }
         prepareRetouch()
         retouchMode = true
         // Sync the list to the session's current source immediately.
@@ -2975,7 +3016,10 @@ public final class AppModel: ObservableObject {
     /// hand instead of a "Loading source…" wait. Idempotent; both
     /// shells share it (called from fuse completion and enterRetouch).
     public func prepareRetouch() {
-        guard let result, phase == .done, !resultDepth.isEmpty else { return }
+        // Edit the fused result — DMap or PMax, whichever was generated. A DMap
+        // primary supplies its depth plane; a PMax primary has none (retouch
+        // stands in a flat plane and never folds it back).
+        guard let base = primaryResult, phase == .done else { return }
         if retouch == nil {
             // Rebuild the exact source configuration the fusion used (same
             // common-coverage crop) so aligned slices match the result.
@@ -2984,16 +3028,22 @@ public final class AppModel: ObservableObject {
             // Same exposure gains too, so stamps don't reintroduce flicker.
             source.gains = resultGains
             if let w = source.outputWidth, let h = source.outputHeight,
-               w != result.width || h != result.height {
+               w != base.width || h != base.height {
                 // Should be impossible (same deterministic crop as the fusion);
                 // if it ever happens, say so instead of misaligning retouch.
                 FileHandle.standardError.write(Data(
-                    "retouch: source canvas \(w)x\(h) != result \(result.width)x\(result.height)\n".utf8))
+                    "retouch: source canvas \(w)x\(h) != result \(base.width)x\(base.height)\n".utf8))
             }
-            retouch = RetouchSession(result: result, depth: resultDepth,
+            retouch = RetouchSession(result: base, method: resultMethod ?? .dmap,
+                                     depth: resultDepth,
                                      sharpness: resultSharpness, source: source,
                                      restoredWorking: savedWorking,
                                      initialSourceIndex: savedSourceIndex)
+            // Hand over the OTHER algorithm's image (the background pass) if it
+            // already exists, so its brush source is instant — no re-fuse.
+            if let other = resultMethod == .pmax ? dmapResult : pmaxResult {
+                retouch?.provideOtherResult(other)
+            }
             retouch?.onEdited = { [weak self] in self?.hasUnsavedWork = true }
             retouch?.onSourceChanged = { [weak self] index in
                 guard let self, let session = self.retouch,
@@ -3020,7 +3070,9 @@ public final class AppModel: ObservableObject {
     /// covers saves and stack switches), retouch exit, and the depth /
     /// animation output paths.
     private func mergeRetouchDepth() {
-        guard let session = retouch, session.depthDirty else { return }
+        // Depth belongs to a DMap primary. A PMax primary retouches over a flat
+        // stand-in plane that must never become the result's depth.
+        guard resultMethod == .dmap, let session = retouch, session.depthDirty else { return }
         session.markDepthMerged()
         resultDepth = session.workingDepth
         let image = DMapFusion.depthImage(from: resultDepth,
@@ -3034,8 +3086,8 @@ public final class AppModel: ObservableObject {
     }
 
     public func resetRetouch() {
-        guard let result else { return }
-        retouch?.resetAll(to: result)
+        guard let dmapResult else { return }
+        retouch?.resetAll(to: dmapResult)
     }
 
     // MARK: - Export
@@ -3046,7 +3098,7 @@ public final class AppModel: ObservableObject {
 
     private func runExportPanel() {
         // Retouch edits, once made, are the result.
-        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
+        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
         guard (outputMode == .depth ? depthResult : baseImage) != nil else { return }
         // Name after the stack's folder — stable and meaningful, unlike
         // whichever frame happens to be first or selected.
@@ -3166,7 +3218,7 @@ public final class AppModel: ObservableObject {
     @discardableResult
     public func writeExport(to url: URL) -> Bool {
         if outputMode == .depth { mergeRetouchDepth() }
-        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? result)
+        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
         guard let raw = outputMode == .depth ? depthResult : baseImage else { return false }
         let image = Self.cropped(raw, to: cropRect, angle: cropAngle)
         do {
