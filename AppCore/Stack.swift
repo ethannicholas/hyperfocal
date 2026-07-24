@@ -43,6 +43,17 @@ struct FuseSettings: Equatable, Codable {
     }
 }
 
+/// The PMax-specific parameters a PMax result was produced with — staleness
+/// tracking for the PMax pass, the analogue of `FuseSettings` for DMap. Kept
+/// in memory only: the PMax result isn't saved in projects (it's regenerated),
+/// so this needn't be Codable.
+struct PMaxSettings: Equatable {
+    var align: Bool
+    var useGPU: Bool
+    var coarseLevels: Int
+    var threshold: Double
+}
+
 /// One focus stack in a project: its frames, per-frame inclusion, and — once
 /// fused — the complete output state including retouch edits.
 ///
@@ -61,12 +72,16 @@ public final class Stack: Identifiable {
     /// Does not touch the per-frame checkboxes.
     public var enabled = true
 
-    // Fusion output; `result == nil` means unfused.
+    // Fusion output; `result == nil` means unfused. `result`/depth are the
+    // DMap pass (depth always comes from DMap); `pmaxResult` is the alternate
+    // PMax image (in-memory only — regenerated, not saved).
     var result: ImageBuffer?
     var depthResult: ImageBuffer?
     var resultDepth: [Float] = []
     var resultSharpness: FrameSharpness?
     var resultGains: [SIMD3<Float>]?
+    var pmaxResult: ImageBuffer?
+    var pmaxFusedSettings: PMaxSettings?
     // Load-time frame-order sanity warning (capture/name order disagreement
     // or missing capture times) — see AppModel.orderWarning. Persisted with
     // the project so the badge survives reopen.

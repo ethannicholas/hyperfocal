@@ -181,6 +181,14 @@ public final class RetouchSession: ObservableObject {
         selectSource(lastFrameSourceIndex)
     }
 
+    deinit {
+        // A PMax build now survives navigation (it caches in the background),
+        // so a discarded session — e.g. closing the project — must still stop
+        // it, or a closed project keeps a fusion running. The token is
+        // thread-safe, so firing it from deinit is safe on any thread.
+        pmaxBuildCancel?.cancel()
+    }
+
     // Tile-based per-stroke undo. Snapshots carry the depth plane alongside
     // the pixels — strokes co-paint depth, so undo must restore both.
     private struct TileSnapshot {
@@ -345,7 +353,8 @@ public final class RetouchSession: ObservableObject {
             return
         }
         lastFrameSourceIndex = clamped
-        pmaxBuildCancel?.cancel()
+        // Navigating away no longer cancels a building PMax layer — it keeps
+        // building in the background and caches, so returning to it is instant.
         let changed = clamped != sourceIndex
         sourceIndex = clamped
         if changed { onSourceChanged?(clamped) }
@@ -354,7 +363,8 @@ public final class RetouchSession: ObservableObject {
         // load/build still pass the staleness guards below (a building PMax
         // layer kept stomping a cache-hit frame's pane with its low-res
         // progress previews, then nulled the paint source on cancellation:
-        // blurry source pane over a sharp brush).
+        // blurry source pane over a sharp brush). The generation bump is what
+        // keeps the still-running build from touching this pane.
         sourceLoadGeneration += 1
         if let cached = sourceCache[clamped] {
             sourceFloat = cached.buffer
@@ -497,7 +507,8 @@ public final class RetouchSession: ObservableObject {
     /// The eraser layer is instantly paintable (the pristine result is already
     /// in memory); only its pane preview needs a one-time 8-bit render.
     private func selectResultLayer() {
-        pmaxBuildCancel?.cancel()
+        // As with frame navigation, a building PMax layer keeps going in the
+        // background (the generation bump supersedes its pane writes).
         let changed = sourceIndex != resultIndex
         sourceIndex = resultIndex
         if changed { onSourceChanged?(resultIndex) }

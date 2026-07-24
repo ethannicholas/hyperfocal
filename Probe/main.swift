@@ -588,12 +588,22 @@ Task { @MainActor in
     guard !model.canFuse else {
         print("probe: FUSE ENABLED WITH NOTHING CHANGED"); exit(1)
     }
-    let sigmaBefore = model.sharpnessSigma
-    model.sharpnessSigma = sigmaBefore + 0.5
+    // Tweak a setting the CURRENT algorithm's result depends on (staleness is
+    // per-method now: the Fuse button tracks the selected algorithm's result).
+    let revertSetting: () -> Void
+    if model.fusionMethod == .pmax {
+        let before = model.pmaxFocusThreshold
+        model.pmaxFocusThreshold = before + 0.01
+        revertSetting = { model.pmaxFocusThreshold = before }
+    } else {
+        let before = model.sharpnessSigma
+        model.sharpnessSigma = before + 0.5
+        revertSetting = { model.sharpnessSigma = before }
+    }
     guard model.canFuse else {
         print("probe: SETTINGS CHANGE DID NOT RE-ENABLE FUSE"); exit(1)
     }
-    model.sharpnessSigma = sigmaBefore
+    revertSetting()
     guard !model.canFuse else {
         print("probe: SETTINGS REVERT DID NOT DISABLE FUSE"); exit(1)
     }

@@ -266,8 +266,19 @@ public final class AppModel: ObservableObject {
     }
     @Published public var medianRadius = defaultMedianRadius
     @Published public var blendRadius = defaultBlendRadius
+    // PMax debloom knobs (creative, per-project, not persisted — like the DMap
+    // sliders above). `coarseLevels == 0` disables the focus gate → standard
+    // PMax, so the one slider is both the off-switch and the strength dial.
+    @Published public var pmaxCoarseLevels = defaultPMaxCoarseLevels
+    @Published public var pmaxFocusThreshold = defaultPMaxFocusThreshold
     @Published public var normalizeExposure: Bool {
         didSet { Self.settings.set(normalizeExposure, forKey: "normalizeExposure") }
+    }
+    /// Which fusion algorithm produces the primary result. Persisted like the
+    /// set-and-forget switches; the DMap result always carries the depth map,
+    /// so PMax-primary stacks still fuse DMap (in the background) for depth.
+    @Published public var fusionMethod: FusionMethod {
+        didSet { Self.settings.set(fusionMethod.rawValue, forKey: "fusionMethod") }
     }
     /// Order each stack's frames by EXIF capture time at load (filename
     /// order breaks when the camera's file counter rolls over mid-stack).
@@ -483,6 +494,20 @@ public final class AppModel: ObservableObject {
     /// new fuse awaits it before starting engine work: two concurrent
     /// 45 MP pipelines are a memory-pressure risk, not a feature.
     private var drainingFusion: Task<Void, Never>?
+    /// After the foreground fuse finishes, the *other* algorithm generates
+    /// here (reusing the cached registration) so switching methods is
+    /// instant. Runs sequentially (never overlapping the foreground) and is
+    /// cancelled on a new fuse, a stack switch, or project close.
+    private var backgroundFusionCancellation: CancellationToken?
+    private var backgroundFusionTask: Task<Void, Never>?
+
+    /// Stops the background secondary-algorithm generation, if any.
+    private func cancelBackgroundFusion() {
+        backgroundFusionCancellation?.cancel()
+        backgroundFusionCancellation = nil
+        backgroundFusionTask?.cancel()
+        backgroundFusionTask = nil
+    }
 
     // Noise-floor preview: while the slider is dragged, the output pane shows
     // the depth map the new floor would produce — the *actual* regularizer
@@ -568,6 +593,8 @@ public final class AppModel: ObservableObject {
             d.removeObject(forKey: legacy)  // sliders no longer persist; slabbing removed
         }
         normalizeExposure = d.object(forKey: "normalizeExposure") as? Bool ?? true
+        fusionMethod = d.string(forKey: "fusionMethod")
+            .flatMap { FusionMethod(rawValue: $0) } ?? .dmap
         orderByCaptureTime = d.object(forKey: "orderByCaptureTime") as? Bool ?? true
         collapsedSections = Set((d.stringArray(forKey: "collapsedSections") ?? [])
             .compactMap(SidebarSection.init))
@@ -717,6 +744,8 @@ public final class AppModel: ObservableObject {
         stack.resultDepth = resultDepth
         stack.resultSharpness = resultSharpness
         stack.resultGains = resultGains
+        stack.pmaxResult = pmaxResult
+        stack.pmaxFusedSettings = pmaxFusedSettings
         stack.fuseURLs = fuseURLs
         stack.fusedSettings = fusedSettings
         stack.tone = tone
@@ -751,6 +780,8 @@ public final class AppModel: ObservableObject {
         resultDepth = stack.resultDepth
         resultSharpness = stack.resultSharpness
         resultGains = stack.resultGains
+        pmaxResult = stack.pmaxResult
+        pmaxFusedSettings = stack.pmaxFusedSettings
         fuseURLs = stack.fuseURLs
         fusedSettings = stack.fusedSettings
         installingStack = true
@@ -798,6 +829,9 @@ public final class AppModel: ObservableObject {
     public func selectStack(_ id: UUID) {
         guard id != selectedStackID, !phase.isRunning,
               let target = stacks.first(where: { $0.id == id }) else { return }
+        // A background secondary gen writes into the selected-stack mirror —
+        // it must not land after we've switched stacks.
+        cancelBackgroundFusion()
         if let current = selectedStack { stash(into: current) }
         selectedStackID = id
         install(from: target)
@@ -898,12 +932,23 @@ public final class AppModel: ObservableObject {
     /// saved before snapshots existed only track frame-set changes).
     func needsRefuse(_ stack: Stack) -> Bool {
         let isSelected = stack.id == selectedStackID
-        let stackResult = isSelected ? result : stack.result
-        guard stackResult != nil else { return true }
         let stackFrames = isSelected ? frames : stack.frames
         let stackIncluded = isSelected ? included : stack.included
         let stackFuseURLs = isSelected ? fuseURLs : stack.fuseURLs
-        if stackFrames.filter({ stackIncluded.contains($0) }) != stackFuseURLs { return true }
+        let frameSetChanged = stackFrames.filter { stackIncluded.contains($0) } != stackFuseURLs
+        // Which result + snapshot decide staleness depends on the selected
+        // algorithm (each is generated and tracked independently).
+        if fusionMethod == .pmax {
+            guard (isSelected ? pmaxResult : stack.pmaxResult) != nil else { return true }
+            if frameSetChanged { return true }
+            if let snapshot = isSelected ? pmaxFusedSettings : stack.pmaxFusedSettings,
+               snapshot != currentPMaxSettings() {
+                return true
+            }
+            return false
+        }
+        guard (isSelected ? result : stack.result) != nil else { return true }
+        if frameSetChanged { return true }
         if let snapshot = isSelected ? fusedSettings : stack.fusedSettings,
            snapshot != currentFuseSettings() {
             return true  // a new fuse would produce a different result
@@ -924,6 +969,11 @@ public final class AppModel: ObservableObject {
                      medianRadius: medianRadius,
                      blendRadius: blendRadius,
                      normalizeExposure: normalizeExposure)
+    }
+
+    private func currentPMaxSettings() -> PMaxSettings {
+        PMaxSettings(align: alignFrames, useGPU: useGPU,
+                     coarseLevels: pmaxCoarseLevels, threshold: pmaxFocusThreshold)
     }
 
     // MARK: - Session persistence
@@ -1342,6 +1392,16 @@ public final class AppModel: ObservableObject {
 
     public private(set) var result: ImageBuffer?
     private(set) var depthResult: ImageBuffer?
+    /// Alternate-algorithm (PMax) image for the selected stack; `result` is the
+    /// DMap image. The displayed/exported primary is `primaryResult` (chosen by
+    /// `fusionMethod`). In-memory only — regenerated, never saved.
+    public private(set) var pmaxResult: ImageBuffer?
+    private var pmaxFusedSettings: PMaxSettings?
+    /// The image the panes show and export uses: PMax when it's the selected
+    /// method and available, else the DMap result.
+    public var primaryResult: ImageBuffer? {
+        fusionMethod == .pmax ? (pmaxResult ?? result) : result
+    }
     private var inputCache: [URL: (image: PlatformImage, pixelSize: CGSize, aligned: Bool)] = [:]
     private var inputCacheOrder: [URL] = []
     private var inputDecodeTask: Task<Void, Never>?
@@ -1356,12 +1416,16 @@ public final class AppModel: ObservableObject {
     static let defaultNoiseFloor = 0.05
     static let defaultMedianRadius = 20.0
     static let defaultBlendRadius = 1.0
+    static let defaultPMaxCoarseLevels = 5
+    static let defaultPMaxFocusThreshold = 0.07
 
     public var fusionSettingsAreDefault: Bool {
         sharpnessSigma == Self.defaultSharpnessSigma
             && noiseFloor == Self.defaultNoiseFloor
             && medianRadius == Self.defaultMedianRadius
             && blendRadius == Self.defaultBlendRadius
+            && pmaxCoarseLevels == Self.defaultPMaxCoarseLevels
+            && pmaxFocusThreshold == Self.defaultPMaxFocusThreshold
     }
 
     public func resetFusionSettings() {
@@ -1369,6 +1433,8 @@ public final class AppModel: ObservableObject {
         noiseFloor = Self.defaultNoiseFloor
         medianRadius = Self.defaultMedianRadius
         blendRadius = Self.defaultBlendRadius
+        pmaxCoarseLevels = Self.defaultPMaxCoarseLevels
+        pmaxFocusThreshold = Self.defaultPMaxFocusThreshold
     }
 
     public var canFuse: Bool {
@@ -1376,14 +1442,14 @@ public final class AppModel: ObservableObject {
             && (selectedStack?.enabled ?? true)
             && (selectedStack.map { needsRefuse($0) } ?? true)
     }
-    var canExport: Bool { result != nil && !phase.isRunning }
+    var canExport: Bool { primaryResult != nil && !phase.isRunning }
 
     /// Crop-rectangle editing mode: the panes show the full canvas with the
     /// CropOverlay on the output pane; everywhere else they show only the
     /// crop.
     @Published public var cropMode = false
 
-    public var canCrop: Bool { result != nil && phase == .done && !retouchMode }
+    public var canCrop: Bool { primaryResult != nil && phase == .done && !retouchMode }
 
     /// Fixed aspect-ratio constraint while editing the crop.
     public enum CropAspect: String, CaseIterable {
@@ -1898,6 +1964,9 @@ public final class AppModel: ObservableObject {
 
     private func resetForNewProject() {
         projectGeneration += 1
+        // Closing/replacing a project must stop any in-flight background
+        // secondary generation (it has no foreground phase to gate it).
+        cancelBackgroundFusion()
         // Cached alignments must die with the project: a re-opened stack
         // should register fresh, not silently reuse transforms from a
         // previous session's load. (Project restore re-seeds the cache from
@@ -1920,6 +1989,8 @@ public final class AppModel: ObservableObject {
         resultDepth = []
         resultSharpness = nil
         resultGains = nil
+        pmaxResult = nil
+        pmaxFusedSettings = nil
         fuseURLs = []
         fusedSettings = nil
         installingStack = true
@@ -2401,9 +2472,16 @@ public final class AppModel: ObservableObject {
         // actually fused with — not whatever the UI shows when it finishes
         // (that marked the result "current" at settings it never used).
         let settingsInUse = currentFuseSettings()
+        let pmaxSettingsInUse = currentPMaxSettings()
+        let method = fusionMethod
         var config = StackPipeline.Configuration()
         config.align = alignFrames
         config.preferGPU = useGPU
+        config.method = method
+        config.pmaxFocusGate = pmaxCoarseLevels > 0
+            ? PyramidFusion.FocusGate(coarseLevels: pmaxCoarseLevels,
+                                      threshold: Float(pmaxFocusThreshold))
+            : nil
         config.fusion = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
                                            blendRadius: Float(blendRadius),
                                            noiseFloor: Float(noiseFloor),
@@ -2419,6 +2497,7 @@ public final class AppModel: ObservableObject {
         let dialogs = self.dialogs
         let cancellation = CancellationToken()
         fusionCancellation = cancellation
+        cancelBackgroundFusion()  // a stale secondary gen must not outlive this fuse
         fusionGeneration += 1
         let generation = fusionGeneration
         let prompt = badFramePrompt ?? (batchMode ? { _ in true } : { lines in
@@ -2510,7 +2589,8 @@ public final class AppModel: ObservableObject {
                 }, cancellation: cancellation)
                 let output = result.output
                 let resultCG = try Preview.image(from: output.image)
-                let depthCG = try Preview.image(from: output.depthMap)
+                // PMax has no depth map; only render its preview for DMap.
+                let depthCG = method == .dmap ? try Preview.image(from: output.depthMap) : nil
                 await MainActor.run { [weak self] in
                     // Generation gate: if the user cancelled (and possibly
                     // started something new), this result belongs to a
@@ -2526,16 +2606,23 @@ public final class AppModel: ObservableObject {
                         result.issues.map { (urls[$0.index], $0.summary) })
                     self.included.subtract(Set(urls).subtracting(result.fusedURLs))
                     self.fuseURLs = result.fusedURLs
-                    self.result = output.image
-                    self.resultDepth = output.depth
-                    self.resultSharpness = output.sharpness
-                    self.resultGains = output.gains
-                    // What this result was fused with (staleness tracking
-                    // for the Fuse buttons) — the start-of-fuse snapshot.
-                    self.fusedSettings = settingsInUse
-                    self.depthResult = output.depthMap
+                    if method == .pmax {
+                        // PMax primary: image only. Depth + retouch come from
+                        // the background DMap pass kicked below.
+                        self.pmaxResult = output.image
+                        self.pmaxFusedSettings = pmaxSettingsInUse
+                    } else {
+                        self.result = output.image
+                        self.resultDepth = output.depth
+                        self.resultSharpness = output.sharpness
+                        self.resultGains = output.gains
+                        // What this result was fused with (staleness tracking
+                        // for the Fuse buttons) — the start-of-fuse snapshot.
+                        self.fusedSettings = settingsInUse
+                        self.depthResult = output.depthMap
+                        if let depthCG { self.depthPreview = depthCG }
+                    }
                     self.outputPreview = resultCG
-                    self.depthPreview = depthCG
                     self.progressive = nil
                     self.processingSource = nil
                     self.processingSourceLabel = nil
@@ -2547,9 +2634,23 @@ public final class AppModel: ObservableObject {
                         self.inputPreviewURL = nil
                         self.showInputFrame(url)
                     }
-                    // Warm the retouch session so Start Retouching opens
-                    // with its source already decoded (both shells).
-                    if !self.batchMode { self.prepareRetouch() }
+                    // DMap primary has depth now → warm the retouch session so
+                    // Start Retouching opens with its source decoded. PMax
+                    // primary waits for the background DMap pass.
+                    if !self.batchMode && method == .dmap { self.prepareRetouch() }
+                    // Generate the other algorithm in the background so
+                    // switching methods is instant (reuses the cached
+                    // registration; batches stay single-algorithm).
+                    if !self.batchMode {
+                        // Fuse the same (possibly reduced) frame list the
+                        // foreground did — the alignment cache is keyed on it.
+                        self.startBackgroundFusion(other: method == .dmap ? .pmax : .dmap,
+                                                   generation: generation,
+                                                   urls: result.fusedURLs,
+                                                   config: config,
+                                                   dmapSettings: settingsInUse,
+                                                   pmaxSettings: pmaxSettingsInUse)
+                    }
                 }
             } catch {
                 await MainActor.run { [weak self] in
@@ -2575,6 +2676,58 @@ public final class AppModel: ObservableObject {
             }
         }
         drainingFusion = task
+    }
+
+    /// Runs the non-selected algorithm after the foreground fuse, reusing the
+    /// cached registration (no re-decode/register) so switching methods later
+    /// is instant. Sequential — it starts only once the foreground result has
+    /// landed, so the two 45 MP pipelines never overlap.
+    private func startBackgroundFusion(other: FusionMethod, generation: Int,
+                                       urls: [URL], config: StackPipeline.Configuration,
+                                       dmapSettings: FuseSettings, pmaxSettings: PMaxSettings) {
+        var bg = config
+        bg.method = other
+        bg.badFrameHandler = nil   // registration is cached; no bad-frame prompts
+        let cancellation = CancellationToken()
+        backgroundFusionCancellation = cancellation
+        let cache = alignmentCache
+        backgroundFusionTask = Task.detached(priority: .utility) { [weak self] in
+            do {
+                let result = try StackPipeline.fuseResult(urls: urls, configuration: bg,
+                                                          alignmentCache: cache, log: logFusion,
+                                                          cancellation: cancellation)
+                let output = result.output
+                let img = try Preview.image(from: output.image)
+                let depthImg = other == .dmap ? try? Preview.image(from: output.depthMap) : nil
+                await MainActor.run { [weak self] in
+                    // Same ownership gate as the foreground: a new fuse, a stack
+                    // switch, or project close bumps the generation / cancels.
+                    guard let self, generation == self.fusionGeneration,
+                          !cancellation.isCancelled else { return }
+                    self.backgroundFusionCancellation = nil
+                    self.backgroundFusionTask = nil
+                    if other == .pmax {
+                        self.pmaxResult = output.image
+                        self.pmaxFusedSettings = pmaxSettings
+                        if self.fusionMethod == .pmax { self.outputPreview = img }
+                    } else {
+                        self.result = output.image
+                        self.resultDepth = output.depth
+                        self.resultSharpness = output.sharpness
+                        self.resultGains = output.gains
+                        self.fusedSettings = dmapSettings
+                        self.depthResult = output.depthMap
+                        if let depthImg { self.depthPreview = depthImg }
+                        if self.fusionMethod == .dmap { self.outputPreview = img }
+                        // Depth is available now — warm retouch for the
+                        // PMax-primary case (skip if a session already exists).
+                        if !self.batchMode && self.retouch == nil { self.prepareRetouch() }
+                    }
+                }
+            } catch {
+                // Background failure is non-fatal: the primary result stands.
+            }
+        }
     }
 
     /// A failed fuse must be unmissable: the previous result stays in the
