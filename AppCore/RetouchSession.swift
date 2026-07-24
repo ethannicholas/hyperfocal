@@ -466,7 +466,12 @@ public final class RetouchSession: ObservableObject {
                             "Building PMax layer… %lld%%", comment: ""), Int(fraction * 100))
                         if let image { self.sourceDisplay = image }
                     }
-                }, cancellation: cancel)
+                }, cancellation: cancel,
+                                                        // Focus-gate the PMax blend layer: a paint
+                                                        // source carrying highlight bloom would paint
+                                                        // that bloom into the result. Runs on CPU or
+                                                        // GPU (parity ≥ standard PMax).
+                                                        focusGate: .init())
                 loaded = (fusedImage, try Preview.image(from: fusedImage))
             } catch {
                 loaded = nil
