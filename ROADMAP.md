@@ -138,6 +138,31 @@ loop or re-attempting a parked optimization.
   Remaining: verify the static link on **Linux** and **Windows** (pick the
   static lib from the MSVC archives), then fold wgpu out of the CLI-DLL
   deployment concern.
+- **Why GPU PMax trails CPU PMax — measure before porting anything else.** On
+  the full-res Azurite stack (63 DNGs, 8076x5237, M1 Pro) the CPU pyramid fuse
+  ran **135 s against the GPU path's 171 s**. That inversion is unexplained and
+  it currently makes two "GPU port" items below unattractive, since both would
+  move work *onto* the slower path. Profile `GPUPyramid` against the CPU phase
+  buckets (`pyramid phases (cpu): decode/warp/build/select/collapse`) — prime
+  suspects are per-frame upload/readback and the per-level dispatch overhead at
+  the coarse levels, where the CPU's fused passes do the same arithmetic without
+  a round trip. Done = the gap is explained and either closed or documented as
+  inherent, with the two items below re-judged against the result.
+- **PMax debloom's near-black gate on Metal + wgpu.** `--pmax-debloom` runs
+  CPU-only: the gate that keeps track B out of the inverted-contrast regime
+  (dark subject on a bright background — see git history for the measurements)
+  lives in `PyramidFusion`'s CPU merge, and the `pyr_select_focus_gated` /
+  `pyr_merge_focus` kernels in `MetalEngine`/`WgpuParity` still carry the
+  ungated form. Shipping both would mean two different debloom behaviours (CPU↔
+  GPU agreement measured **38.8 dB** gated against the ≥ 60 dB bar, vs 79.5 dB
+  ungated). The port needs: a running full-res per-cell min-luminance plane, its
+  near-black membership scaled to a high percentile, a **max-pooled** (not
+  averaged) reduction to each gated level, and the blend to track C. Env knobs
+  `HYPERFOCAL_PMAX_NEARBLACK_{OFF,LO,HI,PCT}` and the taps
+  `HYPERFOCAL_DUMP_{LUMMIN0,NEARBLACK}` exist for A/B against the CPU path.
+  Done = `--pmax-debloom` no longer forces the CPU engine and CPU↔GPU is back
+  over 60 dB. **Gated on the timing item above** — porting to a path that is
+  currently slower buys nothing.
 - **PMax despill inputs on Metal + wgpu.** `--despill --method pmax` currently
   forces the CPU engine: the pass needs the per-frame grid luminance plane and
   the per-cell max of the grit-blurred level-0 focus, and only
@@ -145,13 +170,8 @@ loop or re-attempting a parked optimization.
   `Despill.DespillInputs`). Porting means computing both reductions on-device in
   `GPUPyramid`/`WgpuPyramid` and reading back at grid resolution, gated on
   CPU↔GPU parity of the despill inputs (DMap's equivalent measured ~74 dB).
-  **Benchmark first — the premise is in doubt:** at full res (Azurite, 63 DNGs,
-  8076x5237, M1 Pro) the CPU PMax fuse measured **135 s against the GPU path's
-  171 s**, so the "fallback" is currently the faster route and the port would
-  start by making despill slower. Find out why GPU PMax trails CPU at this size
-  before building anything — if that inversion is a real bug in the GPU pyramid
-  path rather than a measurement artifact, fixing it is the more valuable work
-  and this item is downstream of it.
+  **Gated on the timing item above** — the CPU "fallback" currently measures
+  *faster* than the GPU path, so this port would start by making despill slower.
 - **Research-informed fusion follow-ons** — full findings, evidence, sources, and
   refuted claims: `Docs/research/2026-07-12-focus-stacking-research.md` (consult
   before revisiting). The regularizer is `DepthRegularize.swift` (ablation
