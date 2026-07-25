@@ -66,7 +66,8 @@ enum WgpuPyramid {
                      "blur_h", "blur_v"]
                     + (warp == nil ? [] : ["warp_lanczos3"])
                     + (focusGate == nil ? [] : ["box_downsample", "pyr_select_focus_gated",
-                                                "pyr_base_darkest", "pyr_merge_focus"]) {
+                                                "pyr_base_darkest", "pyr_merge_focus",
+                                                "pyr_lum_min", "pyr_merge_focus_gated"]) {
             _ = try engine.pipeline(name)
         }
         let gritWeights = Filters.gaussianKernel(sigma: PyramidFusion.gritSigma)
@@ -91,6 +92,10 @@ enum WgpuPyramid {
         var hasFocus: [WgpuEngine.Buffer?] = []
         var bestDarkLum: [WgpuEngine.Buffer?] = []
         var focusScratch: WgpuEngine.Buffer! = nil
+        var plainC: [WgpuEngine.Buffer?] = []
+        var plainBestE: [WgpuEngine.Buffer?] = []
+        var maskBuf: [WgpuEngine.Buffer?] = []
+        var lumMin0Buf: WgpuEngine.Buffer! = nil
         var baseDarkLum: WgpuEngine.Buffer! = nil
         func gated(_ l: Int) -> Bool {
             guard let fg = focusGate else { return false }
@@ -191,6 +196,14 @@ enum WgpuPyramid {
                     }
                     focusScratch = try engine.makeBuffer(floats: width * height)
                     baseDarkLum = try engine.makeBuffer(floats: sizes[levels].w * sizes[levels].h)
+                    // Track C (plain max-energy over every frame) + the level-0
+                    // min-luminance the near-black gate reads.
+                    for l in 0..<levels {
+                        plainC.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
+                        plainBestE.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
+                        maskBuf.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
+                    }
+                    lumMin0Buf = try engine.makeBuffer(floats: width * height)
                 }
             }
             precondition(img.width == srcWidth && img.height == srcHeight,
@@ -239,8 +252,10 @@ enum WgpuPyramid {
                         let count = sizes[l].w * sizes[l].h
                         try fill(hasFocus[l]!, 0, count)
                         try fill(bestDarkLum[l]!, .infinity, count)
+                        try fill(plainBestE[l]!, -1, count)
                     }
                     try fill(baseDarkLum, .infinity, sizes[levels].w * sizes[levels].h)
+                    try fill(lumMin0Buf, .infinity, width * height)
                 }
             }
             if warp != nil && !needsWarp {
@@ -259,6 +274,12 @@ enum WgpuPyramid {
                                         UInt32(width), UInt32(height)))
                 try batch.dispatch("warp_lanczos3", buffers: [uploadBuf, gauss[0]],
                                    uniforms: bytes(of: params), gridW: width, gridH: height)
+            }
+            if focusGate != nil {
+                // Running level-0 min luminance for the near-black gate.
+                try batch.dispatch("pyr_lum_min", buffers: [lumMin0Buf, gauss[0]],
+                                   uniforms: bytes(of: Count1(count: UInt32(width * height))),
+                                   gridW: width * height)
             }
             for l in 0..<levels {
                 let (w, h) = sizes[l]
@@ -311,6 +332,10 @@ enum WgpuPyramid {
                                                  fused[l], bestE[l], trackB[l]!,
                                                  bestDarkLum[l]!, hasFocus[l]!],
                                        uniforms: bytes(of: fp), gridW: w * h)
+                    // Track C: `pyr_select` pointed at its own buffers.
+                    try batch.dispatch("pyr_select",
+                                       buffers: [gauss[l], scratchA, plainC[l]!, plainBestE[l]!],
+                                       uniforms: bytes(of: count), gridW: w * h)
                 } else {
                     try batch.dispatch("pyr_select",
                                        buffers: [gauss[l], scratchA, fused[l], bestE[l]],
@@ -356,11 +381,35 @@ enum WgpuPyramid {
         // Focus-gate merge: where no frame was in focus at a gated level, take
         // track B (darkest, bloom-free), then collapse the merged pyramid.
         if focusGate != nil {
+            // Near-black membership from the level-0 min luminance, built by the
+            // SHARED CPU helper so this merge and the CPU one cannot drift.
+            var lm = [Float](repeating: 0, count: width * height)
+            try lm.withUnsafeMutableBytes {
+                try engine.download(lumMin0Buf, into: $0.baseAddress!, byteCount: $0.count)
+            }
+            let gate = PyramidFusion.nearBlackMasks(lumMin0: lm, width: width,
+                                                    height: height, sizes: sizes,
+                                                    levels: levels,
+                                                    darkCoarse: focusGate!.coarseLevels)
+            log?(String(format: "pmax near-black gate: scale=%.4f, mean mask %.3f (wgpu)",
+                        gate.scale, gate.mean))
             let mergeBatch = try engine.makeBatch()
             for l in 0..<levels where gated(l) {
                 let count = sizes[l].w * sizes[l].h
-                try mergeBatch.dispatch("pyr_merge_focus",
-                                        buffers: [fused[l], trackB[l]!, hasFocus[l]!],
+                guard l >= 1, !gate.masks[l].isEmpty else {
+                    // Level 0 carries no track B, so it keeps the plain merge.
+                    try mergeBatch.dispatch("pyr_merge_focus",
+                                            buffers: [fused[l], trackB[l]!, hasFocus[l]!],
+                                            uniforms: bytes(of: Count1(count: UInt32(count))),
+                                            gridW: count)
+                    continue
+                }
+                gate.masks[l].withUnsafeBytes {
+                    engine.upload($0.baseAddress!, byteCount: $0.count, to: maskBuf[l]!)
+                }
+                try mergeBatch.dispatch("pyr_merge_focus_gated",
+                                        buffers: [fused[l], trackB[l]!, hasFocus[l]!,
+                                                  plainC[l]!, maskBuf[l]!],
                                         uniforms: bytes(of: Count1(count: UInt32(count))),
                                         gridW: count)
             }

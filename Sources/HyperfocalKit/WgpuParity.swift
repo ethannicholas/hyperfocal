@@ -698,6 +698,43 @@ public enum WgpuParity {
                            buffers: [gmFused, try c.buf(mTrackB), try c.buf(mHas)],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             c.report("pyr_merge_focus", cpuMerge, try c.read(gmFused, n * 4))
+
+            // pyr_lum_min: running per-cell min luminance across frames.
+            let lmFrames = [c.rand(n * 4), c.rand(n * 4)]
+            var cpuLumMin = [Float](repeating: .infinity, count: n)
+            for f in lmFrames {
+                for i in 0..<n {
+                    cpuLumMin[i] = min(cpuLumMin[i], 0.2126 * f[i * 4] + 0.7152 * f[i * 4 + 1]
+                                                     + 0.0722 * f[i * 4 + 2])
+                }
+            }
+            let glm = try c.buf([Float](repeating: .infinity, count: n))
+            for f in lmFrames {
+                try engine.run("pyr_lum_min", buffers: [glm, try c.buf(f)],
+                               uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
+            }
+            c.report("pyr_lum_min", san(cpuLumMin), san(try c.read(glm, n)))
+
+            // pyr_merge_focus_gated: blend the debloom answer toward the plain
+            // max-energy selection by the near-black mask.
+            let nbFusedIn = c.rand(n * 4), nbTrackB = c.rand(n * 4), nbPlain = c.rand(n * 4)
+            var nbHas = c.rand(n)
+            for i in stride(from: 0, to: n, by: 3) { nbHas[i] = 0 }
+            let nbMask = c.rand(n)
+            var nbCPU = [Float](repeating: 0, count: n * 4)
+            for i in 0..<n {
+                for ch in 0..<4 {
+                    let d = nbHas[i] < 0.5 ? nbTrackB[i * 4 + ch] : nbFusedIn[i * 4 + ch]
+                    let cc = nbPlain[i * 4 + ch]
+                    nbCPU[i * 4 + ch] = cc + (d - cc) * nbMask[i]
+                }
+            }
+            let nbgFused = try c.buf(nbFusedIn)
+            try engine.run("pyr_merge_focus_gated",
+                           buffers: [nbgFused, try c.buf(nbTrackB), try c.buf(nbHas),
+                                     try c.buf(nbPlain), try c.buf(nbMask)],
+                           uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
+            c.report("pyr_merge_focus_gated", nbCPU, try c.read(nbgFused, n * 4))
         }
 
         return c.minPSNR
@@ -817,9 +854,9 @@ public enum WgpuParity {
             frameCount: frameCount,
             focusGate: PyramidFusion.GPUFocusGate(coarseLevels: fg.coarseLevels,
                                                   threshold: fg.threshold)) { frames[$0] }
-        let cpuGated = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
+        let nbCPU = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
                                               focusGate: fg) { frames[$0] }
-        check("pyramid_focus_gated", cpuGated, gpuGated, margin: 8)
+        check("pyramid_focus_gated", nbCPU, gpuGated, margin: 8)
         return minPSNR
     }
 

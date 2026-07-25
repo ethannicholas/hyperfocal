@@ -42,6 +42,50 @@ public enum PyramidFusion {
 
     static let downKernel: [Float] = [1, 4, 6, 4, 1].map { $0 / 16 }
 
+    /// Near-black membership for each gated band level, from the full-res
+    /// per-cell min luminance. **Shared by the CPU and GPU merges** — the gate
+    /// is a handful of thresholds and a reduction, and duplicating that
+    /// arithmetic per backend is exactly how the two paths drift apart, so both
+    /// call this and only the buffer plumbing differs. Returns one mask per
+    /// level (empty for ungated levels), plus the scale and mean for logging.
+    ///
+    /// Env: `HYPERFOCAL_PMAX_NEARBLACK_LO` / `_HI` (default 0.15 / 0.35, as a
+    /// fraction of `_PCT`, default the 99th percentile of the min-luminance),
+    /// and `_OFF` to restore the ungated merge (all-ones masks).
+    static func nearBlackMasks(lumMin0: [Float], width: Int, height: Int,
+                               sizes: [(w: Int, h: Int)], levels: Int,
+                               darkCoarse: Int,
+                               env: [String: String] = ProcessInfo.processInfo.environment)
+        -> (masks: [[Float]], scale: Float, mean: Float) {
+        let off = env["HYPERFOCAL_PMAX_NEARBLACK_OFF"] != nil
+        let lo0 = Float(env["HYPERFOCAL_PMAX_NEARBLACK_LO"] ?? "") ?? 0.15
+        let hi0 = max(Float(env["HYPERFOCAL_PMAX_NEARBLACK_HI"] ?? "") ?? 0.35, lo0 + 1e-6)
+        let pct = Float(env["HYPERFOCAL_PMAX_NEARBLACK_PCT"] ?? "") ?? 0.99
+
+        // Scale reference: a HIGH percentile, not p95. p95 assumes the bright
+        // content is a large minority of the frame; a specimen against a dark
+        // backdrop can be 2-3% of pixels, so p95 lands inside the background
+        // (measured 0.058 on Azurite against a p99 of 0.418) and drags the
+        // thresholds onto the physical rim tail — gating debloom off in exactly
+        // the band it is needed.
+        let scale = max(Despill.percentileLow(lumMin0, pct), 1e-6)
+        let lo = lo0 * scale, hi = hi0 * scale
+        var nb0 = [Float](repeating: 1, count: lumMin0.count)
+        if !off {
+            for i in nb0.indices { nb0[i] = 1 - Despill.smoothstep(lo, hi, lumMin0[i]) }
+        }
+        let mean = nb0.reduce(0, +) / Float(max(nb0.count, 1))
+        var masks = [[Float]](repeating: [], count: levels)
+        for l in 1..<levels where l >= levels - darkCoarse {
+            masks[l] = off
+                ? [Float](repeating: 1, count: sizes[l].w * sizes[l].h)
+                : maxPool(nb0, width: width, height: height, factor: 1 << l)
+        }
+        DMapFusion.dumpPlane(lumMin0, env: "HYPERFOCAL_DUMP_LUMMIN0")
+        DMapFusion.dumpPlane(nb0, env: "HYPERFOCAL_DUMP_NEARBLACK")
+        return (masks, scale, mean)
+    }
+
     /// Max-pooled reduction, for carrying the near-black membership down to the
     /// coarse levels track B runs at. Averaging is wrong here: at 1/64 scale one
     /// cell spans the subject *and* the band beside it, so a mean drags the
@@ -133,14 +177,9 @@ public enum PyramidFusion {
     /// `coarseLevels` band levels by focus (max-energy only where a frame has
     /// fine-scale detail, darkest elsewhere) suppresses that without dimming
     /// real bright features. Default (nil) leaves the standard PMax selection
-    /// untouched.
-    ///
-    /// Runs on the **CPU path only** for now: the near-black gate that keeps
-    /// track B out of the regime it is invalid in (see the merge in `fuse`) has
-    /// no Metal/wgpu counterpart yet, so `fuse` routes debloom to the CPU to
-    /// avoid shipping two different behaviours. The GPU kernels
-    /// (`GPUPyramid`/`WgpuPyramid`) still carry the ungated form, ready to be
-    /// brought up to match.
+    /// untouched. Runs on the CPU, Metal and wgpu paths; the near-black gate
+    /// that keeps track B out of the regime it is invalid in is built by shared
+    /// code (`nearBlackMasks`) that every backend calls.
     public struct FocusGate: Sendable {
         public var coarseLevels: Int
         public var threshold: Float
@@ -229,16 +268,7 @@ public enum PyramidFusion {
         // the CPU loop retains today — stay on the CPU when it is requested. The
         // GPU port is a follow-up, exactly as the focus gate's was.
         if prepareDespill { log?("pmax: despill inputs requested — CPU engine") }
-        // The focus gate's near-black gating lives in the CPU merge only; the
-        // Metal/wgpu focus-gate kernels still implement the ungated form, which
-        // now differs enough to break pmax CPU↔GPU agreement (measured 38.8 dB
-        // against the ≥ 60 dB bar, vs 79.5 dB ungated). Rather than ship two
-        // different debloom behaviours, route debloom to the CPU until the
-        // kernels are ported. The measured cost is nil-to-negative here: a
-        // full-res 63-frame pmax fuse ran 135 s on the CPU against 171 s on the
-        // GPU path (see ROADMAP — that inversion wants explaining on its own).
-        if focusGateEnabled { log?("pmax: focus gate — CPU engine") }
-        let preferGPU = preferGPU && !prepareDespill && !focusGateEnabled
+        let preferGPU = preferGPU && !prepareDespill
         #if canImport(Metal)
         if preferGPU, MetalEngine.shared != nil {
             do {
@@ -540,34 +570,15 @@ public enum PyramidFusion {
         // fraction of the level's 95th-percentile luminance); `_OFF` restores
         // the ungated merge.
         if focusGate {
-            let nbOff = env["HYPERFOCAL_PMAX_NEARBLACK_OFF"] != nil
-            let nbLo = Float(env["HYPERFOCAL_PMAX_NEARBLACK_LO"] ?? "") ?? 0.15
-            let nbHi = max(Float(env["HYPERFOCAL_PMAX_NEARBLACK_HI"] ?? "") ?? 0.35,
-                           nbLo + 1e-6)
-            let nbPct = Float(env["HYPERFOCAL_PMAX_NEARBLACK_PCT"] ?? "") ?? 0.99
-            // Full-res near-black membership, scaled to the scene's own bright
-            // end so the test is exposure- and unit-free, then box-downsampled
-            // per gated level (averaging the *weight*, so a coarse cell that
-            // straddles background and subject gets a proportional blend).
-            // Scale reference: a HIGH percentile, not p95. p95 assumes the
-            // bright content is a large minority of the frame; on a specimen
-            // shot against a dark backdrop the subject can be 2-3% of pixels, so
-            // p95 lands inside the background (measured 0.058 on Azurite against
-            // a p99 of 0.418) and drags the thresholds down onto the physical
-            // rim tail — gating debloom off in exactly the band it is needed.
-            let scale = max(Despill.percentileLow(lumMin0, nbPct), 1e-6)
-            let lo = nbLo * scale, hi = nbHi * scale
-            var nb0 = [Float](repeating: 0, count: lumMin0.count)
-            for i in nb0.indices { nb0[i] = 1 - Despill.smoothstep(lo, hi, lumMin0[i]) }
-            log?(String(format: "pmax near-black gate: scale=%.4f lo=%.1f hi=%.1f, "
-                        + "mean mask %.3f", scale, lo, hi,
-                        nb0.reduce(0, +) / Float(max(nb0.count, 1))))
-            DMapFusion.dumpPlane(lumMin0, env: "HYPERFOCAL_DUMP_LUMMIN0")
-            DMapFusion.dumpPlane(nb0, env: "HYPERFOCAL_DUMP_NEARBLACK")
             let (w0, h0) = workspace!.sizes[0]
+            let gate = Self.nearBlackMasks(lumMin0: lumMin0, width: w0, height: h0,
+                                           sizes: workspace!.sizes, levels: levels,
+                                           darkCoarse: darkCoarse, env: env)
+            log?(String(format: "pmax near-black gate: scale=%.4f, mean mask %.3f",
+                        gate.scale, gate.mean))
             for l in 1..<levels where l >= levels - darkCoarse {
                 let hf = hasFocus[l]
-                let mask = Self.maxPool(nb0, width: w0, height: h0, factor: 1 << l)
+                let mask = gate.masks[l]
                 fused![l].pixels.withUnsafeMutableBufferPointer { ap in
                     trackB[l].pixels.withUnsafeBufferPointer { bp in
                         plainC[l].pixels.withUnsafeBufferPointer { cp in
@@ -584,7 +595,7 @@ public enum PyramidFusion {
                                 // never bright (background), 0 where it is a lit
                                 // surface. Smoothstepped so the transition can't
                                 // band along the falloff.
-                                let t = nbOff ? 1 : mask[i]
+                                let t = mask[i]
                                 ap[pi] = cp[pi] + (dx - cp[pi]) * t
                                 ap[pi + 1] = cp[pi + 1] + (dy - cp[pi + 1]) * t
                                 ap[pi + 2] = cp[pi + 2] + (dz - cp[pi + 2]) * t

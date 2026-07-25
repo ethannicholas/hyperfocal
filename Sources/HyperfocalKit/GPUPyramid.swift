@@ -42,6 +42,9 @@ enum GPUPyramid {
         let selectFocusGated = focusGate == nil ? nil : try engine.pipeline("pyr_select_focus_gated")
         let baseDarkest = focusGate == nil ? nil : try engine.pipeline("pyr_base_darkest")
         let mergeFocus = focusGate == nil ? nil : try engine.pipeline("pyr_merge_focus")
+        let lumMinPipe = focusGate == nil ? nil : try engine.pipeline("pyr_lum_min")
+        let mergeFocusGated = focusGate == nil ? nil
+            : try engine.pipeline("pyr_merge_focus_gated")
         let bandEnergyPipeline = try engine.pipeline("pyr_band_energy")
         let selectSmoothed = try engine.pipeline("pyr_select_smoothed")
         let scalarBlurH = try engine.pipeline("blur_h")
@@ -82,6 +85,9 @@ enum GPUPyramid {
         var bestDarkLum: [MTLBuffer?] = []
         var focusScratch: MTLBuffer! = nil
         var baseDarkLum: MTLBuffer! = nil
+        var plainC: [MTLBuffer?] = []
+        var plainBestE: [MTLBuffer?] = []
+        var lumMin0: MTLBuffer! = nil
         // Coarsest band levels are focus-gated: l in [max(1, levels−coarse), levels).
         func gated(_ l: Int) -> Bool {
             guard let fg = focusGate else { return false }
@@ -185,6 +191,13 @@ enum GPUPyramid {
                     }
                     focusScratch = try engine.makeBuffer(floats: width * height)
                     baseDarkLum = try engine.makeBuffer(floats: sizes[levels].w * sizes[levels].h)
+                    // Track C (the plain max-energy winner over every frame) and
+                    // the level-0 min-luminance the near-black gate reads.
+                    for l in 0..<levels {
+                        plainC.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
+                        plainBestE.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
+                    }
+                    lumMin0 = try engine.makeBuffer(floats: width * height)
                 }
             }
             precondition(img.width == srcWidth && img.height == srcHeight,
@@ -259,9 +272,20 @@ enum GPUPyramid {
                         let count = sizes[l].w * sizes[l].h
                         fillBuf(hasFocus[l]!, 0, count)
                         fillBuf(bestDarkLum[l]!, .infinity, count)
+                        fillBuf(plainBestE[l]!, -1, count)
                     }
                     fillBuf(baseDarkLum, .infinity, sizes[levels].w * sizes[levels].h)
+                    fillBuf(lumMin0, .infinity, width * height)
                 }
+            }
+            if focusGate != nil {
+                // Running level-0 min luminance for the near-black gate, taken
+                // from the warped frame before the pyramid consumes it.
+                var c0 = UInt32(width * height)
+                enc.setBuffer(lumMin0, offset: 0, index: 0)
+                enc.setBuffer(gauss[0], offset: 0, index: 1)
+                enc.setBytes(&c0, length: 4, index: 2)
+                engine.dispatch1D(enc, lumMinPipe!, count: width * height)
             }
             for l in 0..<levels {
                 let (w, h) = sizes[l]
@@ -348,6 +372,16 @@ enum GPUPyramid {
                     enc.setBuffer(hasFocus[l]!, offset: 0, index: 7)
                     enc.setBytes(&fp, length: MemoryLayout<FocusParams>.size, index: 8)
                     engine.dispatch1D(enc, selectFocusGated!, count: w * h)
+
+                    // Track C: the ordinary max-energy selection over every
+                    // frame, accumulated in parallel. No new kernel needed —
+                    // this is `pyr_select` pointed at its own buffers.
+                    enc.setBuffer(gauss[l], offset: 0, index: 0)
+                    enc.setBuffer(scratchA, offset: 0, index: 1)
+                    enc.setBuffer(plainC[l]!, offset: 0, index: 2)
+                    enc.setBuffer(plainBestE[l]!, offset: 0, index: 3)
+                    enc.setBytes(&count, length: 4, index: 4)
+                    engine.dispatch1D(enc, select, count: w * h)
                 } else {
                     enc.setBuffer(gauss[l], offset: 0, index: 0)
                     enc.setBuffer(scratchA, offset: 0, index: 1)
@@ -406,13 +440,44 @@ enum GPUPyramid {
                   let enc = cmd.makeComputeCommandEncoder() else {
                 throw StackError.metal("cannot create command buffer")
             }
+            // Near-black membership: read the level-0 min-luminance back once and
+            // build the per-level masks with the SHARED CPU helper. The gate is a
+            // percentile, a smoothstep and a max-pool — cheap next to a 63-frame
+            // fuse, and running it in one place is what keeps the CPU and GPU
+            // merges from drifting apart. (Unified memory makes the readback a
+            // pointer, not a copy.)
+            let lm = UnsafeBufferPointer(start: lumMin0.contents()
+                                            .assumingMemoryBound(to: Float.self),
+                                         count: width * height)
+            let gate = PyramidFusion.nearBlackMasks(lumMin0: Array(lm),
+                                                    width: width, height: height,
+                                                    sizes: sizes, levels: levels,
+                                                    darkCoarse: focusGate!.coarseLevels)
+            log?(String(format: "pmax near-black gate: scale=%.4f, mean mask %.3f (GPU)",
+                        gate.scale, gate.mean))
             for l in 0..<levels where gated(l) {
                 var count = UInt32(sizes[l].w * sizes[l].h)
+                guard l >= 1, !gate.masks[l].isEmpty else {
+                    // Level 0 is never gated by `nearBlackMasks` (it carries no
+                    // track B); fall back to the plain focus merge there.
+                    enc.setBuffer(fused[l], offset: 0, index: 0)
+                    enc.setBuffer(trackB[l]!, offset: 0, index: 1)
+                    enc.setBuffer(hasFocus[l]!, offset: 0, index: 2)
+                    enc.setBytes(&count, length: 4, index: 3)
+                    engine.dispatch1D(enc, mergeFocus!, count: Int(count))
+                    continue
+                }
+                // Metal copies the mask into its own allocation. (Writing it
+                // by hand into a preallocated buffer's `contents()` corrupted
+                // the heap here — see git history.)
+                let mask = try engine.makeBuffer(gate.masks[l])
                 enc.setBuffer(fused[l], offset: 0, index: 0)
                 enc.setBuffer(trackB[l]!, offset: 0, index: 1)
                 enc.setBuffer(hasFocus[l]!, offset: 0, index: 2)
-                enc.setBytes(&count, length: 4, index: 3)
-                engine.dispatch1D(enc, mergeFocus!, count: Int(count))
+                enc.setBuffer(plainC[l]!, offset: 0, index: 3)
+                enc.setBuffer(mask, offset: 0, index: 4)
+                enc.setBytes(&count, length: 4, index: 5)
+                engine.dispatch1D(enc, mergeFocusGated!, count: Int(count))
             }
             enc.endEncoding()
             cmd.commit()

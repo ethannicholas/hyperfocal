@@ -1151,6 +1151,39 @@ public final class WgpuEngine {
             pmf_fused[gid.x] = pmf_trackB[gid.x];
         }
     }
+
+    @group(0) @binding(0) var<storage, read_write> plm_dst: array<f32>;
+    @group(0) @binding(1) var<storage, read> plm_gauss: array<vec4f>;
+    @group(0) @binding(2) var<uniform> plm_p: Count1;
+
+    // Running per-cell MIN luminance over all frames, at level 0 — the input to
+    // the near-black gate. Mirrors the CPU loop's lumMin0.
+    @compute @workgroup_size(256)
+    fn pyr_lum_min(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= plm_p.count) { return; }
+        let g = plm_gauss[gid.x];
+        let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
+        plm_dst[gid.x] = min(plm_dst[gid.x], lum);
+    }
+
+    @group(0) @binding(0) var<storage, read_write> pmg_fused: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pmg_trackB: array<vec4f>;
+    @group(0) @binding(2) var<storage, read> pmg_hasFocus: array<f32>;
+    @group(0) @binding(3) var<storage, read> pmg_plainC: array<vec4f>;
+    @group(0) @binding(4) var<storage, read> pmg_mask: array<f32>;
+    @group(0) @binding(5) var<uniform> pmg_p: Count1;
+
+    // Near-black-gated focus merge: blend the debloom answer (track A where a
+    // frame was in focus, else track B) toward the plain max-energy selection
+    // by the near-black membership. Same blend as the CPU merge.
+    @compute @workgroup_size(256)
+    fn pyr_merge_focus_gated(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pmg_p.count) { return; }
+        var d = pmg_fused[gid.x];
+        if (pmg_hasFocus[gid.x] < 0.5) { d = pmg_trackB[gid.x]; }
+        let c = pmg_plainC[gid.x];
+        pmg_fused[gid.x] = c + (d - c) * pmg_mask[gid.x];
+    }
     """
 }
 #endif // HYPERFOCAL_HAVE_WGPU

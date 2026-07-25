@@ -46,6 +46,20 @@ public final class MetalEngine {
         return p
     }
 
+    /// A shared-storage buffer initialised from `values` — Metal does the copy
+    /// into its own allocation, so no hand-rolled `copyMemory` into a live
+    /// buffer's `contents()` is involved.
+    func makeBuffer(_ values: [Float]) throws -> MTLBuffer {
+        let b: MTLBuffer? = values.withUnsafeBytes {
+            device.makeBuffer(bytes: $0.baseAddress!, length: $0.count,
+                              options: .storageModeShared)
+        }
+        guard let b else {
+            throw StackError.metal("cannot allocate \(values.count * 4) byte buffer")
+        }
+        return b
+    }
+
     func makeBuffer(floats count: Int) throws -> MTLBuffer {
         guard let b = device.makeBuffer(length: count * 4, options: .storageModeShared) else {
             throw StackError.metal("cannot allocate \(count * 4) byte buffer")
@@ -785,6 +799,35 @@ public final class MetalEngine {
         if (hasFocus[gid] < 0.5) {
             fused[gid] = trackB[gid];
         }
+    }
+
+    // Running per-cell MIN luminance over all frames, at level 0 — the input to
+    // the near-black gate. Mirrors the CPU loop's lumMin0.
+    kernel void pyr_lum_min(device float* dst [[buffer(0)]],
+                            device const float4* gauss [[buffer(1)]],
+                            constant uint& count [[buffer(2)]],
+                            uint gid [[thread_position_in_grid]]) {
+        if (gid >= count) return;
+        float4 g = gauss[gid];
+        float lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
+        dst[gid] = min(dst[gid], lum);
+    }
+
+    // Near-black-gated focus merge. `fused` holds track A, `trackB` the darkest
+    // track, `plainC` the ordinary max-energy winner over every frame; `mask` is
+    // the near-black membership for this level (1 = background, use debloom;
+    // 0 = lit surface, use the plain selection). Same blend as the CPU merge.
+    kernel void pyr_merge_focus_gated(device float4* fused [[buffer(0)]],
+                                      device const float4* trackB [[buffer(1)]],
+                                      device const float* hasFocus [[buffer(2)]],
+                                      device const float4* plainC [[buffer(3)]],
+                                      device const float* mask [[buffer(4)]],
+                                      constant uint& count [[buffer(5)]],
+                                      uint gid [[thread_position_in_grid]]) {
+        if (gid >= count) return;
+        float4 d = hasFocus[gid] < 0.5 ? trackB[gid] : fused[gid];
+        float4 c = plainC[gid];
+        fused[gid] = c + (d - c) * mask[gid];
     }
     """
 }
