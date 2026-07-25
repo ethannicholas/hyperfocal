@@ -64,9 +64,9 @@ public enum DMapFusion {
         /// Retain the grid planes the render-stage rim despill consumes
         /// (`Despill.DespillInputs`) on the fused `Output`. Off by default —
         /// the planes are cheap but pointless work unless a despill pass will
-        /// run. The `fuse` CLI turns it on when `--despill` > 0 (or the
-        /// input-dump env is set); the app leaves it off until it wires up a
-        /// despill control.
+        /// run. `StackPipeline.fuseResult` forces it on for DMap (the render
+        /// cleanup is always-on there); the `fuse` CLI turns it on when its
+        /// resolved despill amount is > 0 or the input-dump env is set.
         public var prepareDespill: Bool
 
         public init(sharpnessSigma: Float = 10, blendRadius: Float = 1, noiseFloor: Float = 0.05,
@@ -88,7 +88,10 @@ public enum DMapFusion {
     }
 
     public struct Output {
-        public let image: ImageBuffer
+        /// `var`, not `let`: the pipeline's render cleanup (rim despill +
+        /// black point) rewrites the fused image in place after the engine
+        /// returns — see `StackPipeline.fuseResult`.
+        public var image: ImageBuffer
         /// Regularized depth as a grayscale image: white = first frame, black =
         /// last. Stacks are typically shot close-to-far, so near is bright — the
         /// usual depth/disparity convention.

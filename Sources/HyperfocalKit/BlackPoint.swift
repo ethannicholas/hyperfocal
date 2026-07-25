@@ -7,11 +7,6 @@ import Foundation
 /// (either can run alone), but together they take the background to Helicon-black
 /// while the despill removes the structured glow.
 ///
-/// Display-referred output only. Linear DNG deliberately carries unmodified data
-/// (that is the format's whole point — see `ToneCurve` header); the raw-workflow
-/// equivalent is writing the DNG BlackLevel tag so a developer subtracts without
-/// touching pixels — a separate, still-to-build path.
-///
 /// Like the despill, this operates in LINEAR light (the veil is additive light;
 /// the working buffer is sRGB-encoded — see `Despill`), so it linearizes,
 /// subtracts the per-channel veil, clips at zero, and re-encodes.
@@ -21,16 +16,41 @@ public enum BlackPoint {
     /// where the large dark background dominates) and subtracts `intensity`×
     /// that level in linear light. `intensity` 0…1 (0 = no-op).
     ///
+    /// **Self-gating**: the subtraction assumes the low percentile IS a dark
+    /// backdrop under a thin veil, and on scenes without one that assumption
+    /// fails destructively — on a light-background stack the percentile lands
+    /// in deep *subject* shadow (measured 24.5% encoded on the white-marble
+    /// sample-stack, and 49% on the synthetic plane scene, vs 0.4–0.6% for the
+    /// real veils on the black-backdrop reference stacks — a 40× separation).
+    /// So the pass gates itself on the measured level: full strength while the
+    /// max channel is near-black, fading to a no-op above a few percent. A
+    /// deliberately gray backdrop is thereby left alone — only a background
+    /// that is already almost black is crushed the rest of the way.
+    ///
     /// Env: `HYPERFOCAL_BLACK_POINT_PCT` (default 0.5) — the per-channel
     /// percentile taken as the veil; lower is more conservative (leaves more
-    /// background), higher crushes harder and risks clipping dark subject shadow.
+    /// background), higher crushes harder and risks clipping dark subject
+    /// shadow. `HYPERFOCAL_BLACK_POINT_GATE_LO` / `_GATE_HI` (default
+    /// 0.02 / 0.06) — the self-gate band over the max-channel encoded veil.
     public static func applyExport(to image: inout ImageBuffer, intensity: Float,
                                    log: ((String) -> Void)? = nil) {
-        let amount = min(max(intensity, 0), 1)
+        var amount = min(max(intensity, 0), 1)
         guard amount > 0 else { return }
         let env = ProcessInfo.processInfo.environment
         let pct = min(max(Float(env["HYPERFOCAL_BLACK_POINT_PCT"] ?? "") ?? 0.5, 0), 1)
         let veil = measureVeil(image, pct: pct)   // linear, per channel
+        let gateLo = Float(env["HYPERFOCAL_BLACK_POINT_GATE_LO"] ?? "") ?? 0.02
+        let gateHi = max(Float(env["HYPERFOCAL_BLACK_POINT_GATE_HI"] ?? "") ?? 0.06,
+                         gateLo + 1e-6)
+        let veilEnc = max(ToneCurve.srgbEncode(veil.x),
+                          ToneCurve.srgbEncode(veil.y), ToneCurve.srgbEncode(veil.z))
+        let gate = 1 - Despill.smoothstep(gateLo, gateHi, veilEnc)
+        guard gate > 0.001 else {
+            log?(String(format: "black point: skipped — measured floor %.1f%% encoded "
+                        + "is not a dark-backdrop veil", veilEnc * 100))
+            return
+        }
+        amount *= gate
         let sub = SIMD3<Float>(veil.x * amount, veil.y * amount, veil.z * amount)
         let w = image.width
         image.pixels.withUnsafeMutableBufferPointer { px in

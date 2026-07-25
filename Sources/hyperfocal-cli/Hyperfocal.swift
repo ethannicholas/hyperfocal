@@ -276,17 +276,18 @@ struct Fuse: ParsableCommand {
     var depthMap: String? = nil
 
     @Option(help: ArgumentHelp("Rim despill strength 0…1: remove the defocus-spill glow "
-            + "hugging the subject's silhouette (0 = off, the default). Works with both "
-            + "methods; on PMax it forces the CPU engine. Display-referred outputs "
-            + "(.tif/.png/.jpg) only — linear .dng is left untouched. Override for A/B "
-            + "with HYPERFOCAL_DESPILL."))
-    var despill: Float = 0
+            + "hugging the subject's silhouette. Default 1 on dmap (matching the app's "
+            + "always-on render cleanup; 0 disables for A/B); default 0 on pmax, where "
+            + "enabling it forces the CPU engine (GPU port pending). Applies to every "
+            + "output format, .dng included. Override with HYPERFOCAL_DESPILL."))
+    var despill: Float? = nil
 
     @Option(help: ArgumentHelp("Black-point strength 0…1: subtract the auto-measured uniform "
-            + "backdrop veil (0 = off, the default), crushing the background toward black like "
-            + "Helicon. Independent of --despill. Display-referred outputs only — linear .dng "
-            + "untouched. Override with HYPERFOCAL_BLACK_POINT."))
-    var blackPoint: Float = 0
+            + "backdrop veil, crushing the background toward black like commercial stackers "
+            + "(default 1; 0 disables). Self-gated to genuinely dark backdrops — on scenes "
+            + "without one it is a no-op. Independent of --despill; applies to every output "
+            + "format. Override with HYPERFOCAL_BLACK_POINT."))
+    var blackPoint: Float = 1
 
     @Flag(name: .customLong("pmax-debloom"),
           help: ArgumentHelp("PMax: gate the coarse pyramid selection by focus to suppress "
@@ -371,10 +372,10 @@ struct Fuse: ParsableCommand {
         // runs re-aim intensity without re-parsing; the input dump lets the
         // hidden `debug-despill` command tune thresholds without re-fusing.
         let env = ProcessInfo.processInfo.environment
-        let despillAmount = Float(env["HYPERFOCAL_DESPILL"] ?? "") ?? despill
+        let despillAmount = Float(env["HYPERFOCAL_DESPILL"] ?? "")
+            ?? despill ?? (fusion.method == .dmap ? 1 : 0)
         let despillDumpDir = env["HYPERFOCAL_DESPILL_DUMP"]
         let blackPointAmount = Float(env["HYPERFOCAL_BLACK_POINT"] ?? "") ?? blackPoint
-        let outputIsDNG = URL(fileURLWithPath: output).pathExtension.lowercased() == "dng"
 
         var result: ImageBuffer? = nil
         var depth: ImageBuffer? = nil
@@ -437,22 +438,16 @@ struct Fuse: ParsableCommand {
             }
         }
         if despillAmount > 0 {
-            if outputIsDNG {
-                print("note: despill skipped — linear .dng is left untouched by design")
-            } else if var img = result, let di = despillInputs {
+            if var img = result, let di = despillInputs {
                 Despill.apply(to: &img, inputs: di, intensity: despillAmount, log: { print($0) })
                 result = img
             } else {
                 print("note: --despill had no inputs — needs at least 3 frames")
             }
         }
-        if blackPointAmount > 0 {
-            if outputIsDNG {
-                print("note: black-point skipped — linear .dng is left untouched by design")
-            } else if var img = result {
-                BlackPoint.applyExport(to: &img, intensity: blackPointAmount, log: { print($0) })
-                result = img
-            }
+        if blackPointAmount > 0, var img = result {
+            BlackPoint.applyExport(to: &img, intensity: blackPointAmount, log: { print($0) })
+            result = img
         }
 
         if let path = depthMap {

@@ -150,7 +150,13 @@ public enum StackPipeline {
             }
         }
         let source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
-        let output: DMapFusion.Output
+        var output: DMapFusion.Output
+        var fusionOptions = configuration.fusion
+        // Always retain the despill grid inputs on the DMap path: the render
+        // cleanup below is on by default, and the planes are cheap next to a
+        // fuse. (PMax only retains them on its CPU streaming loop, so its
+        // despill stays opt-in until the GPU port — see ROADMAP.)
+        if configuration.method == .dmap { fusionOptions.prepareDespill = true }
         switch configuration.method {
         case .pmax:
             // PMax (Laplacian-pyramid max-coefficient): image only, no depth.
@@ -170,36 +176,65 @@ public enum StackPipeline {
         case .dmap:
         #if canImport(Metal)
         if configuration.preferGPU, MetalEngine.shared != nil {
-            output = try GPUDMap.fuseWithDepth(source: source, options: configuration.fusion,
+            output = try GPUDMap.fuseWithDepth(source: source, options: fusionOptions,
                                                log: log, progress: progress,
                                                cancellation: cancellation)
         } else {
             output = try DMapFusion.fuseWithDepth(source: source,
-                                                  options: configuration.fusion, log: log,
+                                                  options: fusionOptions, log: log,
                                                   progress: progress,
                                                   cancellation: cancellation)
         }
         #elseif HYPERFOCAL_HAVE_WGPU
         if configuration.preferGPU, let engine = WgpuEngine.shared,
            engine.usableForAutoSelection {
-            output = try WgpuDMap.fuseWithDepth(source: source, options: configuration.fusion,
+            output = try WgpuDMap.fuseWithDepth(source: source, options: fusionOptions,
                                                 log: log, progress: progress,
                                                 cancellation: cancellation)
         } else {
             output = try DMapFusion.fuseWithDepth(source: source,
-                                                  options: configuration.fusion, log: log,
+                                                  options: fusionOptions, log: log,
                                                   progress: progress,
                                                   cancellation: cancellation)
         }
         #else
         output = try DMapFusion.fuseWithDepth(source: source,
-                                              options: configuration.fusion, log: log,
+                                              options: fusionOptions, log: log,
                                               progress: progress,
                                               cancellation: cancellation)
         #endif
         }
+        applyRenderCleanup(to: &output, log: log)
         progress?(FusionProgress(stage: .finishing, fraction: 1))
         return FuseResult(output: output, issues: issues, fusedURLs: fuseURLs)
+    }
+
+    /// The always-on render cleanup: rim despill (structured defocus-spill glow
+    /// hugging the silhouette) then black point (uniform backdrop veil,
+    /// self-gated to dark backdrops — see `BlackPoint`). Both passes are
+    /// no-risk by construction on scenes they don't apply to — despill's
+    /// spill-strength gate reads a lit scene as subject, black-point's veil
+    /// gate reads a non-black floor as "no backdrop" — which is why there is
+    /// no user-facing control, matching commercial stackers' default-clean
+    /// output. Applied to every consumer of the fused result, DNG included:
+    /// the glow is baked into fused pixels, so a raw developer downstream
+    /// could never remove it later.
+    ///
+    /// A/B escape hatches (measurement, not user settings):
+    /// `HYPERFOCAL_DESPILL` / `HYPERFOCAL_BLACK_POINT` = 0 disable a pass.
+    /// PMax has no despill inputs off the CPU streaming path (GPU port is a
+    /// ROADMAP item), so only the black point applies there.
+    static func applyRenderCleanup(to output: inout DMapFusion.Output,
+                                   log: ((String) -> Void)? = nil) {
+        let env = ProcessInfo.processInfo.environment
+        let despill = min(max(Float(env["HYPERFOCAL_DESPILL"] ?? "") ?? 1, 0), 1)
+        let blackPoint = min(max(Float(env["HYPERFOCAL_BLACK_POINT"] ?? "") ?? 1, 0), 1)
+        if despill > 0, let inputs = output.despill {
+            Despill.apply(to: &output.image, inputs: inputs, intensity: despill, log: log)
+        }
+        if blackPoint > 0 {
+            BlackPoint.applyExport(to: &output.image, intensity: blackPoint, log: log)
+        }
     }
 
     /// Builds the fusion's frame source, cropping the output canvas to the

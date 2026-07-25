@@ -57,6 +57,20 @@ Script: see the end of this file.
   dark-backdrop specimens.
 - **Fluorite** (`~/Desktop/Fluorite`): specular-bokeh check. Glints must not
   change (57 dB was the shipped despill's result).
+- **Fluorite 2** (`~/Desktop/Fluorite 2`, 78 NEF): fused canvas **8031×5357**.
+  Purple fluorite + cream calcite on black — the stack that showed the halo
+  "around almost the entire specimen" at default settings and drove the
+  always-on render cleanup. The calcite's right rim is probed with *horizontal*
+  scans (rows y = 2200, 2600, 3000, 3400, scanning right-to-left; report
+  distances to the right of the edge); the top edge with column scans at
+  x = 3000, 3600, 4400. Helicon reference: `~/Desktop/Fluorite 2 Helicon.tif`
+  (8254×5502; its background is true 0 past ~10–30 px everywhere, and it keeps
+  a physical rim tail of ~17k/17k/10k at −6/−10/−20 at the calcite's bottom
+  contact, so a tail of that scale near y≈3400 is *matching* it, not failing).
+  Defaults-on cleanup measured: calcite row y=2200 went 6141 → 78 at −10 px
+  (reference ~0); the wide 20–30 px band matches the reference everywhere; a
+  narrow residual of ~2–6k at −6/−10 survives on the top/left edges vs the
+  reference's ~70–335 (see the gate-retune note below).
 
 ## Acceptance numbers
 
@@ -99,6 +113,26 @@ that no pixel got *brighter*, since these passes only ever subtract.
   `HYPERFOCAL_DUMP_LUMMIN0` / `_NEARBLACK` (debloom's near-black gate). They
   write raw f32 at grid or full resolution; read with
   `numpy.fromfile(..., dtype=numpy.float32).reshape(h, w)`.
+
+## Measured tuning boundaries (don't re-derive these)
+
+- **Despill spill gate `SPILL_LO` 0.42 → 0.30** (`HYPERFOCAL_DESPILL_SPILL_LO`)
+  was measured on 2026-07-25 and **rejected**. It cuts the Fluorite 2 top-edge
+  residual 5938 → 1920 at −10 px and lands *under* the Helicon reference at
+  every Azurite column (0.2–1.3×, vs 0.5–3.3× for the shipped 0.42) — but the
+  darkening-overlay map shows it starting to outline *interior* crystal
+  contacts inside the Azurite subject (68k bright pixels darkened >1000 vs 24k
+  shipped), the exact failure the 0.42 margin protects against. The narrow
+  −6/−10 px residual on some edges is the accepted price; revisit only with a
+  gate that can tell an interior contact from a silhouette.
+- **Black-point veil gate** (`HYPERFOCAL_BLACK_POINT_GATE_LO`/`_HI`, default
+  0.02/0.06 over the max-channel *encoded* veil): anchor measurements are
+  0.4–0.6% for genuine dark-backdrop veils (Azurite R263 G229 B0; Fluorite 2
+  R0 G365 B410, /65535), vs **24.5%** on the white-marble sample-stack and
+  **50%** on the synthetic plane scene — where an ungated subtraction crushes
+  the sample-stack background to 0, halves its subject shadows, and drops the
+  synth PSNR gate from 38.75 to 8.8 dB. The 40× separation is why the gate can
+  be automatic and the pass needs no user control.
 
 ## Validate at FULL RESOLUTION. This is not optional.
 

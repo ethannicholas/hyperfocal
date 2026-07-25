@@ -46,25 +46,6 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 
 ## UI Improvements
 
-- **Surface rim despill + export black-point in both UIs.** Both are engine +
-  CLI only today (`--despill`, `--black-point`, 0…1 intensity, off by default;
-  `Despill.swift` / `BlackPoint.swift`), so the app can't reach either. They
-  remove the defocus-glow halo hugging a specimen's silhouette and the uniform
-  backdrop veil — the visible gap against commercial stackers on dark-background
-  macro work. Needs the usual dual-UI treatment: state in `AppCore` (with a
-  `ModelEdit` case so ⌘Z walks it back, like every other non-stroke output
-  edit), a SwiftUI control, the QML equivalent, bridge plumbing, accessibility
-  identifiers on both sides, and catalog entries for the new strings. Note both
-  passes are display-referred only — linear DNG export is left untouched by
-  design, so the UI should say so rather than appear to do nothing. Decide
-  whether they default off (today's CLI behaviour) or on.
-- **Non-destructive black point via the DNG BlackLevel tag.** `--black-point`
-  subtracts the measured veil from the pixels; for DNG output the same result
-  can be had by writing the BlackLevel tag so raw developers subtract it
-  themselves and the data stays untouched — which is what linear DNG export is
-  for. `DNGWriter.swift` writes no BlackLevel today. Done = DNG carries the
-  measured black point as a tag, Lightroom/ACR open it showing the crushed
-  background, and the pixel data is unmodified.
 - Improve the experience of starting retouching. Right now it simply freezes the
   UI for up to several seconds before being ready. If we can't speed it up, we need
   a spinner or similar progress indicator.
@@ -176,10 +157,17 @@ loop or re-attempting a parked optimization.
   `Despill.DespillInputs`). Porting means computing both reductions on-device in
   `GPUPyramid`/`WgpuPyramid` and reading back at grid resolution, gated on
   CPU↔GPU parity of the despill inputs (DMap's equivalent measured ~74 dB).
-  Worth doing: the GPU pmax path measures ~1.6-1.9x faster than the CPU one, so
-  forcing CPU for despill is a real cost. The debloom near-black gate's port
-  (git history) is the worked example — shared mask/statistics code called by
-  every backend, with only the buffer plumbing per engine.
+  The stakes rose since this was written: DMap's render cleanup (despill +
+  self-gated black point, `StackPipeline.applyRenderCleanup`) is now always-on
+  in the pipeline and the CLI, but PMax only gets the black-point half — its
+  despill stays opt-in-and-CPU until these inputs exist on the GPU, so PMax
+  results keep their rim glow at default settings. The GPU pmax path measures
+  ~1.6-1.9x faster than the CPU one, so forcing CPU is a real cost. The
+  debloom near-black gate's port (git history) is the worked example — shared
+  mask/statistics code called by every backend, with only the buffer plumbing
+  per engine. Done = the pipeline turns despill on for PMax on every engine
+  and the rim profiles (see `Docs/research/2026-07-25-rim-quality-measurement.md`)
+  match the DMap result on the same stack.
 - **Research-informed fusion follow-ons** — full findings, evidence, sources, and
   refuted claims: `Docs/research/2026-07-12-focus-stacking-research.md` (consult
   before revisiting). The regularizer is `DepthRegularize.swift` (ablation
