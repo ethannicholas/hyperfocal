@@ -153,10 +153,9 @@ loop or re-attempting a parked optimization.
 - **wgpu static-link rollout.** Both fusion paths run on the wgpu/WGSL backend
   (opt-in `HYPERFOCAL_WGPU=1`; validated on WARP + llvmpipe, real-hardware
   speedups still unmeasured — the dev VM has no hardware DX12).
-  `HYPERFOCAL_WGPU_STATIC=1` links `libwgpu_native.a` and is proven on macOS.
-  Remaining: verify the static link on **Linux** and **Windows** (pick the
-  static lib from the MSVC archives), then fold wgpu out of the CLI-DLL
-  deployment concern.
+  `HYPERFOCAL_WGPU_STATIC=1` is proven on macOS and Windows. Remaining: verify
+  the static link on **Linux** (`libwgpu_native.a`, same shape as the macOS
+  branch in `Package.swift`).
 - **RAW decode is the fusion bottleneck — the next real throughput win.** With
   both fusion paths on the GPU, decode dominates everything else. Measured on a
   *quiet* machine (Azurite, 63 DNGs at 8076x5237, M1 Pro, two interleaved reps):

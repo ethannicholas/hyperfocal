@@ -325,15 +325,28 @@ if wgpuEnabled {
     cliSwiftSettings.append(.define("HYPERFOCAL_HAVE_WGPU"))
     cliSwiftSettings.append(contentsOf: wgpuXcc)
     kitLinkerSettings.append(.unsafeFlags(["-L\(wgpuRoot)/lib"]))
+    let wgpuStatic = ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU_STATIC"] == "1"
     #if os(Windows)
-    kitLinkerSettings.append(.linkedLibrary("wgpu_native.dll"))
+    // The MSVC release ships both libraries: wgpu_native.dll.lib (the import
+    // stub — spelled "wgpu_native.dll" to the linker) and wgpu_native.lib
+    // (the ~50 MB static archive). Static drops wgpu_native.dll from the
+    // deployed CLI. The archive's Rust objects carry /DEFAULTLIB directives
+    // for the Win32/D3D libraries wgpu references, so only ntdll has to be
+    // named: the four Nt* pipe/file entry points Rust's std imports directly
+    // are the sole undefined symbols without it.
+    if wgpuStatic {
+        kitLinkerSettings.append(.unsafeFlags(["\(wgpuRoot)/lib/wgpu_native.lib"]))
+        kitLinkerSettings.append(.linkedLibrary("ntdll"))
+    } else {
+        kitLinkerSettings.append(.linkedLibrary("wgpu_native.dll"))
+    }
     #else
     // HYPERFOCAL_WGPU_STATIC=1 links the release archive's libwgpu_native.a
     // instead of the dylib — no runtime library to deploy beside the
     // binary. Verified on macOS (parity suite, no DYLD_LIBRARY_PATH);
     // -lwgpu_native would still pick the dylib when both files sit in
     // lib/, hence the explicit archive path.
-    if ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU_STATIC"] == "1" {
+    if wgpuStatic {
         kitLinkerSettings.append(.unsafeFlags(["\(wgpuRoot)/lib/libwgpu_native.a"]))
     } else {
         kitLinkerSettings.append(.linkedLibrary("wgpu_native"))
