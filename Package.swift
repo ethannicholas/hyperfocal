@@ -9,8 +9,8 @@ import Foundation
 // Cross-platform note: on Apple platforms the engine decodes/encodes through
 // ImageIO/CoreImage and registers through Vision. On Linux those frameworks
 // don't exist, so the engine talks to a C-ABI shim (`CImaging`) over
-// libtiff/libpng/libjpeg-turbo/LibRaw/lcms2/OpenCV (EXIF via the vendored
-// BSD-2 easyexif). See Docs/cross-platform-plan.md.
+// libtiff/libpng/libjpeg-turbo/LibRaw/lcms2/OpenCV/giflib (EXIF via the
+// vendored BSD-2 easyexif). See Docs/cross-platform-plan.md.
 
 // Split a pkg-config invocation's output into individual flags. Run at manifest
 // evaluation time so the multiarch include/lib paths come from the system,
@@ -222,6 +222,8 @@ if ProcessInfo.processInfo.environment["HYPERFOCAL_OPENCV_AB"] == "1",
 // The C-ABI imaging shim over the system libraries. pkg-config supplies the
 // (multiarch) include and link flags at manifest-eval time.
 let imagingPkgs = ["libtiff-4", "libpng", "libjpeg", "lcms2", "libraw", "opencv4"]
+// giflib ships no pkg-config file on Ubuntu (libgif-dev), so it is linked by name.
+let imagingExtraLibs = ["-lgif"]
 extraTargets.append(
     .target(
         name: "CImaging",
@@ -255,7 +257,7 @@ extraTargets.append(
                             "-lopencv_video"].contains(lib) ? lib : nil
                 default: return $0
                 }
-            }),
+            } + imagingExtraLibs),
             .linkedLibrary("stdc++"),
         ]
     )
@@ -268,7 +270,7 @@ hyperfocalKitDeps.append("CImaging")
 // a `vcpkg` checkout beside this repo) and VCPKG_TRIPLET.
 // Import-library names as vcpkg builds them (dynamic triplet; raw_r is
 // LibRaw's thread-safe build — the only one vcpkg ships).
-let winImagingLibs = ["tiff", "libpng16", "jpeg", "lcms2", "raw_r",
+let winImagingLibs = ["tiff", "libpng16", "jpeg", "lcms2", "raw_r", "gif",
                       "opencv_core4", "opencv_imgproc4", "opencv_features2d4",
                       "opencv_calib3d4", "opencv_video4"]
 extraTargets.append(

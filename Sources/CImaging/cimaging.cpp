@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,6 +37,7 @@
 #include <opencv2/video/tracking.hpp>   // findTransformECC
 
 #include "easyexif/exif.h"   // BSD-2 EXIF reader (JPEG + TIFF-based raws)
+#include <gif_lib.h>         // MIT; animated GIF writer (rocking animation)
 
 // MSVC's UCRT spells POSIX timegm as _mkgmtime (same contract: UTC-naive
 // struct tm → epoch).
@@ -1193,6 +1195,300 @@ extern "C" hf_status hf_encode_png16(const char* path, int w, int h,
 extern "C" hf_status hf_encode_jpeg8(const char* path, int w, int h,
                                      const float* rgba, const char* cs) {
     return encodeJPEG(path, w, h, rgba, cs);
+}
+
+// ---------------------------------------------------------------------------
+// Animated GIF
+// ---------------------------------------------------------------------------
+namespace {
+
+// A 5-bit-per-channel colour cube: coarse enough that the histogram and the
+// nearest-palette lookup both fit in 32k entries, fine enough that ordered
+// dithering still has somewhere to land between cells.
+constexpr int kCubeBits = 5;
+constexpr int kCubeSide = 1 << kCubeBits;
+constexpr int kCubeCells = kCubeSide * kCubeSide * kCubeSide;
+
+inline int cubeCell(int r5, int g5, int b5) {
+    return (r5 << (2 * kCubeBits)) | (g5 << kCubeBits) | b5;
+}
+inline int to5(int v8) { return v8 >> (8 - kCubeBits); }
+// Cell coordinate back to the centre of the 8-bit range it covers.
+inline int from5(int v5) { return (v5 * 255 + (kCubeSide - 1) / 2) / (kCubeSide - 1); }
+
+struct Box {
+    int lo[3], hi[3];          // inclusive cube-coordinate bounds
+    long long count = 0;       // pixels inside
+    bool splittable = true;
+};
+
+// Median-cut palette over a colour-cube histogram. giflib has
+// GifQuantizeBuffer, but vcpkg's Windows DLL does not export it
+// (ports/giflib/exports.def lists every other entry point), so the quantizer
+// is ours — which also keeps the three platforms producing identical output.
+std::vector<GifColorType> medianCut(const std::vector<long long>& hist, int want) {
+    auto shrink = [&](Box& box) {
+        int lo[3] = {kCubeSide, kCubeSide, kCubeSide}, hi[3] = {-1, -1, -1};
+        long long n = 0;
+        for (int r = box.lo[0]; r <= box.hi[0]; r++)
+            for (int g = box.lo[1]; g <= box.hi[1]; g++)
+                for (int b = box.lo[2]; b <= box.hi[2]; b++) {
+                    long long c = hist[cubeCell(r, g, b)];
+                    if (!c) continue;
+                    n += c;
+                    const int v[3] = {r, g, b};
+                    for (int k = 0; k < 3; k++) {
+                        lo[k] = std::min(lo[k], v[k]);
+                        hi[k] = std::max(hi[k], v[k]);
+                    }
+                }
+        box.count = n;
+        if (n) for (int k = 0; k < 3; k++) { box.lo[k] = lo[k]; box.hi[k] = hi[k]; }
+    };
+    // Pixel count in one slice (axis == value) of a box.
+    auto slice = [&](const Box& box, int axis, int value) {
+        long long n = 0;
+        int lo[3] = {box.lo[0], box.lo[1], box.lo[2]};
+        int hi[3] = {box.hi[0], box.hi[1], box.hi[2]};
+        lo[axis] = hi[axis] = value;
+        for (int r = lo[0]; r <= hi[0]; r++)
+            for (int g = lo[1]; g <= hi[1]; g++)
+                for (int b = lo[2]; b <= hi[2]; b++) n += hist[cubeCell(r, g, b)];
+        return n;
+    };
+
+    Box all;
+    for (int k = 0; k < 3; k++) { all.lo[k] = 0; all.hi[k] = kCubeSide - 1; }
+    shrink(all);
+    if (all.count == 0) return {};
+    std::vector<Box> boxes{all};
+
+    while ((int)boxes.size() < want) {
+        int best = -1;
+        long long bestCount = 0;
+        for (size_t i = 0; i < boxes.size(); i++) {
+            const Box& bx = boxes[i];
+            const bool hasRoom = bx.hi[0] > bx.lo[0] || bx.hi[1] > bx.lo[1]
+                              || bx.hi[2] > bx.lo[2];
+            if (bx.splittable && hasRoom && bx.count > bestCount) {
+                bestCount = bx.count;
+                best = (int)i;
+            }
+        }
+        if (best < 0) break;                       // every box is a single cell
+        const Box bx = boxes[best];
+        int axis = 0, span = bx.hi[0] - bx.lo[0];
+        for (int k = 1; k < 3; k++)
+            if (bx.hi[k] - bx.lo[k] > span) { span = bx.hi[k] - bx.lo[k]; axis = k; }
+        // Cut at the weighted median, kept strictly inside the box.
+        const long long half = bx.count / 2;
+        long long acc = 0;
+        int cut = bx.lo[axis];
+        for (int v = bx.lo[axis]; v < bx.hi[axis]; v++) {
+            acc += slice(bx, axis, v);
+            cut = v;
+            if (acc >= half) break;
+        }
+        Box a = bx, b = bx;
+        a.hi[axis] = cut;
+        b.lo[axis] = cut + 1;
+        shrink(a);
+        shrink(b);
+        if (a.count == 0 || b.count == 0) {
+            boxes[best].splittable = false;        // no useful cut here
+            continue;
+        }
+        boxes[best] = a;
+        boxes.push_back(b);
+    }
+
+    std::vector<GifColorType> palette;
+    palette.reserve(boxes.size());
+    for (const Box& bx : boxes) {
+        double sr = 0, sg = 0, sb = 0;
+        long long n = 0;
+        for (int r = bx.lo[0]; r <= bx.hi[0]; r++)
+            for (int g = bx.lo[1]; g <= bx.hi[1]; g++)
+                for (int b = bx.lo[2]; b <= bx.hi[2]; b++) {
+                    long long c = hist[cubeCell(r, g, b)];
+                    if (!c) continue;
+                    sr += (double)c * from5(r);
+                    sg += (double)c * from5(g);
+                    sb += (double)c * from5(b);
+                    n += c;
+                }
+        GifColorType entry{};
+        if (n) {
+            entry.Red   = (GifByteType)std::lround(sr / (double)n);
+            entry.Green = (GifByteType)std::lround(sg / (double)n);
+            entry.Blue  = (GifByteType)std::lround(sb / (double)n);
+        }
+        palette.push_back(entry);
+    }
+    return palette;
+}
+
+// 8x8 Bayer threshold matrix, 0..63. Ordered rather than Floyd-Steinberg:
+// error diffusion is serial and this runs over every frame of the animation,
+// and a fixed threshold pattern stays put between frames instead of crawling.
+const int kBayer8[64] = {
+     0, 32,  8, 40,  2, 34, 10, 42,
+    48, 16, 56, 24, 50, 18, 58, 26,
+    12, 44,  4, 36, 14, 46,  6, 38,
+    60, 28, 52, 20, 62, 30, 54, 22,
+     3, 35, 11, 43,  1, 33,  9, 41,
+    51, 19, 59, 27, 49, 17, 57, 25,
+    15, 47,  7, 39, 13, 45,  5, 37,
+    63, 31, 55, 23, 61, 29, 53, 21,
+};
+
+} // namespace
+
+struct hf_gif {
+    GifFileType* gif = nullptr;
+    int w = 0, h = 0;
+    ColorMapObject* cmap = nullptr;
+    std::vector<unsigned char> lut;      // cube cell -> palette index
+    std::vector<GifByteType> indices;    // one frame's worth of indices
+};
+
+namespace {
+
+// Frame pixels (P3 float RGBA) -> palette indices, dithered.
+bool mapFrame(hf_gif* g, const float* rgba) {
+    const size_t px = (size_t)g->w * g->h;
+    std::vector<float> tmp(rgba, rgba + px * 4);
+    if (!fromP3(tmp.data(), (int)px, "srgb")) return false;
+    // Dither amplitude = one cube cell, so the pattern nudges a colour into a
+    // neighbouring cell rather than swamping it.
+    constexpr float kAmp = 256.0f / kCubeSide;
+    for (int y = 0; y < g->h; y++) {
+        for (int x = 0; x < g->w; x++) {
+            const size_t i = (size_t)y * g->w + x;
+            const float d = ((float)kBayer8[(y & 7) * 8 + (x & 7)] / 64.0f - 0.5f) * kAmp;
+            int c[3];
+            for (int k = 0; k < 3; k++) {
+                const float v = clamp01(tmp[i * 4 + k]) * 255.0f + d;
+                c[k] = (int)std::lround(v < 0 ? 0 : (v > 255 ? 255 : v));
+            }
+            g->indices[i] = g->lut[cubeCell(to5(c[0]), to5(c[1]), to5(c[2]))];
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+extern "C" hf_gif* hf_gif_begin(const char* path, int w, int h,
+                                const float* base_rgba) {
+    if (w <= 0 || h <= 0 || !base_rgba) return nullptr;
+    const size_t px = (size_t)w * h;
+
+    // Histogram the base image in sRGB, then median-cut it to 256 colours.
+    std::vector<float> tmp(base_rgba, base_rgba + px * 4);
+    if (!fromP3(tmp.data(), (int)px, "srgb")) return nullptr;
+    std::vector<long long> hist(kCubeCells, 0);
+    for (size_t i = 0; i < px; i++) {
+        hist[cubeCell(to5((int)(clamp01(tmp[i * 4]) * 255.0f + 0.5f)),
+                      to5((int)(clamp01(tmp[i * 4 + 1]) * 255.0f + 0.5f)),
+                      to5((int)(clamp01(tmp[i * 4 + 2]) * 255.0f + 0.5f)))]++;
+    }
+    std::vector<GifColorType> palette = medianCut(hist, 256);
+    if (palette.empty()) return nullptr;
+
+    auto g = std::make_unique<hf_gif>();
+    g->w = w;
+    g->h = h;
+    g->indices.resize(px);
+
+    // GIF colour maps must be a power-of-two size; pad with the first entry.
+    int mapSize = 1;
+    while (mapSize < (int)palette.size()) mapSize <<= 1;
+    g->cmap = GifMakeMapObject(mapSize, nullptr);
+    if (!g->cmap) return nullptr;
+    for (int i = 0; i < mapSize; i++)
+        g->cmap->Colors[i] = palette[(size_t)i < palette.size() ? i : 0];
+
+    // Nearest palette entry for every cube cell, once.
+    g->lut.resize(kCubeCells);
+    for (int r = 0; r < kCubeSide; r++)
+        for (int gg = 0; gg < kCubeSide; gg++)
+            for (int b = 0; b < kCubeSide; b++) {
+                const int cr = from5(r), cg = from5(gg), cb = from5(b);
+                int bestIdx = 0;
+                long bestDist = LONG_MAX;
+                for (size_t i = 0; i < palette.size(); i++) {
+                    const long dr = cr - palette[i].Red;
+                    const long dg = cg - palette[i].Green;
+                    const long db = cb - palette[i].Blue;
+                    const long dist = dr * dr + dg * dg + db * db;
+                    if (dist < bestDist) { bestDist = dist; bestIdx = (int)i; }
+                }
+                g->lut[cubeCell(r, gg, b)] = (unsigned char)bestIdx;
+            }
+
+    int err = 0;
+    g->gif = EGifOpenFileName(path, false, &err);
+    if (!g->gif) { GifFreeMapObject(g->cmap); return nullptr; }
+    EGifSetGifVersion(g->gif, true);      // 89a: loop + delay extensions
+    if (EGifPutScreenDesc(g->gif, w, h, GifBitSize(mapSize), 0, g->cmap)
+            == GIF_ERROR) {
+        EGifCloseFile(g->gif, &err);
+        GifFreeMapObject(g->cmap);
+        return nullptr;
+    }
+    // NETSCAPE 2.0 application extension, loop count 0 = forever.
+    const unsigned char loop[3] = {1, 0, 0};
+    if (EGifPutExtensionLeader(g->gif, APPLICATION_EXT_FUNC_CODE) == GIF_ERROR ||
+        EGifPutExtensionBlock(g->gif, 11, "NETSCAPE2.0") == GIF_ERROR ||
+        EGifPutExtensionBlock(g->gif, 3, loop) == GIF_ERROR ||
+        EGifPutExtensionTrailer(g->gif) == GIF_ERROR) {
+        EGifCloseFile(g->gif, &err);
+        GifFreeMapObject(g->cmap);
+        return nullptr;
+    }
+    return g.release();
+}
+
+extern "C" hf_status hf_gif_add_frame(hf_gif* g, const float* rgba,
+                                      int delay_cs) {
+    if (!g || !g->gif || !rgba) return hf_err_encode;
+    if (!mapFrame(g, rgba)) return hf_err_color;
+
+    GraphicsControlBlock gcb;
+    gcb.DisposalMode = DISPOSAL_UNSPECIFIED;
+    gcb.UserInputFlag = false;
+    gcb.DelayTime = delay_cs;
+    gcb.TransparentColor = NO_TRANSPARENT_COLOR;
+    GifByteType ext[4];
+    EGifGCBToExtension(&gcb, ext);
+    if (EGifPutExtension(g->gif, GRAPHICS_EXT_FUNC_CODE, 4, ext) == GIF_ERROR)
+        return hf_err_encode;
+    // No local colour map: every frame shares the global one.
+    if (EGifPutImageDesc(g->gif, 0, 0, g->w, g->h, false, nullptr) == GIF_ERROR)
+        return hf_err_encode;
+    for (int y = 0; y < g->h; y++)
+        if (EGifPutLine(g->gif, g->indices.data() + (size_t)y * g->w, g->w)
+                == GIF_ERROR)
+            return hf_err_encode;
+    return hf_ok;
+}
+
+extern "C" hf_status hf_gif_finish(hf_gif* g) {
+    if (!g) return hf_err_encode;
+    int err = 0;
+    const bool ok = g->gif && EGifCloseFile(g->gif, &err) != GIF_ERROR;
+    if (g->cmap) GifFreeMapObject(g->cmap);
+    delete g;
+    return ok ? hf_ok : hf_err_encode;
+}
+
+extern "C" void hf_gif_abort(hf_gif* g) {
+    if (!g) return;
+    int err = 0;
+    if (g->gif) EGifCloseFile(g->gif, &err);
+    if (g->cmap) GifFreeMapObject(g->cmap);
+    delete g;
 }
 
 // ---------------------------------------------------------------------------

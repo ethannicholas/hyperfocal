@@ -3,6 +3,8 @@ import Foundation
 import AVFoundation
 import CoreGraphics
 import ImageIO
+#else
+import CImaging
 #endif
 
 /// Rocking animation: the fused image reprojected with a
@@ -213,6 +215,8 @@ public enum RockingAnimation {
         }
     }
 
+    #endif   // canImport(AVFoundation) — the geometry below is shared
+
     /// Box-filter downsample of image and depth together (averaging depth
     /// across a box is fine: it only feeds sub-pixel disparities).
     static func downsample(_ image: ImageBuffer, depth: [Float],
@@ -302,6 +306,7 @@ public enum RockingAnimation {
         }
     }
 
+    #if canImport(AVFoundation)
     /// Float working-space pixels → sRGB BGRA into the encoder's buffer
     /// (CoreGraphics does the color conversion while drawing).
     private static func render(_ image: ImageBuffer, into buffer: CVPixelBuffer) throws {
@@ -325,17 +330,64 @@ public enum RockingAnimation {
         return
     }
     #else
-    /// Rocking export depends on AVFoundation (MP4) / ImageIO (GIF); on
-    /// platforms without them it is not yet available (FFmpeg + giflib backend
-    /// is a later port item). Kept as a throwing stub so the rest of the CLI
-    /// builds and ships. Not on the synth-gate path.
+    /// GIF via the CImaging giflib writer. H.264 has no portable encoder we
+    /// can ship (every obvious FFmpeg build is GPL-configured, which our MIT
+    /// source + app-store distribution cannot take), so MP4 stays Apple-only
+    /// and asks for a `.gif` instead of failing vaguely.
     public static func write(to url: URL, image: ImageBuffer, depth: [Float],
                              options: Options = Options(),
                              log: ((String) -> Void)? = nil,
                              progress: ((Double) -> Void)? = nil,
                              cancellation: CancellationToken? = nil) throws {
-        throw ImageFileError.unsupported(
-            "rocking animation export is not available on this platform yet")
+        precondition(depth.count == image.width * image.height,
+                     "depth plane must match the image")
+        guard url.pathExtension.lowercased() == "gif" else {
+            throw ImageFileError.unsupported(localizedString(
+                "Rocking animations export as GIF on this platform — choose a .gif filename.",
+                comment: "Non-Apple rocking export: only the GIF container is available"))
+        }
+        let scale = min(1.0, Double(options.maxSide) / Double(max(image.width, image.height)))
+        // Even dimensions aren't required by GIF, but keeping the same
+        // rounding as the H.264 path means both produce the same geometry.
+        let w = max(2, Int(Double(image.width) * scale) & ~1)
+        let h = max(2, Int(Double(image.height) * scale) & ~1)
+        let (base, smallDepth) = downsample(image, depth: depth, to: (w, h))
+        let disparity = normalizedDisparity(smallDepth)
+        let frameCount = max(2, Int(options.duration * options.fps))
+        log?(String(format: "rocking: %dx%d, %d frames @ %.0f fps, amplitude %.1f%%, GIF",
+                    w, h, frameCount, options.fps, options.amplitude * 100))
+
+        try? FileManager.default.removeItem(at: url)
+        // GIF delays are centiseconds; below 2 many players silently clamp to
+        // 10, so keep the written value honest rather than promising 30 fps.
+        let delay = max(2, Int((100.0 / options.fps).rounded()))
+        guard let gif = base.pixels.withUnsafeBufferPointer({
+            hf_gif_begin(url.path, CInt(w), CInt(h), $0.baseAddress)
+        }) else {
+            throw StackError.io("couldn't create GIF at \(url.path)")
+        }
+        var finished = false
+        defer { if !finished { hf_gif_abort(gif) } }
+
+        var warped = ImageBuffer(width: w, height: h)
+        for frame in 0..<frameCount {
+            try cancellation?.checkCancelled()
+            let shift = options.shift(frame: frame, of: frameCount, width: w)
+            warp(base, disparity: disparity, shiftX: shift.x, shiftY: shift.y,
+                 into: &warped)
+            let status = warped.pixels.withUnsafeBufferPointer {
+                hf_gif_add_frame(gif, $0.baseAddress, CInt(delay))
+            }
+            guard status == hf_ok else {
+                throw StackError.io("animation frame \(frame) failed (shim status \(status.rawValue))")
+            }
+            progress?(Double(frame + 1) / Double(frameCount))
+        }
+        finished = true
+        guard hf_gif_finish(gif) == hf_ok else {
+            throw StackError.io("couldn't finish writing the GIF")
+        }
+        log?("wrote \(url.lastPathComponent)")
     }
     #endif
 }

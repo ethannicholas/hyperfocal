@@ -244,11 +244,19 @@ void Shell::exportAnimationInteractive() {
     // (AnimationFormat/Duration/Path/Strength). The raw list is what crosses
     // the bridge; the parallel *Labels list is what the user reads. Never
     // write a label back — that would persist a translated rawValue.
-    const QStringList formats = {QStringLiteral("MP4 (H.264)"),
-                                 QStringLiteral("GIF (loops automatically)")};
-    const QStringList formatLabels = {tr("MP4 (H.264)"),
-                                      tr("GIF (loops automatically)")};
-    const QStringList suffixes = {QStringLiteral("mp4"), QStringLiteral("gif")};
+    //
+    // H.264 additionally needs AVFoundation: off Apple the engine writes GIF
+    // only (RockingAnimation's non-Apple path), so don't offer a container the
+    // export would then have to refuse.
+    QStringList formats, formatLabels, suffixes;
+#ifdef Q_OS_MACOS
+    formats << QStringLiteral("MP4 (H.264)");
+    formatLabels << tr("MP4 (H.264)");
+    suffixes << QStringLiteral("mp4");
+#endif
+    formats << QStringLiteral("GIF (loops automatically)");
+    formatLabels << tr("GIF (loops automatically)");
+    suffixes << QStringLiteral("gif");
     QStringList filters;
     for (qsizetype i = 0; i < formats.size(); ++i)
         filters << formatLabels[i] + " (*." + suffixes[i] + ")";
@@ -264,7 +272,7 @@ void Shell::exportAnimationInteractive() {
     auto applyFormat = [&] {
         const qsizetype i = filters.indexOf(dialog.selectedNameFilter());
         dialog.setDefaultSuffix(
-            suffixes.value(qMax(qsizetype(0), i), QStringLiteral("mp4")));
+            suffixes.value(qMax(qsizetype(0), i), suffixes.first()));
     };
     applyFormat();
     QObject::connect(&dialog, &QFileDialog::filterSelected, &dialog,

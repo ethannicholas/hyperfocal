@@ -22,8 +22,8 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   APIs sit behind `#if canImport(<Framework>)`; the `#else` branch talks to
   `Sources/CImaging`.
 - `Sources/CImaging/` — C-ABI imaging shim for the non-Apple platforms
-  (libtiff / libpng / libjpeg-turbo / LibRaw / lcms2 / OpenCV; EXIF via the
-  vendored BSD-2 `easyexif`). macOS uses ImageIO / CoreImage / Vision / CIRAW
+  (libtiff / libpng / libjpeg-turbo / LibRaw / lcms2 / OpenCV / giflib; EXIF via
+  the vendored BSD-2 `easyexif`). macOS uses ImageIO / CoreImage / Vision / CIRAW
   instead. Registration is Vision on macOS, OpenCV elsewhere.
 - `Sources/hyperfocal-cli/`-equivalent target — CLI (`fuse`, `batch`,
   `synth`, `compare`); builds on all three OSes.

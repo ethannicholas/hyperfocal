@@ -27,9 +27,14 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
   the `Scripts/windows-env.ps1` environment; needs a GitHub Actions Windows job
   (or a self-hosted arm64 runner), possibly with Windows-calibrated PSNR floors
   (margins above the shared floors are thin: pmax ~0.25 dB).
-- **Rocking-animation export on non-Apple.** `RockingAnimation.write` throws off
-  Apple — needs the FFmpeg/giflib backend (Ubuntu deps for it:
-  `libavformat/avcodec/avutil/swscale-dev libgif-dev`).
+- **Rocking-animation MP4 on non-Apple.** GIF exports on all three OSes now
+  (giflib, via `hf_gif_*`); H.264 is still Apple-only and the non-Apple path
+  refuses a non-`.gif` filename rather than failing obscurely. The blocker is
+  the encoder's licence, not the plumbing: distro FFmpeg builds are configured
+  `--enable-gpl` and libx264 is GPL-only, neither of which MIT source + paid
+  app-store builds can absorb. Pick a permissive encoder through the
+  `third-party-deps` gate first — OpenH264 (BSD), FFmpeg's own LGPL-safe mpeg4,
+  or the OS encoders (Media Foundation on Windows, VA-API on Linux).
 - **HE-NEF decode on Linux/Wine** is still deferred — Windows converts them via
   the Adobe DNG Converter (`RawConverter`), but the Linux/Wine path was punted;
   see `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.

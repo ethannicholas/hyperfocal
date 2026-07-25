@@ -87,6 +87,25 @@ hf_status hf_encode_png16(const char* path, int w, int h,
 hf_status hf_encode_jpeg8(const char* path, int w, int h,
                           const float* rgba, const char* colorspace);
 
+// ---- Animated GIF ----------------------------------------------------------
+// Streaming writer for the rocking animation's GIF container: begin, add each
+// frame, finish. Frames are RGBA Float32 in the P3 working space, all the same
+// w*h; each is converted to sRGB and mapped to ONE global 256-colour palette,
+// built at begin time from `base_rgba` (the unwarped image every frame is a
+// warp of). A shared palette is both faster than per-frame quantization and
+// visibly steadier — per-frame palettes make flat backgrounds crawl.
+//
+// The file loops forever (NETSCAPE 2.0, loop count 0), matching the ImageIO
+// path on Apple. `delay_cs` is the inter-frame delay in centiseconds, GIF's
+// only unit.
+typedef struct hf_gif hf_gif;
+hf_gif* hf_gif_begin(const char* path, int w, int h, const float* base_rgba);
+hf_status hf_gif_add_frame(hf_gif* gif, const float* rgba, int delay_cs);
+// Writes the trailer, closes, and frees `gif` (invalid afterwards either way).
+hf_status hf_gif_finish(hf_gif* gif);
+// Closes and frees without a trailer — for cancellation or an aborted write.
+void hf_gif_abort(hf_gif* gif);
+
 // ---- EXIF (easyexif + LibRaw fallback) -------------------------------------
 // Capture time as a Unix epoch (seconds, UTC-naive) with sub-second precision
 // folded in; returns hf_err_* and leaves *out_epoch untouched if absent.

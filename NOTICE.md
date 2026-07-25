@@ -162,6 +162,23 @@ EXIF metadata reading (capture time, camera/lens). Vendored at
 > modification, are permitted provided that redistributions retain the above
 > copyright notice, this list of conditions and the following disclaimer.
 
+### giflib
+
+Animated GIF writing for the rocking-animation export. Version 6.1.3, linked
+dynamically. License: `MIT`.
+
+> The GIFLIB distribution is Copyright © 1997 Eric S. Raymond.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+
 ### OpenCombine
 
 `ObservableObject`/`@Published` on non-Apple platforms. License: `MIT`.

@@ -12866,6 +12866,71 @@
         }
       }
     },
+    "Rocking animations export as GIF on this platform — choose a .gif filename.": {
+      "comment": "Shown when a rocking animation is exported to a non-GIF filename on Windows/Linux, where H.264 is unavailable.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parallaxen-Animationen werden auf dieser Plattform als GIF exportiert — wählen Sie einen Dateinamen mit der Endung .gif."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En esta plataforma, las animaciones de balanceo se exportan como GIF: elige un nombre de archivo .gif."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sur cette plateforme, les animations de balancement s’exportent en GIF — choisissez un nom de fichier .gif."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Su questa piattaforma le animazioni oscillanti vengono esportate come GIF: scegli un nome file .gif."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このプラットフォームではスイングアニメーションは GIF として書き出されます。.gif のファイル名を選択してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 플랫폼에서는 로킹 애니메이션을 GIF로 내보냅니다. .gif 파일 이름을 선택하세요."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Op dit platform worden kantelanimaties als GIF geëxporteerd — kies een bestandsnaam met .gif."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nesta plataforma, as animações de balanço são exportadas como GIF — escolha um nome de arquivo .gif."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этой платформе анимации покачивания экспортируются в GIF — выберите имя файла с расширением .gif."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在此平台上，摇摆动画将导出为 GIF，请选择 .gif 文件名。"
+          }
+        }
+      }
+    },
     "S-curve around the midtones: positive deepens shadows and brightens highlights, negative flattens.": {
       "localizations": {
         "de": {
