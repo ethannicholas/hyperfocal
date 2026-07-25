@@ -51,6 +51,25 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 
 ## UI Improvements
 
+- **Surface rim despill + export black-point in both UIs.** Both are engine +
+  CLI only today (`--despill`, `--black-point`, 0…1 intensity, off by default;
+  `Despill.swift` / `BlackPoint.swift`), so the app can't reach either. They
+  remove the defocus-glow halo hugging a specimen's silhouette and the uniform
+  backdrop veil — the visible gap against commercial stackers on dark-background
+  macro work. Needs the usual dual-UI treatment: state in `AppCore` (with a
+  `ModelEdit` case so ⌘Z walks it back, like every other non-stroke output
+  edit), a SwiftUI control, the QML equivalent, bridge plumbing, accessibility
+  identifiers on both sides, and catalog entries for the new strings. Note both
+  passes are display-referred only — linear DNG export is left untouched by
+  design, so the UI should say so rather than appear to do nothing. Decide
+  whether they default off (today's CLI behaviour) or on.
+- **Non-destructive black point via the DNG BlackLevel tag.** `--black-point`
+  subtracts the measured veil from the pixels; for DNG output the same result
+  can be had by writing the BlackLevel tag so raw developers subtract it
+  themselves and the data stays untouched — which is what linear DNG export is
+  for. `DNGWriter.swift` writes no BlackLevel today. Done = DNG carries the
+  measured black point as a tag, Lightroom/ACR open it showing the crushed
+  background, and the pixel data is unmodified.
 - Improve the experience of starting retouching. Right now it simply freezes the
   UI for up to several seconds before being ready. If we can't speed it up, we need
   a spinner or similar progress indicator.
