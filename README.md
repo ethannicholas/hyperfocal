@@ -33,10 +33,11 @@ result every time.
 
 ## Highlights
 
-- **GPU accelerated.** Hyperfocal takes maximum advantage of Apple Silicon,
-  using compute shaders to run its algorithms on the GPU wherever possible.
-  Registration, warping, sharpness scoring, and depth regularization are all
-  GPU-accelerated.
+- **GPU accelerated.** On macOS, Hyperfocal uses Metal compute shaders to run
+  its algorithms on the GPU wherever possible — registration, warping,
+  sharpness scoring, depth regularization, and both fusion engines. Windows
+  and Linux builds currently fuse on the CPU; a WebGPU backend for them is
+  written and passing parity tests, but isn't switched on by default yet.
 
 - **Two fusion engines.** A depth-map engine with halo-aware regularization
   for clean subjects, and Laplacian-pyramid (PMax) fusion for scenes where
@@ -177,11 +178,12 @@ walkthrough of its basic features.
 ## How it works
 
 1. **Registration.** Each frame is registered against its neighbor (adjacent
-   frames in a focus ramp share the most in-focus content) using Vision
-   homographic registration on gradient-magnitude images, which keeps the
-   defocused content from dragging the alignment. Only the chained 3×3
-   matrices are kept. This handles focus breathing, translation, and rotation;
-   the output canvas is cropped to the region every frame covers.
+   frames in a focus ramp share the most in-focus content) by homographic
+   registration on gradient-magnitude images — Vision on macOS, OpenCV
+   elsewhere — which keeps the defocused content from dragging the alignment.
+   Only the chained 3×3 matrices are kept. This handles focus breathing,
+   translation, and rotation; the output canvas is cropped to the region every
+   frame covers.
 
 2. **Fusion.** Each frame is decoded once, warped into reference coordinates
    (Lanczos-3 with an anti-ringing clamp), folded into fixed-size accumulator
