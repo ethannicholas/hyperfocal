@@ -276,9 +276,10 @@ struct Fuse: ParsableCommand {
     var depthMap: String? = nil
 
     @Option(help: ArgumentHelp("Rim despill strength 0…1: remove the defocus-spill glow "
-            + "hugging the subject's silhouette (0 = off, the default). DMap only; "
-            + "display-referred outputs (.tif/.png/.jpg) only — linear .dng is left "
-            + "untouched. Override for A/B with HYPERFOCAL_DESPILL."))
+            + "hugging the subject's silhouette (0 = off, the default). Works with both "
+            + "methods; on PMax it forces the CPU engine. Display-referred outputs "
+            + "(.tif/.png/.jpg) only — linear .dng is left untouched. Override for A/B "
+            + "with HYPERFOCAL_DESPILL."))
     var despill: Float = 0
 
     @Option(help: ArgumentHelp("Black-point strength 0…1: subtract the auto-measured uniform "
@@ -410,13 +411,19 @@ struct Fuse: ParsableCommand {
                 depth = out.depthMap
                 despillInputs = out.despill
             case .pmax:
+                let wantDespill = despillAmount > 0 || despillDumpDir != nil
+                if wantDespill {
+                    print("note: despill on pmax runs the CPU engine (GPU port pending)")
+                }
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),
                                                 log: log,
                                                 focusGate: pmaxDebloom
                                                     ? .init(coarseLevels: pmaxCoarseLevels,
                                                             threshold: pmaxFocusThreshold)
-                                                    : nil)
+                                                    : nil,
+                                                prepareDespill: wantDespill,
+                                                onDespillInputs: { despillInputs = $0 })
             }
         }
         print("fused (\(fusion.method.rawValue)) \(source.count) frames in \(fuseTime)")
@@ -426,7 +433,7 @@ struct Fuse: ParsableCommand {
                 DespillDump.write(di, toDir: dir)
                 print("wrote despill inputs to \(dir)")
             } else {
-                print("note: no despill inputs to dump (--method dmap required)")
+                print("note: no despill inputs to dump")
             }
         }
         if despillAmount > 0 {
@@ -436,7 +443,7 @@ struct Fuse: ParsableCommand {
                 Despill.apply(to: &img, inputs: di, intensity: despillAmount, log: { print($0) })
                 result = img
             } else {
-                print("note: --despill needs --method dmap")
+                print("note: --despill had no inputs — needs at least 3 frames")
             }
         }
         if blackPointAmount > 0 {

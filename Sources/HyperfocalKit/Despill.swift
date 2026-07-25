@@ -112,6 +112,88 @@ public enum Despill {
                              perCellFloor: perCellFloor, spillStrength: spillStrength)
     }
 
+    /// Builds the spill-strength gate directly from per-frame grid luminance,
+    /// for fusion methods that have no depth regularizer to produce it.
+    ///
+    /// DMap gets its `spillStrength` from `DepthRegularize`'s tier-S, where the
+    /// same quantity also steers depth selection; PMax has no depth stage, so it
+    /// needs the gate on its own. The formula is deliberately the same as tier-S
+    /// (`DepthRegularize.swift`, "Tier S: spill floor") rather than shared with
+    /// it: that code path is shipped, tuned, and covered by the CPU↔GPU parity
+    /// gate, and threading a second caller through it would put DMap's output at
+    /// risk to serve PMax. Keep the two in step if either is retuned.
+    ///
+    /// The load-bearing term is `rel`, the relative luminance swing across the
+    /// stack: spill over near-black swings by ~its whole value, while a lit
+    /// surface — including the smooth bright matrix rock that defeats every
+    /// brightness/structure test — barely swings under defocus. `sig` is the
+    /// absolute floor that keeps sensor-noise cells out.
+    ///
+    /// `confidence` (0…1, grid-resolution) is the secondary mask that spares
+    /// cells with real signal; pass a per-cell "did any frame carry fine-scale
+    /// focus here" measure. It is normalized against its own 95th percentile,
+    /// so it needs no particular scale. Pass an empty array to drop the term.
+    /// Env: `HYPERFOCAL_DESPILL_SPAN_EPS_FRAC` (default 0.002, × p95 luminance).
+    public static func spillStrength(luminancePlanes: [[Float]],
+                                     confidence: [Float],
+                                     gridWidth gw: Int, gridHeight gh: Int,
+                                     env: [String: String] = ProcessInfo.processInfo.environment)
+        -> [Float]? {
+        let gridCount = gw * gh
+        guard luminancePlanes.count > 2,
+              luminancePlanes.allSatisfy({ $0.count == gridCount }) else { return nil }
+        let n = luminancePlanes.count
+
+        var lMax = [Float](repeating: 0, count: gridCount)
+        var span = [Float](repeating: 0, count: gridCount)
+        lMax.withUnsafeMutableBufferPointer { mp in
+            span.withUnsafeMutableBufferPointer { sp in
+                DispatchQueue.concurrentPerform(iterations: gh) { gy in
+                    for gx in 0..<gw {
+                        let i = gy * gw + gx
+                        var lo: Float = .infinity, hi: Float = -.infinity
+                        for f in 0..<n {
+                            let l = luminancePlanes[f][i]
+                            if l < lo { lo = l }
+                            if l > hi { hi = l }
+                        }
+                        mp[i] = hi
+                        sp[i] = hi - lo
+                    }
+                }
+            }
+        }
+
+        // Absolute significance floor, as in tier-S: 0.2% of the scene's bright
+        // end. Glow is dim in linear light and `rel` already shields static
+        // surfaces, so this only has to clear sensor noise.
+        let epsFrac = Float(env["HYPERFOCAL_DESPILL_SPAN_EPS_FRAC"] ?? "") ?? 0.002
+        let spanEps = epsFrac * max(DMapFusion.percentile95(lMax), 1e-6)
+        let spanEps2 = spanEps * spanEps
+
+        // Normalize the confidence proxy against its own bright end; clamp so a
+        // strongly-focused cell zeroes the gate outright.
+        let useConf = confidence.count == gridCount
+        let confScale = useConf
+            ? 1 / max(DMapFusion.percentile95(confidence), 1e-6) : 0
+
+        var out = [Float](repeating: 0, count: gridCount)
+        out.withUnsafeMutableBufferPointer { op in
+            DispatchQueue.concurrentPerform(iterations: gh) { gy in
+                for gx in 0..<gw {
+                    let i = gy * gw + gx
+                    let s = span[i]
+                    let rel = s / (lMax[i] + 1e-6)
+                    let sig = s * s / (s * s + spanEps2)
+                    let keep = useConf
+                        ? max(1 - min(confidence[i] * confScale, 1), 0) : 1
+                    op[i] = rel * sig * keep
+                }
+            }
+        }
+        return out
+    }
+
     /// Reconstructs the clean-background level across the whole grid by
     /// push-pull from the near-black backdrop cells (soft near-black
     /// membership so the glow band — a few× the backdrop — stays out of the
