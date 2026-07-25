@@ -180,22 +180,52 @@ Item {
              : Qt.SizeBDiagCursor
     }
 
+    // Rotate sector (0 = top-left, clockwise) for a pane-space point, the
+    // native scheme: sectors are CENTERED on the eight compass directions,
+    // so the breakpoints sit ±22.5° either side of each center. The native
+    // overlay view is flipped (ContentView.swift:1906), so its y-down angle
+    // math carries over unchanged.
+    function rotateSector(px, py) {
+        var c = pane.mapFromCanvas(Qt.point(crop.x + crop.width / 2,
+                                            crop.y + crop.height / 2))
+        var deg = Math.atan2(py - c.y, px - c.x) * 180 / Math.PI
+        return Math.floor(((deg + 135 + 22.5 + 720) % 360) / 45) % 8
+    }
+
     property int hoverMode: 0
     property point hoverDir: Qt.point(0, 0)
+    property point hoverPoint: Qt.point(0, 0)
+    // Frozen at mouse-down and held for the whole drag, like the native
+    // dragCursor — without it the cursor flips as the pointer sweeps into
+    // another sector mid-rotation.
+    property int dragRotateSector: 0
 
     MouseArea {
+        id: area
         anchors.fill: parent
         hoverEnabled: true
-        cursorShape: {
-            var m = overlay.mode !== 0 ? overlay.mode : overlay.hoverMode
-            var d = overlay.mode !== 0 ? overlay.handleDir : overlay.hoverDir
-            // Move and rotate share the hand pair: open on hover,
-            // closed while dragging.
-            return m === 2 ? overlay.resizeCursor(d.x, d.y)
-                 : m === 0 ? Qt.ArrowCursor
-                 : overlay.mode !== 0 ? Qt.ClosedHandCursor
-                                      : Qt.OpenHandCursor
+
+        // Driven imperatively rather than by a cursorShape binding: the
+        // rotate cursors are custom images, which QML's enum cannot name.
+        function updateCursor() {
+            var dragging = overlay.mode !== 0
+            var m = dragging ? overlay.mode : overlay.hoverMode
+            var d = dragging ? overlay.handleDir : overlay.hoverDir
+            if (m === 3)
+                Shell.setRotateCursor(area, dragging
+                    ? overlay.dragRotateSector
+                    : overlay.rotateSector(overlay.hoverPoint.x,
+                                           overlay.hoverPoint.y))
+            else if (m === 2)
+                Shell.setCursorShape(area, overlay.resizeCursor(d.x, d.y))
+            else if (m === 1)
+                // Move: open hand on hover, closed while dragging.
+                Shell.setCursorShape(area, dragging ? Qt.ClosedHandCursor
+                                                    : Qt.OpenHandCursor)
+            else
+                Shell.setCursorShape(area, Qt.ArrowCursor)
         }
+        Component.onCompleted: updateCursor()
 
         onPressed: function(mouse) {
             var raw = pane.mapToCanvas(Qt.point(mouse.x, mouse.y))
@@ -209,8 +239,21 @@ Item {
             var hit = overlay.classify(mouse.x, mouse.y)
             overlay.mode = hit.mode
             overlay.handleDir = Qt.point(hit.hx, hit.hy)
+            overlay.hoverPoint = Qt.point(mouse.x, mouse.y)
+            overlay.dragRotateSector = overlay.rotateSector(mouse.x, mouse.y)
+            updateCursor()
         }
-        onReleased: overlay.mode = 0
+        onReleased: function(mouse) {
+            overlay.mode = 0
+            // Re-classify where the pointer actually ended up, so the
+            // cursor reflects the region it is now over rather than the
+            // one the finished drag started in.
+            var hit = overlay.classify(mouse.x, mouse.y)
+            overlay.hoverMode = hit.mode
+            overlay.hoverDir = Qt.point(hit.hx, hit.hy)
+            overlay.hoverPoint = Qt.point(mouse.x, mouse.y)
+            updateCursor()
+        }
 
         onPositionChanged: function(mouse) {
             if (overlay.mode === 0) {
@@ -219,6 +262,8 @@ Item {
                 var hit = overlay.classify(mouse.x, mouse.y)
                 overlay.hoverMode = hit.mode
                 overlay.hoverDir = Qt.point(hit.hx, hit.hy)
+                overlay.hoverPoint = Qt.point(mouse.x, mouse.y)
+                updateCursor()
                 return
             }
             var raw = pane.mapToCanvas(Qt.point(mouse.x, mouse.y))

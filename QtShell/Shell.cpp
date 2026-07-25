@@ -10,10 +10,16 @@
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QGridLayout>
+#include <QImage>
 #include <QLabel>
 #include <QIcon>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPixmap>
+#include <QQuickItem>
+#include <QTransform>
 #include <QUrl>
+#include <QVector>
 #include <algorithm>
 #include <utility>
 #include <vector>
@@ -393,6 +399,75 @@ QString Shell::retouchSourceStatus() const {
                              hf_retouch_source_status(buffer, sizeof buffer));
 }
 bool Shell::canCrop() const { return hf_can_crop() != 0; }
+namespace {
+
+// The eight rotate cursors, built once from the two glyphs the native crop
+// overlay uses (ContentView.swift:1971-2006): a corner arc and an edge arc,
+// each re-oriented by an affine map instead of shipping eight bitmaps.
+//
+// Qt's QTransform takes the same (m11, m12, m21, m22) convention AppKit's
+// NSAffineTransformStruct does, so the native table transfers — except that
+// AppKit composes it in a y-UP image space and Qt in a y-DOWN one. A map M
+// applied y-up equals F·M·F applied y-down (F = diag(1, -1)), i.e. m12 and
+// m21 negate. Centered mirrors are unaffected by that; only the two
+// transposes (sectors 3 and 7) actually change, and they are written below
+// already converted.
+const QVector<QCursor> &rotateCursors() {
+    static const QVector<QCursor> cursors = [] {
+        QVector<QCursor> out;
+        const QImage corner(QStringLiteral(":/crop-rotate-0.png"));
+        const QImage edge(QStringLiteral(":/crop-rotate-1.png"));
+        if (corner.isNull() || edge.isNull()) return out;
+        // Rendered at 2x into a 24pt cursor, matching the native size.
+        constexpr int kDevice = 48;
+        constexpr qreal kHalf = kDevice / 2.0;
+        struct Sector { const QImage *glyph; qreal m11, m12, m21, m22; };
+        const Sector sectors[8] = {
+            {&corner,  1,  0,  0,  1},   // 0 top-left: as drawn
+            {&edge,    1,  0,  0,  1},   // 1 top: as drawn
+            {&corner, -1,  0,  0,  1},   // 2 top-right: mirror H
+            {&edge,    0, -1, -1,  0},   // 3 right: transpose
+            {&corner, -1,  0,  0, -1},   // 4 bottom-right: mirror both
+            {&edge,    1,  0,  0, -1},   // 5 bottom: mirror V
+            {&corner,  1,  0,  0, -1},   // 6 bottom-left: mirror V
+            {&edge,    0, -1,  1,  0},   // 7 left: transpose + mirror H
+        };
+        for (const Sector &s : sectors) {
+            QPixmap pm(kDevice, kDevice);
+            pm.fill(Qt::transparent);
+            QPainter p(&pm);
+            p.setRenderHint(QPainter::SmoothPixmapTransform);
+            p.setTransform(QTransform(
+                s.m11, s.m12, s.m21, s.m22,
+                kHalf - (s.m11 * kHalf + s.m21 * kHalf),
+                kHalf - (s.m12 * kHalf + s.m22 * kHalf)));
+            p.drawImage(QRect(0, 0, kDevice, kDevice), *s.glyph);
+            p.end();
+            pm.setDevicePixelRatio(2.0);
+            out.append(QCursor(pm, kDevice / 4, kDevice / 4));   // hotspot: center, in points
+        }
+        return out;
+    }();
+    return cursors;
+}
+
+} // namespace
+
+void Shell::setCursorShape(QQuickItem *item, int shape) {
+    if (!item) return;
+    item->setCursor(QCursor(static_cast<Qt::CursorShape>(shape)));
+}
+
+void Shell::setRotateCursor(QQuickItem *item, int sector) {
+    if (!item) return;
+    const QVector<QCursor> &cursors = rotateCursors();
+    if (cursors.isEmpty()) {          // glyphs missing from resources
+        item->setCursor(QCursor(Qt::CrossCursor));
+        return;
+    }
+    item->setCursor(cursors.at(((sector % 8) + 8) % 8));
+}
+
 bool Shell::beginCrop() { return hf_begin_crop() != 0; }
 bool Shell::acceptCrop() { return hf_accept_crop() != 0; }
 bool Shell::cancelCrop() { return hf_cancel_crop() != 0; }

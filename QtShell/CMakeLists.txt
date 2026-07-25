@@ -86,6 +86,20 @@ qt_add_resources(hyperfocal-qt "hyperfocal-icon"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/../App/AppIcon.png"
 )
 
+# The crop overlay's rotate-cursor glyphs, shared with the Mac app rather
+# than duplicated (Shell.cpp re-orients them into the eight sectors). The
+# @2x art is the one that ships: cursors are built at 2x and marked so.
+foreach(glyph 0 1)
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/../App/Resources/crop-rotate-${glyph}@2x.png"
+        PROPERTIES QT_RESOURCE_ALIAS "crop-rotate-${glyph}.png")
+endforeach()
+qt_add_resources(hyperfocal-qt "hyperfocal-cursors"
+    PREFIX "/"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../App/Resources/crop-rotate-0@2x.png"
+          "${CMAKE_CURRENT_SOURCE_DIR}/../App/Resources/crop-rotate-1@2x.png"
+)
+
 # The pane's tone shader (see lut.frag) — compiled to qsb for the scene
 # graph's RHI backends.
 qt_add_shaders(hyperfocal-qt "hyperfocal-shaders"

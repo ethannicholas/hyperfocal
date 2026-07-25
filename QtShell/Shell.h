@@ -13,6 +13,8 @@
 #include <QVariantList>
 #include <qqmlregistration.h>
 
+class QQuickItem;
+
 class Shell : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -178,6 +180,13 @@ public:
     Q_INVOKABLE void retouchAutoPick();
     Q_INVOKABLE void retouchTogglePmax();
     Q_INVOKABLE void retouchToggleResult();
+    /// Crop-overlay cursors. QML's cursorShape only names the built-in
+    /// shapes, and Qt has no rotate cursor at all, so the overlay drives
+    /// both through here: `shape` is a Qt::CursorShape, `sector` indexes the
+    /// eight orientation-matched rotate glyphs (0 = top-left, clockwise).
+    Q_INVOKABLE void setCursorShape(QQuickItem *item, int shape);
+    Q_INVOKABLE void setRotateCursor(QQuickItem *item, int sector);
+
     Q_INVOKABLE bool beginCrop();
     Q_INVOKABLE bool acceptCrop();
     Q_INVOKABLE bool cancelCrop();

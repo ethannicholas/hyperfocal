@@ -35,9 +35,6 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
   see `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
 - **Qt shell polish toward native parity** (`QtShell/`; the shell self-tests via
   `hyperfocal-qt --selftest` with `HFQT_*` env hooks):
-  - **Crop rotation cursors** matching the macOS sector-oriented rotate cursors
-    (Qt has no built-in rotate cursor — needs custom cursor images quantized to
-    8 sectors, like `ContentView.swift:2093-2103`).
   - **Known non-native behaviors to close** — a running "works, but not the
     native way" list; add to it the moment a new deviation is introduced:
     - Confirms/notices are Qt message boxes (fine on Linux; non-native chrome on
