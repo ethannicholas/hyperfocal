@@ -4,11 +4,16 @@ Cross-platform focus-stacking app: a shared Swift engine + model core with
 **two native UIs** — SwiftUI/AppKit on **macOS**, a **Qt/QML shell** on
 **Windows and Linux** (the Qt shell also builds on macOS as a dev/validation
 target). It runs on **three OSes**, and the two UIs must be kept in sync (see
-the dual-UI invariant below). README.md explains the pipeline and records
-shipped features; ROADMAP.md is the prioritized work list — **completed work is
-removed from ROADMAP** (git history + README are the record), and items are
-written self-contained so a cold session can pick one up. Cross-platform
-strategy and phases: `Docs/cross-platform-plan.md`.
+the dual-UI invariant below). **README.md is the project's front page** — what a
+visitor to the GitHub repo reads to decide whether Hyperfocal interests them. It
+is documentation, *not* a changelog: something belongs there only if a
+prospective user would care about it. Never add an entry to README just because
+work shipped, and don't treat it as a record of what's been done. ROADMAP.md is
+the prioritized work list — **completed work is removed from ROADMAP**, and
+items are written self-contained so a cold session can pick one up. **Git history
+is the record of what shipped** (hence the detailed commit messages: measurements,
+rejected alternatives, and why). Cross-platform strategy and phases:
+`Docs/cross-platform-plan.md`.
 
 ## Layout
 
