@@ -30,8 +30,6 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 - **Rocking-animation export on non-Apple.** `RockingAnimation.write` throws off
   Apple — needs the FFmpeg/giflib backend (Ubuntu deps for it:
   `libavformat/avcodec/avutil/swscale-dev libgif-dev`).
-- **Capture-time EXIF *stamping* in `SynthStack`** (ImageIO-only today; needed
-  off Apple for session-split tests).
 - **HE-NEF decode on Linux/Wine** is still deferred — Windows converts them via
   the Adobe DNG Converter (`RawConverter`), but the Linux/Wine path was punted;
   see `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.

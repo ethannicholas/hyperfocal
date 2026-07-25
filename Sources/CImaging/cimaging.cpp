@@ -454,11 +454,15 @@ hf_status decodeTIFF(const char* path, int* out_w, int* out_h, float** out_rgba)
 }
 
 hf_status encodeTIFF(const char* path, int w, int h,
-                     const float* rgba, const char* colorspace) {
+                     const float* rgba, const char* colorspace,
+                     const char* datetimeOriginal) {
     const size_t px = (size_t)w * h;
     std::vector<float> tmp(rgba, rgba + px * 4);
     if (!fromP3(tmp.data(), (int)px, colorspace)) return hf_err_color;
-    TIFF* tif = TIFFOpen(path, "w");
+    const bool stampTime = datetimeOriginal && *datetimeOriginal;
+    // "w+" (not "w") so the EXIF pass below can seek back to directory 0 and
+    // rewrite it with the sub-IFD offset; a write-only handle cannot re-read it.
+    TIFF* tif = TIFFOpen(path, stampTime ? "w+" : "w");
     if (!tif) return hf_err_open;
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, (uint32_t)w);
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH, (uint32_t)h);
@@ -473,6 +477,12 @@ hf_status encodeTIFF(const char* path, int w, int h,
     TIFFSetField(tif, TIFFTAG_EXTRASAMPLES, 1, extra);
     auto icc = iccBlobFor(colorspace);
     if (!icc.empty()) TIFFSetField(tif, TIFFTAG_ICCPROFILE, (uint32_t)icc.size(), icc.data());
+    if (stampTime) {
+        TIFFSetField(tif, TIFFTAG_DATETIME, datetimeOriginal);
+        // Reserve the sub-IFD pointer so directory 0 has room for the real
+        // offset once the EXIF directory has been written below.
+        TIFFSetField(tif, TIFFTAG_EXIFIFD, (uint64_t)0);
+    }
 
     std::vector<uint16_t> row((size_t)w * 4);
     for (int y = 0; y < h; y++) {
@@ -485,6 +495,20 @@ hf_status encodeTIFF(const char* path, int w, int h,
             row[x * 4 + 3] = (uint16_t)(a * 65535.0f + 0.5f);
         }
         if (TIFFWriteScanline(tif, row.data(), y) < 0) { TIFFClose(tif); return hf_err_encode; }
+    }
+
+    if (stampTime) {
+        // Flush the image directory, append a custom EXIF directory carrying
+        // DateTimeOriginal, then patch directory 0's EXIFIFD tag with where it
+        // landed. Order matters: the offset isn't known until it is written.
+        uint64_t exifOffset = 0;
+        if (!TIFFWriteDirectory(tif) ||
+            TIFFCreateEXIFDirectory(tif) != 0) { TIFFClose(tif); return hf_err_encode; }
+        TIFFSetField(tif, EXIFTAG_DATETIMEORIGINAL, datetimeOriginal);
+        if (!TIFFWriteCustomDirectory(tif, &exifOffset) ||
+            !TIFFSetDirectory(tif, 0)) { TIFFClose(tif); return hf_err_encode; }
+        TIFFSetField(tif, TIFFTAG_EXIFIFD, exifOffset);
+        if (!TIFFRewriteDirectory(tif)) { TIFFClose(tif); return hf_err_encode; }
     }
     TIFFClose(tif);
     return hf_ok;
@@ -1158,8 +1182,9 @@ extern "C" hf_status hf_pixel_size(const char* path, int is_raw, int* out_w, int
 }
 
 extern "C" hf_status hf_encode_tiff16(const char* path, int w, int h,
-                                      const float* rgba, const char* cs) {
-    return encodeTIFF(path, w, h, rgba, cs);
+                                      const float* rgba, const char* cs,
+                                      const char* datetime_original) {
+    return encodeTIFF(path, w, h, rgba, cs, datetime_original);
 }
 extern "C" hf_status hf_encode_png16(const char* path, int w, int h,
                                      const float* rgba, const char* cs) {
@@ -1208,6 +1233,92 @@ void gmTime(time_t t, struct tm& out) {
 #endif
 }
 
+// ---- Direct TIFF IFD walk --------------------------------------------------
+// easyexif needs the whole IFD chain inside the buffer it is handed, which the
+// bounded prefix read cannot promise: libtiff writes directories *after* the
+// image data, so IFD0 of any TIFF bigger than the prefix sits past the end of
+// it (our own encoder included — a 4.5 MB synth frame puts IFD0 at ~4.48 MB).
+// Seeking straight to the directory costs a few reads instead of a buffer the
+// size of the file, and only the capture-time tags are needed here.
+struct TiffReader {
+    FILE* f = nullptr;
+    bool le = true;
+    long size = 0;
+    uint16_t u16(const uint8_t* p) const {
+        return le ? (uint16_t)(p[0] | (p[1] << 8)) : (uint16_t)((p[0] << 8) | p[1]);
+    }
+    uint32_t u32(const uint8_t* p) const {
+        return le ? ((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24))
+                  : (((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3]);
+    }
+    bool at(uint32_t off, void* dst, size_t n) const {
+        if (off > (uint32_t)size || (long)(off + n) > size) return false;
+        return fseek(f, (long)off, SEEK_SET) == 0 && fread(dst, 1, n, f) == n;
+    }
+    // ASCII tag value: <=4 bytes live inline in the entry's value field.
+    std::string ascii(const uint8_t* entry) const {
+        uint32_t count = u32(entry + 4);
+        if (count == 0 || count > 512) return {};
+        std::string s(count, '\0');
+        if (count <= 4) {
+            memcpy(&s[0], entry + 8, count);
+        } else if (!at(u32(entry + 8), &s[0], count)) {
+            return {};
+        }
+        s.resize(strnlen(s.c_str(), s.size()));   // drop the trailing NUL
+        return s;
+    }
+};
+
+// Walk IFD `off`, handing each 12-byte entry to `visit`. Bounded by entryCap so
+// a corrupt count cannot spin.
+template <typename F>
+void walkIFD(const TiffReader& r, uint32_t off, F&& visit) {
+    uint8_t cnt[2];
+    if (!r.at(off, cnt, 2)) return;
+    uint16_t n = r.u16(cnt);
+    if (n == 0 || n > 512) return;
+    std::vector<uint8_t> entries((size_t)n * 12);
+    if (!r.at(off + 2, entries.data(), entries.size())) return;
+    for (uint16_t i = 0; i < n; i++) visit(entries.data() + (size_t)i * 12);
+}
+
+bool parseTiffTimeTags(const char* path, ExifMeta& out) {
+    TiffReader r;
+    r.f = fopen(path, "rb");
+    if (!r.f) return false;
+    struct Closer { FILE* f; ~Closer() { if (f) fclose(f); } } closer{r.f};
+    if (fseek(r.f, 0, SEEK_END) != 0) return false;
+    r.size = ftell(r.f);
+    uint8_t hdr[8];
+    if (!r.at(0, hdr, 8)) return false;
+    if (hdr[0] == 'I' && hdr[1] == 'I') r.le = true;
+    else if (hdr[0] == 'M' && hdr[1] == 'M') r.le = false;
+    else return false;
+    if (r.u16(hdr + 2) != 42) return false;
+
+    uint32_t exifIFD = 0;
+    walkIFD(r, r.u32(hdr + 4), [&](const uint8_t* e) {
+        switch (r.u16(e)) {
+        case 0x0132: out.dateTime = r.ascii(e); break;          // DateTime
+        case 0x010F: if (out.make.empty())  out.make  = r.ascii(e); break;
+        case 0x0110: if (out.model.empty()) out.model = r.ascii(e); break;
+        case 0x8769: exifIFD = r.u32(e + 8); break;             // ExifIFD pointer
+        default: break;
+        }
+    });
+    if (exifIFD) {
+        walkIFD(r, exifIFD, [&](const uint8_t* e) {
+            switch (r.u16(e)) {
+            case 0x9003: out.dateTimeOriginal = r.ascii(e); break;   // DateTimeOriginal
+            case 0x9291: out.subSec = r.ascii(e); break;             // SubSecTimeOriginal
+            default: break;
+            }
+        });
+    }
+    return !out.dateTimeOriginal.empty() || !out.dateTime.empty();
+}
+
 // Fill `out` from a permissive read. Returns false if nothing could be parsed.
 bool parseExifMeta(const char* path, ExifMeta& out) {
     static const size_t kPrefix = 4 * 1024 * 1024;
@@ -1244,6 +1355,10 @@ bool parseExifMeta(const char* path, ExifMeta& out) {
         if (info.ISOSpeedRatings > 0) out.iso = (int)info.ISOSpeedRatings;
         return true;
     }
+
+    // TIFF whose directories sit past the prefix (see parseTiffTimeTags): seek
+    // to them directly rather than growing the buffer to the size of the file.
+    if (parseTiffTimeTags(path, out)) return true;
 
     // Fallback for raws easyexif can't parse (non-TIFF containers like CR3):
     // LibRaw metadata from the same prefix — header parse only, no unpack.

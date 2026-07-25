@@ -308,14 +308,14 @@ public enum ImageFile {
     /// Saves by extension: .tif/.tiff/.png → 16-bit, .jpg/.jpeg → 8-bit,
     /// .dng → 16-bit Linear DNG. Pass a source frame of the stack so its EXIF
     /// (exposure, lens, camera, GPS — and for DNG from raw sources, as-shot
-    /// white balance) carries over into the export. `extraProperties` are
-    /// ImageIO destination properties merged on top (used by SynthStack to
-    /// stamp capture times; ignored for DNG). `colorSpace` converts the export
-    /// out of the working space (nil keeps Display P3; DNG always declares P3
-    /// and ignores it).
+    /// white balance) carries over into the export. `dateTimeOriginal` stamps an
+    /// EXIF capture time ("YYYY:MM:DD HH:MM:SS" — `StackSplitter.exifFormatter`);
+    /// used by SynthStack to make synth stacks splittable, ignored for DNG.
+    /// `colorSpace` converts the export out of the working space (nil keeps
+    /// Display P3; DNG always declares P3 and ignores it).
     public static func save(_ image: ImageBuffer, to url: URL,
                             sourceFrame: URL? = nil,
-                            extraProperties: [CFString: Any]? = nil,
+                            dateTimeOriginal: String? = nil,
                             colorSpace: CGColorSpace? = nil) throws {
         let ext = url.pathExtension.lowercased()
         if ext == "dng" {
@@ -347,8 +347,10 @@ public enum ImageFile {
         if let sourceFrame, let meta = exportMetadata(from: sourceFrame) {
             props.merge(meta) { current, _ in current }
         }
-        if let extraProperties {
-            props.merge(extraProperties) { _, extra in extra }
+        if let dateTimeOriginal {
+            var exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+            exif[kCGImagePropertyExifDateTimeOriginal] = dateTimeOriginal
+            props[kCGImagePropertyExifDictionary] = exif
         }
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {
@@ -535,8 +537,12 @@ public enum ImageFile {
     /// converts the export out of the working space (nil keeps Display P3; DNG
     /// always declares P3). `sourceFrame` carries EXIF into a DNG export; for
     /// raster exports EXIF carry-over is not yet wired on this platform.
+    /// `dateTimeOriginal` stamps an EXIF capture time ("YYYY:MM:DD HH:MM:SS" —
+    /// `StackSplitter.exifFormatter`); TIFF only, matching where SynthStack
+    /// needs it, and ignored for DNG.
     public static func save(_ image: ImageBuffer, to url: URL,
                             sourceFrame: URL? = nil,
+                            dateTimeOriginal: String? = nil,
                             colorSpaceName: String? = nil) throws {
         let ext = url.pathExtension.lowercased()
         if ext == "dng" {
@@ -548,7 +554,7 @@ public enum ImageFile {
         let status: hf_status = try image.pixels.withUnsafeBufferPointer { buf in
             let base = buf.baseAddress
             switch ext {
-            case "tif", "tiff": return hf_encode_tiff16(url.path, w, h, base, cs)
+            case "tif", "tiff": return hf_encode_tiff16(url.path, w, h, base, cs, dateTimeOriginal)
             case "png":         return hf_encode_png16(url.path, w, h, base, cs)
             case "jpg", "jpeg": return hf_encode_jpeg8(url.path, w, h, base, cs)
             default:

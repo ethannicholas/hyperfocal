@@ -74,8 +74,14 @@ hf_status hf_pixel_size(const char* path, int is_raw, int* out_w, int* out_h);
 // Encode an RGBA Float32 P3 buffer. `colorspace` is one of "p3", "srgb",
 // "prophoto": the buffer is converted from P3 into that space and the matching
 // ICC profile is embedded. TIFF/PNG are 16-bit, JPEG is 8-bit q=0.95.
+//
+// `datetime_original` (nullable) stamps a capture time, formatted the EXIF way
+// ("YYYY:MM:DD HH:MM:SS"). It is written both as an EXIF IFD carrying
+// DateTimeOriginal — what hf_exif_capture_epoch prefers, and what ImageIO
+// writes on the Apple side — and as the baseline TIFF DateTime tag.
 hf_status hf_encode_tiff16(const char* path, int w, int h,
-                           const float* rgba, const char* colorspace);
+                           const float* rgba, const char* colorspace,
+                           const char* datetime_original);
 hf_status hf_encode_png16(const char* path, int w, int h,
                           const float* rgba, const char* colorspace);
 hf_status hf_encode_jpeg8(const char* path, int w, int h,
