@@ -201,7 +201,8 @@ public enum Despill {
     /// without a re-fuse. Env: `HYPERFOCAL_DESPILL_BACKDROP_PCT` (default 0.20),
     /// `_NB_LO_MULT` / `_NB_HI_MULT` (default 2 / 5, × backdrop).
     static func reconstructBackdrop(perCellFloor: [Float], width gw: Int, height gh: Int,
-                                    env: [String: String]) -> (plane: [Float], backdrop: Float) {
+                                    env: [String: String])
+        -> (plane: [Float], backdrop: Float, cleanW: [Float]) {
         let gridCount = gw * gh
         let backdrop = max(percentileLow(perCellFloor,
                            Float(env["HYPERFOCAL_DESPILL_BACKDROP_PCT"] ?? "") ?? 0.20), 1e-9)
@@ -218,10 +219,10 @@ public enum Despill {
             wsum += Double(cleanW)
         }
         guard wsum > Double(gridCount) * 0.001 else {
-            return ([Float](repeating: backdrop, count: gridCount), backdrop)
+            return ([Float](repeating: backdrop, count: gridCount), backdrop, wt)
         }
         return (DepthRegularize.pushPull(valueWeight: vw, weight: wt, width: gw, height: gh),
-                backdrop)
+                backdrop, wt)
     }
 
     // MARK: - Apply (shared, image-space)
@@ -275,25 +276,47 @@ public enum Despill {
         }
         let lGrid = DMapFusion.boxDownsample(lFull, width: width, height: height, factor: f)
 
+        // Subtract-down-to target per cell: the darkest-frame floor, falling
+        // back to the reconstructed backdrop where the per-cell floor is itself
+        // glow-contaminated (ratio to the global backdrop exceeds the
+        // contamination band — concave notches, rock-mixed cells).
+        let (backdropInterp, backdrop, cleanW) = reconstructBackdrop(
+            perCellFloor: inputs.perCellFloor, width: gw, height: gh, env: env)
+
         // Spill gate: the regularizer's spill-strength, smoothstepped, decides
         // WHERE to correct. It is the only signal that separates the in-focus
         // subject from the defocus glow (see DespillInputs.spillStrength). It
         // both weights the guided fit (so the fit describes the glow, not the
         // adjacent subject — the "plume" failure) and, upsampled, gates the
         // full-res correction so the subject is protected.
+        //
+        // The gate's lower edge is position-dependent: next to the near-black
+        // backdrop it relaxes to `sLoRim`, elsewhere it stays at `sLo`. The
+        // last background cell before a silhouette carries the halo's spike
+        // but reads mixed (spill-strength ~0.44, a hair above the 0.42 edge
+        // → fit weight ~0.05), so the guided fit under-corrects it and a
+        // narrow residual band survives at the rim. Globally lowering the
+        // edge to catch it was measured and rejected — it starts outlining
+        // interior crystal contacts inside the subject (see the rim-quality
+        // doc's tuning-boundaries section). Scoping the relaxation to cells
+        // within `rimRadius` of genuinely near-black cells (the backdrop
+        // reconstruction's own anchor weights, dilated) is the discriminator
+        // a global threshold can't be: a halo can only exist beside empty
+        // backdrop, and an interior contact never borders one.
+        // Env: `HYPERFOCAL_DESPILL_SPILL_LO_RIM` (default 0.30),
+        // `HYPERFOCAL_DESPILL_RIM_RADIUS` (default 2 cells).
         let sLo = Float(env["HYPERFOCAL_DESPILL_SPILL_LO"] ?? "") ?? 0.42
         let sHi = max(Float(env["HYPERFOCAL_DESPILL_SPILL_HI"] ?? "") ?? 0.55, sLo + 1e-6)
+        let sLoRim = min(Float(env["HYPERFOCAL_DESPILL_SPILL_LO_RIM"] ?? "") ?? 0.30, sLo)
+        let rimRadius = max(0, Int(env["HYPERFOCAL_DESPILL_RIM_RADIUS"] ?? "") ?? 2)
+        let rimAdj = rimRadius > 0
+            ? maxPool(cleanW, width: gw, height: gh, radius: rimRadius) : cleanW
+        let bandWidth = sHi - sLo
         var spillMask = [Float](repeating: 0, count: gridCount)
         for i in 0..<gridCount {
-            spillMask[i] = smoothstep(sLo, sHi, inputs.spillStrength[i])
+            let lo = sLo - (sLo - sLoRim) * rimAdj[i]
+            spillMask[i] = smoothstep(lo, lo + bandWidth, inputs.spillStrength[i])
         }
-
-        // Subtract-down-to target per cell: the darkest-frame floor, falling
-        // back to the reconstructed backdrop where the per-cell floor is itself
-        // glow-contaminated (ratio to the global backdrop exceeds the
-        // contamination band — concave notches, rock-mixed cells).
-        let (backdropInterp, backdrop) = reconstructBackdrop(
-            perCellFloor: inputs.perCellFloor, width: gw, height: gh, env: env)
         let contamLo = Float(env["HYPERFOCAL_DESPILL_CONTAM_LO"] ?? "") ?? 20
         let contamHi = max(Float(env["HYPERFOCAL_DESPILL_CONTAM_HI"] ?? "") ?? 80, contamLo + 1e-6)
         var target = [Float](repeating: 0, count: gridCount)

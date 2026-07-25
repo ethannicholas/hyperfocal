@@ -68,9 +68,10 @@ Script: see the end of this file.
   a physical rim tail of ~17k/17k/10k at −6/−10/−20 at the calcite's bottom
   contact, so a tail of that scale near y≈3400 is *matching* it, not failing).
   Defaults-on cleanup measured: calcite row y=2200 went 6141 → 78 at −10 px
-  (reference ~0); the wide 20–30 px band matches the reference everywhere; a
-  narrow residual of ~2–6k at −6/−10 survives on the top/left edges vs the
-  reference's ~70–335 (see the gate-retune note below).
+  (reference ~0); the wide 20–30 px band matches the reference everywhere.
+  With the rim-adjacency gate relaxation the top-edge residual is ~2k at
+  −6/−10 vs the reference's ~70–335 — a whisper at 4× shadow lift, accepted
+  (see the gate-retune note below for what was tried).
 
 ## Acceptance numbers
 
@@ -116,15 +117,28 @@ that no pixel got *brighter*, since these passes only ever subtract.
 
 ## Measured tuning boundaries (don't re-derive these)
 
-- **Despill spill gate `SPILL_LO` 0.42 → 0.30** (`HYPERFOCAL_DESPILL_SPILL_LO`)
-  was measured on 2026-07-25 and **rejected**. It cuts the Fluorite 2 top-edge
-  residual 5938 → 1920 at −10 px and lands *under* the Helicon reference at
-  every Azurite column (0.2–1.3×, vs 0.5–3.3× for the shipped 0.42) — but the
-  darkening-overlay map shows it starting to outline *interior* crystal
-  contacts inside the Azurite subject (68k bright pixels darkened >1000 vs 24k
-  shipped), the exact failure the 0.42 margin protects against. The narrow
-  −6/−10 px residual on some edges is the accepted price; revisit only with a
-  gate that can tell an interior contact from a silhouette.
+- **Despill spill gate `SPILL_LO` 0.42 → 0.30 globally** was measured on
+  2026-07-25 and **rejected**. It cuts the Fluorite 2 top-edge residual
+  5938 → 1920 at −10 px and lands *under* the Helicon reference at every
+  Azurite column — but the darkening-overlay map shows it starting to outline
+  *interior* crystal contacts inside the Azurite subject (68k bright pixels
+  darkened >1000 vs 24k shipped), the exact failure the 0.42 margin protects
+  against. What shipped instead is the **rim-adjacency scoped relaxation**
+  (`HYPERFOCAL_DESPILL_SPILL_LO_RIM` 0.30 within `HYPERFOCAL_DESPILL_RIM_RADIUS`
+  2 cells of the backdrop reconstruction's near-black anchors): the last
+  background cell before a silhouette carries the halo spike but reads
+  spill ≈ 0.44 — inside the relaxed band, so it keeps its fit weight — while
+  an interior contact never borders true backdrop and keeps the 0.42 edge.
+  Measured: the full benefit at silhouettes (top edge −10 px 5938 → 2066,
+  matching the global retune), Azurite acceptance columns unchanged, and all
+  514 sampled extra-darkened bright pixels within 24 px of true-black
+  background (darkened count 29k vs 24k shipped vs 68k global). Two failed
+  levers, for the record: shrinking the guided radius r 8 → 4 gains only
+  ~25% more (1537) and risks fit twitchiness elsewhere; weighting the
+  aBar/bBar coefficient smoothing by the spill mask measured *worse* (2377),
+  so the residual ~2k at −6/−10 is guided-filter smoothing itself, not
+  weighting — accepted (reference leaves ~73–335 there; ours is a whisper at
+  4× lift).
 - **Black-point veil gate** (`HYPERFOCAL_BLACK_POINT_GATE_LO`/`_HI`, default
   0.02/0.06 over the max-channel *encoded* veil): anchor measurements are
   0.4–0.6% for genuine dark-backdrop veils (Azurite R263 G229 B0; Fluorite 2
