@@ -67,4 +67,7 @@ if [ "$(uname)" = Darwin ]; then
     .build/release/retouch-probe "$WORK"/probe-synth/frame_*.tif
 fi
 
+echo "== string catalog"
+Scripts/check-xcstrings.sh
+
 echo "== CI GATE PASSED"

@@ -145,6 +145,22 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   persist to UserDefaults must NEVER localize the rawValue — display goes
   through the `DisplayNamed` seam (`AppCore/Localization.swift`) and
   NSPopUpButton reverse-lookup is index-based, not title-based.
+- **Never commit Xcode's rewrite of `Localizable.xcstrings`.** Opening the
+  project in Xcode.app and building rewrites the catalog — ~22k lines of churn
+  that marks every live translated string `extractionState: "stale"`, deletes
+  the untranslated stubs, and adds junk keys (`%@`, `%@%@`, `%@ of %@`) scraped
+  from string interpolation. It never adds a translation. The cause is Xcode's
+  *lightweight parser*, which finds only ~101 of the catalog's 264 strings (it
+  misses most SwiftUI literals and can't see HyperfocalKit at all); the stale
+  pass then believes the rest are unused. Nothing is wrong with the committed
+  file — `xcstringstool sync --skip-marking-strings-stale` reproduces it
+  byte-for-byte. The fix is always `git checkout
+  App/Resources/Localizable.xcstrings`; add new entries by hand. The
+  command-line build is innocent (`SWIFT_EMIT_LOC_STRINGS` is already `NO`; a
+  clean `xcodebuild` leaves the file untouched), so this only bites after an
+  Xcode.app session. `Scripts/check-xcstrings.sh` detects it, and runs from both
+  `Scripts/ci-gate.sh` and `.githooks/pre-commit` — enable the hooks in a fresh
+  clone with `git config core.hooksPath .githooks`.
 - Bundle ID `com.ethannicholas.hyperfocal` (lowercase — the capitalized
   form collides case-insensitively in Apple's App ID registry), team
   `Y3GFBT2WQ2`.

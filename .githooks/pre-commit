@@ -1,0 +1,17 @@
+#!/bin/bash
+# Versioned hooks: enable them once per clone with
+#     git config core.hooksPath .githooks
+#
+# Rejects a staged Localizable.xcstrings that carries Xcode's rewrite (see
+# Scripts/check-xcstrings.sh for what that is and why it's never wanted). Checks
+# the *staged* content, not the working tree, so `git add -p` and partial stages
+# are judged on what would actually land.
+set -euo pipefail
+
+CATALOG=App/Resources/Localizable.xcstrings
+git diff --cached --name-only --diff-filter=ACM | grep -qx "$CATALOG" || exit 0
+
+TMP="$(mktemp -t xcstrings)"
+trap 'rm -f "$TMP"' EXIT
+git show ":$CATALOG" > "$TMP"
+Scripts/check-xcstrings.sh "$TMP"
