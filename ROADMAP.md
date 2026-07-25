@@ -138,31 +138,24 @@ loop or re-attempting a parked optimization.
   Remaining: verify the static link on **Linux** and **Windows** (pick the
   static lib from the MSVC archives), then fold wgpu out of the CLI-DLL
   deployment concern.
-- **Why GPU PMax trails CPU PMax — measure before porting anything else.** On
-  the full-res Azurite stack (63 DNGs, 8076x5237, M1 Pro) the CPU pyramid fuse
-  ran **135 s against the GPU path's 171 s**. That inversion is unexplained and
-  it currently makes two "GPU port" items below unattractive, since both would
-  move work *onto* the slower path. Profile `GPUPyramid` against the CPU phase
-  buckets (`pyramid phases (cpu): decode/warp/build/select/collapse`) — prime
-  suspects are per-frame upload/readback and the per-level dispatch overhead at
-  the coarse levels, where the CPU's fused passes do the same arithmetic without
-  a round trip. Done = the gap is explained and either closed or documented as
-  inherent, with the two items below re-judged against the result.
-- **PMax debloom's near-black gate on Metal + wgpu.** `--pmax-debloom` runs
-  CPU-only: the gate that keeps track B out of the inverted-contrast regime
-  (dark subject on a bright background — see git history for the measurements)
-  lives in `PyramidFusion`'s CPU merge, and the `pyr_select_focus_gated` /
-  `pyr_merge_focus` kernels in `MetalEngine`/`WgpuParity` still carry the
-  ungated form. Shipping both would mean two different debloom behaviours (CPU↔
-  GPU agreement measured **38.8 dB** gated against the ≥ 60 dB bar, vs 79.5 dB
-  ungated). The port needs: a running full-res per-cell min-luminance plane, its
-  near-black membership scaled to a high percentile, a **max-pooled** (not
-  averaged) reduction to each gated level, and the blend to track C. Env knobs
-  `HYPERFOCAL_PMAX_NEARBLACK_{OFF,LO,HI,PCT}` and the taps
-  `HYPERFOCAL_DUMP_{LUMMIN0,NEARBLACK}` exist for A/B against the CPU path.
-  Done = `--pmax-debloom` no longer forces the CPU engine and CPU↔GPU is back
-  over 60 dB. **Gated on the timing item above** — porting to a path that is
-  currently slower buys nothing.
+- **RAW decode is the fusion bottleneck — the next real throughput win.** With
+  both fusion paths on the GPU, decode dominates everything else. Measured on a
+  *quiet* machine (Azurite, 63 DNGs at 8076x5237, M1 Pro, two interleaved reps):
+
+  | method | GPU fuse | CPU fuse | GPU compute inside the fuse |
+  |---|---|---|---|
+  | pmax | 32.9-43.8 s | 62.1-62.6 s | **0.07-0.65 s** |
+  | dmap | 47.7-51.8 s | 74.5-76.4 s | **~1.2 s** |
+
+  PMax on the GPU is 31 s decode-wait + 1.7-8.3 s upload + **0.1 s** of actual
+  kernel time; DMap adds 10-14 s spill-write and ~7 s spill-read on top of ~21 s
+  decode-wait. Kernel optimization has nothing left to give at this stack size —
+  the targets are (a) RAW decode throughput (LibRaw/CIRAW, ~0.4 s/frame), (b) the
+  upload path, and (c) for DMap, whether the frame spill still pays now that it
+  costs ~17-21 s against a ~21 s re-decode. **Read `Docs/performance.md` first**,
+  and re-measure before trusting any of this: an earlier run of the same
+  benchmark on a loaded machine reported pmax GPU at 171 s vs CPU 135 s and
+  inverted the ordering entirely.
 - **PMax despill inputs on Metal + wgpu.** `--despill --method pmax` currently
   forces the CPU engine: the pass needs the per-frame grid luminance plane and
   the per-cell max of the grit-blurred level-0 focus, and only
@@ -170,8 +163,10 @@ loop or re-attempting a parked optimization.
   `Despill.DespillInputs`). Porting means computing both reductions on-device in
   `GPUPyramid`/`WgpuPyramid` and reading back at grid resolution, gated on
   CPU↔GPU parity of the despill inputs (DMap's equivalent measured ~74 dB).
-  **Gated on the timing item above** — the CPU "fallback" currently measures
-  *faster* than the GPU path, so this port would start by making despill slower.
+  Worth doing: the GPU pmax path measures ~1.6-1.9x faster than the CPU one, so
+  forcing CPU for despill is a real cost. The debloom near-black gate's port
+  (git history) is the worked example — shared mask/statistics code called by
+  every backend, with only the buffer plumbing per engine.
 - **Research-informed fusion follow-ons** — full findings, evidence, sources, and
   refuted claims: `Docs/research/2026-07-12-focus-stacking-research.md` (consult
   before revisiting). The regularizer is `DepthRegularize.swift` (ablation
