@@ -1280,6 +1280,59 @@ Task { @MainActor in
         print("probe: portable simd shim OK")
     }
 
+    // Portable string catalog (HyperfocalKit/Localization.swift). Off Apple
+    // this is the ONLY source of localized text — including everything the Qt
+    // shell renders from AppCore — so it must not be exercised only on the
+    // platforms where a regression is hardest to see. The table and the tag
+    // resolver compile everywhere; check them here.
+    do {
+        func fail(_ what: String) -> Never {
+            print("probe: PORTABLE STRINGS \(what)"); exit(1)
+        }
+        // Tag resolution: region-qualified, script-implied, bare, and the
+        // encoding suffix an env-derived identifier carries.
+        let cases: [(String, String)] = [
+            ("de_DE", "de"), ("de", "de"), ("de_DE.UTF-8", "de"),
+            ("pt_BR", "pt-BR"), ("zh_CN", "zh-Hans"), ("fr_CA", "fr"),
+        ]
+        for (identifier, expected) in cases {
+            let tags = PortableStrings.candidateTags(for: identifier)
+            guard tags.contains(expected) else {
+                fail("\(identifier) → \(tags), expected to contain \(expected)")
+            }
+            // The first tag that ships a table must be the expected one.
+            guard let hit = tags.first(where: {
+                PortableStrings.table(for: $0) != nil
+            }), hit == expected else {
+                fail("\(identifier) resolved to a table other than \(expected)")
+            }
+        }
+        // zh_TW has no shipped table: it must fall through to English rather
+        // than silently matching Simplified.
+        if PortableStrings.candidateTags(for: "zh_TW")
+            .contains(where: { PortableStrings.table(for: $0) != nil }) {
+            fail("zh_TW matched a table; Traditional is not shipped")
+        }
+        // Every shipped language resolves a known key, and the blob parses
+        // into balanced key/value pairs (a stray separator would shift them).
+        for language in PortableStrings.languages {
+            guard let table = PortableStrings.table(for: language),
+                  table.count > 100 else {
+                fail("\(language) table missing or short")
+            }
+            guard let fused = table["Fuse Stack"], !fused.isEmpty,
+                  fused != "Fuse Stack" else {
+                fail("\(language) has no translation for \"Fuse Stack\"")
+            }
+        }
+        // A key with no entry falls back to itself, never to empty.
+        guard PortableStrings.localized("no such key ∅") == "no such key ∅" else {
+            fail("missing key did not fall back to itself")
+        }
+        print("probe: portable string catalog OK "
+              + "(\(PortableStrings.languages.count) languages)")
+    }
+
     print("probe: ALL PASS")
     exit(0)
 }

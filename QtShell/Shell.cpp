@@ -63,6 +63,16 @@ QString alertBody(const QString &message, const QString &informative) {
     return informative.isEmpty() ? message : informative;
 }
 
+// Option combos show translated labels but persist enum rawValues, so the
+// two lists are kept parallel and selection is by INDEX, never by text —
+// matching a translated label against a raw value would silently reset the
+// popup to its first entry in every non-English run. Unknown/absent raw
+// values fall back to the first entry, as they did before.
+int selectRaw(const QStringList &rawValues, const QString &current) {
+    const qsizetype i = rawValues.indexOf(current);
+    return i < 0 ? 0 : int(i);
+}
+
 int shellConfirm(const char *message, const char *informative,
                  const char *confirmTitle, const char *cancelTitle,
                  int warning, void *) {
@@ -211,22 +221,29 @@ QString Shell::stageEta() const {
 
 QString Shell::suggestedProjectName() const {
     const QVariantList list = stacks();
-    if (list.isEmpty()) return QStringLiteral("Project.hyperfocal");
+    // Only the stem is translated; the extension identifies the format.
+    if (list.isEmpty()) return tr("Project") + QStringLiteral(".hyperfocal");
     return list.first().toMap().value(QStringLiteral("name")).toString()
         + QStringLiteral(".hyperfocal");
 }
 
 void Shell::exportAnimationInteractive() {
-    QFileDialog dialog(nullptr, QStringLiteral("Export Rocking Animation"));
+    QFileDialog dialog(nullptr, tr("Export Rocking Animation"));
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setAcceptMode(QFileDialog::AcceptSave);
     dialog.setFileMode(QFileDialog::AnyFile);
+    // Every option list here is a persisted enum rawValue on the model side
+    // (AnimationFormat/Duration/Path/Strength). The raw list is what crosses
+    // the bridge; the parallel *Labels list is what the user reads. Never
+    // write a label back — that would persist a translated rawValue.
     const QStringList formats = {QStringLiteral("MP4 (H.264)"),
                                  QStringLiteral("GIF (loops automatically)")};
+    const QStringList formatLabels = {tr("MP4 (H.264)"),
+                                      tr("GIF (loops automatically)")};
     const QStringList suffixes = {QStringLiteral("mp4"), QStringLiteral("gif")};
     QStringList filters;
     for (qsizetype i = 0; i < formats.size(); ++i)
-        filters << formats[i] + " (*." + suffixes[i] + ")";
+        filters << formatLabels[i] + " (*." + suffixes[i] + ")";
     dialog.setNameFilters(filters);
     QString currentFormat;
     {
@@ -245,32 +262,40 @@ void Shell::exportAnimationInteractive() {
     QObject::connect(&dialog, &QFileDialog::filterSelected, &dialog,
                      [&applyFormat](const QString &) { applyFormat(); });
     // The native accessory's remaining rows.
+    const QStringList durations = {
+        QStringLiteral("2 seconds"), QStringLiteral("3 seconds"),
+        QStringLiteral("4 seconds"), QStringLiteral("6 seconds")};
     auto *duration = new QComboBox(&dialog);
-    duration->addItems({QStringLiteral("2 seconds"), QStringLiteral("3 seconds"),
-                        QStringLiteral("4 seconds"), QStringLiteral("6 seconds")});
+    duration->addItems({tr("2 seconds"), tr("3 seconds"),
+                        tr("4 seconds"), tr("6 seconds")});
     {
         char buffer[64];
-        duration->setCurrentText(QString::fromUtf8(
-            buffer, hf_animation_duration(buffer, sizeof buffer)));
+        duration->setCurrentIndex(selectRaw(durations, QString::fromUtf8(
+            buffer, hf_animation_duration(buffer, sizeof buffer))));
     }
+    const QStringList paths = {QStringLiteral("Rock left–right"),
+                               QStringLiteral("Rock up–down"),
+                               QStringLiteral("Circle")};
     auto *path = new QComboBox(&dialog);
-    path->addItems({QStringLiteral("Rock left–right"),
-                    QStringLiteral("Rock up–down"), QStringLiteral("Circle")});
+    path->addItems({tr("Rock left–right"), tr("Rock up–down"), tr("Circle")});
     {
         char buffer[64];
-        path->setCurrentText(QString::fromUtf8(
-            buffer, hf_animation_path(buffer, sizeof buffer)));
+        path->setCurrentIndex(selectRaw(paths, QString::fromUtf8(
+            buffer, hf_animation_path(buffer, sizeof buffer))));
     }
+    const QStringList strengths = {QStringLiteral("Subtle"),
+                                   QStringLiteral("Medium"),
+                                   QStringLiteral("Strong")};
     auto *strength = new QComboBox(&dialog);
-    strength->addItems({QStringLiteral("Subtle"), QStringLiteral("Medium"),
-                        QStringLiteral("Strong")});
-    strength->setCurrentText(animationStrength());
+    strength->addItems({tr("Subtle"), tr("Medium"), tr("Strong")});
+    strength->setCurrentIndex(selectRaw(strengths, animationStrength()));
     if (auto *grid = qobject_cast<QGridLayout *>(dialog.layout())) {
         int row = grid->rowCount();
-        const std::pair<const char *, QComboBox *> rows[] = {
-            {"Duration:", duration}, {"Path:", path}, {"Strength:", strength}};
+        const std::pair<QString, QComboBox *> rows[] = {
+            {tr("Duration:"), duration}, {tr("Path:"), path},
+            {tr("Strength:"), strength}};
         for (const auto &[label, combo] : rows) {
-            grid->addWidget(new QLabel(QString::fromUtf8(label), &dialog),
+            grid->addWidget(new QLabel(label, &dialog),
                             row, 0, Qt::AlignRight);
             grid->addWidget(combo, row, 1);
             ++row;
@@ -282,9 +307,11 @@ void Shell::exportAnimationInteractive() {
         formats.value(qMax(qsizetype(0),
                            filters.indexOf(dialog.selectedNameFilter())))
             .toUtf8().constData());
-    hf_set_animation_duration(duration->currentText().toUtf8().constData());
-    hf_set_animation_path(path->currentText().toUtf8().constData());
-    setAnimationStrength(strength->currentText());
+    hf_set_animation_duration(
+        durations.value(duration->currentIndex()).toUtf8().constData());
+    hf_set_animation_path(
+        paths.value(path->currentIndex()).toUtf8().constData());
+    setAnimationStrength(strengths.value(strength->currentIndex()));
     hf_export_animation(
         dialog.selectedFiles().first().toUtf8().constData());
 }
@@ -627,31 +654,36 @@ void Shell::exportInteractive() {
     // accessory — QFileDialog's grid accepts appended rows only in
     // non-native mode. Standard on Linux/Windows; on macOS this trades
     // the Finder sidebar for inline options.
-    QFileDialog dialog(nullptr, depthMode() ? QStringLiteral("Export Depth Map")
-                                            : QStringLiteral("Export Result"));
+    QFileDialog dialog(nullptr, depthMode() ? tr("Export Depth Map")
+                                            : tr("Export Result"));
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setAcceptMode(QFileDialog::AcceptSave);
     dialog.setFileMode(QFileDialog::AnyFile);
     // The dialog's own filter combo IS the format picker — one control,
     // no redundant "Format:" row; only Color Space needs an accessory.
+    // Raw values persist (ExportFormat/ExportColorSpace rawValues); the
+    // parallel *Labels lists are display-only. See selectRaw().
     const QStringList formats = {QStringLiteral("TIFF (16-bit)"),
                                  QStringLiteral("DNG (raw)"),
                                  QStringLiteral("PNG (16-bit)"),
                                  QStringLiteral("JPEG")};
+    const QStringList formatLabels = {tr("TIFF (16-bit)"), tr("DNG (raw)"),
+                                      tr("PNG (16-bit)"), tr("JPEG")};
     const QStringList suffixes = {QStringLiteral("tif"), QStringLiteral("dng"),
                                   QStringLiteral("png"), QStringLiteral("jpg")};
     QStringList filters;
     for (qsizetype i = 0; i < formats.size(); ++i)
-        filters << formats[i] + " (*." + suffixes[i] + ")";
+        filters << formatLabels[i] + " (*." + suffixes[i] + ")";
     dialog.setNameFilters(filters);
-    dialog.selectNameFilter(
-        filters.value(qMax(qsizetype(0), formats.indexOf(exportFormat()))));
+    dialog.selectNameFilter(filters.value(selectRaw(formats, exportFormat())));
     const QStringList spaces = {QStringLiteral("sRGB"),
                                 QStringLiteral("Display P3"),
                                 QStringLiteral("ProPhoto RGB")};
+    const QStringList spaceLabels = {tr("sRGB"), tr("Display P3"),
+                                     tr("ProPhoto RGB")};
     auto *space = new QComboBox(&dialog);
-    space->addItems(spaces);
-    space->setCurrentText(exportColorSpace());
+    space->addItems(spaceLabels);
+    space->setCurrentIndex(selectRaw(spaces, exportColorSpace()));
     QString savedSpace = exportColorSpace();
     auto applyFormat = [&, space] {
         const qsizetype i =
@@ -663,14 +695,14 @@ void Shell::exportInteractive() {
         // accessory's behavior.
         const bool dng = formats.value(i) == QStringLiteral("DNG (raw)");
         if (dng && space->isEnabled()) {
-            savedSpace = space->currentText();
+            savedSpace = spaces.value(space->currentIndex());
             space->clear();
-            space->addItem(QStringLiteral("Linear Display P3"));
+            space->addItem(tr("Linear Display P3"));
             space->setEnabled(false);
         } else if (!dng && !space->isEnabled()) {
             space->clear();
-            space->addItems(spaces);
-            space->setCurrentText(savedSpace);
+            space->addItems(spaceLabels);
+            space->setCurrentIndex(selectRaw(spaces, savedSpace));
             space->setEnabled(true);
         }
     };
@@ -679,7 +711,7 @@ void Shell::exportInteractive() {
                      [&applyFormat](const QString &) { applyFormat(); });
     if (auto *grid = qobject_cast<QGridLayout *>(dialog.layout())) {
         const int row = grid->rowCount();
-        grid->addWidget(new QLabel(QStringLiteral("Color Space:"), &dialog),
+        grid->addWidget(new QLabel(tr("Color Space:"), &dialog),
                         row, 0, Qt::AlignRight);
         grid->addWidget(space, row, 1);
     }
@@ -689,7 +721,8 @@ void Shell::exportInteractive() {
     // accessory; the write itself uses them via the model's settings.
     setExportFormat(formats.value(
         qMax(qsizetype(0), filters.indexOf(dialog.selectedNameFilter()))));
-    setExportColorSpace(space->isEnabled() ? space->currentText() : savedSpace);
+    setExportColorSpace(space->isEnabled() ? spaces.value(space->currentIndex())
+                                           : savedSpace);
     hf_export(dialog.selectedFiles().first().toUtf8().constData(), nullptr);
 }
 
@@ -839,12 +872,12 @@ bool Shell::gpuAvailable() const { return hf_gpu_available() != 0; }
 
 bool Shell::confirmQuit() {
     QMessageBox box(QMessageBox::Warning,
-                    QStringLiteral("Are you sure you want to quit?"),
-                    QStringLiteral("Unsaved data will be lost."));
+                    tr("Are you sure you want to quit?"),
+                    tr("Unsaved data will be lost."));
     applyAlertIcon(box);
-    QAbstractButton *quit = box.addButton(QStringLiteral("Quit"),
+    QAbstractButton *quit = box.addButton(tr("Quit"),
                                           QMessageBox::AcceptRole);
-    box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+    box.addButton(tr("Cancel"), QMessageBox::RejectRole);
     box.exec();
     return box.clickedButton() == quit;
 }
@@ -860,14 +893,16 @@ bool Shell::exportTo(const QUrl &file) {
     // format was persisted last (the bridge restores the preference
     // after the write, so this never becomes a sticky settings change).
     const QString path = file.toLocalFile();
+    // These are ExportFormat rawValues handed to the bridge, never shown —
+    // the displayed labels are built with tr() in exportInteractive().
     const char *format = nullptr;    // unknown extension: persisted format
     if (path.endsWith(QStringLiteral(".tif"), Qt::CaseInsensitive)
         || path.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive))
-        format = "TIFF (16-bit)";
+        format = "TIFF (16-bit)";   // i18n-exempt: rawValue
     else if (path.endsWith(QStringLiteral(".dng"), Qt::CaseInsensitive))
-        format = "DNG (raw)";
+        format = "DNG (raw)";       // i18n-exempt: rawValue
     else if (path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive))
-        format = "PNG (16-bit)";
+        format = "PNG (16-bit)";    // i18n-exempt: rawValue
     else if (path.endsWith(QStringLiteral(".jpg"), Qt::CaseInsensitive)
              || path.endsWith(QStringLiteral(".jpeg"), Qt::CaseInsensitive))
         format = "JPEG";

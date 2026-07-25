@@ -2,16 +2,31 @@
 # Versioned hooks: enable them once per clone with
 #     git config core.hooksPath .githooks
 #
-# Rejects a staged Localizable.xcstrings that carries Xcode's rewrite (see
-# Scripts/check-xcstrings.sh for what that is and why it's never wanted). Checks
-# the *staged* content, not the working tree, so `git add -p` and partial stages
-# are judged on what would actually land.
+# Two checks, each skipped when the commit can't affect it:
+#
+#  1. Rejects a staged Localizable.xcstrings that carries Xcode's rewrite (see
+#     Scripts/check-xcstrings.sh for what that is and why it's never wanted).
+#     Checks the *staged* content, not the working tree, so `git add -p` and
+#     partial stages are judged on what would actually land.
+#
+#  2. Translation coverage across both UIs (Scripts/check-translations.py):
+#     every user-facing string wrapped, in the catalog, and translated into
+#     all ten languages. This one reads the working tree — it spans a dozen
+#     files and the staged-content dance isn't worth it — so a partial stage
+#     is judged on what you have, not purely on what lands.
 set -euo pipefail
 
 CATALOG=App/Resources/Localizable.xcstrings
-git diff --cached --name-only --diff-filter=ACM | grep -qx "$CATALOG" || exit 0
+STAGED="$(git diff --cached --name-only --diff-filter=ACM)"
 
-TMP="$(mktemp -t xcstrings)"
-trap 'rm -f "$TMP"' EXIT
-git show ":$CATALOG" > "$TMP"
-Scripts/check-xcstrings.sh "$TMP"
+if grep -qx "$CATALOG" <<<"$STAGED"; then
+    TMP="$(mktemp -t xcstrings)"
+    trap 'rm -f "$TMP"' EXIT
+    git show ":$CATALOG" > "$TMP"
+    Scripts/check-xcstrings.sh "$TMP"
+fi
+
+# Anything that can introduce or orphan a user-facing string.
+if grep -qE '^(App/Resources/Localizable\.xcstrings|QtShell/.*\.(qml|cpp|h)|AppCore/.*\.swift|Sources/HyperfocalKit/.*\.swift)$' <<<"$STAGED"; then
+    Scripts/check-translations.py
+fi

@@ -74,7 +74,30 @@ qt_add_qml_module(hyperfocal-qt
     QML_FILES Main.qml CropOverlay.qml RetouchOverlay.qml BrushCircle.qml
     RESOURCES crop-landscape.svg crop-portrait.svg
     SOURCES Shell.h Shell.cpp PaneItem.h PaneItem.cpp LutImageProvider.h
+            CatalogTranslator.h
 )
+
+# Translations: generated from App/Resources/Localizable.xcstrings by
+# Scripts/gen-translations.py and checked in, so Windows/Linux builds need
+# no Python and no Qt Linguist tooling. CONFIGURE_DEPENDS re-runs the glob
+# when a language is added or removed.
+file(GLOB HFQT_I18N CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/i18n/*.json")
+if(HFQT_I18N)
+    foreach(catalog ${HFQT_I18N})
+        get_filename_component(catalog_name "${catalog}" NAME)
+        set_source_files_properties("${catalog}"
+            PROPERTIES QT_RESOURCE_ALIAS "${catalog_name}")
+    endforeach()
+    qt_add_resources(hyperfocal-qt "hyperfocal-i18n"
+        PREFIX "/i18n"
+        FILES ${HFQT_I18N}
+    )
+else()
+    message(WARNING
+        "No QtShell/i18n/*.json — run Scripts/gen-translations.py; "
+        "the shell will fall back to English.")
+endif()
 
 # The app icon rides in resources for QGuiApplication::setWindowIcon
 # (dock/taskbar identity on every platform; macOS bundles would use an

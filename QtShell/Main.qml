@@ -29,7 +29,7 @@ ApplicationWindow {
             var parts = Shell.projectPath.split("/")
             name = parts[parts.length - 1].replace(/\.hyperfocal$/, "")
         }
-        return name + (Shell.hasUnsavedWork ? " — Edited" : "")
+        return Shell.hasUnsavedWork ? qsTr("%1 — Edited").arg(name) : name
     }
     color: theme.window
 
@@ -101,9 +101,9 @@ ApplicationWindow {
 
     menuBar: MenuBar {
         Menu {
-            title: "File"
+            title: qsTr("File")
             Action {
-                text: "New Project…"
+                text: qsTr("New Project…")
                 shortcut: StandardKey.New
                 enabled: !Shell.isRunning
                 // Confirm before the picker, like native; the chosen
@@ -114,31 +114,31 @@ ApplicationWindow {
                 }
             }
             Action {
-                text: "Open Project…"
+                text: qsTr("Open Project…")
                 shortcut: StandardKey.Open
                 enabled: !Shell.isRunning
                 onTriggered: openProjectDialog.open()
             }
             Action {
-                text: "Add Stack Folder…"
+                text: qsTr("Add Stack Folder…")
                 shortcut: "Ctrl+Shift+N"
                 enabled: !Shell.isRunning
                 onTriggered: openDialog.open()
             }
             MenuSeparator {}
             Action {
-                text: "Close Stack"
+                text: qsTr("Close Stack")
                 enabled: !Shell.isRunning && Shell.stacks.length > 0
                 onTriggered: Shell.closeStack()
             }
             Action {
-                text: "Close Project"
+                text: qsTr("Close Project")
                 enabled: !Shell.isRunning && Shell.stacks.length > 0
                 onTriggered: Shell.closeProject()
             }
             MenuSeparator {}
             Action {
-                text: "Save Project"
+                text: qsTr("Save Project")
                 shortcut: StandardKey.Save
                 enabled: !Shell.isRunning
                 onTriggered: {
@@ -147,7 +147,7 @@ ApplicationWindow {
                 }
             }
             Action {
-                text: "Save Project As…"
+                text: qsTr("Save Project As…")
                 shortcut: "Ctrl+Shift+S"
                 enabled: !Shell.isRunning
                 onTriggered: {
@@ -158,55 +158,55 @@ ApplicationWindow {
             }
             MenuSeparator {}
             Action {
-                text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"
+                text: Shell.depthMode ? qsTr("Export Depth Map…") : qsTr("Export Result…")
                 shortcut: "Ctrl+E"
                 enabled: !Shell.isRunning && Shell.hasDisplay
                 onTriggered: Shell.exportInteractive()
             }
             Action {
-                text: "Export All Fused…"
+                text: qsTr("Export All Fused…")
                 enabled: !Shell.isRunning && Shell.fusedStackCount > 1
                 onTriggered: exportAllDialog.open()
             }
             Action {
-                text: "Export Aligned Frames…"
+                text: qsTr("Export Aligned Frames…")
                 shortcut: "Ctrl+Shift+E"
                 enabled: !Shell.isRunning && Shell.canExportAligned
                 onTriggered: exportAlignedDialog.open()
             }
             Action {
-                text: "Export Rocking Animation…"
+                text: qsTr("Export Rocking Animation…")
                 enabled: !Shell.isRunning && Shell.canAnimate
                 onTriggered: Shell.exportAnimationInteractive()
             }
         }
         Menu {
-            title: "Edit"
+            title: qsTr("Edit")
             Action {
-                text: "Crop…"
+                text: qsTr("Crop…")
                 shortcut: "C"
                 enabled: Shell.canCrop && !Shell.cropMode
                 onTriggered: Shell.beginCrop()
             }
             Action {
-                text: "Swap Crop Orientation"
+                text: qsTr("Swap Crop Orientation")
                 shortcut: "X"
                 enabled: Shell.cropMode
                 onTriggered: Shell.toggleCropOrientation()
             }
             Action {
-                text: "Accept Crop"
+                text: qsTr("Accept Crop")
                 enabled: Shell.cropMode
                 onTriggered: Shell.acceptCrop()
             }
             Action {
-                text: "Cancel Crop"
+                text: qsTr("Cancel Crop")
                 enabled: Shell.cropMode
                 onTriggered: Shell.cancelCrop()
             }
             MenuSeparator {}
             Action {
-                text: "Settings…"
+                text: qsTr("Settings…")
                 shortcut: StandardKey.Preferences
                 onTriggered: settingsDialog.open()
             }
@@ -225,16 +225,16 @@ ApplicationWindow {
             }
         }
         Menu {
-            title: "Help"
+            title: qsTr("Help")
             Action {
-                text: "Hyperfocal Help"
+                text: qsTr("Hyperfocal Help")
                 shortcut: "Ctrl+?"
                 // The server 301s http → https; link the final URL.
                 onTriggered: Qt.openUrlExternally(
                     "https://ethannicholas.com/hyperfocal/tutorial.html")
             }
             Action {
-                text: "About Hyperfocal"
+                text: qsTr("About Hyperfocal")
                 onTriggered: aboutDialog.open()
             }
         }
@@ -242,17 +242,17 @@ ApplicationWindow {
 
     FileDialog {
         id: openProjectDialog
-        title: "Open a project"
-        nameFilters: ["Hyperfocal projects (*.hyperfocal)"]
+        title: qsTr("Open a project")
+        nameFilters: [qsTr("Hyperfocal projects (*.hyperfocal)")]
         onAccepted: Shell.openStack(selectedFile)
     }
 
     FileDialog {
         id: saveProjectDialog
-        title: "Save project"
+        title: qsTr("Save project")
         fileMode: FileDialog.SaveFile
         defaultSuffix: "hyperfocal"
-        nameFilters: ["Hyperfocal projects (*.hyperfocal)"]
+        nameFilters: [qsTr("Hyperfocal projects (*.hyperfocal)")]
         onAccepted: Shell.saveProject(selectedFile)
     }
 
@@ -404,8 +404,8 @@ ApplicationWindow {
                 Layout.alignment: Qt.AlignHCenter
             }
             Label {
-                text: "Version " + Shell.appVersion()
-                      + " (" + Shell.appBuild() + ")"
+                text: qsTr("Version %1 (%2)")
+                      .arg(Shell.appVersion()).arg(Shell.appBuild())
                 color: theme.textSecondary
                 font.pixelSize: 11
                 Layout.alignment: Qt.AlignHCenter
@@ -419,11 +419,10 @@ ApplicationWindow {
                 onLinkActivated: link => Qt.openUrlExternally(link)
             }
             Label {
-                text: "Includes the Adobe DNG SDK (DNG technology under "
-                      + "license by Adobe Systems Incorporated) and the Qt "
-                      + "framework under the GNU LGPL v3, plus other "
-                      + "open-source libraries. See NOTICE.md for all "
-                      + "third-party credits and licenses."
+                // One literal, not a concatenation: the catalog key is the
+                // whole sentence, and a split expression would key on the
+                // joined result while reading as five separate strings.
+                text: qsTr("Includes the Adobe DNG SDK (DNG technology under license by Adobe Systems Incorporated) and the Qt framework under the GNU LGPL v3, plus other open-source libraries. See NOTICE.md for all third-party credits and licenses.")
                 color: theme.textDim
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
@@ -431,7 +430,7 @@ ApplicationWindow {
                 horizontalAlignment: Text.AlignHCenter
             }
             Label {
-                text: "© 2026 Ethan Nicholas"
+                text: "© 2026 Ethan Nicholas"   // i18n-exempt: a name
                 color: theme.textDim
                 font.pixelSize: 11
                 Layout.alignment: Qt.AlignHCenter
@@ -441,7 +440,7 @@ ApplicationWindow {
 
     Dialog {
         id: settingsDialog
-        title: "Settings"
+        title: qsTr("Settings")
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.Close
@@ -456,28 +455,28 @@ ApplicationWindow {
             spacing: 8
             CheckBox {
                 id: orderToggle
-                text: "Order frames by capture time"
+                text: qsTr("Order frames by capture time")
                 onToggled: Shell.setBoolSetting("order-by-capture", checked)
             }
             CheckBox {
                 id: alignToggle
-                text: "Align frames"
+                text: qsTr("Align frames")
                 onToggled: Shell.setBoolSetting("align", checked)
             }
             CheckBox {
                 id: normalizeToggle
-                text: "Even out exposure"
+                text: qsTr("Even out exposure")
                 onToggled: Shell.setBoolSetting("normalize-exposure", checked)
             }
             CheckBox {
                 id: gpuToggle
-                text: "Use GPU"
+                text: qsTr("Use GPU")
                 enabled: Shell.gpuAvailable()
                 onToggled: Shell.setBoolSetting("gpu", checked)
             }
             CheckBox {
                 id: diskToggle
-                text: "Cache frames on disk while fusing"
+                text: qsTr("Cache frames on disk while fusing")
                 onToggled: Shell.setBoolSetting("disk-cache", checked)
             }
         }
@@ -485,25 +484,25 @@ ApplicationWindow {
 
     FolderDialog {
         id: openDialog
-        title: "Choose a stack folder"
+        title: qsTr("Choose a stack folder")
         onAccepted: Shell.openStack(selectedFolder)
     }
 
     FolderDialog {
         id: newProjectDialog
-        title: "Choose a stack: a folder of frames"
+        title: qsTr("Choose a stack: a folder of frames")
         onAccepted: Shell.newProject(selectedFolder)
     }
 
     FolderDialog {
         id: exportAllDialog
-        title: "Export every fused stack to a folder"
+        title: qsTr("Export every fused stack to a folder")
         onAccepted: Shell.exportAll(selectedFolder)
     }
 
     FolderDialog {
         id: exportAlignedDialog
-        title: "Export aligned frames to a folder"
+        title: qsTr("Export aligned frames to a folder")
         onAccepted: Shell.exportAligned(selectedFolder)
     }
 
@@ -832,7 +831,7 @@ ApplicationWindow {
             // like the native sidebar. Row click selects (stash/install);
             // the checkbox is the batch-fuse opt-in.
             Label {
-                text: "Stacks"
+                text: qsTr("Stacks")
                 visible: stackList.count > 1
                 color: theme.textPrimary
                 font.bold: true
@@ -979,7 +978,7 @@ ApplicationWindow {
 
             SectionHeader {
                 id: stackHeader
-                title: "Stack"
+                title: qsTr("Stack")
                 section: "stack"
                 // "N of M" included count, the native stack.count.
                 subtitle: {
@@ -987,10 +986,10 @@ ApplicationWindow {
                     var n = 0
                     for (var i = 0; i < Shell.frames.length; ++i)
                         if (Shell.frames[i].included) ++n
-                    return n + " of " + Shell.frames.length
+                    return qsTr("%1 of %2").arg(n).arg(Shell.frames.length)
                 }
                 Button {
-                    text: "All"
+                    text: qsTr("All")
                     visible: frameList.count > 0
                     enabled: !Shell.isRunning
                     flat: true
@@ -1006,7 +1005,7 @@ ApplicationWindow {
                     onClicked: Shell.setAllFramesIncluded(true)
                 }
                 Button {
-                    text: "None"
+                    text: qsTr("None")
                     visible: frameList.count > 0
                     enabled: !Shell.isRunning
                     flat: true
@@ -1028,7 +1027,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
                          && !stackHeader.collapsed
-                text: "Drop a folder of frames here, or:"
+                text: qsTr("Drop a folder of frames here, or:")
                 color: theme.textDim
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
@@ -1037,7 +1036,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
                          && !stackHeader.collapsed
-                text: "Open Folder…"
+                text: qsTr("Open Folder…")
                 enabled: !Shell.isRunning
                 onClicked: openDialog.open()
             }
@@ -1088,10 +1087,10 @@ ApplicationWindow {
 
             SectionHeader {
                 id: fusionHeader
-                title: "Fusion"
+                title: qsTr("Fusion")
                 section: "fusion"
                 Button {
-                    text: "Reset"
+                    text: qsTr("Reset")
                     visible: !Shell.fusionDefault
                     enabled: !Shell.isRunning
                     flat: true
@@ -1114,14 +1113,17 @@ ApplicationWindow {
                 // the persisted raw value is "dmap"/"pmax". Label on top with
                 // the radios below, matching the SidebarSlider layout.
                 Label {
-                    text: "Algorithm:"; color: theme.textSecondary; font.pixelSize: 12
+                    text: qsTr("Algorithm:"); color: theme.textSecondary; font.pixelSize: 12
                 }
                 Repeater {
                     model: [
+                        // "DMap"/"PMax" are proper algorithm names, never
+                        // translated — the same call AppCore's DisplayNamed
+                        // makes for FusionMethod (see Localization.swift).
                         { key: "dmap", label: "DMap",
-                          tip: "Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap." },
+                          tip: qsTr("Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap.") },
                         { key: "pmax", label: "PMax",
-                          tip: "Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce." }
+                          tip: qsTr("Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce.") }
                     ]
                     delegate: RowLayout {
                         Layout.fillWidth: true
@@ -1146,43 +1148,43 @@ ApplicationWindow {
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.sharpness"
-                    label: "Sharpness σ"; from: 1; to: 16; format: "%1 px"
+                    label: qsTr("Sharpness σ"); from: 1; to: 16; format: qsTr("%1 px")
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.noise-floor"
-                    label: "Noise floor"; from: 0.01; to: 1
+                    label: qsTr("Noise floor"); from: 0.01; to: 1
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.median-radius"
-                    label: "Median radius"; from: 0; to: 32; format: "%1 px"
+                    label: qsTr("Median radius"); from: 0; to: 32; format: qsTr("%1 px")
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.blend-radius"
-                    label: "Blend radius"; from: 0.75; to: 4
+                    label: qsTr("Blend radius"); from: 0.75; to: 4
                     enabled: !Shell.isRunning
                 }
                 // PMax debloom sliders (shown for the pyramid-fusion algorithm)
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm === "pmax"
                     sliderId: "fusion.slider.debloom-levels"
-                    label: "Debloom levels"; from: 0; to: 8; format: "%1"
+                    label: qsTr("Debloom levels"); from: 0; to: 8; format: "%1"
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm === "pmax"
                     sliderId: "fusion.slider.focus-threshold"
-                    label: "Focus threshold"; from: 0; to: 0.3
+                    label: qsTr("Focus threshold"); from: 0; to: 0.3
                     enabled: !Shell.isRunning
                 }
                 Button {
                     Layout.fillWidth: true
-                    text: "Fuse Stack"
+                    text: qsTr("Fuse Stack")
                     enabled: Shell.canFuse
                     highlighted: true
                     onClicked: Shell.fuse()
@@ -1190,7 +1192,7 @@ ApplicationWindow {
                 Button {
                     Layout.fillWidth: true
                     visible: stackList.count > 1
-                    text: "Fuse " + Shell.pendingStackCount + " Stacks"
+                    text: qsTr("Fuse %1 Stacks").arg(Shell.pendingStackCount)
                     enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
                     onClicked: Shell.fuseEnabledStacks()
                 }
@@ -1198,10 +1200,10 @@ ApplicationWindow {
 
             SectionHeader {
                 id: toneHeader
-                title: "Tone"
+                title: qsTr("Tone")
                 section: "tone"
                 Button {
-                    text: "Reset"
+                    text: qsTr("Reset")
                     visible: !Shell.toneNeutral
                     flat: true
                     font.pixelSize: 11
@@ -1220,33 +1222,33 @@ ApplicationWindow {
                 visible: !toneHeader.collapsed
                 SidebarSlider {
                     sliderId: "tone.slider.exposure"
-                    label: "Exposure"; from: -5; to: 5; format: "%1 EV"
+                    label: qsTr("Exposure"); from: -5; to: 5; format: qsTr("%1 EV")
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.contrast"
-                    label: "Contrast"; from: -100; to: 100; decimals: 0
+                    label: qsTr("Contrast"); from: -100; to: 100; decimals: 0
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.highlights"
-                    label: "Highlights"; from: -100; to: 100; decimals: 0
+                    label: qsTr("Highlights"); from: -100; to: 100; decimals: 0
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.shadows"
-                    label: "Shadows"; from: -100; to: 100; decimals: 0
+                    label: qsTr("Shadows"); from: -100; to: 100; decimals: 0
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.whites"
-                    label: "Whites"; from: -100; to: 100; decimals: 0
+                    label: qsTr("Whites"); from: -100; to: 100; decimals: 0
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.blacks"
-                    label: "Blacks"; from: -100; to: 100; decimals: 0
+                    label: qsTr("Blacks"); from: -100; to: 100; decimals: 0
                 }
             }
 
             SectionHeader {
                 id: editHeader
-                title: "Edit"
+                title: qsTr("Edit")
                 section: "retouch"
             }
             SidebarCard {
@@ -1254,15 +1256,15 @@ ApplicationWindow {
                 Button {
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
-                    text: "Crop…"
+                    text: qsTr("Crop…")
                     enabled: Shell.canCrop
                     onClicked: Shell.beginCrop()
                 }
                 Button {
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
-                    text: Shell.retouchHasEdits ? "Continue Retouching"
-                                                : "Start Retouching"
+                    text: Shell.retouchHasEdits ? qsTr("Continue Retouching")
+                                                : qsTr("Start Retouching")
                     enabled: Shell.canRetouch
                     onClicked: Shell.enterRetouch()
                 }
@@ -1271,18 +1273,36 @@ ApplicationWindow {
                 // "Crop" sub-header — the native CropControls placement.
                 Label {
                     visible: Shell.cropMode
-                    text: "Crop"; color: theme.textPrimary; font.bold: true
+                    text: qsTr("Crop"); color: theme.textPrimary; font.bold: true
                 }
                 RowLayout {
                     visible: Shell.cropMode
                     Layout.fillWidth: true
-                    Label { text: "Aspect Ratio"; color: theme.textSecondary }
+                    Label { text: qsTr("Aspect Ratio"); color: theme.textSecondary }
                     ComboBox {
                         Layout.fillWidth: true
-                        model: ["Original", "Custom", "1:1", "3:2", "5:4",
-                                "4:3", "16:9"]
-                        currentIndex: Math.max(0, model.indexOf(Shell.cropAspect))
-                        onActivated: Shell.cropAspect = currentText
+                        // The aspect value persists through the bridge:
+                        // the model keeps it verbatim and only `display` is
+                        // translated, so a localized run never writes a
+                        // translated rawValue back (the DisplayNamed rule).
+                        model: [
+                            { value: "Original", display: qsTr("Original") },
+                            { value: "Custom", display: qsTr("Custom") },
+                            { value: "1:1", display: "1:1" },
+                            { value: "3:2", display: "3:2" },
+                            { value: "5:4", display: "5:4" },
+                            { value: "4:3", display: "4:3" },
+                            { value: "16:9", display: "16:9" }
+                        ]
+                        textRole: "display"
+                        valueRole: "value"
+                        currentIndex: {
+                            for (var i = 0; i < model.length; ++i)
+                                if (model[i].value === Shell.cropAspect)
+                                    return i
+                            return 0
+                        }
+                        onActivated: index => Shell.cropAspect = model[index].value
                     }
                     Button {
                         // Icon button in the aspect row, like native's
@@ -1298,7 +1318,7 @@ ApplicationWindow {
                         onClicked: Shell.toggleCropOrientation()
                         ToolTip.visible: hovered
                         ToolTip.text:
-                            "Swap the crop between landscape and portrait (X)."
+                            qsTr("Swap the crop between landscape and portrait (X).")
                     }
                 }
                 RowLayout {
@@ -1307,52 +1327,52 @@ ApplicationWindow {
                     Button {
                         Layout.fillWidth: true
                         highlighted: true
-                        text: "Accept"
+                        text: qsTr("Accept")
                         onClicked: Shell.acceptCrop()
                     }
                     Button {
                         Layout.fillWidth: true
-                        text: "Cancel"
+                        text: qsTr("Cancel")
                         onClicked: Shell.cancelCrop()
                     }
                 }
 
                 Label {
                     visible: Shell.retouchMode
-                    text: "Retouching"; color: theme.textPrimary; font.bold: true
+                    text: qsTr("Retouching"); color: theme.textPrimary; font.bold: true
                 }
                 SidebarSlider {
                     visible: Shell.retouchMode
                     sliderId: "retouch.slider.brush-size"
-                    label: "Brush size"; from: 1; to: 800; decimals: 0
-                    format: "%1 px"
+                    label: qsTr("Brush size"); from: 1; to: 800; decimals: 0
+                    format: qsTr("%1 px")
                 }
                 SidebarSlider {
                     visible: Shell.retouchMode
                     sliderId: "retouch.slider.softness"
-                    label: "Softness"; from: 0; to: 1
+                    label: qsTr("Softness"); from: 0; to: 1
                 }
                 ColumnLayout {
                     visible: Shell.retouchMode
                     Layout.fillWidth: true
                     spacing: 2
                     Label {
-                        text: "Retouch from"
+                        text: qsTr("Retouch from")
                         color: theme.textSecondary
                         font.pixelSize: 12
                     }
                     RadioButton {
-                        text: "Source Image"
+                        text: qsTr("Source Image")
                         checked: Shell.retouchSourceKind === 0
                         onClicked: Shell.retouchSourceKind = 0
                     }
                     RadioButton {
-                        text: "PMax Result"
+                        text: qsTr("PMax Result")
                         checked: Shell.retouchSourceKind === 1
                         onClicked: Shell.retouchSourceKind = 1
                     }
                     RadioButton {
-                        text: "DMap Result"
+                        text: qsTr("DMap Result")
                         checked: Shell.retouchSourceKind === 2
                         onClicked: Shell.retouchSourceKind = 2
                     }
@@ -1361,24 +1381,28 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     visible: Shell.retouchMode
                     enabled: Shell.retouchHasEdits
-                    text: "Revert All"
+                    text: qsTr("Revert All")
                     onClicked: Shell.revertRetouch()
                 }
                 Button {
                     Layout.fillWidth: true
                     visible: Shell.retouchMode
                     highlighted: true
-                    text: "Done Retouching"
+                    text: qsTr("Done Retouching")
                     onClicked: Shell.exitRetouch()
                 }
 
                 Label {
                     Layout.fillWidth: true
                     visible: Shell.displayCrop.width > 0
-                    text: "Cropped to " + Shell.displayCrop.width + "×"
-                          + Shell.displayCrop.height
-                          + (Shell.displayCropAngle !== 0
-                             ? ", " + Shell.displayCropAngle.toFixed(1) + "°" : "")
+                    text: Shell.displayCropAngle !== 0
+                        ? qsTr("Cropped to %1×%2, %3°")
+                          .arg(Shell.displayCrop.width)
+                          .arg(Shell.displayCrop.height)
+                          .arg(Shell.displayCropAngle.toFixed(1))
+                        : qsTr("Cropped to %1×%2")
+                          .arg(Shell.displayCrop.width)
+                          .arg(Shell.displayCrop.height)
                     color: theme.textDim
                     font.pixelSize: 11
                     elide: Text.ElideRight
@@ -1389,14 +1413,14 @@ ApplicationWindow {
 
             SectionHeader {
                 id: exportHeader
-                title: "Export"
+                title: qsTr("Export")
                 section: "export"
             }
             SidebarCard {
                 visible: !exportHeader.collapsed
                 Button {
                     Layout.fillWidth: true
-                    text: Shell.depthMode ? "Export Depth Map…" : "Export Result…"
+                    text: Shell.depthMode ? qsTr("Export Depth Map…") : qsTr("Export Result…")
                     enabled: !Shell.isRunning && Shell.hasDisplay
                     onClicked: Shell.exportInteractive()
                 }
@@ -1433,14 +1457,14 @@ ApplicationWindow {
                     // widths must not skew the layout).
                     Layout.preferredWidth: 1
                     title: Shell.retouchMode
-                        ? "Source: " + Shell.retouchSourceName
-                          + "   ↑/↓ cycle · space picks sharpest"
+                        ? qsTr("Source: %1   ↑/↓ cycle · space picks sharpest")
+                          .arg(Shell.retouchSourceName)
                         : Shell.inputTitle !== "" ? Shell.inputTitle
-                                                  : "Input"
+                                                  : qsTr("Input")
                     hint: Shell.hasInput ? ""
                         : Shell.frames.length === 0
-                            ? "Open a stack to begin"
-                            : "Select a frame in the Stack list"
+                            ? qsTr("Open a stack to begin")
+                            : qsTr("Select a frame in the Stack list")
                     // Mid-fuse the pane cycles processing sources — the
                     // spinner would just flicker (native gates the same
                     // way); the retouch source keeps its own status label.
@@ -1474,7 +1498,7 @@ ApplicationWindow {
                             ? Shell.retouchSourceError
                             : Shell.retouchSourceStatus !== ""
                                 ? Shell.retouchSourceStatus
-                                : "Loading source…"
+                                : qsTr("Loading source…")
                         color: theme.textSecondary
                         font.pixelSize: 13
                         padding: 8
@@ -1486,12 +1510,13 @@ ApplicationWindow {
                     Layout.preferredWidth: 1
                     title: Shell.retouchMode
                         ? (Shell.depthMode
-                           ? "Retouched Depth"
-                           : "Retouched Output — drag to paint from source")
-                        : "Output"
+                           ? qsTr("Retouched Depth")
+                           : qsTr("Retouched Output — drag to paint from source"))
+                        : qsTr("Output")
                     dataDisplay: Shell.displayIsData
                     hint: Shell.hasDisplay ? ""
-                        : Shell.canFuse ? "Press “Fuse Stack”" : "No output yet"
+                        : Shell.canFuse ? qsTr("Press “Fuse Stack”")
+                                        : qsTr("No output yet")
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     // Segmented mode picker in the pane header, the
@@ -1500,22 +1525,38 @@ ApplicationWindow {
                         parent: outputPane.headerArea
                         spacing: 1
                         Button {
-                            text: "Result"
+                            text: qsTr("Result")
                             checkable: true
                             autoExclusive: true
                             checked: !Shell.depthMode
                             onClicked: Shell.depthMode = false
-                            implicitWidth: 64
+                            // No width override: a hardcoded 64 elided
+                            // German "Ergebnis" and Russian "Результат", and
+                            // deriving it from implicitContentWidth doesn't
+                            // help either — headerSlot sizes from
+                            // childrenRect, which doesn't re-evaluate when a
+                            // child's implicit width is itself a binding.
+                            // The natural button width is stable and fits.
+                            leftPadding: 10
+                            rightPadding: 10
                             implicitHeight: 22
                             font.pixelSize: 11
                         }
                         Button {
-                            text: "Depth"
+                            text: qsTr("Depth")
                             checkable: true
                             autoExclusive: true
                             checked: Shell.depthMode
                             onClicked: Shell.depthMode = true
-                            implicitWidth: 64
+                            // No width override: a hardcoded 64 elided
+                            // German "Ergebnis" and Russian "Результат", and
+                            // deriving it from implicitContentWidth doesn't
+                            // help either — headerSlot sizes from
+                            // childrenRect, which doesn't re-evaluate when a
+                            // child's implicit width is itself a binding.
+                            // The natural button width is stable and fits.
+                            leftPadding: 10
+                            rightPadding: 10
                             implicitHeight: 22
                             font.pixelSize: 11
                         }
@@ -1571,7 +1612,7 @@ ApplicationWindow {
                                     font.pixelSize: 12
                                 }
                                 Button {
-                                    text: "Cancel"
+                                    text: qsTr("Cancel")
                                     font.pixelSize: 11
                                     onClicked: Shell.cancelFuse()
                                 }
@@ -1587,10 +1628,10 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.margins: 6
                 Item { Layout.fillWidth: true }
-                Label { text: "Zoom:"; color: theme.textSecondary; font.pixelSize: 12 }
+                Label { text: qsTr("Zoom:"); color: theme.textSecondary; font.pixelSize: 12 }
                 ToolButton {
                     id: zoomMenuButton
-                    text: (outputPane.item.fitted ? "Fit"
+                    text: (outputPane.item.fitted ? qsTr("Fit")
                           : Math.round(outputPane.item.displayScale * 100)
                             + "%") + "  ⌵"
                     font.pixelSize: 12
@@ -1598,7 +1639,7 @@ ApplicationWindow {
                     Menu {
                         id: zoomMenu
                         y: -implicitHeight - 4
-                        MenuItem { text: "Fit"; onTriggered: outputPane.item.fit() }
+                        MenuItem { text: qsTr("Fit"); onTriggered: outputPane.item.fit() }
                         MenuItem { text: "25%"; onTriggered: outputPane.item.setAbsoluteScale(0.25) }
                         MenuItem { text: "50%"; onTriggered: outputPane.item.setAbsoluteScale(0.5) }
                         MenuItem { text: "100%"; onTriggered: outputPane.item.setAbsoluteScale(1) }

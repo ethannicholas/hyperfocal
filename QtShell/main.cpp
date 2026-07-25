@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "CatalogTranslator.h"
 #include "LutImageProvider.h"
 #include "PaneItem.h"
 #include "Shell.h"
@@ -550,6 +551,29 @@ int main(int argc, char *argv[]) {
     QObject::connect(pump, &QTimer::timeout, &app, [] { hf_pump_main(); });
     pump->start(5);
 #endif
+    // Language, before the QML engine loads: qsTr() bindings resolve as
+    // their components are created, so a translator installed afterwards
+    // would leave the already-built UI in English.
+    //
+    // HFQT_LANG forces a tag ("de", "pt-BR", "zh-Hans"); "en" — and the
+    // selftest, whose assertions compare against English bridge strings —
+    // deliberately install nothing and fall through to the source text.
+    CatalogTranslator translator;
+    const QString forcedLang = QString::fromLocal8Bit(qgetenv("HFQT_LANG"));
+    const bool selftest = argc >= 2
+        && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--selftest");
+    if (!selftest && forcedLang != QStringLiteral("en")) {
+        const QStringList tags = forcedLang.isEmpty()
+            ? CatalogTranslator::candidateTags(QLocale::system())
+            : QStringList{forcedLang};
+        for (const QString &tag : tags) {
+            if (translator.loadCatalog(tag)) {
+                app.installTranslator(&translator);
+                break;
+            }
+        }
+    }
+
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("hflut"), new LutImageProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,

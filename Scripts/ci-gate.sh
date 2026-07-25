@@ -70,4 +70,7 @@ fi
 echo "== string catalog"
 Scripts/check-xcstrings.sh
 
+echo "== translation coverage"
+Scripts/check-translations.py
+
 echo "== CI GATE PASSED"

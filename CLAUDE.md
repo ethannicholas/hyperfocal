@@ -65,7 +65,8 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   modal): `DialogService` (AppCore) → `MacDialogService` (App) → `BridgeDialogs`
   + an `hf_*_cb` callback (Bridge/`hyperfocal_bridge.h`) → a `QMessageBox`
   in `Shell.cpp`. Never add UI to one side only; a feature that exists in just
-  one shell is a bug.
+  one shell is a bug — and so is a string that reaches either shell
+  untranslated (see the localization invariant below).
 - **Three OSes, one engine.** `HyperfocalKit` + `AppCore` must stay building on
   macOS, Windows, and Linux. Shared code must not assume Apple APIs — gate them
   `#if canImport(<Framework>)` with a CImaging/portable `#else`. `swift build`
@@ -134,24 +135,81 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   `RetouchSession`, and they co-paint the depth plane (frame → its index,
   eraser → session-start depth, PMax → untouched); the model folds session
   depth back into `resultDepth` via `mergeRetouchDepth()` at every consumer.
-- The **macOS** app is localized (10 languages,
-  `App/Resources/Localizable.xcstrings` — hand-maintained JSON, keys are the
-  English strings). Every new user-facing string needs a catalog entry: SwiftUI
-  literals localize automatically; String-typed plumbing uses
-  `String(localized:)` in the app layer and `NSLocalizedString` in AppCore/Kit
-  (Linux-safe; headless consumers fall back to the English key). The Qt shell's
-  own UI strings (QML literals / `QObject::tr` in `Shell.cpp`) are a separate
-  mechanism, currently English-only. Option enums whose rawValues
-  persist to UserDefaults must NEVER localize the rawValue — display goes
-  through the `DisplayNamed` seam (`AppCore/Localization.swift`) and
-  NSPopUpButton reverse-lookup is index-based, not title-based.
+- **Localization: both UIs, all ten languages, every string, no exceptions.**
+  This has been got wrong repeatedly, so the rules are spelled out:
+  - **You write the translations.** There is no translation vendor, no
+    translator, no external localization process, and no scheduled "translation
+    pass" to defer to — *you*, the agent, author every translation, in the same
+    change that adds the string. Past sessions have left strings English-only,
+    committed catalog entries commented "Needs translation.", and referred to an
+    outside translation process that does not exist. All three are bugs. If you
+    cannot translate a string you cannot add it.
+  - **A string untranslated in any of the ten languages is as broken as a
+    feature that shipped in only one UI** — same invariant, same severity.
+  - Languages (source `en`): `de`, `es`, `fr`, `it`, `ja`, `ko`, `nl`, `pt-BR`,
+    `ru`, `zh-Hans`. Adding an eleventh means backfilling every existing key.
+  - **One canonical catalog for both shells:**
+    `App/Resources/Localizable.xcstrings` — hand-maintained JSON, keys are the
+    English strings. Every user-facing string in the repo lives here, whether it
+    is rendered by SwiftUI, by QML, or by Qt C++. Add entries by hand, with all
+    ten translations filled in.
+  - **Generated, never hand-edited** (regenerate with
+    `Scripts/gen-translations.py`, commit the result):
+    `Sources/HyperfocalKit/GeneratedStrings.swift` (the portable catalog the
+    Swift layer reads off Apple) and `QtShell/i18n/<lang>.json` (the Qt shell's
+    per-language maps, compiled into its Qt resources by CMake and read by
+    `QtShell/CatalogTranslator.h`). All are checked in so Windows and Linux
+    builds stay hermetic — no generator step, and no Qt Linguist tooling:
+    there are deliberately no `.ts`/`.qm` files, because `lupdate`/`lrelease`
+    would be a build-tool dependency on three platforms for a catalog we
+    already generate.
+  - **Where each string goes:** macOS SwiftUI literals localize automatically;
+    String-typed plumbing uses `String(localized:)` in the app layer and
+    **`localizedString(_:comment:)`** (HyperfocalKit, *not* `NSLocalizedString`)
+    in AppCore/Kit; QML uses `qsTr("…")`; Qt C++ uses `tr("…")`. Bare literals
+    in QML/`Shell.cpp` are the Qt-side equivalent of a missing catalog entry.
+  - `localizedString` is the seam that makes the shared layer translatable off
+    Apple: on Apple it *is* `NSLocalizedString`, elsewhere it resolves against
+    the generated catalog rather than falling back to English. This matters
+    because the Qt shell's status text, errors, dialogs and undo names all
+    originate in the shared layer — localizing QML alone leaves the shell
+    half-English. `PortableStrings` (the resolver + locale-tag matching) is
+    compiled on every platform and checked by `retouch-probe`, so it isn't
+    exercised only where a regression is hardest to notice.
+  - Untranslatable by design: accelerators (`Ctrl+Shift+N`), object/accessibility
+    identifiers, font families (`Menlo`, `Consolas`), pure format shells, and
+    the algorithm names `DMap`/`PMax`. Where the gate can't infer that, mark the
+    line `// i18n-exempt: <why>`; it should stay rare (four lines today).
+  - **Option enums whose rawValues persist must NEVER localize the rawValue.**
+    On macOS display goes through the `DisplayNamed` seam
+    (`AppCore/Localization.swift`), and NSPopUpButton reverse-lookup is
+    index-based, not title-based. The Qt shell hits the same trap from the
+    other side: its combos used to round-trip `currentText()` straight back
+    through the bridge, so translating a label would have persisted a
+    translated rawValue and broken the model's parsing. The pattern there is a
+    raw list plus a parallel `…Labels` list, selected **by index** via
+    `selectRaw()` (`Shell.cpp`) — same for the QML aspect-ratio combo, whose
+    model carries `value` (raw) and `display` (translated) columns.
+  - **Testing a language:** `HFQT_LANG=<tag>` for the Qt shell, `HYPERFOCAL_LANG`
+    for the Swift layer; both take a catalog tag (`de`, `pt-BR`, `zh-Hans`).
+    `HFQT_LANG=en` and `--selftest` install no translator — the Qt selftest
+    asserts against English bridge strings, so it must stay untranslated.
+    Localization is also a layout test: German and Russian are the widest, and
+    they have already caught a hardcoded control width.
+  - **Gate:** `Scripts/check-translations.py` must pass — it fails on a bare
+    user-facing literal in either shell, a key missing from the catalog, a
+    missing or empty translation in any language, and a generated file that has
+    drifted from the catalog. It runs from `Scripts/ci-gate.sh` and
+    `.githooks/pre-commit`. Translated text follows the same writing conventions
+    as English (below): no competitor names, no personal names.
 - **Never commit Xcode's rewrite of `Localizable.xcstrings`.** Opening the
   project in Xcode.app and building rewrites the catalog — ~22k lines of churn
   that marks every live translated string `extractionState: "stale"`, deletes
   the untranslated stubs, and adds junk keys (`%@`, `%@%@`, `%@ of %@`) scraped
   from string interpolation. It never adds a translation. The cause is Xcode's
-  *lightweight parser*, which finds only ~101 of the catalog's 264 strings (it
-  misses most SwiftUI literals and can't see HyperfocalKit at all); the stale
+  *lightweight parser*, which finds only ~101 of the catalog's strings (it
+  misses most SwiftUI literals, can't see HyperfocalKit at all, and never sees
+  the Qt shell's entries, which no Swift file references); the stale
   pass then believes the rest are unused. Nothing is wrong with the committed
   file — `xcstringstool sync --skip-marking-strings-stale` reproduces it
   byte-for-byte. The fix is always `git checkout

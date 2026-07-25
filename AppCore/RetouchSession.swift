@@ -158,9 +158,9 @@ public final class RetouchSession: ObservableObject {
     private var resultImageCache: PlatformImage?
 
     public var sourceName: String {
-        if isPMaxSource { return NSLocalizedString("PMax Result", comment: "") }
-        if isDMapSource { return NSLocalizedString("DMap Result", comment: "") }
-        return String(format: NSLocalizedString("%@ (aligned)", comment: ""),
+        if isPMaxSource { return localizedString("PMax Result", comment: "") }
+        if isDMapSource { return localizedString("DMap Result", comment: "") }
+        return String(format: localizedString("%@ (aligned)", comment: ""),
                       urls[sourceIndex].lastPathComponent)
     }
 
@@ -409,9 +409,9 @@ public final class RetouchSession: ObservableObject {
                 self.sourceLoading = false
                 self.sourceError = loaded == nil
                     ? (FileManager.default.fileExists(atPath: url.path)
-                        ? String(format: NSLocalizedString("Couldn't load %@", comment: ""),
+                        ? String(format: localizedString("Couldn't load %@", comment: ""),
                                  url.lastPathComponent)
-                        : String(format: NSLocalizedString("%@ is missing", comment: ""),
+                        : String(format: localizedString("%@ is missing", comment: ""),
                                  url.lastPathComponent))
                     : nil
                 if loaded != nil {
@@ -451,7 +451,7 @@ public final class RetouchSession: ObservableObject {
     /// The single "a source is being prepared" label — one template for both
     /// algorithms so the DMap and PMax wording can never drift apart.
     private func preparingStatus(_ fraction: Double?) -> String {
-        let base = String(format: NSLocalizedString("Preparing the %@ result…", comment: ""),
+        let base = String(format: localizedString("Preparing the %@ result…", comment: ""),
                           otherMethod.displayName)
         guard let fraction else { return base }
         return base + String(format: " %lld%%", Int((fraction * 100).rounded()))

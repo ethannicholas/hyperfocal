@@ -18,11 +18,11 @@ public enum RawConverterError: Error, CustomStringConvertible, LocalizedError {
     public var description: String {
         switch self {
         case .converterMissing(let url):
-            return String(format: NSLocalizedString(
+            return String(format: localizedString(
                 "This camera's raw files need the free Adobe DNG Converter, which isn't installed. Download it from %@",
                 comment: "Shown when an undecodable raw is opened without the Adobe DNG Converter"), url)
         case .conversionFailed(let detail):
-            return String(format: NSLocalizedString(
+            return String(format: localizedString(
                 "Adobe DNG Converter could not convert this file: %@",
                 comment: "Shown when the Adobe DNG Converter runs but produces no output"), detail)
         }
@@ -85,7 +85,7 @@ public final class RawConverter {
             throw RawConverterError.converterMissing(downloadURL: adobeDNGConverterDownloadURL)
         }
 
-        RawConverter.progressHandler?(String(format: NSLocalizedString(
+        RawConverter.progressHandler?(String(format: localizedString(
             "Converting %@ via Adobe DNG Converter…",
             comment: "Progress shown while transcoding an unsupported raw file to DNG"),
             url.lastPathComponent))
