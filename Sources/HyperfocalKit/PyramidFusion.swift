@@ -42,6 +42,37 @@ public enum PyramidFusion {
 
     static let downKernel: [Float] = [1, 4, 6, 4, 1].map { $0 / 16 }
 
+    /// Max-pooled reduction, for carrying the near-black membership down to the
+    /// coarse levels track B runs at. Averaging is wrong here: at 1/64 scale one
+    /// cell spans the subject *and* the band beside it, so a mean drags the
+    /// membership toward the subject's zero and switches debloom off in exactly
+    /// the few cells next to the silhouette where it does its work. The
+    /// question the mask asks is "does this cell contain background that could
+    /// be bloomed into?", and that is an any-of, not an average-of.
+    static func maxPool(_ plane: [Float], width: Int, height: Int,
+                        factor: Int) -> [Float] {
+        let ow = (width + factor - 1) / factor
+        let oh = (height + factor - 1) / factor
+        var out = [Float](repeating: 0, count: ow * oh)
+        out.withUnsafeMutableBufferPointer { op in
+            plane.withUnsafeBufferPointer { sp in
+                DispatchQueue.concurrentPerform(iterations: oh) { oy in
+                    for ox in 0..<ow {
+                        var m: Float = 0
+                        for y in (oy * factor)..<min((oy + 1) * factor, height) {
+                            let row = y * width
+                            for x in (ox * factor)..<min((ox + 1) * factor, width) {
+                                m = max(m, sp[row + x])
+                            }
+                        }
+                        op[oy * ow + ox] = m
+                    }
+                }
+            }
+        }
+        return out
+    }
+
     static func downsample(_ img: ImageBuffer) -> ImageBuffer {
         let blurred = Filters.convolveSeparableRGBA(img, kernel: downKernel)
         let nw = (img.width + 1) / 2
@@ -101,9 +132,15 @@ public enum PyramidFusion {
     /// selection and leak into its dark neighbours. Gating the coarsest
     /// `coarseLevels` band levels by focus (max-energy only where a frame has
     /// fine-scale detail, darkest elsewhere) suppresses that without dimming
-    /// real bright features. Runs on the Metal and wgpu paths
-    /// (`GPUPyramid`/`WgpuPyramid`) as well as the CPU streaming loop; default
-    /// (nil) leaves the standard PMax selection untouched.
+    /// real bright features. Default (nil) leaves the standard PMax selection
+    /// untouched.
+    ///
+    /// Runs on the **CPU path only** for now: the near-black gate that keeps
+    /// track B out of the regime it is invalid in (see the merge in `fuse`) has
+    /// no Metal/wgpu counterpart yet, so `fuse` routes debloom to the CPU to
+    /// avoid shipping two different behaviours. The GPU kernels
+    /// (`GPUPyramid`/`WgpuPyramid`) still carry the ungated form, ready to be
+    /// brought up to match.
     public struct FocusGate: Sendable {
         public var coarseLevels: Int
         public var threshold: Float
@@ -192,7 +229,16 @@ public enum PyramidFusion {
         // the CPU loop retains today — stay on the CPU when it is requested. The
         // GPU port is a follow-up, exactly as the focus gate's was.
         if prepareDespill { log?("pmax: despill inputs requested — CPU engine") }
-        let preferGPU = preferGPU && !prepareDespill
+        // The focus gate's near-black gating lives in the CPU merge only; the
+        // Metal/wgpu focus-gate kernels still implement the ungated form, which
+        // now differs enough to break pmax CPU↔GPU agreement (measured 38.8 dB
+        // against the ≥ 60 dB bar, vs 79.5 dB ungated). Rather than ship two
+        // different debloom behaviours, route debloom to the CPU until the
+        // kernels are ported. The measured cost is nil-to-negative here: a
+        // full-res 63-frame pmax fuse ran 135 s on the CPU against 171 s on the
+        // GPU path (see ROADMAP — that inversion wants explaining on its own).
+        if focusGateEnabled { log?("pmax: focus gate — CPU engine") }
+        let preferGPU = preferGPU && !prepareDespill && !focusGateEnabled
         #if canImport(Metal)
         if preferGPU, MetalEngine.shared != nil {
             do {
@@ -246,6 +292,9 @@ public enum PyramidFusion {
         var bandBestLum: [[Float]] = []
         var trackB: [ImageBuffer] = []
         var hasFocus: [[Float]] = []
+        var plainC: [ImageBuffer] = []
+        var plainBestE: [[Float]] = []
+        var lumMin0: [Float] = []
         // Despill inputs (only when asked): per-frame grid luminance for the
         // dark floor, and the running per-cell max of this frame's fine-scale
         // focus — the "did any frame ever resolve detail here" confidence proxy
@@ -307,6 +356,41 @@ public enum PyramidFusion {
                             ? [Float](repeating: 0, count: ws.sizes[l].w * ws.sizes[l].h)
                             : []
                     }
+                    // Track C: the plain max-energy winner over ALL frames — the
+                    // un-debloomed selection, kept so bright regions can fall
+                    // back to it (see the near-black gate at the merge). Cheap:
+                    // these are only the coarsest levels, ≤ 1/1024 of full res.
+                    plainC = (0..<levels).map { l in
+                        (l >= levels - darkCoarse)
+                            ? ImageBuffer(width: ws.sizes[l].w, height: ws.sizes[l].h)
+                            : ImageBuffer(width: 0, height: 0)
+                    }
+                    plainBestE = (0..<levels).map { l in
+                        (l >= levels - darkCoarse)
+                            ? [Float](repeating: -1, count: ws.sizes[l].w * ws.sizes[l].h)
+                            : []
+                    }
+                    // FULL-RES per-cell min luminance over all frames — the
+                    // near-black test's input.
+                    //
+                    // Two things had to be right here. The statistic is the
+                    // *min*, because the test asks what this cell's true
+                    // background level is and the least-contaminated estimate of
+                    // that is the darkest frame; a max-based test reads the glow
+                    // band — debloom's whole purpose — as a lit surface, because
+                    // bloom is exactly what makes it bright in some frame.
+                    //
+                    // And it is measured at level 0, not at the coarse level
+                    // being gated. Track B runs at 1/32…1/1024 scale, where one
+                    // cell spans the subject *and* the thin band beside it, so
+                    // no per-cell brightness test there can separate them — a
+                    // level-local test collapses the two regimes together
+                    // (measured: no lo/hi pair satisfies both a dark-background
+                    // and a bright-background stack). At full res they separate
+                    // cleanly, so the membership is evaluated here and box-
+                    // downsampled to each gated level, which also blends
+                    // partial-coverage cells instead of hard-switching them.
+                    lumMin0 = [Float](repeating: .infinity, count: ws.sizes[0].w * ws.sizes[0].h)
                 }
             }
             let ws = workspace!
@@ -333,6 +417,21 @@ public enum PyramidFusion {
             }
             tWarp += now() - t0
             t0 = now()
+            if focusGate {
+                // Running full-res min luminance for the near-black gate.
+                ws.gauss[0].withUnsafeBufferPointer { gp in
+                    lumMin0.withUnsafeMutableBufferPointer { mp in
+                        DispatchQueue.concurrentPerform(iterations: ch) { y in
+                            for x in 0..<cw {
+                                let i = y * cw + x, pi = i * 4
+                                let l = 0.2126 * gp[pi] + 0.7152 * gp[pi + 1]
+                                      + 0.0722 * gp[pi + 2]
+                                if l < mp[i] { mp[i] = l }
+                            }
+                        }
+                    }
+                }
+            }
             for l in 0..<levels { ws.fusedDownsample(level: l) }
             ws.level0BandEnergy()
             if prepareDespill {
@@ -373,7 +472,8 @@ public enum PyramidFusion {
                     ws.selectStreamingFocusGated(level: l, focus: focus, threshold: focusThresh,
                                                  fused: &fused![l], bestE: &bestEnergy[l],
                                                  trackB: &trackB[l], bestDarkLum: &bandBestLum[l],
-                                                 hasFocus: &hasFocus[l])
+                                                 hasFocus: &hasFocus[l],
+                                                 plainC: &plainC[l], plainBestE: &plainBestE[l])
                 } else if darkCoarse > 0 && l >= levels - darkCoarse {
                     ws.selectStreamingDark(level: l, fused: &fused![l], bestLum: &bandBestLum[l])
                 } else {
@@ -417,17 +517,79 @@ public enum PyramidFusion {
                 fused![levels].pixels[i] /= n
             }
         }
-        // Focus-gate merge: keep track A (max-energy among in-focus frames)
-        // where any frame was in focus, else track B (darkest, bloom-free).
+        // Focus-gate merge. Two steps: the debloom result is track A
+        // (max-energy among in-focus frames) where any frame was in focus, else
+        // track B (darkest, bloom-free) — then the whole thing is gated to the
+        // near-black regions it is valid in, falling back to track C (the plain
+        // max-energy selection) everywhere else.
+        //
+        // Track B's premise is that the contaminant is additive: a bright
+        // subject blooming into a dark background, which is the regime the
+        // focus gate was built and tuned for. Where the neighbouring subject is
+        // *darker* than the background the sign reverses, and "keep the darkest
+        // frame" keeps the most contaminated one — a dark halo hugging the
+        // silhouette, plus desaturation as the darker background mixes in.
+        // Inverting track B to keep the brightest does not fix it (measured: it
+        // trades the dark halo for a larger bright flare, because max-of-N grabs
+        // the brightest outlier exactly as min-of-N grabs the darkest). The
+        // failure is the extreme order statistic, not its direction — so where
+        // the premise does not hold, the fix is to not use it. Track C is the
+        // un-debloomed selection, which measures closest to DMap in that regime.
+        //
+        // Env: `HYPERFOCAL_PMAX_NEARBLACK_LO` / `_HI` (default 0.15 / 0.35, as a
+        // fraction of the level's 95th-percentile luminance); `_OFF` restores
+        // the ungated merge.
         if focusGate {
+            let nbOff = env["HYPERFOCAL_PMAX_NEARBLACK_OFF"] != nil
+            let nbLo = Float(env["HYPERFOCAL_PMAX_NEARBLACK_LO"] ?? "") ?? 0.15
+            let nbHi = max(Float(env["HYPERFOCAL_PMAX_NEARBLACK_HI"] ?? "") ?? 0.35,
+                           nbLo + 1e-6)
+            let nbPct = Float(env["HYPERFOCAL_PMAX_NEARBLACK_PCT"] ?? "") ?? 0.99
+            // Full-res near-black membership, scaled to the scene's own bright
+            // end so the test is exposure- and unit-free, then box-downsampled
+            // per gated level (averaging the *weight*, so a coarse cell that
+            // straddles background and subject gets a proportional blend).
+            // Scale reference: a HIGH percentile, not p95. p95 assumes the
+            // bright content is a large minority of the frame; on a specimen
+            // shot against a dark backdrop the subject can be 2-3% of pixels, so
+            // p95 lands inside the background (measured 0.058 on Azurite against
+            // a p99 of 0.418) and drags the thresholds down onto the physical
+            // rim tail — gating debloom off in exactly the band it is needed.
+            let scale = max(Despill.percentileLow(lumMin0, nbPct), 1e-6)
+            let lo = nbLo * scale, hi = nbHi * scale
+            var nb0 = [Float](repeating: 0, count: lumMin0.count)
+            for i in nb0.indices { nb0[i] = 1 - Despill.smoothstep(lo, hi, lumMin0[i]) }
+            log?(String(format: "pmax near-black gate: scale=%.4f lo=%.1f hi=%.1f, "
+                        + "mean mask %.3f", scale, lo, hi,
+                        nb0.reduce(0, +) / Float(max(nb0.count, 1))))
+            DMapFusion.dumpPlane(lumMin0, env: "HYPERFOCAL_DUMP_LUMMIN0")
+            DMapFusion.dumpPlane(nb0, env: "HYPERFOCAL_DUMP_NEARBLACK")
+            let (w0, h0) = workspace!.sizes[0]
             for l in 1..<levels where l >= levels - darkCoarse {
                 let hf = hasFocus[l]
+                let mask = Self.maxPool(nb0, width: w0, height: h0, factor: 1 << l)
                 fused![l].pixels.withUnsafeMutableBufferPointer { ap in
                     trackB[l].pixels.withUnsafeBufferPointer { bp in
-                        for i in 0..<hf.count where hf[i] < 0.5 {
-                            let pi = i * 4
-                            ap[pi] = bp[pi]; ap[pi + 1] = bp[pi + 1]
-                            ap[pi + 2] = bp[pi + 2]; ap[pi + 3] = bp[pi + 3]
+                        plainC[l].pixels.withUnsafeBufferPointer { cp in
+                            for i in 0..<hf.count {
+                                let pi = i * 4
+                                // Debloom's own answer for this cell.
+                                var dx = ap[pi], dy = ap[pi + 1]
+                                var dz = ap[pi + 2], dw = ap[pi + 3]
+                                if hf[i] < 0.5 {
+                                    dx = bp[pi]; dy = bp[pi + 1]
+                                    dz = bp[pi + 2]; dw = bp[pi + 3]
+                                }
+                                // Near-black membership: 1 where the cell is
+                                // never bright (background), 0 where it is a lit
+                                // surface. Smoothstepped so the transition can't
+                                // band along the falloff.
+                                let t = nbOff ? 1 : mask[i]
+                                ap[pi] = cp[pi] + (dx - cp[pi]) * t
+                                ap[pi + 1] = cp[pi + 1] + (dy - cp[pi + 1]) * t
+                                ap[pi + 2] = cp[pi + 2] + (dz - cp[pi + 2]) * t
+                                ap[pi + 3] = cp[pi + 3] + (dw - cp[pi + 3]) * t
+                            }
                         }
                     }
                 }
@@ -689,10 +851,16 @@ public enum PyramidFusion {
         /// records whether any frame was in focus; the caller keeps A there and
         /// B elsewhere — so bloom can never win in a focused region, and a
         /// featureless region falls to the least-bloomed frame.
+        ///
+        /// Track C (`plainC`/`plainBestE`) accumulates the ordinary max-energy
+        /// winner over *every* frame in parallel — the un-debloomed selection,
+        /// which the caller's near-black gate falls back to outside the regime
+        /// track B is valid in.
         func selectStreamingFocusGated(level l: Int, focus: [Float], threshold: Float,
                                        fused: inout ImageBuffer, bestE: inout [Float],
                                        trackB: inout ImageBuffer, bestDarkLum: inout [Float],
-                                       hasFocus: inout [Float]) {
+                                       hasFocus: inout [Float],
+                                       plainC: inout ImageBuffer, plainBestE: inout [Float]) {
             let (w, h) = sizes[l]
             let (nw, nh) = sizes[l + 1]
             let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
@@ -704,6 +872,8 @@ public enum PyramidFusion {
                       bestDarkLum.withUnsafeMutableBufferPointer { bd in
                         hasFocus.withUnsafeMutableBufferPointer { hf in
                           focus.withUnsafeBufferPointer { fo in
+                           plainC.pixels.withUnsafeMutableBufferPointer { cp in
+                            plainBestE.withUnsafeMutableBufferPointer { pe in
                             DispatchQueue.concurrentPerform(iterations: h) { y in
                               for x in 0..<w {
                                 let i = y * w + x
@@ -712,6 +882,14 @@ public enum PyramidFusion {
                                                          x: x, y: y, scaleX: sx, scaleY: sy)
                                 let bx = fine[pi] - up.x, by = fine[pi + 1] - up.y
                                 let bz = fine[pi + 2] - up.z, bw = fine[pi + 3] - up.w
+                                // Track C runs for every frame, independent of
+                                // the focus gate.
+                                let ce = abs(bx) + abs(by) + abs(bz)
+                                if ce > pe[i] {
+                                    pe[i] = ce
+                                    cp[pi] = bx; cp[pi + 1] = by
+                                    cp[pi + 2] = bz; cp[pi + 3] = bw
+                                }
                                 if fo[i] > threshold {
                                     let e = abs(bx) + abs(by) + abs(bz)
                                     if e > be[i] {
@@ -730,6 +908,8 @@ public enum PyramidFusion {
                                 }
                               }
                             }
+                            }
+                           }
                           }
                         }
                       }

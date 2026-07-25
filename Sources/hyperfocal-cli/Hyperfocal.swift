@@ -291,7 +291,7 @@ struct Fuse: ParsableCommand {
     @Flag(name: .customLong("pmax-debloom"),
           help: ArgumentHelp("PMax: gate the coarse pyramid selection by focus to suppress "
             + "highlight bloom (defocused bright features spreading into their surroundings), "
-            + "without dimming the subject. --method pmax only (CPU or GPU)."))
+            + "without dimming the subject. --method pmax only; runs the CPU engine."))
     var pmaxDebloom: Bool = false
 
     @Option(name: .customLong("pmax-coarse-levels"),
@@ -412,8 +412,9 @@ struct Fuse: ParsableCommand {
                 despillInputs = out.despill
             case .pmax:
                 let wantDespill = despillAmount > 0 || despillDumpDir != nil
-                if wantDespill {
-                    print("note: despill on pmax runs the CPU engine (GPU port pending)")
+                if wantDespill || pmaxDebloom {
+                    print("note: \(wantDespill ? "despill" : "--pmax-debloom") on pmax runs "
+                          + "the CPU engine (GPU port pending)")
                 }
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),
