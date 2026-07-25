@@ -138,6 +138,20 @@ loop or re-attempting a parked optimization.
   Remaining: verify the static link on **Linux** and **Windows** (pick the
   static lib from the MSVC archives), then fold wgpu out of the CLI-DLL
   deployment concern.
+- **PMax despill inputs on Metal + wgpu.** `--despill --method pmax` currently
+  forces the CPU engine: the pass needs the per-frame grid luminance plane and
+  the per-cell max of the grit-blurred level-0 focus, and only
+  `PyramidFusion`'s CPU streaming loop retains them (`prepareDespill` →
+  `Despill.DespillInputs`). Porting means computing both reductions on-device in
+  `GPUPyramid`/`WgpuPyramid` and reading back at grid resolution, gated on
+  CPU↔GPU parity of the despill inputs (DMap's equivalent measured ~74 dB).
+  **Benchmark first — the premise is in doubt:** at full res (Azurite, 63 DNGs,
+  8076x5237, M1 Pro) the CPU PMax fuse measured **135 s against the GPU path's
+  171 s**, so the "fallback" is currently the faster route and the port would
+  start by making despill slower. Find out why GPU PMax trails CPU at this size
+  before building anything — if that inversion is a real bug in the GPU pyramid
+  path rather than a measurement artifact, fixing it is the more valuable work
+  and this item is downstream of it.
 - **Research-informed fusion follow-ons** — full findings, evidence, sources, and
   refuted claims: `Docs/research/2026-07-12-focus-stacking-research.md` (consult
   before revisiting). The regularizer is `DepthRegularize.swift` (ablation
