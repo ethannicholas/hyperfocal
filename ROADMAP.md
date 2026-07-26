@@ -44,6 +44,31 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
     - No trackpad two-finger pan off macOS (trackpad scroll arrives as wheel
       angle deltas, indistinguishable from a mouse; pan via left-drag, or
       middle-/Ctrl-drag in retouch mode).
+  - **Full side-by-side UI divergence audit.** The dual-UI invariant is
+    enforced for *existence* (a control is in both shells) and for strings (the
+    translation gate), but nothing checks that the two shells *present* the same
+    control the same way — and they have drifted. Two independent divergences
+    were found in a single screenshot comparison of the Fusion card: the
+    algorithm radios were laid out label-above-radios instead of native's
+    `LabeledContent` label-beside-column, and seven sliders formatted their
+    values differently (Qt's `SidebarSlider` had no `displayScale` or
+    signed-format support, so native's `5%` read `0.05` and `+25` read `25`).
+    Both are now fixed; the point of this item is that they were found by
+    eye, one card at a time, which means the rest of the sidebar has not been
+    checked. Walk **every** section of both shells side by side — Stack,
+    Fusion, Tone, Crop, Retouch, Export, Settings, menus, dialogs — comparing
+    layout (label placement, grouping, spacing, alignment), value formatting
+    (decimals, units, signs, percents), control kinds, enable/disable
+    conditions, and default states. Record each divergence and either fix it or
+    add it to the "known non-native behaviors" list above with a reason.
+    "Done" is a written pass over every section with no unrecorded difference.
+    Method that worked: `hyperfocal-cli synth` a stack into a frames-only
+    directory (keep `ground_truth.tif` out — it ingests as a bad 16th frame),
+    then `hyperfocal-qt --selftest <frames> <out.tif> <shot.png>` with
+    `HFQT_AUTOCONFIRM=1` for the Qt-side window grab, against a macOS
+    screenshot of the same panel. Worth considering whether any part of this
+    can become a gate rather than a one-off audit — the formatting drift in
+    particular is comparable data on both sides.
 
 ## UI Improvements
 

@@ -10880,7 +10880,7 @@
       }
     },
     "Algorithm:": {
-      "comment": "Fusion panel: label above the DMap/PMax algorithm radios. Needs translation.",
+      "comment": "Fusion panel: label beside the DMap/PMax algorithm radios.",
       "localizations": {
         "de": {
           "stringUnit": {

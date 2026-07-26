@@ -716,6 +716,21 @@ ApplicationWindow {
         required property real to
         property string format: "%1"
         property int decimals: 2
+        // Display-only multiplier: the percent sliders keep their 0…1 model
+        // value and read as 0…100 (native LabeledSlider.displayScale). Never
+        // touches what goes back through the bridge.
+        property real displayScale: 1
+        // Native formats the tone sliders "%+.0f" — the sign is always
+        // shown, so a centred slider reads "+0", not "0".
+        property bool showsSign: false
+        // A hair below zero formats as "-0.00" (drag back toward zero and
+        // stop a fraction short) — show the zero it rounds to instead, the
+        // same guard native's displayString applies.
+        readonly property string displayValue: {
+            var s = (control.value * displayScale).toFixed(decimals)
+            if (Number(s) === 0) s = (0).toFixed(decimals)
+            return showsSign && Number(s) >= 0 ? "+" + s : s
+        }
         spacing: 2
         Layout.fillWidth: true
         RowLayout {
@@ -734,7 +749,7 @@ ApplicationWindow {
             }
             Label {
                 id: valueLabel
-                text: format.arg(control.value.toFixed(decimals))
+                text: format.arg(displayValue)
                 color: theme.textDim
                 font.pixelSize: 12
                 // Monospace keeps the value from jittering during drags;
@@ -1196,38 +1211,67 @@ ApplicationWindow {
                 visible: !fusionHeader.collapsed
                 // Algorithm selector: DMap (depth map) or PMax (pyramid
                 // fusion), each with an info tooltip. Only DMap carries depth;
-                // the persisted raw value is "dmap"/"pmax". Label on top with
-                // the radios below, matching the SidebarSlider layout.
-                Label {
-                    text: qsTr("Algorithm:"); color: theme.textSecondary; font.pixelSize: 12
-                }
-                Repeater {
-                    model: [
-                        // "DMap"/"PMax" are proper algorithm names, never
-                        // translated — the same call AppCore's DisplayNamed
-                        // makes for FusionMethod (see Localization.swift).
-                        { key: "dmap", label: "DMap",
-                          tip: qsTr("Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap.") },
-                        { key: "pmax", label: "PMax",
-                          tip: qsTr("Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce.") }
-                    ]
-                    delegate: RowLayout {
-                        Layout.fillWidth: true
-                        RadioButton {
-                            text: modelData.label
-                            checked: Shell.fusionAlgorithm === modelData.key
-                            enabled: !Shell.isRunning
-                            onClicked: Shell.fusionAlgorithm = modelData.key
-                            ToolTip.visible: hovered
-                            ToolTip.text: modelData.tip
-                        }
+                // the persisted raw value is "dmap"/"pmax". Native lays this
+                // out as a LabeledContent — "Algorithm:" in the Form's label
+                // column, the stacked radios in the content column beside it —
+                // so this is a row, not a label above the radios. The radios
+                // keep their own tight spacing rather than inheriting the
+                // card's inter-control gap, which spread them apart.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    // LabeledContent aligns its label with the FIRST row of
+                    // the content column, not the column's middle. The
+                    // invisible ghost gives the label cell exactly one radio
+                    // row's height, so centering in it lands on "DMap"
+                    // (layouts skip invisible items but still read their
+                    // implicitHeight — the SectionHeader trick).
+                    Item {
+                        Layout.alignment: Qt.AlignTop
+                        implicitWidth: algorithmLabel.implicitWidth
+                        implicitHeight: radioGhost.implicitHeight
+                        RadioButton { id: radioGhost; visible: false; text: "X" }
                         Label {
-                            text: "ⓘ"; color: theme.textSecondary
-                            HoverHandler { id: infoHover }
-                            ToolTip.visible: infoHover.hovered
-                            ToolTip.text: modelData.tip
+                            id: algorithmLabel
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("Algorithm:")
+                            color: theme.textSecondary
+                            font.pixelSize: 12
                         }
-                        Item { Layout.fillWidth: true }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 3
+                        Repeater {
+                            model: [
+                                // "DMap"/"PMax" are proper algorithm names,
+                                // never translated — the same call AppCore's
+                                // DisplayNamed makes for FusionMethod (see
+                                // Localization.swift).
+                                { key: "dmap", label: "DMap",
+                                  tip: qsTr("Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap.") },
+                                { key: "pmax", label: "PMax",
+                                  tip: qsTr("Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce.") }
+                            ]
+                            delegate: RowLayout {
+                                Layout.fillWidth: true
+                                RadioButton {
+                                    text: modelData.label
+                                    checked: Shell.fusionAlgorithm === modelData.key
+                                    enabled: !Shell.isRunning
+                                    onClicked: Shell.fusionAlgorithm = modelData.key
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: modelData.tip
+                                }
+                                Label {
+                                    text: "ⓘ"; color: theme.textSecondary
+                                    HoverHandler { id: infoHover }
+                                    ToolTip.visible: infoHover.hovered
+                                    ToolTip.text: modelData.tip
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
+                        }
                     }
                 }
                 // DMap sliders (shown for the depth-map algorithm)
@@ -1235,18 +1279,23 @@ ApplicationWindow {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.sharpness"
                     label: qsTr("Sharpness σ"); from: 1; to: 16; format: qsTr("%1 px")
+                    decimals: 1
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.noise-floor"
                     label: qsTr("Noise floor"); from: 0.01; to: 1
+                    // A fraction in the model, a percentage on screen.
+                    format: "%1%"
+                    displayScale: 100; decimals: 0
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.median-radius"
                     label: qsTr("Median radius"); from: 0; to: 32; format: qsTr("%1 px")
+                    decimals: 0
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
@@ -1260,6 +1309,7 @@ ApplicationWindow {
                     visible: Shell.fusionAlgorithm === "pmax"
                     sliderId: "fusion.slider.debloom-levels"
                     label: qsTr("Debloom levels"); from: 0; to: 8; format: "%1"
+                    decimals: 0
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
@@ -1306,29 +1356,38 @@ ApplicationWindow {
             }
             SidebarCard {
                 visible: !toneHeader.collapsed
+                // Every tone control reads signed (native "%+.2f EV" /
+                // "%+.0f"): these are offsets from neutral, so the sign is
+                // part of the value, not noise.
                 SidebarSlider {
                     sliderId: "tone.slider.exposure"
                     label: qsTr("Exposure"); from: -5; to: 5; format: qsTr("%1 EV")
+                    showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.contrast"
                     label: qsTr("Contrast"); from: -100; to: 100; decimals: 0
+                    showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.highlights"
                     label: qsTr("Highlights"); from: -100; to: 100; decimals: 0
+                    showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.shadows"
                     label: qsTr("Shadows"); from: -100; to: 100; decimals: 0
+                    showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.whites"
                     label: qsTr("Whites"); from: -100; to: 100; decimals: 0
+                    showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.blacks"
                     label: qsTr("Blacks"); from: -100; to: 100; decimals: 0
+                    showsSign: true
                 }
             }
 
@@ -1437,6 +1496,9 @@ ApplicationWindow {
                     visible: Shell.retouchMode
                     sliderId: "retouch.slider.softness"
                     label: qsTr("Softness"); from: 0; to: 1
+                    // Feathered fraction: 0…1 in the model, 0%…100% shown.
+                    format: "%1%"
+                    displayScale: 100; decimals: 0
                 }
                 ColumnLayout {
                     visible: Shell.retouchMode
