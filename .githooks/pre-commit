@@ -20,7 +20,9 @@ CATALOG=App/Resources/Localizable.xcstrings
 STAGED="$(git diff --cached --name-only --diff-filter=ACM)"
 
 if grep -qx "$CATALOG" <<<"$STAGED"; then
-    TMP="$(mktemp -t xcstrings)"
+    # The template needs its X's: BSD/macOS mktemp appends a suffix on its
+    # own, but GNU mktemp (Git Bash, Linux) rejects "too few X's".
+    TMP="$(mktemp -t xcstrings.XXXXXX)"
     trap 'rm -f "$TMP"' EXIT
     git show ":$CATALOG" > "$TMP"
     Scripts/check-xcstrings.sh "$TMP"
@@ -28,5 +30,7 @@ fi
 
 # Anything that can introduce or orphan a user-facing string.
 if grep -qE '^(App/Resources/Localizable\.xcstrings|QtShell/.*\.(qml|cpp|h)|AppCore/.*\.swift|Sources/HyperfocalKit/.*\.swift)$' <<<"$STAGED"; then
-    Scripts/check-translations.py
+    # Explicit interpreter: the script's python3 shebang doesn't resolve on
+    # Windows (see Scripts/python-interpreter.sh).
+    "$(Scripts/python-interpreter.sh)" Scripts/check-translations.py
 fi

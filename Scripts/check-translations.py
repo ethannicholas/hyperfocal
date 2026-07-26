@@ -18,6 +18,13 @@ import re
 import subprocess
 import sys
 
+# Windows consoles default to a legacy code page (cp1252 here), which cannot
+# encode the ✓/✗/× below — the gate would then fail on its own success message,
+# taking ci-gate.sh down with it. Force UTF-8 on both streams.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, 'reconfigure'):
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CATALOG = os.path.join(ROOT, 'App/Resources/Localizable.xcstrings')
 LANGUAGES = ['de', 'es', 'fr', 'it', 'ja', 'ko', 'nl', 'pt-BR', 'ru',
