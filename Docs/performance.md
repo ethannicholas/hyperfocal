@@ -61,9 +61,19 @@ frames-at-once *memory* (not time) is the likelier next lever.**
   VM at 11 MP — write io is cache/flush-governed, not byte-proportional (~41–48 s
   regardless), and the strided pack cost +3 s convert plus inflated warp +4–9 s
   (2-core memory-bandwidth interference). Parked in the local `spill-rgb` stash;
-  its −19 % fp32 footprint may pay on real hardware or at 45 MP (io term 3×
-  larger, fp16 auto-selected) — measure there first. `HYPERFOCAL_SPILL_FP16=1`
-  forces the degraded tier for controlled A/Bs (~79.5 dB synth).
+  its −19 % footprint may pay on real hardware or at 45 MP (io term 3× larger) —
+  measure there first. Note the *baseline* moved under it: the spill now stores
+  the pipeline's own f16 pixels (8 B/px), so it is already half what those
+  measurements assumed, and the fp32/fp16 tier split — with its
+  `HYPERFOCAL_SPILL_FP16` A/B tap — is gone.
+- **CPU-path cost of f16 storage**: the widen/narrow in the hot loops is real
+  but small on Apple Silicon — 12 MP × 17 synth, best of 2: dmap/cpu 7.06 → 7.41 s
+  (+5 %), pmax/cpu 5.84 → 6.52 s (+12 %). The GPU paths, which are the default
+  engine, got *faster* on the same stack (dmap 5.36 → 3.94 s, pmax 4.02 → 3.35 s)
+  — half the bytes through every kernel. Peak footprint fell ~25 % across all
+  four combinations (e.g. dmap/gpu 2.45 → 1.83 GB); it is not 50 % because
+  decode buffers, the scalar f32 planes, and the Metal/OS baseline don't scale
+  with pixel storage.
 - **Metal GPUDMap zero-copy upload** — see the ROADMAP item. Two findings:
   `[Float]` elements live at offset 32 past the storage base, so
   `makeBuffer(bytesNoCopy:)` can never page-align without reworking
@@ -93,3 +103,18 @@ trap cost **55×** in the warp. Use concrete-typed helpers only (see
 stdlib's generic `pointwiseMin`/`Max` staying witness-dispatched (concrete
 `hfMin`/`hfMax` fixes it bit-identically; the trap is toolchain-specific and was
 neutral on Swift 6.3.3/Windows).
+
+**f16 widen/narrow is the same trap, and it is asymmetric** (measured with
+`swiftc -O -emit-assembly`, Swift 6.2/arm64, 2026-07-26):
+
+| direction | good spelling | lowers to |
+|---|---|---|
+| f16 → f32 | `SIMD4<Float>(Float(p[0]), Float(p[1]), …)` | `ldr d0` + `fcvtl` |
+| f32 → f16 | `SIMD4<Float16>(v)` (vector init) | `fcvtn` + `str` |
+
+The *other* spelling is bad in each direction: `SIMD4<Float>(someSIMD4Float16)`
+is the stdlib's generic `init<Other: BinaryFloatingPoint>` and tail-calls an
+unspecialized generic, while the scalar-element narrowing emits four separate
+`fcvt`/`str` pairs with per-index overflow checks. `SIMD3` of halves never uses
+`fcvtl` at all — load the RGBA quad and take `.xyz`. Always go through
+`hfLoadRGBA` / `hfLoad8` / `hfStoreRGBA`.

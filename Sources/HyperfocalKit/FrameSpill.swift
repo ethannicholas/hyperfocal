@@ -13,14 +13,20 @@ import WinSDK
 /// every frame twice (argmax pass, then render pass); streaming the warped
 /// frame back from SSD replaces the render pass's decode + upload + warp and
 /// measures faster for every input format (RAW by the widest margin, but
-/// even uncompressed TIFF and JPEG win). Frames are stored as warped fp32
-/// RGBA by default — bit-identical to re-warping (the warp kernel is
-/// deterministic, so the stored plane IS what pass 2 would compute), which
-/// the ≥ 90 dB CPU↔GPU parity gate leans on. When fp32 doesn't fit the temp
-/// volume, the spill *degrades to fp16* instead of vanishing: quantizing the
-/// render inputs to ~75–80 dB is far better than re-decoding + re-warping
-/// the whole stack, and machines where the gates run always fit fp32 (synth
-/// stacks are tiny), so the parity bar is unaffected.
+/// even uncompressed TIFF and JPEG win).
+///
+/// Frames are stored as warped RGBA **f16** — the pipeline's own storage
+/// format (`ImageBuffer.pixels`), written and read verbatim. That makes the
+/// round-trip bit-identical to re-warping (the warp kernel is deterministic,
+/// so the stored plane IS what pass 2 would compute), which the ≥ 90 dB
+/// CPU↔GPU parity gate leans on.
+///
+/// This class used to carry a *degrade-to-fp16* tier for temp volumes that
+/// couldn't hold the fp32 spill (~75–80 dB, and the escape hatch for the
+/// 45 MP case where a barely-fitting fp32 spill drove a volume to 97% full
+/// and the fuse to 2124 s vs 469 s). Storage is f16 end to end now, so the
+/// spill is already half what it was and the tier has nothing left to halve;
+/// a spill that still doesn't fit is skipped, and the caller re-decodes.
 ///
 /// The backing file is unlinked immediately after creation — it lives only as
 /// this object's file descriptor, so the space is reclaimed on deinit or
@@ -43,8 +49,8 @@ public struct WarpedFrameCache {
     public let height: Int
     public let frameCount: Int
 
-    /// Streams frame `i` back as an ImageBuffer (fp32 RGBA; fp16-quantized
-    /// when the spill degraded — same tier the primary's render consumed).
+    /// Streams frame `i` back as an ImageBuffer — the stored bytes ARE the
+    /// buffer's storage format, so this is a straight read.
     func frame(_ i: Int) throws -> ImageBuffer {
         var buf = ImageBuffer(width: width, height: height)
         try buf.pixels.withUnsafeMutableBufferPointer { p in
@@ -69,14 +75,12 @@ public final class FrameSpill {
     #else
     private let fd: Int32
     #endif
-    private let frameBytes: Int   // fp32 payload size per frame (callers' unit)
-    let slotBytes: Int            // on-disk slot (halved when fp16)
-    private let halfPrecision: Bool
-    private var scratch: [UInt16] = []
+    private let frameBytes: Int   // payload size per frame (f16 RGBA)
+    let slotBytes: Int            // on-disk slot (frameBytes, 16 KiB-aligned)
     private let scratchLock = NSLock()
 
-    // HYPERFOCAL_SPILL_DEBUG=1: fp16-convert vs raw-I/O time split, printed
-    // at teardown — the measurement tap for spill performance work.
+    // HYPERFOCAL_SPILL_DEBUG=1: staging vs raw-I/O time split, printed at
+    // teardown — the measurement tap for spill performance work.
     private static let debugTiming =
         ProcessInfo.processInfo.environment["HYPERFOCAL_SPILL_DEBUG"] == "1"
     private var tConvert = 0.0, tIO = 0.0
@@ -86,12 +90,11 @@ public final class FrameSpill {
 
     /// Free space the spill must leave untouched on the temp volume: 2 GB,
     /// or half the spill's own size for large spills. The flat 2 GB floor
-    /// let a 7.3 GB fp32 spill "fit" a volume with 9.3 GB free (Fluorite
-    /// 45 MP × 10 on the dev VM, 2026-07-21) — driving the volume to 97%
-    /// full, where write latency collapses: that fuse took 2124 s against
-    /// 469 s forced-fp16, for an output the fp16 tier matches at 95.9 dB.
-    /// Proportional headroom demotes exactly those barely-fits cases while
-    /// roomy volumes keep the bit-identical fp32 tier.
+    /// let a 7.3 GB spill "fit" a volume with 9.3 GB free (Fluorite 45 MP × 10
+    /// on the dev VM, 2026-07-21) — driving the volume to 97% full, where
+    /// write latency collapses: that fuse took 2124 s against 469 s for a
+    /// half-size spill. Proportional headroom demotes exactly those
+    /// barely-fits cases.
     private static func margin(for spillBytes: Int64) -> Int64 {
         max(2 << 30, spillBytes / 2)
     }
@@ -151,34 +154,18 @@ public final class FrameSpill {
         return (needed, effective)
     }
 
-    /// Returns nil (logging why) when the temp volume can't hold even the
-    /// fp16 spill with headroom to spare, or the file can't be created —
-    /// callers fall back to re-decoding. When fp32 doesn't fit but fp16
-    /// does, the spill runs at half precision (logged).
+    /// Returns nil (logging why) when the temp volume can't hold the spill
+    /// with headroom to spare, or the file can't be created — callers fall
+    /// back to re-decoding.
     init?(frameBytes: Int, frameCount: Int, log: ((String) -> Void)? = nil) {
         self.frameBytes = frameBytes
-        if ProcessInfo.processInfo.environment["HYPERFOCAL_SPILL_FP16"] == "1" {
-            // Test tap: exercise the degraded tier on stacks that would
-            // comfortably fit fp32 (synth A/Bs measure it at ~75-80 dB).
-            halfPrecision = true
-            slotBytes = (frameBytes / 2 + 0x3FFF) & ~0x3FFF
-            log?("frame spill: fp16 forced by HYPERFOCAL_SPILL_FP16")
-        } else if FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) == nil {
-            halfPrecision = false
-            slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
-        } else if FrameSpill.shortfall(frameBytes: frameBytes / 2,
-                                       frameCount: frameCount) == nil {
-            halfPrecision = true
-            slotBytes = (frameBytes / 2 + 0x3FFF) & ~0x3FFF
-            log?("frame spill: fp32 won't fit the temp volume — caching at fp16")
-        } else {
-            let short = FrameSpill.shortfall(frameBytes: frameBytes / 2,
-                                             frameCount: frameCount)!
-            log?(String(format: "frame spill skipped: needs %.1f GB even at fp16, volume has %.1f GB free",
+        if let short = FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) {
+            log?(String(format: "frame spill skipped: needs %.1f GB, volume has %.1f GB free",
                         Double(short.needed) / Double(1 << 30),
                         Double(short.available) / Double(1 << 30)))
             return nil
         }
+        slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("hyperfocal-spill-\(UUID().uuidString).bin")
         #if os(Windows)
@@ -218,8 +205,8 @@ public final class FrameSpill {
         writeQueue.sync {}   // never close the handle under an in-flight write
         if FrameSpill.debugTiming {
             FileHandle.standardError.write(Data(String(
-                format: "spill timing: convert %.2fs, io %.2fs (fp16 %d)\n",
-                tConvert, tIO, halfPrecision ? 1 : 0).utf8))
+                format: "spill timing: staging %.2fs, io %.2fs\n",
+                tConvert, tIO).utf8))
         }
         #if os(Windows)
         CloseHandle(handle)
@@ -297,44 +284,20 @@ public final class FrameSpill {
     }
     #endif
 
-    // Public write/read speak fp32 (`frameBytes` of it) regardless of the
-    // on-disk precision; fp16 conversion happens through a reused scratch
-    // buffer (locked — the GPU paths may spill from a worker thread).
+    // Write/read move the caller's f16 RGBA payload verbatim.
     func write(frame: Int, from ptr: UnsafeRawPointer) throws {
-        guard halfPrecision else {
-            let t0 = FrameSpill.now()
-            try writeRaw(frame: frame, from: ptr, byteCount: frameBytes)
-            tIO += FrameSpill.now() - t0
-            return
-        }
-        let count = frameBytes / 4
-        let src = ptr.assumingMemoryBound(to: Float.self)
-        scratchLock.lock()
-        defer { scratchLock.unlock() }
-        if scratch.count < count { scratch = [UInt16](repeating: 0, count: count) }
-        try scratch.withUnsafeMutableBufferPointer { sp in
-            var t0 = FrameSpill.now()
-            for i in 0..<count {
-                // Clamp: Float16 traps above 65504; pixels live in [0,1] but
-                // decode excursions must not crash the spill.
-                sp[i] = Float16(min(max(src[i], -65504), 65504)).bitPattern
-            }
-            tConvert += FrameSpill.now() - t0
-            t0 = FrameSpill.now()
-            try writeRaw(frame: frame, from: UnsafeRawPointer(sp.baseAddress!),
-                         byteCount: frameBytes / 2)
-            tIO += FrameSpill.now() - t0
-        }
+        let t0 = FrameSpill.now()
+        try writeRaw(frame: frame, from: ptr, byteCount: frameBytes)
+        tIO += FrameSpill.now() - t0
     }
 
     // MARK: - Overlapped writes
-    // The spill's cost is raw I/O (measured: fp16 convert 2.7 s vs I/O 32 s
-    // for an 82-frame stack on the reference VM), and pass 1's writes were
-    // serial with compute. `writeAsync` stages the payload synchronously
-    // (fp16 convert or plain copy — tens of ms) and performs the positional
-    // write on a background queue; up to two frames stage at once, then the
-    // caller blocks. Errors surface at `drainWrites` — callers must call it
-    // before the first read.
+    // The spill's cost is raw I/O (measured: staging 2.7 s vs I/O 32 s for an
+    // 82-frame stack on the reference VM), and pass 1's writes were serial
+    // with compute. `writeAsync` stages the payload synchronously (a copy —
+    // tens of ms) and performs the positional write on a background queue; up
+    // to two frames stage at once, then the caller blocks. Errors surface at
+    // `drainWrites` — callers must call it before the first read.
     private let writeQueue = DispatchQueue(label: "hyperfocal.spill.write")
     private let stagingFree = DispatchSemaphore(value: 2)
     private var asyncError: Error?
@@ -347,7 +310,7 @@ public final class FrameSpill {
     func writeAsync(frame: Int, from ptr: UnsafeRawPointer) {
         stagingFree.wait()
         let t0 = FrameSpill.now()
-        let payloadBytes = halfPrecision ? frameBytes / 2 : frameBytes
+        let payloadBytes = frameBytes
         scratchLock.lock()
         var staged = stagingPool.popLast() ?? []
         scratchLock.unlock()
@@ -355,16 +318,7 @@ public final class FrameSpill {
             staged = [UInt8](repeating: 0, count: payloadBytes)
         }
         staged.withUnsafeMutableBytes { sb in
-            if halfPrecision {
-                let count = frameBytes / 4
-                let src = ptr.assumingMemoryBound(to: Float.self)
-                let dst = sb.baseAddress!.assumingMemoryBound(to: UInt16.self)
-                for i in 0..<count {
-                    dst[i] = Float16(min(max(src[i], -65504), 65504)).bitPattern
-                }
-            } else {
-                sb.baseAddress!.copyMemory(from: ptr, byteCount: frameBytes)
-            }
+            sb.baseAddress!.copyMemory(from: ptr, byteCount: frameBytes)
         }
         scratchLock.lock()
         tConvert += FrameSpill.now() - t0
@@ -404,26 +358,8 @@ public final class FrameSpill {
     }
 
     func read(frame: Int, into ptr: UnsafeMutableRawPointer) throws {
-        guard halfPrecision else {
-            let t0 = FrameSpill.now()
-            try readRaw(frame: frame, into: ptr, byteCount: frameBytes)
-            tIO += FrameSpill.now() - t0
-            return
-        }
-        let count = frameBytes / 4
-        let dst = ptr.assumingMemoryBound(to: Float.self)
-        scratchLock.lock()
-        defer { scratchLock.unlock() }
-        if scratch.count < count { scratch = [UInt16](repeating: 0, count: count) }
-        try scratch.withUnsafeMutableBufferPointer { sp in
-            var t0 = FrameSpill.now()
-            try readRaw(frame: frame, into: sp.baseAddress!, byteCount: frameBytes / 2)
-            tIO += FrameSpill.now() - t0
-            t0 = FrameSpill.now()
-            for i in 0..<count {
-                dst[i] = Float(Float16(bitPattern: sp[i]))
-            }
-            tConvert += FrameSpill.now() - t0
-        }
+        let t0 = FrameSpill.now()
+        try readRaw(frame: frame, into: ptr, byteCount: frameBytes)
+        tIO += FrameSpill.now() - t0
     }
 }

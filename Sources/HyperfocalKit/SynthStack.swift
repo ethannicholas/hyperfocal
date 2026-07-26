@@ -92,7 +92,8 @@ public enum SynthStack {
         }
 
         var img = ImageBuffer(width: width, height: height)
-        img.pixels.withUnsafeMutableBufferPointer { px in
+        img.pixels.withUnsafeMutableBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
             DispatchQueue.concurrentPerform(iterations: height) { y in
                 for x in 0..<width {
                     var rgb = SIMD3<Float>(0.5, 0.5, 0.5)
@@ -121,11 +122,10 @@ public enum SynthStack {
                         }
                         amp *= 0.55
                     }
-                    let pi = (y * width + x) * 4
-                    px[pi] = min(max(rgb.x, 0), 1)
-                    px[pi + 1] = min(max(rgb.y, 0), 1)
-                    px[pi + 2] = min(max(rgb.z, 0), 1)
-                    px[pi + 3] = 1
+                    let v = SIMD4<Float>(min(max(rgb.x, 0), 1),
+                                         min(max(rgb.y, 0), 1),
+                                         min(max(rgb.z, 0), 1), 1)
+                    hfStoreRGBA(px, (y * width + x) * 4, v)
                 }
             }
         }
@@ -139,9 +139,10 @@ public enum SynthStack {
             for dy in -r...r {
                 for dx in -r...r where dx * dx + dy * dy <= r * r {
                     let pi = ((cy + dy) * width + (cx + dx)) * 4
-                    img.pixels[pi] = bright
-                    img.pixels[pi + 1] = bright
-                    img.pixels[pi + 2] = bright
+                    let h = Float16(bright)
+                    img.pixels[pi] = h
+                    img.pixels[pi + 1] = h
+                    img.pixels[pi + 2] = h
                 }
             }
         }
@@ -156,18 +157,20 @@ public enum SynthStack {
     /// Premultiplied-alpha over: fg.rgb + bg.rgb * (1 - fg.a), opaque result.
     static func composite(_ fg: ImageBuffer, over bg: ImageBuffer) -> ImageBuffer {
         var out = ImageBuffer(width: fg.width, height: fg.height)
-        fg.pixels.withUnsafeBufferPointer { f in
-            bg.pixels.withUnsafeBufferPointer { b in
-                out.pixels.withUnsafeMutableBufferPointer { o in
+        fg.pixels.withUnsafeBufferPointer { fBuf in
+            let f = fBuf.baseAddress!
+            bg.pixels.withUnsafeBufferPointer { bBuf in
+                let b = bBuf.baseAddress!
+                out.pixels.withUnsafeMutableBufferPointer { oBuf in
+                    let o = oBuf.baseAddress!
                     DispatchQueue.concurrentPerform(iterations: fg.height) { y in
                         let row = y * fg.width * 4
                         var pi = row
                         while pi < row + fg.width * 4 {
-                            let a = f[pi + 3]
-                            o[pi] = f[pi] + b[pi] * (1 - a)
-                            o[pi + 1] = f[pi + 1] + b[pi + 1] * (1 - a)
-                            o[pi + 2] = f[pi + 2] + b[pi + 2] * (1 - a)
-                            o[pi + 3] = 1
+                            let fp = hfLoadRGBA(f, pi)
+                            var v = fp + hfLoadRGBA(b, pi) * (1 - fp.w)
+                            v.w = 1
+                            hfStoreRGBA(o, pi, v)
                             pi += 4
                         }
                     }
@@ -194,28 +197,39 @@ public enum SynthStack {
             // Pre-blurred versions at bucketed sigmas; per-pixel blur interpolates buckets.
             let bucketStep: Float = 0.75
             let bucketCount = Int((options.maxBlur / bucketStep).rounded(.up)) + 1
-            var buckets = [tex]
+            // Buckets live in ONE contiguous plane array indexed by
+            // `bucket * planeCount + i`, so the per-pixel interpolation below
+            // needs a single base pointer instead of escaping one per bucket
+            // out of a `withUnsafeBufferPointer` (which would be UB).
+            let planeCount = w * h * 4
+            var buckets = [Float16](repeating: 0, count: (bucketCount + 1) * planeCount)
+            buckets.replaceSubrange(0..<planeCount, with: tex.pixels)
             for b in 1...bucketCount {
                 let sigma = Float(b) * bucketStep
                 let k = Filters.gaussianKernel(sigma: sigma)
-                buckets.append(Filters.convolveSeparableRGBA(tex, kernel: k))
+                let blurred = Filters.convolveSeparableRGBA(tex, kernel: k)
+                buckets.replaceSubrange(b * planeCount..<(b + 1) * planeCount,
+                                        with: blurred.pixels)
             }
-            log?("\(buckets.count) blur buckets prepared")
+            log?("\(bucketCount + 1) blur buckets prepared")
             let maxBlur = options.maxBlur
             makeFrame = { focus in
                 var frame = ImageBuffer(width: w, height: h)
-                frame.pixels.withUnsafeMutableBufferPointer { px in
-                    DispatchQueue.concurrentPerform(iterations: h) { y in
-                        for x in 0..<w {
-                            let sigma = maxBlur * abs(depth(x: x, y: y, width: w, height: h) - focus)
-                            let fb = sigma / bucketStep
-                            let b0 = min(Int(fb), bucketCount - 1)
-                            let b1 = min(b0 + 1, bucketCount)
-                            let t = fb - Float(b0)
-                            let pi = (y * w + x) * 4
-                            for c in 0..<4 {
-                                px[pi + c] = buckets[b0].pixels[pi + c] * (1 - t)
-                                    + buckets[b1].pixels[pi + c] * t
+                buckets.withUnsafeBufferPointer { bkBuf in
+                    let bk = bkBuf.baseAddress!
+                    frame.pixels.withUnsafeMutableBufferPointer { pxBuf in
+                        let px = pxBuf.baseAddress!
+                        DispatchQueue.concurrentPerform(iterations: h) { y in
+                            for x in 0..<w {
+                                let sigma = maxBlur * abs(depth(x: x, y: y, width: w, height: h) - focus)
+                                let fb = sigma / bucketStep
+                                let b0 = min(Int(fb), bucketCount - 1)
+                                let b1 = min(b0 + 1, bucketCount)
+                                let t = fb - Float(b0)
+                                let pi = (y * w + x) * 4
+                                hfStoreRGBA(px, pi,
+                                            hfLoadRGBA(bk, b0 * planeCount + pi) * (1 - t)
+                                          + hfLoadRGBA(bk, b1 * planeCount + pi) * t)
                             }
                         }
                     }
@@ -229,13 +243,15 @@ public enum SynthStack {
             // Defocused frames spill subject glow onto the background — the halo case.
             let tex = groundTruth(width: w, height: h, seed: seed)
             var bg = groundTruth(width: w, height: h, seed: seed &+ 7)
-            for i in bg.pixels.indices where i % 4 != 3 { bg.pixels[i] *= 0.05 }
+            bg.scaleRGB(by: 0.05)
 
             var subject = ImageBuffer(width: w, height: h)
             let cx = Float(w) * 0.5, cy = Float(h) * 0.52
             let rx = Float(w) * 0.28, ry = Float(h) * 0.34
-            subject.pixels.withUnsafeMutableBufferPointer { px in
-                tex.pixels.withUnsafeBufferPointer { tp in
+            subject.pixels.withUnsafeMutableBufferPointer { pxBuf in
+                let px = pxBuf.baseAddress!
+                tex.pixels.withUnsafeBufferPointer { tpBuf in
+                    let tp = tpBuf.baseAddress!
                     DispatchQueue.concurrentPerform(iterations: h) { y in
                         for x in 0..<w {
                             let dx = (Float(x) - cx) / rx
@@ -243,10 +259,9 @@ public enum SynthStack {
                             let d = (dx * dx + dy * dy).squareRoot()
                             let m = min(max((1.01 - d) / 0.02, 0), 1)  // ~2 px soft edge
                             let pi = (y * w + x) * 4
-                            px[pi] = tp[pi] * m
-                            px[pi + 1] = tp[pi + 1] * m
-                            px[pi + 2] = tp[pi + 2] * m
-                            px[pi + 3] = m
+                            var v = hfLoadRGBA(tp, pi) * m
+                            v.w = m
+                            hfStoreRGBA(px, pi, v)
                         }
                     }
                 }
@@ -282,10 +297,7 @@ public enum SynthStack {
             // Exposure flicker: a deterministic pseudo-random gain per frame
             // (all frames, including the reference — real flicker spares nobody).
             if options.flicker != 0 {
-                let gain = 1 + options.flicker * sin(Float(i) * 2.399)
-                for pi in frame.pixels.indices where pi % 4 != 3 {
-                    frame.pixels[pi] *= gain
-                }
+                frame.scaleRGB(by: 1 + options.flicker * sin(Float(i) * 2.399))
             }
 
             // Focus breathing + jitter; the reference frame stays untransformed so the
@@ -331,8 +343,10 @@ public enum SynthStack {
         let w = img.width, h = img.height
         let wavelength = Float(h) / 2.5
         var out = ImageBuffer(width: w, height: h)
-        img.pixels.withUnsafeBufferPointer { src in
-            out.pixels.withUnsafeMutableBufferPointer { dst in
+        img.pixels.withUnsafeBufferPointer { srcBuf in
+            let src = srcBuf.baseAddress!
+            out.pixels.withUnsafeMutableBufferPointer { dstBuf in
+                let dst = dstBuf.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: h) { y in
                     for x in 0..<w {
                         let sx = Float(x) + shift + amplitude * sin(Float(y) * 2 * .pi / wavelength)
@@ -341,16 +355,14 @@ public enum SynthStack {
                         let cy = min(max(sy, 0), Float(h - 1))
                         let x0 = min(Int(cx), w - 2), y0 = min(Int(cy), h - 2)
                         let tx = cx - Float(x0), ty = cy - Float(y0)
-                        let di = (y * w + x) * 4
-                        for c in 0..<3 {
-                            let i00 = src[(y0 * w + x0) * 4 + c]
-                            let i10 = src[(y0 * w + x0 + 1) * 4 + c]
-                            let i01 = src[((y0 + 1) * w + x0) * 4 + c]
-                            let i11 = src[((y0 + 1) * w + x0 + 1) * 4 + c]
-                            dst[di + c] = (i00 * (1 - tx) + i10 * tx) * (1 - ty)
-                                        + (i01 * (1 - tx) + i11 * tx) * ty
-                        }
-                        dst[di + 3] = 1
+                        let i00 = hfLoadRGBA(src, (y0 * w + x0) * 4)
+                        let i10 = hfLoadRGBA(src, (y0 * w + x0 + 1) * 4)
+                        let i01 = hfLoadRGBA(src, ((y0 + 1) * w + x0) * 4)
+                        let i11 = hfLoadRGBA(src, ((y0 + 1) * w + x0 + 1) * 4)
+                        var v = (i00 * (1 - tx) + i10 * tx) * (1 - ty)
+                              + (i01 * (1 - tx) + i11 * tx) * ty
+                        v.w = 1
+                        hfStoreRGBA(dst, (y * w + x) * 4, v)
                     }
                 }
             }

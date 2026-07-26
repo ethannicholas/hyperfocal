@@ -369,13 +369,16 @@ Task { @MainActor in
     let cx = output.image.width / 2, cy = output.image.height / 2
     let brushPoint = CGPoint(x: cx, y: cy)
     session.brushRadius = 40  // softness 0.2 → inner radius 32; assert within 20
-    func maxDiskDiff(_ a: [Float], _ b: [Float], radius: Int) -> Float {
+    func maxDiskDiff(_ a: [Float16], _ b: [Float16], radius: Int) -> Float {
         var m: Float = 0
         for y in (cy - radius)...(cy + radius) {
             for x in (cx - radius)...(cx + radius) where
                 (x - cx) * (x - cx) + (y - cy) * (y - cy) <= radius * radius {
                 let i = (y * output.image.width + x) * 4
-                for c in 0..<3 { m = max(m, abs(a[i + c] - b[i + c])) }
+                // Widen before differencing — see Metrics.psnr.
+                for c in 0..<3 {
+                    m = max(m, abs(Float(a[i + c]) - Float(b[i + c])))
+                }
             }
         }
         return m
@@ -519,6 +522,16 @@ Task { @MainActor in
     let restoredProject = try! ProjectStore.read(from: sessionURL)
     func maxDiff(_ a: [Float], _ b: [Float]) -> Float {
         zip(a, b).reduce(0) { max($0, abs($1.0 - $1.1)) }
+    }
+    // f16-storage overload. The tolerances below are unchanged: the project
+    // format is still 16-bit fixed point, and an f16 → fixed16 → f16 round
+    // trip never exceeds the fixed-point step. Where f16 is COARSER than
+    // 1/65535 (values near 1) the perturbation is far inside half an f16 ulp
+    // and rounds back to the identical half; where f16 is FINER (small
+    // values) the fixed-point step dominates and the re-narrowing adds
+    // nothing measurable.
+    func maxDiff(_ a: [Float16], _ b: [Float16]) -> Float {
+        zip(a, b).reduce(0) { max($0, abs(Float($1.0) - Float($1.1))) }
     }
     assert(restoredProject.stacks.count == 2, "stack count differs")
     assert(restoredProject.selectedIndex == 0)

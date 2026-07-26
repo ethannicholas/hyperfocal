@@ -16,16 +16,17 @@ public enum WarpBench {
     /// work, as they do on photographs.
     static func makeSource(width: Int, height: Int) -> ImageBuffer {
         var img = ImageBuffer(width: width, height: height)
-        img.pixels.withUnsafeMutableBufferPointer { p in
+        img.pixels.withUnsafeMutableBufferPointer { pBuf in
+            let p = pBuf.baseAddress!
             for y in 0..<height {
                 let fy = Float(y)
                 for x in 0..<width {
-                    let i = (y * width + x) * 4
                     let fx = Float(x)
-                    p[i] = 0.5 + 0.4 * sinf(fx * 0.31) * cosf(fy * 0.17)
-                    p[i + 1] = 0.5 + 0.4 * sinf(fx * 0.011 + fy * 0.013)
-                    p[i + 2] = (x / 7 + y / 11) % 2 == 0 ? 0.9 : 0.1
-                    p[i + 3] = 1
+                    hfStoreRGBA(p, (y * width + x) * 4, SIMD4<Float>(
+                        0.5 + 0.4 * sinf(fx * 0.31) * cosf(fy * 0.17),
+                        0.5 + 0.4 * sinf(fx * 0.011 + fy * 0.013),
+                        (x / 7 + y / 11) % 2 == 0 ? 0.9 : 0.1,
+                        1))
                 }
             }
         }
@@ -33,11 +34,13 @@ public enum WarpBench {
     }
 
     /// Max |a-b| and PSNR over two equal-length float buffers (peak 1.0).
-    static func diff(_ a: [Float], _ b: [Float]) -> (maxAbs: Float, psnr: Float, exact: Bool) {
+    static func diff(_ a: [Float16], _ b: [Float16]) -> (maxAbs: Float, psnr: Float, exact: Bool) {
         var maxAbs: Float = 0
         var sumSq: Double = 0
+        // Widen before differencing — an f16 subtraction would quantize the
+        // very residual this bench exists to report.
         for i in 0..<a.count {
-            let d = a[i] - b[i]
+            let d = Float(a[i]) - Float(b[i])
             maxAbs = max(maxAbs, abs(d))
             sumSq += Double(d) * Double(d)
         }
@@ -58,11 +61,11 @@ public enum WarpBench {
                                 translation: SIMD2<Float>(3.7, -2.3), center: center)
         let H = M.inverse
 
-        var reference = [Float](repeating: 0, count: w * h * 4)
+        var reference = [Float16](repeating: 0, count: w * h * 4)
 
-        func bench(_ name: String, _ f: (ImageBuffer, simd_float3x3, Int, Int, inout [Float]) -> Void,
+        func bench(_ name: String, _ f: (ImageBuffer, simd_float3x3, Int, Int, inout [Float16]) -> Void,
                    isReference: Bool = false) {
-            var dst = [Float](repeating: 0, count: w * h * 4)
+            var dst = [Float16](repeating: 0, count: w * h * 4)
             f(src, H, w, h, &dst)   // warm-up (page faults, LUT init)
             var best = Double.infinity
             var times: [Double] = []

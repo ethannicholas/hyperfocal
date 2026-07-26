@@ -260,14 +260,16 @@ public enum Despill {
 
         // Full-res linear luminance of the fused (encoded) image.
         var lFull = [Float](repeating: 0, count: width * height)
-        image.pixels.withUnsafeBufferPointer { px in
+        image.pixels.withUnsafeBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
             lFull.withUnsafeMutableBufferPointer { lp in
                 DispatchQueue.concurrentPerform(iterations: height) { y in
                     var pi = y * width * 4
                     for x in 0..<width {
-                        let r = ToneCurve.srgbLinearize(max(px[pi], 0))
-                        let g = ToneCurve.srgbLinearize(max(px[pi + 1], 0))
-                        let b = ToneCurve.srgbLinearize(max(px[pi + 2], 0))
+                        let p = hfLoadRGBA(px, pi)
+                        let r = ToneCurve.srgbLinearize(max(p.x, 0))
+                        let g = ToneCurve.srgbLinearize(max(p.y, 0))
+                        let b = ToneCurve.srgbLinearize(max(p.z, 0))
                         lp[y * width + x] = 0.2126 * r + 0.7152 * g + 0.0722 * b
                         pi += 4
                     }
@@ -414,7 +416,8 @@ public enum Despill {
         // floor (out ≥ floor → no over-subtracted moat). Where no correction
         // lands, the pixel is left bit-exact (no encode round-trip).
         var touched = 0
-        image.pixels.withUnsafeMutableBufferPointer { px in
+        image.pixels.withUnsafeMutableBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
             lFull.withUnsafeBufferPointer { lp in
                 aFull.withUnsafeBufferPointer { afp in
                     bFull.withUnsafeBufferPointer { bfp in
@@ -436,10 +439,12 @@ public enum Despill {
                                     if corr > bound { corr = bound }
                                     if corr > 0 && l > 1e-8 {
                                         let scale = (l - corr) / l
+                                        var p = hfLoadRGBA(px, pi)
                                         for c in 0..<3 {
-                                            let lin = ToneCurve.srgbLinearize(max(px[pi + c], 0))
-                                            px[pi + c] = ToneCurve.srgbEncode(lin * scale)
+                                            let lin = ToneCurve.srgbLinearize(max(p[c], 0))
+                                            p[c] = ToneCurve.srgbEncode(lin * scale)
                                         }
+                                        hfStoreRGBA(px, pi, p)
                                         rowTouched += 1
                                     }
                                     pi += 4

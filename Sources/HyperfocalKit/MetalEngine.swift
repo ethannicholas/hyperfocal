@@ -5,9 +5,20 @@ import simd
 
 /// Thin wrapper around a Metal device: kernels compiled once from source at
 /// startup, pipeline cache, dispatch helpers. All image kernels operate on raw
-/// Float32 buffers (no textures) so results match the CPU path bit-for-bit in
+/// buffers (no textures) so results match the CPU path bit-for-bit in
 /// structure — resampling taps (Lanczos-3 by default), clamp-to-edge, and luma
 /// weights are identical code.
+///
+/// **Storage is `half4`, arithmetic is `float`.** RGBA image buffers are
+/// `device half4*`, matching `ImageBuffer`'s CPU storage byte-for-byte, so
+/// uploads and downloads are plain copies with no conversion pass. Every
+/// kernel widens to `float4` on load and narrows on store — Metal's
+/// `float4(half4)` / `half4(float4)` are single instructions. Scalar PLANES
+/// (energy, depth indices, weights, guided-filter coefficients) stay `float`:
+/// they are a quarter of an RGBA plane's bytes, several carry frame indices or
+/// running sums rather than [0,1] color, and depth's exactness depends on f32.
+/// The accumulators — `tent_accumulate`'s `accum` and the pyramid's base sum —
+/// are `float4` for the same reason.
 public final class MetalEngine {
 
     public static let shared: MetalEngine? = MetalEngine()
@@ -67,6 +78,28 @@ public final class MetalEngine {
         return b
     }
 
+    /// Half-precision image storage — the allocation for anything the kernels
+    /// declare as `half4`, and byte-identical to `ImageBuffer.pixels`, so
+    /// upload and download are plain copies.
+    func makeBuffer(halves count: Int) throws -> MTLBuffer {
+        guard let b = device.makeBuffer(length: count * 2, options: .storageModeShared) else {
+            throw StackError.metal("cannot allocate \(count * 2) byte buffer")
+        }
+        return b
+    }
+
+    /// A shared-storage buffer initialised from half-precision pixels.
+    func makeBuffer(_ values: [Float16]) throws -> MTLBuffer {
+        let b: MTLBuffer? = values.withUnsafeBytes {
+            device.makeBuffer(bytes: $0.baseAddress!, length: $0.count,
+                              options: .storageModeShared)
+        }
+        guard let b else {
+            throw StackError.metal("cannot allocate \(values.count * 2) byte buffer")
+        }
+        return b
+    }
+
     func dispatch2D(_ encoder: MTLComputeCommandEncoder, _ pipeline: MTLComputePipelineState,
                     width: Int, height: Int) {
         encoder.setComputePipelineState(pipeline)
@@ -93,8 +126,8 @@ public final class MetalEngine {
         uint4 dims;                        // srcW, srcH, dstW, dstH
     };
 
-    kernel void warp_bilinear(device const float4* src [[buffer(0)]],
-                              device float4* dst [[buffer(1)]],
+    kernel void warp_bilinear(device const half4* src [[buffer(0)]],
+                              device half4* dst [[buffer(1)]],
                               constant WarpParams& p [[buffer(2)]],
                               uint2 gid [[thread_position_in_grid]]) {
         uint dw = p.dims.z, dh = p.dims.w;
@@ -108,15 +141,15 @@ public final class MetalEngine {
         float wx = sx - float(x0), wy = sy - float(y0);
         int cx0 = clamp(x0, 0, sw - 1), cx1 = clamp(x0 + 1, 0, sw - 1);
         int cy0 = clamp(y0, 0, sh - 1), cy1 = clamp(y0 + 1, 0, sh - 1);
-        float4 top = mix(src[cy0 * sw + cx0], src[cy0 * sw + cx1], wx);
-        float4 bot = mix(src[cy1 * sw + cx0], src[cy1 * sw + cx1], wx);
+        float4 top = mix(float4(src[cy0 * sw + cx0]), float4(src[cy0 * sw + cx1]), wx);
+        float4 bot = mix(float4(src[cy1 * sw + cx0]), float4(src[cy1 * sw + cx1]), wx);
         float4 sample = mix(top, bot, wy);
         // Outside the source: colors stay edge-clamped (no artificial dark edge
         // in gradients) but alpha 0 marks "this frame has no data here".
         bool inside = sx >= -0.5f && sx <= float(sw) - 0.5f
                    && sy >= -0.5f && sy <= float(sh) - 0.5f;
         sample.w = inside ? sample.w : 0.0f;
-        dst[gid.y * dw + gid.x] = sample;
+        dst[gid.y * dw + gid.x] = half4(sample);
     }
 
     // Lanczos-3 kernel via the product form 3·sin(πx)·sin(πx/3)/(πx)² —
@@ -133,8 +166,8 @@ public final class MetalEngine {
     // the bilinear kernel; an anti-ringing clamp to the bilinear footprint's
     // range stops the negative lobes from glowing at hard edges and at the
     // coverage boundary. Must stay tap-for-tap identical to Warp.applyLanczos3.
-    kernel void warp_lanczos3(device const float4* src [[buffer(0)]],
-                              device float4* dst [[buffer(1)]],
+    kernel void warp_lanczos3(device const half4* src [[buffer(0)]],
+                              device half4* dst [[buffer(1)]],
                               constant WarpParams& p [[buffer(2)]],
                               uint2 gid [[thread_position_in_grid]]) {
         uint dw = p.dims.z, dh = p.dims.w;
@@ -158,25 +191,25 @@ public final class MetalEngine {
             float4 row = float4(0.0);
             for (int kx = 0; kx < 6; kx++) {
                 int tx = clamp(x0 - 2 + kx, 0, sw - 1);
-                row += src[ty * sw + tx] * wx[kx];
+                row += float4(src[ty * sw + tx]) * wx[kx];
             }
             acc += row * wy[ky];
         }
         float4 sample = acc / (sumX * sumY);
         int cx0 = clamp(x0, 0, sw - 1), cx1 = clamp(x0 + 1, 0, sw - 1);
         int cy0 = clamp(y0, 0, sh - 1), cy1 = clamp(y0 + 1, 0, sh - 1);
-        float4 a = src[cy0 * sw + cx0], b = src[cy0 * sw + cx1];
-        float4 c = src[cy1 * sw + cx0], d = src[cy1 * sw + cx1];
+        float4 a = float4(src[cy0 * sw + cx0]), b = float4(src[cy0 * sw + cx1]);
+        float4 c = float4(src[cy1 * sw + cx0]), d = float4(src[cy1 * sw + cx1]);
         sample = clamp(sample, min(min(a, b), min(c, d)), max(max(a, b), max(c, d)));
         bool inside = sx >= -0.5f && sx <= float(sw) - 0.5f
                    && sy >= -0.5f && sy <= float(sh) - 0.5f;
         sample.w = inside ? sample.w : 0.0f;
-        dst[gid.y * dw + gid.x] = sample;
+        dst[gid.y * dw + gid.x] = half4(sample);
     }
 
     constant float3 kLuma = float3(0.2126, 0.7152, 0.0722);
 
-    kernel void lum_laplacian(device const float4* img [[buffer(0)]],
+    kernel void lum_laplacian(device const half4* img [[buffer(0)]],
                               device float* out [[buffer(1)]],
                               constant uint2& dims [[buffer(2)]],
                               uint2 gid [[thread_position_in_grid]]) {
@@ -185,11 +218,11 @@ public final class MetalEngine {
         int x = int(gid.x), y = int(gid.y);
         int xl = max(x - 1, 0), xr = min(x + 1, w - 1);
         int yu = max(y - 1, 0), yd = min(y + 1, h - 1);
-        float c = dot(img[y * w + x].rgb, kLuma);
-        float l = dot(img[y * w + xl].rgb, kLuma);
-        float r = dot(img[y * w + xr].rgb, kLuma);
-        float u = dot(img[yu * w + x].rgb, kLuma);
-        float d = dot(img[yd * w + x].rgb, kLuma);
+        float c = dot(float4(img[y * w + x]).rgb, kLuma);
+        float l = dot(float4(img[y * w + xl]).rgb, kLuma);
+        float r = dot(float4(img[y * w + xr]).rgb, kLuma);
+        float u = dot(float4(img[yu * w + x]).rgb, kLuma);
+        float d = dot(float4(img[yd * w + x]).rgb, kLuma);
         out[y * w + x] = fabs(l + r + u + d - 4.0 * c);
     }
 
@@ -227,7 +260,7 @@ public final class MetalEngine {
     }
 
     kernel void argmax_update(device const float* energy [[buffer(0)]],
-                              device const float4* frame [[buffer(1)]],
+                              device const half4* frame [[buffer(1)]],
                               device float* bestE [[buffer(2)]],
                               device float* bestIdx [[buffer(3)]],
                               constant float& frameIdx [[buffer(4)]],
@@ -238,7 +271,8 @@ public final class MetalEngine {
         if (gid >= count) return;
         // Alpha-masked: a frame gets no depth vote where it has no data.
         // Gain: exposure-normalized energy (Laplacian is linear in gain).
-        float e = energy[gid] * frame[gid].w * gain;
+        float4 f = float4(frame[gid]);
+        float e = energy[gid] * f.w * gain;
         bool wins = e > bestE[gid];
         if (wins) {
             bestE[gid] = e;
@@ -249,20 +283,20 @@ public final class MetalEngine {
         // crisp at fine silhouette detail (a stack mean would defocus-blur
         // them away). Frame 0 seeds pixels no frame ever wins.
         if (wins || frameIdx == 0.0f) {
-            guide[gid] = dot(frame[gid].rgb, kLuma) * gain;
+            guide[gid] = dot(f.rgb, kLuma) * gain;
         }
     }
 
     struct TentParams { float4 gain; float index; float radius; uint count; };
 
-    kernel void tent_accumulate(device const float4* frame [[buffer(0)]],
+    kernel void tent_accumulate(device const half4* frame [[buffer(0)]],
                                 device const float* depth [[buffer(1)]],
                                 device float4* accum [[buffer(2)]],
                                 device float* wsum [[buffer(3)]],
                                 constant TentParams& p [[buffer(4)]],
                                 uint gid [[thread_position_in_grid]]) {
         if (gid >= p.count) return;
-        float4 s = frame[gid];
+        float4 s = float4(frame[gid]);
         if (s.w <= 0.0f) return;  // no data from this frame here
         float tent = max(1.0 - fabs(p.index - depth[gid]) / p.radius, 0.0);
         // Tiny floor: pixels whose selected frames lack coverage still average
@@ -277,14 +311,14 @@ public final class MetalEngine {
     struct PlanePreviewParams { uint srcW; uint srcH; uint dstW; uint dstH; float scale; float bias; };
 
     kernel void plane_preview(device const float* plane [[buffer(0)]],
-                              device float4* out [[buffer(1)]],
+                              device half4* out [[buffer(1)]],
                               constant PlanePreviewParams& p [[buffer(2)]],
                               uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= p.dstW || gid.y >= p.dstH) return;
         uint sx = min(gid.x * p.srcW / p.dstW, p.srcW - 1);
         uint sy = min(gid.y * p.srcH / p.dstH, p.srcH - 1);
         float v = p.bias + plane[sy * p.srcW + sx] * p.scale;
-        out[gid.y * p.dstW + gid.x] = float4(v, v, v, 1.0);
+        out[gid.y * p.dstW + gid.x] = half4(float4(v, v, v, 1.0));
     }
 
     struct BoxDownParams { uint srcW; uint srcH; uint dstW; uint dstH; uint factor; };
@@ -334,12 +368,12 @@ public final class MetalEngine {
     }
 
     // Rec. 709 luma plane — must match ImageBuffer.luminancePlane.
-    kernel void luma_plane(device const float4* img [[buffer(0)]],
+    kernel void luma_plane(device const half4* img [[buffer(0)]],
                            device float* out [[buffer(1)]],
                            constant uint& count [[buffer(2)]],
                            uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float4 p = img[gid];
+        float4 p = float4(img[gid]);
         out[gid] = 0.2126f * p.x + 0.7152f * p.y + 0.0722f * p.z;
     }
 
@@ -350,7 +384,7 @@ public final class MetalEngine {
     // frame lands (matches DMapFusion.progressivePreview).
     kernel void progressive_preview(device const float4* accum [[buffer(0)]],
                                     device const float* wsum [[buffer(1)]],
-                                    device float4* out [[buffer(2)]],
+                                    device half4* out [[buffer(2)]],
                                     constant PreviewParams& p [[buffer(3)]],
                                     uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= p.dstW || gid.y >= p.dstH) return;
@@ -360,19 +394,19 @@ public final class MetalEngine {
         float w = wsum[si];
         float4 v = w > 0.01f ? accum[si] / w : float4(0.0);
         v.w = 1.0;
-        out[gid.y * p.dstW + gid.x] = v;
+        out[gid.y * p.dstW + gid.x] = half4(v);
     }
 
     kernel void normalize_out(device const float4* accum [[buffer(0)]],
                               device const float* wsum [[buffer(1)]],
-                              device float4* out [[buffer(2)]],
+                              device half4* out [[buffer(2)]],
                               constant uint& count [[buffer(3)]],
                               uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
         float w = wsum[gid];
         float4 v = w > 1e-7f ? accum[gid] / w : float4(0.0);
         v.w = 1.0;  // pixels no frame covers come out opaque black
-        out[gid] = v;
+        out[gid] = half4(v);
     }
 
     // ---- Depth-map regularization ----
@@ -584,7 +618,11 @@ public final class MetalEngine {
 
     constant float kPyr5[5] = {1.0/16, 4.0/16, 6.0/16, 4.0/16, 1.0/16};
 
-    kernel void pyr_blur5_h(device const float4* src [[buffer(0)]],
+    // H pass writes FLOAT4. The separable blur's intermediate stays f32
+    // exactly as the CPU's `fusedDownsample` keeps its `rows` scratch in f32:
+    // narrowing between H and V put a second quantization into every pyramid
+    // level and cost ~40 dB of CPU↔GPU parity on the synth plane (105 → 65).
+    kernel void pyr_blur5_h(device const half4* src [[buffer(0)]],
                             device float4* dst [[buffer(1)]],
                             constant uint2& dims [[buffer(2)]],
                             uint2 gid [[thread_position_in_grid]]) {
@@ -594,13 +632,14 @@ public final class MetalEngine {
         float4 acc = float4(0.0);
         for (int i = -2; i <= 2; i++) {
             int xi = clamp(int(gid.x) + i, 0, w - 1);
-            acc += src[row + xi] * kPyr5[i + 2];
+            acc += float4(src[row + xi]) * kPyr5[i + 2];
         }
         dst[row + int(gid.x)] = acc;
     }
 
+    // V pass consumes the f32 H result and narrows once, on store.
     kernel void pyr_blur5_v(device const float4* src [[buffer(0)]],
-                            device float4* dst [[buffer(1)]],
+                            device half4* dst [[buffer(1)]],
                             constant uint2& dims [[buffer(2)]],
                             uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dims.x || gid.y >= dims.y) return;
@@ -610,22 +649,23 @@ public final class MetalEngine {
             int yi = clamp(int(gid.y) + i, 0, h - 1);
             acc += src[yi * w + int(gid.x)] * kPyr5[i + 2];
         }
-        dst[int(gid.y) * w + int(gid.x)] = acc;
+        dst[int(gid.y) * w + int(gid.x)] = half4(acc);
     }
 
     struct PyrResizeParams { uint srcW; uint srcH; uint dstW; uint dstH; };
 
-    kernel void pyr_decimate(device const float4* src [[buffer(0)]],
-                             device float4* dst [[buffer(1)]],
+    kernel void pyr_decimate(device const half4* src [[buffer(0)]],
+                             device half4* dst [[buffer(1)]],
                              constant PyrResizeParams& p [[buffer(2)]],
                              uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= p.dstW || gid.y >= p.dstH) return;
         uint sx = min(gid.x * 2, p.srcW - 1);
         uint sy = min(gid.y * 2, p.srcH - 1);
+        // Storage-to-storage: decimation picks a sample, it doesn't compute one.
         dst[gid.y * p.dstW + gid.x] = src[sy * p.srcW + sx];
     }
 
-    inline float4 pyr_bilinear(device const float4* src, int sw, int sh,
+    inline float4 pyr_bilinear(device const half4* src, int sw, int sh,
                                uint2 gid, uint dstW, uint dstH) {
         float fx = (float(gid.x) + 0.5f) * float(sw) / float(dstW) - 0.5f;
         float fy = (float(gid.y) + 0.5f) * float(sh) / float(dstH) - 0.5f;
@@ -633,12 +673,18 @@ public final class MetalEngine {
         float wx = fx - float(x0), wy = fy - float(y0);
         int cx0 = clamp(x0, 0, sw - 1), cx1 = clamp(x0 + 1, 0, sw - 1);
         int cy0 = clamp(y0, 0, sh - 1), cy1 = clamp(y0 + 1, 0, sh - 1);
-        float4 top = mix(src[cy0 * sw + cx0], src[cy0 * sw + cx1], wx);
-        float4 bot = mix(src[cy1 * sw + cx0], src[cy1 * sw + cx1], wx);
+        float4 top = mix(float4(src[cy0 * sw + cx0]), float4(src[cy0 * sw + cx1]), wx);
+        float4 bot = mix(float4(src[cy1 * sw + cx0]), float4(src[cy1 * sw + cx1]), wx);
         return mix(top, bot, wy);
     }
 
-    kernel void pyr_upsample(device const float4* src [[buffer(0)]],
+    // Writes FLOAT4, and every `up` consumer below reads float4. The band is
+    // `fine - up`, a difference of two nearly-equal Gaussians: rounding `up`
+    // to f16 first throws away most of the band's significant bits — classic
+    // catastrophic cancellation. The CPU path never materializes this at all
+    // (`upsampleAt` returns f32 inline), and storing it as f16 cost ~40 dB of
+    // PMax CPU↔GPU parity on the synth plane. `scratchA` is sized f32 for it.
+    kernel void pyr_upsample(device const half4* src [[buffer(0)]],
                              device float4* dst [[buffer(1)]],
                              constant PyrResizeParams& p [[buffer(2)]],
                              uint2 gid [[thread_position_in_grid]]) {
@@ -648,51 +694,52 @@ public final class MetalEngine {
     }
 
     // Collapse step: dst = band + upsample(coarser). Same mapping as above.
-    kernel void pyr_upsample_add(device const float4* src [[buffer(0)]],
-                                 device const float4* band [[buffer(1)]],
-                                 device float4* dst [[buffer(2)]],
+    kernel void pyr_upsample_add(device const half4* src [[buffer(0)]],
+                                 device const half4* band [[buffer(1)]],
+                                 device half4* dst [[buffer(2)]],
                                  constant PyrResizeParams& p [[buffer(3)]],
                                  uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= p.dstW || gid.y >= p.dstH) return;
         uint i = gid.y * p.dstW + gid.x;
-        dst[i] = band[i] + pyr_bilinear(src, int(p.srcW), int(p.srcH), gid, p.dstW, p.dstH);
+        dst[i] = half4(float4(band[i])
+                       + pyr_bilinear(src, int(p.srcW), int(p.srcH), gid, p.dstW, p.dstH));
     }
 
     // Max-energy coefficient select: band = fine − upsampled coarser; keep it
     // wherever its |RGB| energy beats the best so far. bestE starts at −1 so
     // the first frame installs everywhere.
-    kernel void pyr_select(device const float4* fine [[buffer(0)]],
+    kernel void pyr_select(device const half4* fine [[buffer(0)]],
                            device const float4* up [[buffer(1)]],
-                           device float4* fused [[buffer(2)]],
+                           device half4* fused [[buffer(2)]],
                            device float* bestE [[buffer(3)]],
                            constant uint& count [[buffer(4)]],
                            uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float4 band = fine[gid] - up[gid];
+        float4 band = float4(fine[gid]) - up[gid];
         float e = fabs(band.x) + fabs(band.y) + fabs(band.z);
         if (e > bestE[gid]) {
             bestE[gid] = e;
-            fused[gid] = band;
+            fused[gid] = half4(band);
         }
     }
 
     // Finest-level selection energy for grit suppression: written to a plane
     // so it can be blurred before selection (PyramidFusion.selectionEnergy).
-    kernel void pyr_band_energy(device const float4* fine [[buffer(0)]],
+    kernel void pyr_band_energy(device const half4* fine [[buffer(0)]],
                                 device const float4* up [[buffer(1)]],
                                 device float* e [[buffer(2)]],
                                 constant uint& count [[buffer(3)]],
                                 uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float4 band = fine[gid] - up[gid];
+        float4 band = float4(fine[gid]) - up[gid];
         e[gid] = fabs(band.x) + fabs(band.y) + fabs(band.z);
     }
 
     // pyr_select with the energy read from a pre-smoothed plane instead of
     // computed inline — the band itself is recomputed (never smoothed).
-    kernel void pyr_select_smoothed(device const float4* fine [[buffer(0)]],
+    kernel void pyr_select_smoothed(device const half4* fine [[buffer(0)]],
                                     device const float4* up [[buffer(1)]],
-                                    device float4* fused [[buffer(2)]],
+                                    device half4* fused [[buffer(2)]],
                                     device float* bestE [[buffer(3)]],
                                     device const float* energy [[buffer(4)]],
                                     constant uint& count [[buffer(5)]],
@@ -701,24 +748,34 @@ public final class MetalEngine {
         float e = energy[gid];
         if (e > bestE[gid]) {
             bestE[gid] = e;
-            fused[gid] = fine[gid] - up[gid];
+            fused[gid] = half4(float4(fine[gid]) - up[gid]);
         }
     }
 
+    // The pyramid's base level is the one ACCUMULATOR in the pipeline: it
+    // sums every frame's coarsest Gaussian before the average. That total
+    // leaves [0,1], where f16's steps stop being fine — by a few tens of
+    // frames its ulp exceeds a pixel's worth of signal — so `dst` here is
+    // float4 even though its `src` (a stored Gaussian) is half4. Mirrors the
+    // CPU path's `baseAccum`.
     kernel void pyr_add4(device float4* dst [[buffer(0)]],
-                         device const float4* src [[buffer(1)]],
+                         device const half4* src [[buffer(1)]],
                          constant uint& count [[buffer(2)]],
                          uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        dst[gid] += src[gid];
+        dst[gid] += float4(src[gid]);
     }
 
-    kernel void pyr_scale4(device float4* dst [[buffer(0)]],
-                           constant float& s [[buffer(1)]],
-                           constant uint& count [[buffer(2)]],
+    // Scale-and-narrow: divides the f32 base accumulator by the frame count
+    // and lands it in the half4 buffer the collapse chain runs on. Folds in
+    // what used to be a separate blit copy of the base.
+    kernel void pyr_scale4(device half4* dst [[buffer(0)]],
+                           device const float4* src [[buffer(1)]],
+                           constant float& s [[buffer(2)]],
+                           constant uint& count [[buffer(3)]],
                            uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        dst[gid] *= s;
+        dst[gid] = half4(src[gid] * s);
     }
 
     kernel void pyr_fill(device float* dst [[buffer(0)]],
@@ -744,44 +801,46 @@ public final class MetalEngine {
     // Two-track select. `up` is the already-upsampled coarser Gaussian (as for
     // pyr_select); `focus` is this frame's focus map at this level. bestE
     // starts at -1 (track A) and bestDarkLum at +inf (track B).
-    kernel void pyr_select_focus_gated(device const float4* fine [[buffer(0)]],
+    kernel void pyr_select_focus_gated(device const half4* fine [[buffer(0)]],
                                        device const float4* up [[buffer(1)]],
                                        device const float* focus [[buffer(2)]],
-                                       device float4* fused [[buffer(3)]],
+                                       device half4* fused [[buffer(3)]],
                                        device float* bestE [[buffer(4)]],
-                                       device float4* trackB [[buffer(5)]],
+                                       device half4* trackB [[buffer(5)]],
                                        device float* bestDarkLum [[buffer(6)]],
                                        device float* hasFocus [[buffer(7)]],
                                        constant PyrFocusParams& p [[buffer(8)]],
                                        uint gid [[thread_position_in_grid]]) {
         if (gid >= p.count) return;
-        float4 f = fine[gid];
+        float4 f = float4(fine[gid]);
         float4 band = f - up[gid];
         if (focus[gid] > p.threshold) {
             float e = fabs(band.x) + fabs(band.y) + fabs(band.z);
             if (e > bestE[gid]) {
                 bestE[gid] = e;
                 hasFocus[gid] = 1.0;
-                fused[gid] = band;
+                fused[gid] = half4(band);
             }
         } else {
             float lum = 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z;
             if (lum < bestDarkLum[gid]) {
                 bestDarkLum[gid] = lum;
-                trackB[gid] = band;
+                trackB[gid] = half4(band);
             }
         }
     }
 
     // Base level: keep the least-luminous (least-bloomed) frame's Gaussian at
     // each cell instead of averaging. bestLum starts at +inf.
+    // Writes the SAME base buffer pyr_add4 accumulates into (float4), so the
+    // two base policies share one allocation and one scale-and-narrow exit.
     kernel void pyr_base_darkest(device float4* fused [[buffer(0)]],
-                                 device const float4* gauss [[buffer(1)]],
+                                 device const half4* gauss [[buffer(1)]],
                                  device float* bestLum [[buffer(2)]],
                                  constant uint& count [[buffer(3)]],
                                  uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float4 g = gauss[gid];
+        float4 g = float4(gauss[gid]);
         float lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
         if (lum < bestLum[gid]) {
             bestLum[gid] = lum;
@@ -790,13 +849,14 @@ public final class MetalEngine {
     }
 
     // Focus-gate merge: where no frame was in focus, take track B.
-    kernel void pyr_merge_focus(device float4* fused [[buffer(0)]],
-                                device const float4* trackB [[buffer(1)]],
+    kernel void pyr_merge_focus(device half4* fused [[buffer(0)]],
+                                device const half4* trackB [[buffer(1)]],
                                 device const float* hasFocus [[buffer(2)]],
                                 constant uint& count [[buffer(3)]],
                                 uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
         if (hasFocus[gid] < 0.5) {
+            // Storage-to-storage: the merge picks a band, it doesn't compute one.
             fused[gid] = trackB[gid];
         }
     }
@@ -804,11 +864,11 @@ public final class MetalEngine {
     // Running per-cell MIN luminance over all frames, at level 0 — the input to
     // the near-black gate. Mirrors the CPU loop's lumMin0.
     kernel void pyr_lum_min(device float* dst [[buffer(0)]],
-                            device const float4* gauss [[buffer(1)]],
+                            device const half4* gauss [[buffer(1)]],
                             constant uint& count [[buffer(2)]],
                             uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float4 g = gauss[gid];
+        float4 g = float4(gauss[gid]);
         float lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
         dst[gid] = min(dst[gid], lum);
     }
@@ -817,17 +877,17 @@ public final class MetalEngine {
     // track, `plainC` the ordinary max-energy winner over every frame; `mask` is
     // the near-black membership for this level (1 = background, use debloom;
     // 0 = lit surface, use the plain selection). Same blend as the CPU merge.
-    kernel void pyr_merge_focus_gated(device float4* fused [[buffer(0)]],
-                                      device const float4* trackB [[buffer(1)]],
+    kernel void pyr_merge_focus_gated(device half4* fused [[buffer(0)]],
+                                      device const half4* trackB [[buffer(1)]],
                                       device const float* hasFocus [[buffer(2)]],
-                                      device const float4* plainC [[buffer(3)]],
+                                      device const half4* plainC [[buffer(3)]],
                                       device const float* mask [[buffer(4)]],
                                       constant uint& count [[buffer(5)]],
                                       uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float4 d = hasFocus[gid] < 0.5 ? trackB[gid] : fused[gid];
-        float4 c = plainC[gid];
-        fused[gid] = c + (d - c) * mask[gid];
+        float4 d = float4(hasFocus[gid] < 0.5 ? trackB[gid] : fused[gid]);
+        float4 c = float4(plainC[gid]);
+        fused[gid] = half4(c + (d - c) * mask[gid]);
     }
     """
 }

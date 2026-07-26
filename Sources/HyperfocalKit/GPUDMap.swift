@@ -155,7 +155,8 @@ public enum GPUDMap {
         func downloadPreview() -> ImageBuffer {
             var preview = ImageBuffer(width: pw, height: ph)
             preview.pixels.withUnsafeMutableBufferPointer { p in
-                p.baseAddress!.update(from: previewBuf.contents().assumingMemoryBound(to: Float.self),
+                // Straight copy — the kernel wrote half4, which IS our storage.
+                p.baseAddress!.update(from: previewBuf.contents().assumingMemoryBound(to: Float16.self),
                                       count: pw * ph * 4)
             }
             return preview
@@ -164,7 +165,8 @@ public enum GPUDMap {
         func uploadAndWarp(_ img: ImageBuffer, frameIndex: Int,
                            encoder: MTLComputeCommandEncoder) -> MTLBuffer {
             img.pixels.withUnsafeBufferPointer { p in
-                rawBuf.contents().copyMemory(from: p.baseAddress!, byteCount: p.count * 4)
+                // 2 bytes per half — rawBuf is a `halves` allocation.
+                rawBuf.contents().copyMemory(from: p.baseAddress!, byteCount: p.count * 2)
             }
             guard let t = source.transforms?[frameIndex] else {
                 return rawBuf  // no alignment: output dims == source dims
@@ -199,8 +201,8 @@ public enum GPUDMap {
                 width = source.outputWidth ?? img.width
                 height = source.outputHeight ?? img.height
                 pixelCount = width * height
-                rawBuf = try engine.makeBuffer(floats: srcWidth * srcHeight * 4)
-                warpedBuf = try engine.makeBuffer(floats: pixelCount * 4)
+                rawBuf = try engine.makeBuffer(halves: srcWidth * srcHeight * 4)
+                warpedBuf = try engine.makeBuffer(halves: pixelCount * 4)
                 lapBuf = try engine.makeBuffer(floats: pixelCount)
                 tmpBuf = try engine.makeBuffer(floats: pixelCount)
                 energyBuf = try engine.makeBuffer(floats: pixelCount)
@@ -218,7 +220,7 @@ public enum GPUDMap {
                 let previewScale = min(1.0, 1200.0 / Double(max(width, height)))
                 pw = max(1, Int(Double(width) * previewScale))
                 ph = max(1, Int(Double(height) * previewScale))
-                previewBuf = try engine.makeBuffer(floats: pw * ph * 4)
+                previewBuf = try engine.makeBuffer(halves: pw * ph * 4)
                 let factor = DMapFusion.sharpnessDownsample
                 sw = (width + factor - 1) / factor
                 sh = (height + factor - 1) / factor
@@ -227,7 +229,7 @@ public enum GPUDMap {
                 guideBuf = try engine.makeBuffer(floats: pixelCount)
                 memset(guideBuf.contents(), 0, pixelCount * 4)
                 if wantSpill {
-                    spill = FrameSpill(frameBytes: pixelCount * 16,
+                    spill = FrameSpill(frameBytes: pixelCount * 8,
                                        frameCount: frameCount, log: log)
                 }
             }
@@ -519,7 +521,7 @@ public enum GPUDMap {
                     // The spill holds the *warped* frame — show that (the
                     // aligned frame on the output canvas) as the source.
                     sourcePreview = ImageBuffer.downsampledNearest(
-                        fromRGBA: warpedBuf.contents().assumingMemoryBound(to: Float.self),
+                        fromRGBA: warpedBuf.contents().assumingMemoryBound(to: Float16.self),
                         width: width, height: height, maxSide: 1200)
                     sourceW = width
                     sourceH = height
@@ -579,7 +581,7 @@ public enum GPUDMap {
                     spill != nil ? "spill-read" : "decode-wait",
                     spill != nil ? tSpillRead : tRenderWait, tRenderGPU, tRenderPreview))
         if spill != nil {
-            let frameGB = Double(pixelCount) * 16 / Double(1 << 30)
+            let frameGB = Double(pixelCount) * 8 / Double(1 << 30)
             log?(String(format: "spill: wrote %.1f GB in %.2fs, read %.1f GB in %.2fs",
                         frameGB * Double(frameCount), tSpillWrite,
                         frameGB * Double(renderIndices.count), tSpillRead))
@@ -603,7 +605,7 @@ public enum GPUDMap {
 
         var out = ImageBuffer(width: width, height: height)
         out.pixels.withUnsafeMutableBufferPointer { p in
-            p.baseAddress!.update(from: rawBuf.contents().assumingMemoryBound(to: Float.self),
+            p.baseAddress!.update(from: rawBuf.contents().assumingMemoryBound(to: Float16.self),
                                   count: pixelCount * 4)
         }
         var output = DMapFusion.Output(image: out,
@@ -627,16 +629,18 @@ public enum GPUDMap {
     /// Alpha-weighted per-channel mean of an RGBA float buffer, stride-
     /// subsampled — the exposure-gain measurement, matching
     /// `DMapFusion.meanChannels`.
+    /// CPU-side reduction over a half4 image buffer — same stride and 1-in-7
+    /// subsample as `DMapFusion.meanChannels`, so the two engines measure the
+    /// same exposure gain.
     static func meanChannels(buffer: MTLBuffer, pixelCount: Int) -> SIMD3<Float> {
-        let p = buffer.contents().assumingMemoryBound(to: Float.self)
+        let p = buffer.contents().assumingMemoryBound(to: Float16.self)
         var sum = SIMD3<Float>()
         var wsum: Float = 0
         var i = 0
         while i < pixelCount {
-            let pi = i * 4
-            let a = p[pi + 3]
-            sum += SIMD3(p[pi], p[pi + 1], p[pi + 2]) * a
-            wsum += a
+            let v = hfLoadRGBA(p, i * 4)
+            sum += SIMD3(v.x, v.y, v.z) * v.w
+            wsum += v.w
             i += 7
         }
         return wsum > 0 ? sum / wsum : SIMD3()

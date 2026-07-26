@@ -189,7 +189,9 @@ public final class RetouchSession: ObservableObject {
     // Tile-based per-stroke undo. Snapshots carry the depth plane alongside
     // the pixels — strokes co-paint depth, so undo must restore both.
     private struct TileSnapshot {
-        var pixels: [Float]
+        // Same f16 storage as `working.pixels` — tile undo copies bytes, it
+        // never does arithmetic on them, so the stroke history halves too.
+        var pixels: [Float16]
         var depth: [Float]
     }
     private static let tileSize = 256
@@ -796,8 +798,12 @@ public final class RetouchSession: ObservableObject {
                             depthDisplayPixels.withUnsafeMutableBufferPointer { dbytes in
                     let innerSq = inner * inner
                     let count = w * self.height
-                    dst.baseAddress!.withMemoryRebound(to: SIMD4<Float>.self, capacity: count) { dstV in
-                    s.baseAddress!.withMemoryRebound(to: SIMD4<Float>.self, capacity: count) { srcV in
+                    // Pixels are f16 storage: rebind to SIMD4<Float16> (one
+                    // 8-byte RGBA vector), widen per pixel for the blend, and
+                    // narrow on store. Rebinding to SIMD4<Float> here would
+                    // read twice the bytes the buffer holds.
+                    dst.baseAddress!.withMemoryRebound(to: SIMD4<Float16>.self, capacity: count) { dstV in
+                    s.baseAddress!.withMemoryRebound(to: SIMD4<Float16>.self, capacity: count) { srcV in
                     bytes.baseAddress!.withMemoryRebound(to: SIMD4<UInt8>.self, capacity: count) { bytesV in
                     let dstBox = UncheckedSendable(dstV)
                     let srcBox = UncheckedSendable(srcV)
@@ -833,14 +839,19 @@ public final class RetouchSession: ObservableObject {
                             // Respect source coverage: alpha 0 means the aligned
                             // frame has no data here (warp out-of-bounds) — never
                             // paint smear colors from past its edge.
-                            let sv = srcV[pi]
+                            let sh = srcV[pi]
+                            let sv = SIMD4<Float>(Float(sh.x), Float(sh.y),
+                                                  Float(sh.z), Float(sh.w))
                             let alpha = Float(t * t * (3 - 2 * t)) * sv.w
                             guard alpha > 0.003 else { continue }
+                            let dh = dstV[pi]
+                            let dv = SIMD4<Float>(Float(dh.x), Float(dh.y),
+                                                  Float(dh.z), Float(dh.w))
                             // Same arithmetic as the scalar path had
                             // (d·(1−α) + s·α), one vector op per pixel.
-                            var out = dstV[pi] * (1 - alpha) + sv * alpha
+                            var out = dv * (1 - alpha) + sv * alpha
                             out.w = 1
-                            dstV[pi] = out
+                            dstV[pi] = SIMD4<Float16>(out)
                             // hfMin/hfMax: the stdlib generic stays witness-
                             // dispatched at -O on the Mac toolchain (see
                             // PortableSIMD's contract).
@@ -904,7 +915,7 @@ public final class RetouchSession: ObservableObject {
 
     private func copyTile(tx: Int, ty: Int) -> TileSnapshot {
         let r = tileRect(tx: tx, ty: ty)
-        var out = [Float](repeating: 0, count: r.w * r.h * 4)
+        var out = [Float16](repeating: 0, count: r.w * r.h * 4)
         var outDepth = [Float](repeating: 0, count: r.w * r.h)
         working.pixels.withUnsafeBufferPointer { src in
             workingDepth.withUnsafeBufferPointer { srcD in
@@ -914,7 +925,7 @@ public final class RetouchSession: ObservableObject {
                             let srcStart = ((r.y0 + row) * width + r.x0) * 4
                             let dstStart = row * r.w * 4
                             memcpy(dst.baseAddress! + dstStart, src.baseAddress! + srcStart,
-                                   r.w * 4 * MemoryLayout<Float>.stride)
+                                   r.w * 4 * MemoryLayout<Float16>.stride)
                             let srcDStart = (r.y0 + row) * width + r.x0
                             let dstDStart = row * r.w
                             memcpy(dstD.baseAddress! + dstDStart, srcD.baseAddress! + srcDStart,
@@ -940,7 +951,7 @@ public final class RetouchSession: ObservableObject {
                         for i in 0..<(r.w * 4) {
                             let v = src[srcStart + i]
                             dst[dstStart + i] = v
-                            bytes[dstStart + i] = UInt8(min(max(v, 0), 1) * 255 + 0.5)
+                            bytes[dstStart + i] = UInt8(min(max(Float(v), 0), 1) * 255 + 0.5)
                         }
                     }
                 }

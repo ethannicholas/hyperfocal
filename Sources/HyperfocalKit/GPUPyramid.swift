@@ -154,7 +154,7 @@ enum GPUPyramid {
                     let (w, h) = sizes[previewLevel]
                     var img = ImageBuffer(width: w, height: h)
                     img.pixels.withUnsafeMutableBufferPointer {
-                        _ = memcpy($0.baseAddress!, buf.contents(), w * h * 16)
+                        _ = memcpy($0.baseAddress!, buf.contents(), w * h * 8)
                     }
                     preview = img
                 }
@@ -178,25 +178,34 @@ enum GPUPyramid {
                     let p = sizes.last!
                     sizes.append(((p.w + 1) / 2, (p.h + 1) / 2))
                 }
-                for s in sizes {
-                    gauss.append(try engine.makeBuffer(floats: s.w * s.h * 4))
-                    fused.append(try engine.makeBuffer(floats: s.w * s.h * 4))
+                for (l, s) in sizes.enumerated() {
+                    gauss.append(try engine.makeBuffer(halves: s.w * s.h * 4))
+                    // The base level (the last one) is the f32 accumulator;
+                    // every band level is half4 storage. See pyr_add4.
+                    fused.append(l == levels
+                        ? try engine.makeBuffer(floats: s.w * s.h * 4)
+                        : try engine.makeBuffer(halves: s.w * s.h * 4))
                 }
                 for s in sizes.dropLast() {
                     bestE.append(try engine.makeBuffer(floats: s.w * s.h))
                 }
                 if warp != nil {
-                    uploadBufs = [try engine.makeBuffer(floats: srcWidth * srcHeight * 4),
-                                  try engine.makeBuffer(floats: srcWidth * srcHeight * 4)]
+                    uploadBufs = [try engine.makeBuffer(halves: srcWidth * srcHeight * 4),
+                                  try engine.makeBuffer(halves: srcWidth * srcHeight * 4)]
                 } else {
                     // No warp stage to fill level 0 on-device, so the upload
                     // buffers alternate as gauss[0] itself (one is the
                     // original allocation, reused).
                     uploadBufs = [gauss[0],
-                                  try engine.makeBuffer(floats: width * height * 4)]
+                                  try engine.makeBuffer(halves: width * height * 4)]
                 }
+                // scratchA is the separable blur's f32 intermediate (see
+                // pyr_blur5_h) AND, in a later phase, one half of the
+                // collapse's half4 ping-pong. Both roles write every element
+                // before reading it and never overlap in time, so the f32
+                // sizing simply leaves the collapse room to spare.
                 scratchA = try engine.makeBuffer(floats: width * height * 4)
-                scratchB = try engine.makeBuffer(floats: width * height * 4)
+                scratchB = try engine.makeBuffer(halves: width * height * 4)
                 gritA = try engine.makeBuffer(floats: width * height)
                 gritB = try engine.makeBuffer(floats: width * height)
                 if onSharpness != nil {
@@ -205,14 +214,15 @@ enum GPUPyramid {
                     sharpBufs = [try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h),
                                  try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h)]
                 }
-                baseTmp = try engine.makeBuffer(floats: sizes[levels].w * sizes[levels].h * 4)
+                baseTmp = try engine.makeBuffer(halves: sizes[levels].w * sizes[levels].h * 4)
                 previewLevel = sizes.firstIndex { max($0.w, $0.h) <= 1600 } ?? levels
+                // float4 accumulator: 16 bytes per cell.
                 memset(fused[levels].contents(), 0, sizes[levels].w * sizes[levels].h * 16)
                 if focusGate != nil {
                     // Per-gated-level tracks (nil for the ungated levels);
                     // focusScratch is level-0-sized (≥ any gated level).
                     for l in 0..<levels {
-                        trackB.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
+                        trackB.append(gated(l) ? try engine.makeBuffer(halves: sizes[l].w * sizes[l].h * 4) : nil)
                         hasFocus.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         bestDarkLum.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                     }
@@ -221,7 +231,7 @@ enum GPUPyramid {
                     // Track C (the plain max-energy winner over every frame) and
                     // the level-0 min-luminance the near-black gate reads.
                     for l in 0..<levels {
-                        plainC.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
+                        plainC.append(gated(l) ? try engine.makeBuffer(halves: sizes[l].w * sizes[l].h * 4) : nil)
                         plainBestE.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                     }
                     lumMin0 = try engine.makeBuffer(floats: width * height)
@@ -239,7 +249,7 @@ enum GPUPyramid {
             bucket(&tUpload) {
                 img.pixels.withUnsafeBufferPointer {
                     _ = memcpy(upload.contents(), $0.baseAddress!,
-                               srcWidth * srcHeight * 16)
+                               srcWidth * srcHeight * 8)
                 }
             }
             // The previous frame's GPU work overlapped the decode wait and
@@ -257,7 +267,7 @@ enum GPUPyramid {
                     throw StackError.metal("cannot create blit encoder")
                 }
                 blit.copy(from: upload, sourceOffset: 0, to: gauss[0],
-                          destinationOffset: 0, size: srcWidth * srcHeight * 16)
+                          destinationOffset: 0, size: srcWidth * srcHeight * 8)
                 blit.endEncoding()
             }
             guard let enc = cmd.makeComputeCommandEncoder() else {
@@ -556,20 +566,18 @@ enum GPUPyramid {
                                        scale4: MTLComputePipelineState,
                                        upsampleAdd: MTLComputePipelineState) throws -> MTLBuffer {
         let (bw, bh) = sizes[levels]
-        guard let blit = cmd.makeBlitCommandEncoder() else {
-            throw StackError.metal("cannot create blit encoder")
-        }
-        blit.copy(from: fused[levels], sourceOffset: 0, to: baseTmp,
-                  destinationOffset: 0, size: bw * bh * 16)
-        blit.endEncoding()
         guard let enc = cmd.makeComputeCommandEncoder() else {
             throw StackError.metal("cannot create command buffer")
         }
+        // scale4 divides the f32 base accumulator by the frame count and
+        // narrows it into the half4 collapse chain in one pass — it used to
+        // need a blit copy of the base first, because it scaled in place.
         var scale = baseScale
         var baseCount = UInt32(bw * bh)
         enc.setBuffer(baseTmp, offset: 0, index: 0)
-        enc.setBytes(&scale, length: 4, index: 1)
-        enc.setBytes(&baseCount, length: 4, index: 2)
+        enc.setBuffer(fused[levels], offset: 0, index: 1)
+        enc.setBytes(&scale, length: 4, index: 2)
+        enc.setBytes(&baseCount, length: 4, index: 3)
         engine.dispatch1D(enc, scale4, count: Int(baseCount))
         var current: MTLBuffer = baseTmp
         var currentSize = sizes[levels]
@@ -612,7 +620,7 @@ enum GPUPyramid {
         let (w, h) = sizes[toLevel]
         var out = ImageBuffer(width: w, height: h)
         out.pixels.withUnsafeMutableBufferPointer {
-            _ = memcpy($0.baseAddress!, result.contents(), w * h * 16)
+            _ = memcpy($0.baseAddress!, result.contents(), w * h * 8)
         }
         return out
     }

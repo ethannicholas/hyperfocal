@@ -10,9 +10,12 @@ public enum Metrics {
         let cb = margin > 0 ? b.cropped(margin: margin) : b
         var sum: Double = 0
         var count = 0
+        // Widen BEFORE subtracting: differencing in f16 and then converting
+        // would quantize the residual itself and inflate every PSNR this gate
+        // reports.
         for i in stride(from: 0, to: ca.pixels.count, by: 4) {
             for c in 0..<3 {
-                let d = Double(ca.pixels[i + c] - cb.pixels[i + c])
+                let d = Double(Float(ca.pixels[i + c])) - Double(Float(cb.pixels[i + c]))
                 sum += d * d
             }
             count += 3

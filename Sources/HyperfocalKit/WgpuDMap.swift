@@ -121,7 +121,39 @@ public enum WgpuDMap {
         var meanRGB0 = SIMD3<Float>(repeating: 1)
         // Host copy of the warped frame, for the exposure mean and the spill
         // (allocated only when a warp makes the device copy the only one).
-        var warpedHost: [Float] = []
+        // f16, like `ImageBuffer.pixels` and the spill payload.
+        var warpedHost: [Float16] = []
+        // The WGSL kernels are still f32 (the wgpu backend's half-storage port
+        // is a separate ROADMAP item — WGSL reaches f16 through
+        // pack2x16float/unpack2x16float rather than the non-universal
+        // shader-f16 feature). Until then every host↔device RGBA transfer
+        // widens through this scratch, so the wgpu path is correct but does
+        // not yet get the bandwidth or footprint win the Metal path does.
+        var f32Scratch: [Float] = []
+        func ensureScratch(_ count: Int) {
+            if f32Scratch.count < count {
+                f32Scratch = [Float](repeating: 0, count: count)
+            }
+        }
+        /// Widen `count` halves and upload them as f32.
+        func uploadHalves(_ src: UnsafePointer<Float16>, count: Int,
+                          to buf: WgpuEngine.Buffer) {
+            ensureScratch(count)
+            f32Scratch.withUnsafeMutableBufferPointer { dst in
+                hfWiden(src, dst.baseAddress!, count: count)
+                engine.upload(dst.baseAddress!, byteCount: count * 4, to: buf)
+            }
+        }
+        /// Download `count` f32 values and narrow them into half storage.
+        func downloadHalves(_ buf: WgpuEngine.Buffer,
+                            into dst: UnsafeMutablePointer<Float16>,
+                            count: Int) throws {
+            ensureScratch(count)
+            try f32Scratch.withUnsafeMutableBufferPointer { tmp in
+                try engine.download(buf, into: tmp.baseAddress!, byteCount: count * 4)
+                hfNarrow(tmp.baseAddress!, dst, count: count)
+            }
+        }
 
         let wantSpill = FrameSpill.wanted(options.spillEnabled)
         var spill: FrameSpill?
@@ -131,8 +163,7 @@ public enum WgpuDMap {
         func downloadPreview() throws -> ImageBuffer {
             var preview = ImageBuffer(width: pw, height: ph)
             try preview.pixels.withUnsafeMutableBufferPointer {
-                try engine.download(previewBuf, into: $0.baseAddress!,
-                                    byteCount: pw * ph * 16)
+                try downloadHalves(previewBuf, into: $0.baseAddress!, count: pw * ph * 4)
             }
             return preview
         }
@@ -144,7 +175,7 @@ public enum WgpuDMap {
         func encodeUploadAndWarp(_ img: ImageBuffer, frameIndex: Int,
                                  batch: WgpuEngine.Batch) throws -> WgpuEngine.Buffer {
             img.pixels.withUnsafeBufferPointer {
-                engine.upload($0.baseAddress!, byteCount: $0.count * 4, to: rawBuf)
+                uploadHalves($0.baseAddress!, count: $0.count, to: rawBuf)
             }
             guard let t = source.transforms?[frameIndex] else {
                 return rawBuf  // no alignment: output dims == source dims
@@ -213,12 +244,12 @@ public enum WgpuDMap {
                 }
                 init0.submit()
                 if wantSpill {
-                    spill = FrameSpill(frameBytes: pixelCount * 16,
+                    spill = FrameSpill(frameBytes: pixelCount * 8,
                                        frameCount: frameCount, log: log)
                 }
                 if source.transforms != nil,
                    options.normalizeExposure || spill != nil {
-                    warpedHost = [Float](repeating: 0, count: pixelCount * 4)
+                    warpedHost = [Float16](repeating: 0, count: pixelCount * 4)
                 }
             }
             guard img.width == srcWidth && img.height == srcHeight else {
@@ -231,7 +262,7 @@ public enum WgpuDMap {
             // the pixels, the warp submits alone and its output downloads
             // before the rest of the frame encodes. Unwarped frames skip the
             // round trip — the decoded pixels are the warped pixels.
-            var hostPixels: [Float]? = nil  // aligned frame on the host, when needed
+            var hostPixels: [Float16]? = nil  // aligned frame on the host, when needed
             let needHost = options.normalizeExposure || spill != nil
             let didWarp = source.transforms?[fi] != nil
             let batch: WgpuEngine.Batch
@@ -240,9 +271,8 @@ public enum WgpuDMap {
                 let warpBatch = try engine.makeBatch()
                 input = try encodeUploadAndWarp(img, frameIndex: fi, batch: warpBatch)
                 warpBatch.submit()
-                try warpedHost.withUnsafeMutableBytes {
-                    try engine.download(input, into: $0.baseAddress!,
-                                        byteCount: pixelCount * 16)
+                try warpedHost.withUnsafeMutableBufferPointer {
+                    try downloadHalves(input, into: $0.baseAddress!, count: pixelCount * 4)
                 }
                 hostPixels = warpedHost
                 batch = try engine.makeBatch()
@@ -474,14 +504,14 @@ public enum WgpuDMap {
                 fi = renderIndices[step]
                 let t0 = now()
                 if warpedHost.isEmpty {
-                    warpedHost = [Float](repeating: 0, count: pixelCount * 4)
+                    warpedHost = [Float16](repeating: 0, count: pixelCount * 4)
                 }
                 try warpedHost.withUnsafeMutableBytes {
                     try spill.read(frame: fi, into: $0.baseAddress!)
                 }
                 tSpillRead += now() - t0
                 warpedHost.withUnsafeBufferPointer {
-                    engine.upload($0.baseAddress!, byteCount: $0.count * 4, to: warpedBuf)
+                    uploadHalves($0.baseAddress!, count: $0.count, to: warpedBuf)
                 }
                 input = warpedBuf
                 if progress != nil {
@@ -538,7 +568,7 @@ public enum WgpuDMap {
             }
         }
         if spill != nil {
-            let frameGB = Double(pixelCount) * 16 / Double(1 << 30)
+            let frameGB = Double(pixelCount) * 8 / Double(1 << 30)
             log?(String(format: "spill: wrote %.1f GB in %.2fs, read %.1f GB in %.2fs",
                         frameGB * Double(frameCount), tSpillWrite,
                         frameGB * Double(renderIndices.count), tSpillRead))
@@ -552,8 +582,7 @@ public enum WgpuDMap {
         normBatch.submit()
         var out = ImageBuffer(width: width, height: height)
         try out.pixels.withUnsafeMutableBufferPointer {
-            try engine.download(rawBuf, into: $0.baseAddress!,
-                                byteCount: pixelCount * 16)
+            try downloadHalves(rawBuf, into: $0.baseAddress!, count: pixelCount * 4)
         }
         var output = DMapFusion.Output(image: out,
                                        depthMap: DMapFusion.depthImage(from: depth, width: width,

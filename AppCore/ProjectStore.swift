@@ -289,14 +289,14 @@ enum ProjectStore {
         guard manifest.hasResult else { return payload }
 
         let w = manifest.resultWidth, h = manifest.resultHeight
-        let resultPixels = try readFixed16(try blob("result.raw"), name: "result.raw",
-                                           scale: 65535, expected: w * h * 4)
+        let resultPixels = try readFixed16Half(try blob("result.raw"), name: "result.raw",
+                                               scale: 65535, expected: w * h * 4)
         payload.result = ImageBuffer(width: w, height: h, pixels: resultPixels)
         payload.depth = try readFixed16(try blob("depth.raw"), name: "depth.raw",
                                         scale: 64, expected: w * h)
         if manifest.hasWorking {
-            let pixels = try readFixed16(try blob("working.raw"), name: "working.raw",
-                                         scale: 65535, expected: w * h * 4)
+            let pixels = try readFixed16Half(try blob("working.raw"), name: "working.raw",
+                                             scale: 65535, expected: w * h * 4)
             payload.working = ImageBuffer(width: w, height: h, pixels: pixels)
         }
         if let factor = manifest.sharpnessFactor,
@@ -325,6 +325,28 @@ enum ProjectStore {
     }
 
     /// Fixed-point 16-bit encoding: stored = round(value * scale).
+    /// f16-storage overload. The project FORMAT is unchanged — still 16-bit
+    /// fixed point — only the in-memory source type differs, so projects
+    /// written before and after the f16 conversion interchange freely.
+    private static func fixed16Data(_ values: [Float16], scale: Float) -> Data {
+        var samples = [UInt16](repeating: 0, count: values.count)
+        let chunks = max(1, values.count / 65536)
+        values.withUnsafeBufferPointer { src in
+            samples.withUnsafeMutableBufferPointer { dst in
+                let s = UncheckedSendable(src), d = UncheckedSendable(dst)
+                DispatchQueue.concurrentPerform(iterations: chunks) { chunk in
+                    let src = s.value, dst = d.value
+                    let lo = chunk * src.count / chunks
+                    let hi = (chunk + 1) * src.count / chunks
+                    for i in lo..<hi {
+                        dst[i] = UInt16(min(max(Float(src[i]) * scale, 0), 65535) + 0.5)
+                    }
+                }
+            }
+        }
+        return samples.withUnsafeBytes { Data($0) }
+    }
+
     private static func fixed16Data(_ values: [Float], scale: Float) -> Data {
         var samples = [UInt16](repeating: 0, count: values.count)
         let chunks = max(1, values.count / 65536)
@@ -342,6 +364,33 @@ enum ProjectStore {
             }
         }
         return samples.withUnsafeBytes { Data($0) }
+    }
+
+    /// f16-storage overload, for the blobs that land back in an `ImageBuffer`.
+    private static func readFixed16Half(_ data: Data, name: String, scale: Float,
+                                        expected: Int) throws -> [Float16] {
+        guard data.count == expected * 2 else {
+            throw NSError(domain: "Hyperfocal", code: 2, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "\(name): expected \(expected * 2) bytes, found \(data.count)"])
+        }
+        var values = [Float16](repeating: 0, count: expected)
+        data.withUnsafeBytes { raw in
+            let src = raw.bindMemory(to: UInt16.self)
+            let chunks = max(1, expected / 65536)
+            values.withUnsafeMutableBufferPointer { dst in
+                let s = UncheckedSendable(src), d = UncheckedSendable(dst)
+                DispatchQueue.concurrentPerform(iterations: chunks) { chunk in
+                    let src = s.value, dst = d.value
+                    let lo = chunk * expected / chunks
+                    let hi = (chunk + 1) * expected / chunks
+                    for i in lo..<hi {
+                        dst[i] = Float16(Float(src[i]) / scale)
+                    }
+                }
+            }
+        }
+        return values
     }
 
     private static func readFixed16(_ data: Data, name: String, scale: Float,

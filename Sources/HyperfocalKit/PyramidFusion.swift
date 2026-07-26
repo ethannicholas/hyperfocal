@@ -149,8 +149,18 @@ public enum PyramidFusion {
             let fine = gaussians[l]
             let up = Filters.resizeBilinear(gaussians[l + 1], toWidth: fine.width, toHeight: fine.height)
             var band = ImageBuffer(width: fine.width, height: fine.height)
-            for i in band.pixels.indices {
-                band.pixels[i] = fine.pixels[i] - up.pixels[i]
+            // Difference in f32, then narrow — subtracting two halves at f16
+            // would quantize the band before it is ever stored.
+            band.pixels.withUnsafeMutableBufferPointer { bpBuf in
+                let bp = bpBuf.baseAddress!
+                fine.pixels.withUnsafeBufferPointer { fBuf in
+                    up.pixels.withUnsafeBufferPointer { uBuf in
+                        let f = fBuf.baseAddress!, u = uBuf.baseAddress!
+                        for i in stride(from: 0, to: bpBuf.count, by: 4) {
+                            hfStoreRGBA(bp, i, hfLoadRGBA(f, i) - hfLoadRGBA(u, i))
+                        }
+                    }
+                }
             }
             pyramid.append(band)
         }
@@ -163,8 +173,14 @@ public enum PyramidFusion {
         for l in stride(from: pyramid.count - 2, through: 0, by: -1) {
             let band = pyramid[l]
             var up = Filters.resizeBilinear(current, toWidth: band.width, toHeight: band.height)
-            for i in up.pixels.indices {
-                up.pixels[i] += band.pixels[i]
+            up.pixels.withUnsafeMutableBufferPointer { uBuf in
+                let u = uBuf.baseAddress!
+                band.pixels.withUnsafeBufferPointer { bBuf in
+                    let b = bBuf.baseAddress!
+                    for i in stride(from: 0, to: uBuf.count, by: 4) {
+                        hfStoreRGBA(u, i, hfLoadRGBA(u, i) + hfLoadRGBA(b, i))
+                    }
+                }
             }
             current = up
         }
@@ -327,6 +343,9 @@ public enum PyramidFusion {
         let focusThresh = fgThreshold
         let useDarkBase = env["HYPERFOCAL_PMAX_DARKBASE"] != nil || focusGate
         var baseBestLum: [Float] = []
+        // f32 sum of every frame's coarsest Gaussian, for the averaged base.
+        // See the accumulation site for why this one buffer resists f16.
+        var baseAccum: [Float] = []
         var bandBestLum: [[Float]] = []
         var trackB: [ImageBuffer] = []
         var hasFocus: [[Float]] = []
@@ -380,6 +399,9 @@ public enum PyramidFusion {
                 if useDarkBase {
                     baseBestLum = [Float](repeating: .infinity,
                                           count: ws.sizes[levels].w * ws.sizes[levels].h)
+                } else {
+                    baseAccum = [Float](repeating: 0,
+                                        count: ws.sizes[levels].w * ws.sizes[levels].h * 4)
                 }
                 bandBestLum = (0..<levels).map { l in
                     (darkCoarse > 0 && l >= levels - darkCoarse)
@@ -460,13 +482,14 @@ public enum PyramidFusion {
             t0 = now()
             if focusGate {
                 // Running full-res min luminance for the near-black gate.
-                ws.gauss[0].withUnsafeBufferPointer { gp in
+                ws.gauss[0].withUnsafeBufferPointer { gpBuf in
+                    let gp = gpBuf.baseAddress!
                     lumMin0.withUnsafeMutableBufferPointer { mp in
                         DispatchQueue.concurrentPerform(iterations: ch) { y in
                             for x in 0..<cw {
-                                let i = y * cw + x, pi = i * 4
-                                let l = 0.2126 * gp[pi] + 0.7152 * gp[pi + 1]
-                                      + 0.0722 * gp[pi + 2]
+                                let i = y * cw + x
+                                let g = hfLoadRGBA(gp, i * 4)
+                                let l = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z
                                 if l < mp[i] { mp[i] = l }
                             }
                         }
@@ -491,13 +514,14 @@ public enum PyramidFusion {
                 if onSharpness != nil { sharpnessPlanes.append(focusGrid) }
                 if prepareDespill {
                     var lum = [Float](repeating: 0, count: cw * ch)
-                    ws.gauss[0].withUnsafeBufferPointer { gp in
+                    ws.gauss[0].withUnsafeBufferPointer { gpBuf in
+                        let gp = gpBuf.baseAddress!
                         lum.withUnsafeMutableBufferPointer { lp in
                             DispatchQueue.concurrentPerform(iterations: ch) { y in
                                 for x in 0..<cw {
-                                    let pi = (y * cw + x) * 4
-                                    lp[y * cw + x] = 0.2126 * gp[pi] + 0.7152 * gp[pi + 1]
-                                        + 0.0722 * gp[pi + 2]
+                                    let g = hfLoadRGBA(gp, (y * cw + x) * 4)
+                                    lp[y * cw + x] = 0.2126 * g.x + 0.7152 * g.y
+                                        + 0.0722 * g.z
                                 }
                             }
                         }
@@ -530,26 +554,35 @@ public enum PyramidFusion {
             }
             if useDarkBase {
                 // Keep the least-luminous frame's base RGB at each cell.
+                // Storage-to-storage once the winner is decided.
                 fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
-                    ws.gauss[levels].withUnsafeBufferPointer { gp in
+                    ws.gauss[levels].withUnsafeBufferPointer { gpBuf in
+                        let gp = gpBuf.baseAddress!
                         baseBestLum.withUnsafeMutableBufferPointer { bl in
                             for i in 0..<bl.count {
                                 let pi = i * 4
-                                let lum = 0.2126 * gp[pi] + 0.7152 * gp[pi + 1] + 0.0722 * gp[pi + 2]
+                                let g = hfLoadRGBA(gp, pi)
+                                let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z
                                 if lum < bl[i] {
                                     bl[i] = lum
-                                    fp[pi] = gp[pi]; fp[pi + 1] = gp[pi + 1]
-                                    fp[pi + 2] = gp[pi + 2]; fp[pi + 3] = gp[pi + 3]
+                                    fp[pi] = gpBuf[pi]; fp[pi + 1] = gpBuf[pi + 1]
+                                    fp[pi + 2] = gpBuf[pi + 2]; fp[pi + 3] = gpBuf[pi + 3]
                                 }
                             }
                         }
                     }
                 }
             } else {
-                // Base level accumulates a running sum for averaging.
-                fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
+                // Base level accumulates a running sum for averaging — the one
+                // buffer in the pyramid that is a true ACCUMULATOR, so it stays
+                // f32. Summing a stack into f16 would quantize catastrophically
+                // (the running total leaves the [0,1] range where f16's steps
+                // are fine, and by 40 frames its ulp exceeds a whole pixel's
+                // worth of signal). Narrowed into the band pyramid after the
+                // divide below.
+                baseAccum.withUnsafeMutableBufferPointer { ap in
                     ws.gauss[levels].withUnsafeBufferPointer { gp in
-                        for i in 0..<gp.count { fp[i] += gp[i] }
+                        for i in 0..<gp.count { ap[i] += Float(gp[i]) }
                     }
                 }
             }
@@ -558,11 +591,14 @@ public enum PyramidFusion {
             progress?(Double(fi + 1) / Double(frameCount), fi, nil)
         }
 
-        // Average the accumulated base level (unless darkest-base kept a winner).
+        // Average the accumulated base level (unless darkest-base kept a winner)
+        // and narrow the f32 accumulator into the band pyramid.
         if !useDarkBase {
             let n = Float(frameCount)
-            for i in fused![levels].pixels.indices {
-                fused![levels].pixels[i] /= n
+            fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
+                baseAccum.withUnsafeBufferPointer { ap in
+                    for i in 0..<ap.count { fp[i] = Float16(ap[i] / n) }
+                }
             }
         }
         // Focus-gate merge. Two steps: the debloom result is track A
@@ -597,27 +633,22 @@ public enum PyramidFusion {
             for l in 1..<levels where l >= levels - darkCoarse {
                 let hf = hasFocus[l]
                 let mask = gate.masks[l]
-                fused![l].pixels.withUnsafeMutableBufferPointer { ap in
-                    trackB[l].pixels.withUnsafeBufferPointer { bp in
-                        plainC[l].pixels.withUnsafeBufferPointer { cp in
+                fused![l].pixels.withUnsafeMutableBufferPointer { apBuf in
+                    let ap = apBuf.baseAddress!
+                    trackB[l].pixels.withUnsafeBufferPointer { bpBuf in
+                        let bp = bpBuf.baseAddress!
+                        plainC[l].pixels.withUnsafeBufferPointer { cpBuf in
+                            let cp = cpBuf.baseAddress!
                             for i in 0..<hf.count {
                                 let pi = i * 4
                                 // Debloom's own answer for this cell.
-                                var dx = ap[pi], dy = ap[pi + 1]
-                                var dz = ap[pi + 2], dw = ap[pi + 3]
-                                if hf[i] < 0.5 {
-                                    dx = bp[pi]; dy = bp[pi + 1]
-                                    dz = bp[pi + 2]; dw = bp[pi + 3]
-                                }
+                                let d = hf[i] < 0.5 ? hfLoadRGBA(bp, pi) : hfLoadRGBA(ap, pi)
                                 // Near-black membership: 1 where the cell is
                                 // never bright (background), 0 where it is a lit
                                 // surface. Smoothstepped so the transition can't
                                 // band along the falloff.
-                                let t = mask[i]
-                                ap[pi] = cp[pi] + (dx - cp[pi]) * t
-                                ap[pi + 1] = cp[pi + 1] + (dy - cp[pi + 1]) * t
-                                ap[pi + 2] = cp[pi + 2] + (dz - cp[pi + 2]) * t
-                                ap[pi + 3] = cp[pi + 3] + (dw - cp[pi + 3]) * t
+                                let c = hfLoadRGBA(cp, pi)
+                                hfStoreRGBA(ap, pi, c + (d - c) * mask[i])
                             }
                         }
                     }
@@ -673,8 +704,13 @@ public enum PyramidFusion {
     final class CPUWorkspace {
         let levels: Int
         let sizes: [(w: Int, h: Int)]
-        var gauss: [[Float]]      // levels+1 Gaussian levels, RGBA
-        var band: [Float]         // level-0 band, RGBA (kept for post-blur select)
+        // Gaussian levels and the level-0 band are f16 STORAGE — this is the
+        // pyramid working set, the largest transient in a PMax fuse, and every
+        // read below widens to f32 before it does arithmetic. `energy` and the
+        // per-level `best*` planes stay f32: they are scalar, a quarter the
+        // bytes, and hold running extrema/sums rather than color.
+        var gauss: [[Float16]]    // levels+1 Gaussian levels, RGBA
+        var band: [Float16]       // level-0 band, RGBA (kept for post-blur select)
         var energy: [Float]       // level-0 selection energy plane
         var energyTmp: [Float]    // blur scratch
         let gritWeights: [Float]
@@ -687,8 +723,8 @@ public enum PyramidFusion {
                 s.append(((p.w + 1) / 2, (p.h + 1) / 2))
             }
             sizes = s
-            gauss = s.map { [Float](repeating: 0, count: $0.w * $0.h * 4) }
-            band = [Float](repeating: 0, count: width * height * 4)
+            gauss = s.map { [Float16](repeating: 0, count: $0.w * $0.h * 4) }
+            band = [Float16](repeating: 0, count: width * height * 4)
             energy = [Float](repeating: 0, count: width * height)
             energyTmp = [Float](repeating: 0, count: width * height)
             gritWeights = Filters.gaussianKernel(sigma: PyramidFusion.gritSigma)
@@ -703,8 +739,10 @@ public enum PyramidFusion {
             let (sw, sh) = sizes[l]
             let (nw, nh) = sizes[l + 1]
             let k = PyramidFusion.downKernel
-            gauss[l].withUnsafeBufferPointer { src in
-                gauss[l + 1].withUnsafeMutableBufferPointer { dst in
+            gauss[l].withUnsafeBufferPointer { srcBuf in
+                let src = srcBuf.baseAddress!
+                gauss[l + 1].withUnsafeMutableBufferPointer { dstBuf in
+                    let dst = dstBuf.baseAddress!
                     k.withUnsafeBufferPointer { kp in
                         DispatchQueue.concurrentPerform(iterations: nh) { oy in
                             // H-blur the 5 contributing source rows at the
@@ -720,9 +758,7 @@ public enum PyramidFusion {
                                         var acc = SIMD4<Float>()
                                         for kx in 0..<5 {
                                             let tx = min(max(sx - 2 + kx, 0), sw - 1)
-                                            let i = (rowOff + tx) * 4
-                                            acc += SIMD4<Float>(src[i], src[i + 1],
-                                                                src[i + 2], src[i + 3]) * kp[kx]
+                                            acc += hfLoadRGBA(src, (rowOff + tx) * 4) * kp[kx]
                                         }
                                         let o = (ky * nw + ox) * 4
                                         rp[o] = acc.x; rp[o + 1] = acc.y
@@ -736,9 +772,7 @@ public enum PyramidFusion {
                                         acc += SIMD4<Float>(rp[i], rp[i + 1],
                                                             rp[i + 2], rp[i + 3]) * kp[ky]
                                     }
-                                    let o = (oy * nw + ox) * 4
-                                    dst[o] = acc.x; dst[o + 1] = acc.y
-                                    dst[o + 2] = acc.z; dst[o + 3] = acc.w
+                                    hfStoreRGBA(dst, (oy * nw + ox) * 4, acc)
                                 }
                             }
                         }
@@ -751,7 +785,7 @@ public enum PyramidFusion {
         /// maps output pixel (x, y) to — replicated exactly (incl. the
         /// (x+0.5)·scale−0.5 mapping and edge clamps).
         @inline(__always)
-        private static func upsampleAt(_ src: UnsafeBufferPointer<Float>,
+        private static func upsampleAt(_ src: UnsafePointer<Float16>,
                                        sw: Int, sh: Int, x: Int, y: Int,
                                        scaleX: Float, scaleY: Float) -> SIMD4<Float> {
             let fy = (Float(y) + 0.5) * scaleY - 0.5
@@ -766,13 +800,9 @@ public enum PyramidFusion {
             let cx1 = min(max(x0 + 1, 0), sw - 1)
             let i00 = (cy0 * sw + cx0) * 4, i10 = (cy0 * sw + cx1) * 4
             let i01 = (cy1 * sw + cx0) * 4, i11 = (cy1 * sw + cx1) * 4
-            var out = SIMD4<Float>()
-            for c in 0..<4 {
-                let top = src[i00 + c] * (1 - wx) + src[i10 + c] * wx
-                let bot = src[i01 + c] * (1 - wx) + src[i11 + c] * wx
-                out[c] = top * (1 - wy) + bot * wy
-            }
-            return out
+            let top = hfLoadRGBA(src, i00) * (1 - wx) + hfLoadRGBA(src, i10) * wx
+            let bot = hfLoadRGBA(src, i01) * (1 - wx) + hfLoadRGBA(src, i11) * wx
+            return top * (1 - wy) + bot * wy
         }
 
         /// Level 0: band + energy in one streaming pass (band kept — the
@@ -781,19 +811,20 @@ public enum PyramidFusion {
             let (w, h) = sizes[0]
             let (nw, nh) = sizes[1]
             let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
-            gauss[0].withUnsafeBufferPointer { fine in
-                gauss[1].withUnsafeBufferPointer { coarse in
-                    band.withUnsafeMutableBufferPointer { bp in
+            gauss[0].withUnsafeBufferPointer { fineBuf in
+                let fine = fineBuf.baseAddress!
+                gauss[1].withUnsafeBufferPointer { coarseBuf in
+                    let coarse = coarseBuf.baseAddress!
+                    band.withUnsafeMutableBufferPointer { bpBuf in
+                        let bp = bpBuf.baseAddress!
                         energy.withUnsafeMutableBufferPointer { ep in
                             DispatchQueue.concurrentPerform(iterations: h) { y in
                                 for x in 0..<w {
                                     let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
                                                              x: x, y: y, scaleX: sx, scaleY: sy)
                                     let i = (y * w + x) * 4
-                                    let b = SIMD4<Float>(fine[i], fine[i + 1],
-                                                         fine[i + 2], fine[i + 3]) - up
-                                    bp[i] = b.x; bp[i + 1] = b.y
-                                    bp[i + 2] = b.z; bp[i + 3] = b.w
+                                    let b = hfLoadRGBA(fine, i) - up
+                                    hfStoreRGBA(bp, i, b)
                                     ep[y * w + x] = abs(b.x) + abs(b.y) + abs(b.z)
                                 }
                             }
@@ -855,6 +886,11 @@ public enum PyramidFusion {
                                 for i in (y * w)..<((y + 1) * w) {
                                     if ep[i] > be[i] {
                                         be[i] = ep[i]
+                                        // Storage-to-storage: both sides are f16
+                                        // bands, so the winner copies verbatim.
+                                        // (Making this band f32 was measured:
+                                        // exactly 0 dB of parity, so it stays
+                                        // half — see ROADMAP's parity note.)
                                         let pi = i * 4
                                         fp[pi] = bp[pi]
                                         fp[pi + 1] = bp[pi + 1]
@@ -899,15 +935,20 @@ public enum PyramidFusion {
             let (w, h) = sizes[l]
             let (nw, nh) = sizes[l + 1]
             let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
-            gauss[l].withUnsafeBufferPointer { fine in
-              gauss[l + 1].withUnsafeBufferPointer { coarse in
-                fused.pixels.withUnsafeMutableBufferPointer { ap in
-                  trackB.pixels.withUnsafeMutableBufferPointer { bp in
+            gauss[l].withUnsafeBufferPointer { fineBuf in
+              let fine = fineBuf.baseAddress!
+              gauss[l + 1].withUnsafeBufferPointer { coarseBuf in
+                let coarse = coarseBuf.baseAddress!
+                fused.pixels.withUnsafeMutableBufferPointer { apBuf in
+                  let ap = apBuf.baseAddress!
+                  trackB.pixels.withUnsafeMutableBufferPointer { bpBuf in
+                    let bp = bpBuf.baseAddress!
                     bestE.withUnsafeMutableBufferPointer { be in
                       bestDarkLum.withUnsafeMutableBufferPointer { bd in
                         hasFocus.withUnsafeMutableBufferPointer { hf in
                           focus.withUnsafeBufferPointer { fo in
-                           plainC.pixels.withUnsafeMutableBufferPointer { cp in
+                           plainC.pixels.withUnsafeMutableBufferPointer { cpBuf in
+                            let cp = cpBuf.baseAddress!
                             plainBestE.withUnsafeMutableBufferPointer { pe in
                             DispatchQueue.concurrentPerform(iterations: h) { y in
                               for x in 0..<w {
@@ -915,30 +956,26 @@ public enum PyramidFusion {
                                 let pi = i * 4
                                 let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
                                                          x: x, y: y, scaleX: sx, scaleY: sy)
-                                let bx = fine[pi] - up.x, by = fine[pi + 1] - up.y
-                                let bz = fine[pi + 2] - up.z, bw = fine[pi + 3] - up.w
+                                let f4 = hfLoadRGBA(fine, pi)
+                                let b = f4 - up
                                 // Track C runs for every frame, independent of
                                 // the focus gate.
-                                let ce = abs(bx) + abs(by) + abs(bz)
+                                let ce = abs(b.x) + abs(b.y) + abs(b.z)
                                 if ce > pe[i] {
                                     pe[i] = ce
-                                    cp[pi] = bx; cp[pi + 1] = by
-                                    cp[pi + 2] = bz; cp[pi + 3] = bw
+                                    hfStoreRGBA(cp, pi, b)
                                 }
                                 if fo[i] > threshold {
-                                    let e = abs(bx) + abs(by) + abs(bz)
+                                    let e = abs(b.x) + abs(b.y) + abs(b.z)
                                     if e > be[i] {
                                         be[i] = e; hf[i] = 1
-                                        ap[pi] = bx; ap[pi + 1] = by
-                                        ap[pi + 2] = bz; ap[pi + 3] = bw
+                                        hfStoreRGBA(ap, pi, b)
                                     }
                                 } else {
-                                    let lum = 0.2126 * fine[pi] + 0.7152 * fine[pi + 1]
-                                            + 0.0722 * fine[pi + 2]
+                                    let lum = 0.2126 * f4.x + 0.7152 * f4.y + 0.0722 * f4.z
                                     if lum < bd[i] {
                                         bd[i] = lum
-                                        bp[pi] = bx; bp[pi + 1] = by
-                                        bp[pi + 2] = bz; bp[pi + 3] = bw
+                                        hfStoreRGBA(bp, pi, b)
                                     }
                                 }
                               }
@@ -964,24 +1001,24 @@ public enum PyramidFusion {
             let (w, h) = sizes[l]
             let (nw, nh) = sizes[l + 1]
             let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
-            gauss[l].withUnsafeBufferPointer { fine in
-                gauss[l + 1].withUnsafeBufferPointer { coarse in
-                    fused.pixels.withUnsafeMutableBufferPointer { fp in
+            gauss[l].withUnsafeBufferPointer { fineBuf in
+                let fine = fineBuf.baseAddress!
+                gauss[l + 1].withUnsafeBufferPointer { coarseBuf in
+                    let coarse = coarseBuf.baseAddress!
+                    fused.pixels.withUnsafeMutableBufferPointer { fpBuf in
+                        let fp = fpBuf.baseAddress!
                         bestLum.withUnsafeMutableBufferPointer { bl in
                             DispatchQueue.concurrentPerform(iterations: h) { y in
                                 for x in 0..<w {
                                     let i = y * w + x
                                     let pi = i * 4
-                                    let lum = 0.2126 * fine[pi] + 0.7152 * fine[pi + 1]
-                                            + 0.0722 * fine[pi + 2]
+                                    let f4 = hfLoadRGBA(fine, pi)
+                                    let lum = 0.2126 * f4.x + 0.7152 * f4.y + 0.0722 * f4.z
                                     if lum < bl[i] {
                                         bl[i] = lum
                                         let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
                                                                  x: x, y: y, scaleX: sx, scaleY: sy)
-                                        fp[pi] = fine[pi] - up.x
-                                        fp[pi + 1] = fine[pi + 1] - up.y
-                                        fp[pi + 2] = fine[pi + 2] - up.z
-                                        fp[pi + 3] = fine[pi + 3] - up.w
+                                        hfStoreRGBA(fp, pi, f4 - up)
                                     }
                                 }
                             }
@@ -997,9 +1034,12 @@ public enum PyramidFusion {
             let (w, h) = sizes[l]
             let (nw, nh) = sizes[l + 1]
             let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
-            gauss[l].withUnsafeBufferPointer { fine in
-                gauss[l + 1].withUnsafeBufferPointer { coarse in
-                    fused.pixels.withUnsafeMutableBufferPointer { fp in
+            gauss[l].withUnsafeBufferPointer { fineBuf in
+                let fine = fineBuf.baseAddress!
+                gauss[l + 1].withUnsafeBufferPointer { coarseBuf in
+                    let coarse = coarseBuf.baseAddress!
+                    fused.pixels.withUnsafeMutableBufferPointer { fpBuf in
+                        let fp = fpBuf.baseAddress!
                         best.withUnsafeMutableBufferPointer { be in
                             DispatchQueue.concurrentPerform(iterations: h) { y in
                                 for x in 0..<w {
@@ -1007,13 +1047,11 @@ public enum PyramidFusion {
                                                              x: x, y: y, scaleX: sx, scaleY: sy)
                                     let i = y * w + x
                                     let pi = i * 4
-                                    let b = SIMD4<Float>(fine[pi], fine[pi + 1],
-                                                         fine[pi + 2], fine[pi + 3]) - up
+                                    let b = hfLoadRGBA(fine, pi) - up
                                     let e = abs(b.x) + abs(b.y) + abs(b.z)
                                     if e > be[i] {
                                         be[i] = e
-                                        fp[pi] = b.x; fp[pi + 1] = b.y
-                                        fp[pi + 2] = b.z; fp[pi + 3] = b.w
+                                        hfStoreRGBA(fp, pi, b)
                                     }
                                 }
                             }
@@ -1046,12 +1084,13 @@ public enum PyramidFusion {
     static func bandEnergy(_ band: ImageBuffer) -> [Float] {
         let count = band.width * band.height
         var energy = [Float](repeating: 0, count: count)
-        band.pixels.withUnsafeBufferPointer { bp in
+        band.pixels.withUnsafeBufferPointer { bpBuf in
+            let bp = bpBuf.baseAddress!
             energy.withUnsafeMutableBufferPointer { ep in
                 DispatchQueue.concurrentPerform(iterations: band.height) { y in
                     for i in (y * band.width)..<((y + 1) * band.width) {
-                        let pi = i * 4
-                        ep[i] = abs(bp[pi]) + abs(bp[pi + 1]) + abs(bp[pi + 2])
+                        let b = hfLoadRGBA(bp, i * 4)
+                        ep[i] = abs(b.x) + abs(b.y) + abs(b.z)
                     }
                 }
             }

@@ -134,7 +134,7 @@ public enum DNGWriter {
         for i in 0..<(pw * ph) {
             for c in 0..<3 {
                 previewRGB[i * 3 + c] =
-                    UInt8(min(max(preview.pixels[i * 4 + c], 0), 1) * 255 + 0.5)
+                    UInt8(min(max(Float(preview.pixels[i * 4 + c]), 0), 1) * 255 + 0.5)
             }
         }
 
@@ -199,14 +199,15 @@ public enum DNGWriter {
         let factors = channelFactors ?? (1, 1, 1)
         let f = [factors.0, factors.1, factors.2]
         var rgb = [UInt16](repeating: 0, count: w * h * 3)
-        image.pixels.withUnsafeBufferPointer { src in
+        image.pixels.withUnsafeBufferPointer { srcBuf in
+            let src = srcBuf.baseAddress!
             rgb.withUnsafeMutableBufferPointer { dst in
                 DispatchQueue.concurrentPerform(iterations: h) { y in
                     for x in 0..<w {
-                        let si = (y * w + x) * 4
+                        let p = hfLoadRGBA(src, (y * w + x) * 4)
                         let di = (y * w + x) * 3
                         for c in 0..<3 {
-                            let v = min(max(src[si + c], 0), 1)
+                            let v = min(max(p[c], 0), 1)
                             let linear: Float = v <= 0.04045
                                 ? v / 12.92
                                 : powf((v + 0.055) / 1.055, 2.4)
@@ -256,7 +257,7 @@ public enum DNGWriter {
         for i in 0..<(pw * ph) {
             for c in 0..<3 {
                 previewPayload[i * 3 + c] =
-                    UInt8(min(max(preview.pixels[i * 4 + c], 0), 1) * 255 + 0.5)
+                    UInt8(min(max(Float(preview.pixels[i * 4 + c]), 0), 1) * 255 + 0.5)
             }
         }
 

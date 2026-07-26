@@ -10,10 +10,17 @@ the record.
 **Regression gates** (re-check before trusting any algorithm change): `swift
 build && .build/debug/retouch-probe <synth frames…>` must print `probe: ALL
 PASS`; `hyperfocal-cli synth` baselines (default params) are **plane ≈ 38.7 dB
-dmap / 38.3 pmax**, **object ≈ 41.3** vs truth; CPU↔GPU parity **≥ 90 dB** both
-methods (≈ 114 dmap / 106 pmax on the synth plane). `retouch-probe` is
-macOS-only — off Apple, gate on the CLI synth→fuse→compare path plus the Qt
-shell selftest matrix.
+dmap / 38.2 pmax** vs truth. CPU↔GPU parity is **≥ 90 dB for dmap** (≈ 101 on
+the synth plane) and **≥ 65 dB for pmax** (≈ 70). The two bars differ because
+pixel storage is **f16**: two engines that agree to better than one f16 ulp
+still land on different halves, so ~75–80 dB is the arithmetic ceiling for any
+value near 1.0, and PMax's multi-level collapse compounds a few ulps of it.
+DMap clears 90 because its output is a weighted average both engines round
+identically. Anything *below* these bars is drift, not quantization — and the
+usual cause is a buffer that should be f32 (an accumulator, or a separable
+filter's intermediate) being stored as half. `retouch-probe` is macOS-only —
+off Apple, gate on the CLI synth→fuse→compare path plus the Qt shell selftest
+matrix.
 
 ---
 
@@ -163,6 +170,12 @@ the background secondary runs, and ~5.9 GB surviving project close with every
 model property provably empty. That residual is NOT an app leak; its
 composition drives the two items below.
 
+**Those figures predate f16 storage** (pixels are 8 B/px now, not 16). The
+CLI A/B on a 12 MP × 17 synth stack measured ~25 % off peak footprint, not
+50 %, because decode buffers, the scalar f32 planes, and the Metal/OS baseline
+don't scale with pixel storage — so re-run `--memprofile` on the 46 MP NEF
+stack before quoting a new ledger.
+
 - **Return the Metal allocator's memory (~2–2.6 GB).** MTLDevice retains freed
   buffer memory for the process lifetime — measured flat across project close
   with zero live MTLBuffer references (`EngineStats.metalAllocatedBytes`).
@@ -182,20 +195,29 @@ composition drives the two items below.
   context, or accepting it as the cost of Apple's RAW engine and documenting
   it. Do not chase it below ~2 GB without checking decode throughput — the
   cache exists for a reason.
-- **f16 storage format (halves everything).** The working buffers are RGBA
-  f32 (16 bytes/px; ~0.7 GB per 46 MP plane) — every number above scales
-  with it. In-repo precedent says f16 storage is quality-viable: FrameSpill's
-  degraded tier stores these exact frames at f16 and measures 75–80 dB vs
-  f32 (95.9 dB effect on a real fused output), far below fusion error
-  (~38–41 dB vs truth). Accumulation stays f32 in registers; the layout keeps
-  float4→half4 shape everywhere. Costs to plan for: every engine + kernel,
-  CPU-path performance off Apple Silicon (x86 Float16 is emulated — convert
-  tiles to f32 for compute), wgpu's shader-f16 feature isn't universal, and
-  the ≥90 dB parity gates need re-baselining. Decided and recorded: dropping
-  the ALPHA channel instead (RGB f32, 12 bytes/px) is dominated — alpha
-  carries the warp-coverage mask through fusion, `vec3` storage buffers
-  stride 16 bytes anyway, and CG float contexts require alpha; 25% savings
-  for a bigger rewrite than f16's 50%.
+- **f16 storage on the wgpu backend (Windows/Linux GPU).** `ImageBuffer` and
+  the Metal kernels are f16 now; the WGSL kernels are still f32, and
+  `WgpuDMap`/`WgpuPyramid` widen through an f32 staging array at every
+  host↔device RGBA transfer to stay correct. So the wgpu path pays a
+  conversion it doesn't need and gets none of the bandwidth or footprint win.
+  Port it via **`pack2x16float` / `unpack2x16float`** — core WGSL, so an RGBA
+  half4 is 2 `u32` words and no `shader-f16` feature is required. That matters:
+  `shader-f16` is not universal, and the only validated surfaces here are WARP
+  and llvmpipe. Mirror the Metal split exactly — accumulators (`tent_accumulate`'s
+  accum, the pyramid base sum) and the separable blur's H→V intermediate stay
+  f32; see `MetalEngine`'s kernel header for why each one does. Done = the
+  staging arrays in `WgpuDMap` are gone, `WgpuParity` passes, and parity holds
+  at the bars above. **Note this is unverified even as it stands**: the host-seam
+  conversion above was written without a wgpu-enabled build (syntax-checked
+  only), so type-check it on a `HYPERFOCAL_WGPU=1` build first.
+- **Depth-map export precision.** `DMapFusion.depthImage` now returns an f16
+  `ImageBuffer` like everything else, so a 16-bit depth-map export resolves
+  ~2048 levels over its top octave instead of 65535. Far above what a stack can
+  express (frame counts are in the tens) and `resultDepth` — the f32 plane
+  projects persist and retouch merges into — is untouched, so this is only a
+  concern if depth maps get used as external range data. If that becomes a use
+  case, export depth straight from `resultDepth` to 16-bit fixed point and skip
+  the image entirely.
 
 - **Serve retouch source loads from the retained warped-frame spill.** The
   background PMax generation now streams the DMap primary's `WarpedFrameCache`
@@ -206,8 +228,8 @@ composition drives the two items below.
   (`RetouchSession.selectSource` → `loadAligned`, plus `prefetchNeighbors`).
   Serving those from the same cache would make frame switching near-instant and
   remove the app's remaining self-contention — at the cost of keeping the
-  multi-GB spill alive for the whole retouch session (it already degrades to
-  fp16 / skips itself on tight disks; the decode path stays as the fallback).
+  multi-GB spill alive for the whole retouch session (it skips itself on tight
+  disks; the decode path stays as the fallback).
   Decide the lifetime policy (session-long vs release-on-low-space) before
   wiring it.
 - **Symmetric spill for a PMax primary.** The reuse above only helps the

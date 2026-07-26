@@ -53,14 +53,17 @@ public enum BlackPoint {
         amount *= gate
         let sub = SIMD3<Float>(veil.x * amount, veil.y * amount, veil.z * amount)
         let w = image.width
-        image.pixels.withUnsafeMutableBufferPointer { px in
+        image.pixels.withUnsafeMutableBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
             DispatchQueue.concurrentPerform(iterations: image.height) { y in
                 var pi = y * w * 4
                 for _ in 0..<w {
+                    var p = hfLoadRGBA(px, pi)
                     for c in 0..<3 {
-                        let lin = ToneCurve.srgbLinearize(max(px[pi + c], 0))
-                        px[pi + c] = ToneCurve.srgbEncode(max(lin - sub[c], 0))
+                        let lin = ToneCurve.srgbLinearize(max(p[c], 0))
+                        p[c] = ToneCurve.srgbEncode(max(lin - sub[c], 0))
                     }
+                    hfStoreRGBA(px, pi, p)
                     pi += 4
                 }
             }
@@ -77,14 +80,15 @@ public enum BlackPoint {
         let stride = max(1, image.pixels.count / 4 / 300_000)   // ~300k samples
         r.reserveCapacity(image.pixels.count / 4 / stride + 1)
         g.reserveCapacity(r.capacity); b.reserveCapacity(r.capacity)
-        image.pixels.withUnsafeBufferPointer { px in
+        image.pixels.withUnsafeBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
             var i = 0
-            let pixelCount = px.count / 4
+            let pixelCount = pxBuf.count / 4
             while i < pixelCount {
-                let pi = i * 4
-                r.append(ToneCurve.srgbLinearize(max(px[pi], 0)))
-                g.append(ToneCurve.srgbLinearize(max(px[pi + 1], 0)))
-                b.append(ToneCurve.srgbLinearize(max(px[pi + 2], 0)))
+                let p = hfLoadRGBA(px, i * 4)
+                r.append(ToneCurve.srgbLinearize(max(p.x, 0)))
+                g.append(ToneCurve.srgbLinearize(max(p.y, 0)))
+                b.append(ToneCurve.srgbLinearize(max(p.z, 0)))
                 i += stride
             }
         }

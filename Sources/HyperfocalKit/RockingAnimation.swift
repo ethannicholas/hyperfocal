@@ -226,28 +226,31 @@ public enum RockingAnimation {
         var out = ImageBuffer(width: w, height: h)
         var outDepth = [Float](repeating: 0, count: w * h)
         let sw = image.width, sh = image.height
-        image.pixels.withUnsafeBufferPointer { src in
+        image.pixels.withUnsafeBufferPointer { srcBuf in
+            let src = srcBuf.baseAddress!
             depth.withUnsafeBufferPointer { srcD in
-                out.pixels.withUnsafeMutableBufferPointer { dst in
+                out.pixels.withUnsafeMutableBufferPointer { dstBuf in
+                    let dst = dstBuf.baseAddress!
                     outDepth.withUnsafeMutableBufferPointer { dstD in
                         DispatchQueue.concurrentPerform(iterations: h) { y in
                             let y0 = y * sh / h, y1 = max(y0 + 1, (y + 1) * sh / h)
                             for x in 0..<w {
                                 let x0 = x * sw / w, x1 = max(x0 + 1, (x + 1) * sw / w)
-                                var r: Float = 0, g: Float = 0, b: Float = 0, d: Float = 0
+                                var acc = SIMD4<Float>()
+                                var d: Float = 0
                                 for sy in y0..<y1 {
                                     var si = (sy * sw + x0) * 4
                                     var sdi = sy * sw + x0
                                     for _ in x0..<x1 {
-                                        r += src[si]; g += src[si + 1]; b += src[si + 2]
+                                        acc += hfLoadRGBA(src, si)
                                         d += srcD[sdi]
                                         si += 4; sdi += 1
                                     }
                                 }
                                 let n = Float((y1 - y0) * (x1 - x0))
-                                let di = (y * w + x) * 4
-                                dst[di] = r / n; dst[di + 1] = g / n; dst[di + 2] = b / n
-                                dst[di + 3] = 1
+                                var v = acc / n
+                                v.w = 1
+                                hfStoreRGBA(dst, (y * w + x) * 4, v)
                                 dstD[y * w + x] = d / n
                             }
                         }
@@ -278,9 +281,11 @@ public enum RockingAnimation {
     static func warp(_ base: ImageBuffer, disparity: [Float],
                      shiftX: Float, shiftY: Float, into out: inout ImageBuffer) {
         let w = base.width, h = base.height
-        base.pixels.withUnsafeBufferPointer { src in
+        base.pixels.withUnsafeBufferPointer { srcBuf in
+            let src = srcBuf.baseAddress!
             disparity.withUnsafeBufferPointer { disp in
-                out.pixels.withUnsafeMutableBufferPointer { dst in
+                out.pixels.withUnsafeMutableBufferPointer { dstBuf in
+                    let dst = dstBuf.baseAddress!
                     DispatchQueue.concurrentPerform(iterations: h) { y in
                         let row = y * w
                         for x in 0..<w {
@@ -290,15 +295,15 @@ public enum RockingAnimation {
                             let x0 = Int(sx), y0 = Int(sy)
                             let x1 = min(x0 + 1, w - 1), y1 = min(y0 + 1, h - 1)
                             let fx = sx - Float(x0), fy = sy - Float(y0)
-                            let a = (y0 * w + x0) * 4, b = (y0 * w + x1) * 4
-                            let c = (y1 * w + x0) * 4, e = (y1 * w + x1) * 4
-                            let di = (row + x) * 4
-                            for ch in 0..<3 {
-                                let top = src[a + ch] + (src[b + ch] - src[a + ch]) * fx
-                                let bot = src[c + ch] + (src[e + ch] - src[c + ch]) * fx
-                                dst[di + ch] = top + (bot - top) * fy
-                            }
-                            dst[di + 3] = 1
+                            let pa = hfLoadRGBA(src, (y0 * w + x0) * 4)
+                            let pb = hfLoadRGBA(src, (y0 * w + x1) * 4)
+                            let pc = hfLoadRGBA(src, (y1 * w + x0) * 4)
+                            let pe = hfLoadRGBA(src, (y1 * w + x1) * 4)
+                            let top = pa + (pb - pa) * fx
+                            let bot = pc + (pe - pc) * fx
+                            var v = top + (bot - top) * fy
+                            v.w = 1
+                            hfStoreRGBA(dst, (row + x) * 4, v)
                         }
                     }
                 }

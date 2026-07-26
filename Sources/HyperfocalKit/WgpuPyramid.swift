@@ -161,10 +161,15 @@ enum WgpuPyramid {
                     let (w, h) = sizes[previewLevel]
                     var img = ImageBuffer(width: w, height: h)
                     try bucket(&tPreview) {
-                        try img.pixels.withUnsafeMutableBufferPointer {
+                        // WGSL kernels are still f32 here (see WgpuDMap's note
+                        // on the deferred half-storage port), so RGBA crosses
+                        // the host boundary through an f32 staging array.
+                        var tmp = [Float](repeating: 0, count: w * h * 4)
+                        try tmp.withUnsafeMutableBufferPointer {
                             try engine.download(buf, into: $0.baseAddress!,
                                                 byteCount: w * h * 16)
                         }
+                        img = ImageBuffer(width: w, height: h, floatPixels: tmp)
                     }
                     preview = img
                 }
@@ -242,7 +247,7 @@ enum WgpuPyramid {
             } ?? false
             let upload = warp != nil ? uploadBuf! : gauss[0]
             bucket(&tUpload) {
-                img.pixels.withUnsafeBufferPointer {
+                img.floatPixels().withUnsafeBufferPointer {
                     engine.upload($0.baseAddress!, byteCount: srcWidth * srcHeight * 16,
                                   to: upload)
                 }
@@ -470,12 +475,12 @@ enum WgpuPyramid {
                                         baseTmp: baseTmp,
                                         scratchA: scratchA, scratchB: scratchB)
         batch.submit()
-        var out = ImageBuffer(width: width, height: height)
-        try out.pixels.withUnsafeMutableBufferPointer {
+        var tmp = [Float](repeating: 0, count: width * height * 4)
+        try tmp.withUnsafeMutableBufferPointer {
             try engine.download(result, into: $0.baseAddress!,
                                 byteCount: width * height * 16)
         }
-        return out
+        return ImageBuffer(width: width, height: height, floatPixels: tmp)
     }
 
     /// Encodes (onto `batch`, after whatever is already there) a collapse of

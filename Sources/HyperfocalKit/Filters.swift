@@ -65,46 +65,40 @@ public enum Filters {
         let r = kernel.count / 2
         var tmp = ImageBuffer(width: w, height: h)
         var out = ImageBuffer(width: w, height: h)
-        src.pixels.withUnsafeBufferPointer { s in
-            tmp.pixels.withUnsafeMutableBufferPointer { t in
+        // Taps widen to f32 on load and the running sum stays in an f32
+        // register; only the pass result narrows back into storage.
+        src.pixels.withUnsafeBufferPointer { sBuf in
+            let s = sBuf.baseAddress!
+            tmp.pixels.withUnsafeMutableBufferPointer { tBuf in
+                let t = tBuf.baseAddress!
                 kernel.withUnsafeBufferPointer { kp in
                     DispatchQueue.concurrentPerform(iterations: h) { y in
                         let row = y * w * 4
                         for x in 0..<w {
-                            var acc = (Float(0), Float(0), Float(0), Float(0))
+                            var acc = SIMD4<Float>()
                             for i in -r...r {
                                 let xi = min(max(x + i, 0), w - 1)
-                                let idx = row + xi * 4
-                                let kv = kp[i + r]
-                                acc.0 += s[idx] * kv
-                                acc.1 += s[idx + 1] * kv
-                                acc.2 += s[idx + 2] * kv
-                                acc.3 += s[idx + 3] * kv
+                                acc += hfLoadRGBA(s, row + xi * 4) * kp[i + r]
                             }
-                            let o = row + x * 4
-                            t[o] = acc.0; t[o + 1] = acc.1; t[o + 2] = acc.2; t[o + 3] = acc.3
+                            hfStoreRGBA(t, row + x * 4, acc)
                         }
                     }
                 }
             }
         }
-        tmp.pixels.withUnsafeBufferPointer { t in
-            out.pixels.withUnsafeMutableBufferPointer { o in
+        tmp.pixels.withUnsafeBufferPointer { tBuf in
+            let t = tBuf.baseAddress!
+            out.pixels.withUnsafeMutableBufferPointer { oBuf in
+                let o = oBuf.baseAddress!
                 kernel.withUnsafeBufferPointer { kp in
                     DispatchQueue.concurrentPerform(iterations: h) { y in
                         for x in 0..<w {
-                            var acc = (Float(0), Float(0), Float(0), Float(0))
+                            var acc = SIMD4<Float>()
                             for i in -r...r {
                                 let yi = min(max(y + i, 0), h - 1)
-                                let idx = (yi * w + x) * 4
-                                let kv = kp[i + r]
-                                acc.0 += t[idx] * kv
-                                acc.1 += t[idx + 1] * kv
-                                acc.2 += t[idx + 2] * kv
-                                acc.3 += t[idx + 3] * kv
+                                acc += hfLoadRGBA(t, (yi * w + x) * 4) * kp[i + r]
                             }
-                            let oi = (y * w + x) * 4
-                            o[oi] = acc.0; o[oi + 1] = acc.1; o[oi + 2] = acc.2; o[oi + 3] = acc.3
+                            hfStoreRGBA(o, (y * w + x) * 4, acc)
                         }
                     }
                 }
@@ -189,8 +183,10 @@ public enum Filters {
         var out = ImageBuffer(width: tw, height: th)
         let sx = Float(sw) / Float(tw)
         let sy = Float(sh) / Float(th)
-        src.pixels.withUnsafeBufferPointer { s in
-            out.pixels.withUnsafeMutableBufferPointer { o in
+        src.pixels.withUnsafeBufferPointer { sBuf in
+            let s = sBuf.baseAddress!
+            out.pixels.withUnsafeMutableBufferPointer { oBuf in
+                let o = oBuf.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: th) { y in
                     let fy = (Float(y) + 0.5) * sy - 0.5
                     let y0 = Int(fy.rounded(.down))
@@ -205,12 +201,11 @@ public enum Filters {
                         let cx1 = min(max(x0 + 1, 0), sw - 1)
                         let i00 = (cy0 * sw + cx0) * 4, i10 = (cy0 * sw + cx1) * 4
                         let i01 = (cy1 * sw + cx0) * 4, i11 = (cy1 * sw + cx1) * 4
-                        let oi = (y * tw + x) * 4
-                        for c in 0..<4 {
-                            let top = s[i00 + c] * (1 - wx) + s[i10 + c] * wx
-                            let bot = s[i01 + c] * (1 - wx) + s[i11 + c] * wx
-                            o[oi + c] = top * (1 - wy) + bot * wy
-                        }
+                        // a*(1-w) + b*w per lane — the same expression order the
+                        // GPU's plane_upsample/pyr_bilinear use, kept for parity.
+                        let top = hfLoadRGBA(s, i00) * (1 - wx) + hfLoadRGBA(s, i10) * wx
+                        let bot = hfLoadRGBA(s, i01) * (1 - wx) + hfLoadRGBA(s, i11) * wx
+                        hfStoreRGBA(o, (y * tw + x) * 4, top * (1 - wy) + bot * wy)
                     }
                 }
             }

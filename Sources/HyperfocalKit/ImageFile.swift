@@ -107,25 +107,32 @@ public enum ImageFile {
         }
         let space = workingSpace
         var buf = ImageBuffer(width: w, height: h)
+        // .RGBAh renders straight into the buffer's own f16 storage: no f32
+        // staging allocation (~0.7 GB at 46 MP) and no conversion pass.
         buf.pixels.withUnsafeMutableBytes { ptr in
-            ciContext.render(ci, toBitmap: ptr.baseAddress!, rowBytes: w * 16,
-                             bounds: extent, format: .RGBAf, colorSpace: space)
+            ciContext.render(ci, toBitmap: ptr.baseAddress!, rowBytes: w * 8,
+                             bounds: extent, format: .RGBAh, colorSpace: space)
         }
         return buf
     }
 
-    /// Decode any CGImage into Float32 RGBA via a float bitmap context.
+    /// Bitmap-context layout matching `ImageBuffer`'s storage: 16-bit float
+    /// RGBA, premultiplied-last, little-endian — a CoreGraphics-supported
+    /// pixel format, so the context draws directly into our pixels.
+    static let halfBitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        | CGBitmapInfo.floatComponents.rawValue
+        | CGBitmapInfo.byteOrder16Little.rawValue
+
+    /// Decode any CGImage into RGBA half-float via a float bitmap context.
     public static func buffer(from cg: CGImage) throws -> ImageBuffer {
         let w = cg.width, h = cg.height
         var buf = ImageBuffer(width: w, height: h)
         let space = workingSpace
-        let info = CGImageAlphaInfo.premultipliedLast.rawValue
-            | CGBitmapInfo.floatComponents.rawValue
-            | CGBitmapInfo.byteOrder32Little.rawValue
         let ok = buf.pixels.withUnsafeMutableBytes { ptr -> Bool in
             guard let ctx = CGContext(data: ptr.baseAddress, width: w, height: h,
-                                      bitsPerComponent: 32, bytesPerRow: w * 16,
-                                      space: space, bitmapInfo: info) else { return false }
+                                      bitsPerComponent: 16, bytesPerRow: w * 8,
+                                      space: space,
+                                      bitmapInfo: halfBitmapInfo) else { return false }
             ctx.interpolationQuality = .none
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
             return true
@@ -191,21 +198,19 @@ public enum ImageFile {
                                 decodeFactor: 1)
     }
 
-    /// Small Float32 RGBA buffer from any CGImage (grayscale included), drawn at
-    /// reduced size — cheap progress-preview conversion.
+    /// Small RGBA half-float buffer from any CGImage (grayscale included), drawn
+    /// at reduced size — cheap progress-preview conversion.
     public static func previewBuffer(from cg: CGImage, maxSide: Int) throws -> ImageBuffer {
         let scale = min(1.0, Double(maxSide) / Double(max(cg.width, cg.height)))
         let pw = max(1, Int(Double(cg.width) * scale))
         let ph = max(1, Int(Double(cg.height) * scale))
         var buf = ImageBuffer(width: pw, height: ph)
         let space = workingSpace
-        let info = CGImageAlphaInfo.premultipliedLast.rawValue
-            | CGBitmapInfo.floatComponents.rawValue
-            | CGBitmapInfo.byteOrder32Little.rawValue
         let ok = buf.pixels.withUnsafeMutableBytes { ptr -> Bool in
             guard let ctx = CGContext(data: ptr.baseAddress, width: pw, height: ph,
-                                      bitsPerComponent: 32, bytesPerRow: pw * 16,
-                                      space: space, bitmapInfo: info) else { return false }
+                                      bitsPerComponent: 16, bytesPerRow: pw * 8,
+                                      space: space,
+                                      bitmapInfo: halfBitmapInfo) else { return false }
             ctx.interpolationQuality = .low
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: pw, height: ph))
             return true
@@ -261,16 +266,18 @@ public enum ImageFile {
     public static func cgImage8(from image: ImageBuffer) throws -> CGImage {
         let w = image.width, h = image.height
         var bytes = [UInt8](repeating: 0, count: w * h * 4)
-        image.pixels.withUnsafeBufferPointer { src in
+        image.pixels.withUnsafeBufferPointer { srcBuf in
+            let src = srcBuf.baseAddress!
             bytes.withUnsafeMutableBufferPointer { dst in
                 DispatchQueue.concurrentPerform(iterations: h) { y in
                     for x in 0..<w {
                         let pi = (y * w + x) * 4
+                        let p = hfLoadRGBA(src, pi)
                         // Premultiply: buffers use alpha 0 for "no data" (warp
                         // out-of-bounds) — render those honestly black.
-                        let a = min(max(src[pi + 3], 0), 1)
+                        let a = min(max(p.w, 0), 1)
                         for c in 0..<3 {
-                            dst[pi + c] = UInt8(min(max(src[pi + c], 0), 1) * a * 255 + 0.5)
+                            dst[pi + c] = UInt8(min(max(p[c], 0), 1) * a * 255 + 0.5)
                         }
                         dst[pi + 3] = UInt8(a * 255 + 0.5)
                     }
@@ -293,14 +300,16 @@ public enum ImageFile {
     public static func cgImage16(from image: ImageBuffer) throws -> CGImage {
         let w = image.width, h = image.height
         var samples = [UInt16](repeating: 0, count: w * h * 4)
-        image.pixels.withUnsafeBufferPointer { src in
+        image.pixels.withUnsafeBufferPointer { srcBuf in
+            let src = srcBuf.baseAddress!
             samples.withUnsafeMutableBufferPointer { dst in
                 DispatchQueue.concurrentPerform(iterations: h) { y in
                     for x in 0..<w {
                         let pi = (y * w + x) * 4
-                        let a = min(max(src[pi + 3], 0), 1)
+                        let p = hfLoadRGBA(src, pi)
+                        let a = min(max(p.w, 0), 1)
                         for c in 0..<3 {
-                            dst[pi + c] = UInt16(min(max(src[pi + c], 0), 1) * a * 65535 + 0.5).bigEndian
+                            dst[pi + c] = UInt16(min(max(p[c], 0), 1) * a * 65535 + 0.5).bigEndian
                         }
                         dst[pi + 3] = UInt16(a * 65535 + 0.5).bigEndian
                     }
@@ -441,9 +450,7 @@ public enum ImageFile {
             throw ImageFileError.cannotLoad("\(url.path) (shim status \(status.rawValue))")
         }
         defer { hf_free(ptr) }
-        let count = Int(w) * Int(h) * 4
-        let pixels = Array(UnsafeBufferPointer(start: ptr, count: count))
-        return ImageBuffer(width: Int(w), height: Int(h), pixels: pixels)
+        return ImageBuffer(width: Int(w), height: Int(h), floatPixels: ptr)
     }
 
     /// No embedded-preview extraction on the CImaging path yet (LibRaw's
@@ -474,9 +481,7 @@ public enum ImageFile {
             throw ImageFileError.cannotLoad("\(url.lastPathComponent): RAW decode failed (\(status.rawValue))")
         }
         defer { hf_free(ptr) }
-        let count = Int(w) * Int(h) * 4
-        let pixels = Array(UnsafeBufferPointer(start: ptr, count: count))
-        return ImageBuffer(width: Int(w), height: Int(h), pixels: pixels)
+        return ImageBuffer(width: Int(w), height: Int(h), floatPixels: ptr)
     }
 
     /// 8-bit luminance plane for registration (the portable `GrayImage` seam).
@@ -539,14 +544,14 @@ public enum ImageFile {
         let ph = max(1, Int(Double(gray.height) * scale))
         var buf = ImageBuffer(width: pw, height: ph)
         gray.pixels.withUnsafeBufferPointer { src in
-            buf.pixels.withUnsafeMutableBufferPointer { dst in
+            buf.pixels.withUnsafeMutableBufferPointer { dstBuf in
+                let dst = dstBuf.baseAddress!
                 for y in 0..<ph {
                     let sy = min(y * gray.height / ph, gray.height - 1)
                     for x in 0..<pw {
                         let sx = min(x * gray.width / pw, gray.width - 1)
                         let v = Float(src[sy * gray.width + sx]) / 255
-                        let di = (y * pw + x) * 4
-                        dst[di] = v; dst[di + 1] = v; dst[di + 2] = v; dst[di + 3] = 1
+                        hfStoreRGBA(dst, (y * pw + x) * 4, SIMD4<Float>(v, v, v, 1))
                     }
                 }
             }
@@ -575,7 +580,9 @@ public enum ImageFile {
         }
         let cs = colorSpaceName ?? "p3"
         let w = CInt(image.width), h = CInt(image.height)
-        let status: hf_status = try image.pixels.withUnsafeBufferPointer { buf in
+        // The encoders' C ABI is `const float*`; this is one of the few places
+        // that genuinely materializes an f32 copy of the plane.
+        let status: hf_status = try image.floatPixels().withUnsafeBufferPointer { buf in
             let base = buf.baseAddress
             switch ext {
             case "tif", "tiff": return hf_encode_tiff16(url.path, w, h, base, cs, dateTimeOriginal)

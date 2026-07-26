@@ -53,6 +53,87 @@ public func hfMax(_ a: SIMD4<Float>, _ b: SIMD4<Float>) -> SIMD4<Float> {
     #endif
 }
 
+// MARK: - f16 pixel storage conversion
+//
+// Image pixels are stored as RGBA `Float16` (`ImageBuffer.pixels`); all
+// arithmetic happens in f32 registers. These are the only sanctioned way to
+// cross that boundary in a per-pixel loop.
+//
+// Codegen contract (measured on Swift 6.2 / arm64 `-O`, `swiftc -emit-assembly`,
+// 2026-07-26) — the two directions are NOT symmetric, and picking the wrong
+// form in either one falls off a cliff exactly like the generic-SIMD trap above:
+//
+// - WIDENING (f16→f32) must go through the SCALAR-ELEMENT form,
+//   `SIMD4<Float>(Float(p[0]), Float(p[1]), Float(p[2]), Float(p[3]))`.
+//   The optimizer recognizes it and emits `ldr d0` + `fcvtl v0.4s, v0.4h` —
+//   one load, one convert. The obvious vector spelling
+//   `SIMD4<Float>(someSIMD4Float16)` is the stdlib's GENERIC
+//   `SIMD4.init<Other: BinaryFloatingPoint>` and does NOT specialize: it
+//   compiles to a tail call into the unspecialized generic, per-element.
+// - NARROWING (f32→f16) must go through the VECTOR form, `SIMD4<Float16>(v)`,
+//   which lowers to `fcvtn v0.4h, v0.4s` + one store. The scalar-element
+//   spelling is the bad one here — four separate `fcvt`/`str` pairs plus
+//   overflow checks on each index.
+// - Never load a `SIMD3` of halves: the three-lane shape can't use `fcvtl`
+//   and compiles to a load/convert/insert sequence per lane. Load the RGBA
+//   quad and take `.xyz` from the f32 result.
+//
+// `i` is the ELEMENT index (pixel × 4), so the 8-byte `SIMD4<Float16>` access
+// is always naturally aligned inside a pixel array.
+
+/// Widens one RGBA pixel from f16 storage into an f32 vector.
+@inlinable
+public func hfLoadRGBA(_ p: UnsafePointer<Float16>, _ i: Int) -> SIMD4<Float> {
+    SIMD4<Float>(Float(p[i]), Float(p[i + 1]), Float(p[i + 2]), Float(p[i + 3]))
+}
+
+/// Widens an adjacent PAIR of RGBA pixels — the warp's interior tap loop works
+/// two pixels at a time. Same scalar-element rule as `hfLoadRGBA`; this lowers
+/// to one `ldp d0, d1` plus two `fcvtl`.
+@inlinable
+public func hfLoad8(_ p: UnsafePointer<Float16>, _ i: Int) -> SIMD8<Float> {
+    SIMD8<Float>(Float(p[i]),     Float(p[i + 1]), Float(p[i + 2]), Float(p[i + 3]),
+                 Float(p[i + 4]), Float(p[i + 5]), Float(p[i + 6]), Float(p[i + 7]))
+}
+
+/// Narrows an f32 RGBA vector back into f16 storage.
+@inlinable
+public func hfStoreRGBA(_ p: UnsafeMutablePointer<Float16>, _ i: Int,
+                        _ v: SIMD4<Float>) {
+    let h = SIMD4<Float16>(v)
+    UnsafeMutableRawPointer(p + i).storeBytes(of: h, as: SIMD4<Float16>.self)
+}
+
+/// f16's finite range. Pixels live in [0, 1], but decode excursions and
+/// intermediate sums must saturate rather than become inf — `Float16(x)` of an
+/// out-of-range `Float` yields inf, which would poison a whole neighborhood
+/// through the resampler. Storage helpers that can see unbounded input clamp
+/// with this; the hot per-pixel paths (already-stored pixels, bounded by
+/// construction) don't pay for it.
+@inlinable
+public var hfHalfMax: Float { 65504 }
+
+@inlinable
+public func hfClampToHalf(_ v: SIMD4<Float>) -> SIMD4<Float> {
+    hfMin(hfMax(v, SIMD4<Float>(repeating: -hfHalfMax)),
+          SIMD4<Float>(repeating: hfHalfMax))
+}
+
+/// Bulk f16→f32 widening, for the boundaries that genuinely need an f32 array
+/// (ImageIO/CImaging handoff, fixed-point project serialization, DNG).
+public func hfWiden(_ src: UnsafePointer<Float16>,
+                    _ dst: UnsafeMutablePointer<Float>, count: Int) {
+    for i in 0..<count { dst[i] = Float(src[i]) }
+}
+
+/// Bulk f32→f16 narrowing, clamped to f16's finite range.
+public func hfNarrow(_ src: UnsafePointer<Float>,
+                     _ dst: UnsafeMutablePointer<Float16>, count: Int) {
+    for i in 0..<count {
+        dst[i] = Float16(min(max(src[i], -hfHalfMax), hfHalfMax))
+    }
+}
+
 /// A 3×3 `Float` matrix matching `simd_float3x3`'s semantics for the
 /// operations the engine uses: `init(rows:)` builds the matrix whose i-th row
 /// is `rows[i]`, `M * v` is the row·vector product, `A * B` is the standard

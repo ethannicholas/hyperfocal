@@ -114,13 +114,13 @@ public enum WgpuParity {
             dims: SIMD4<UInt32>(UInt32(sw), UInt32(sh), UInt32(dw), UInt32(dh)))
         for (kernel, method) in [("warp_lanczos3", Warp.Method.lanczos3),
                                  ("warp_bilinear", Warp.Method.bilinear)] {
-            let srcBuf = try c.buf(src.pixels)
+            let srcBuf = try c.buf(src.floatPixels())
             let dstBuf = try engine.makeBuffer(floats: dw * dh * 4)
             try engine.run(kernel, buffers: [srcBuf, dstBuf],
                            uniforms: bytes(of: wp), gridW: dw, gridH: dh)
             let cpu = Warp.apply(src, outputToSource: H, outWidth: dw, outHeight: dh,
                                  method: method)
-            c.report(kernel, cpu.pixels, try c.read(dstBuf, dw * dh * 4))
+            c.report(kernel, cpu.floatPixels(), try c.read(dstBuf, dw * dh * 4))
         }
 
         // -- blur_h + blur_v --------------------------------------------------
@@ -746,17 +746,18 @@ public enum WgpuParity {
     private static func synthStack(width w: Int, height h: Int,
                                    frameCount: Int) -> [ImageBuffer] {
         var base = ImageBuffer(width: w, height: h)
-        base.pixels.withUnsafeMutableBufferPointer { p in
+        base.pixels.withUnsafeMutableBufferPointer { pBuf in
+            let p = pBuf.baseAddress!
             for y in 0..<h { for x in 0..<w {
                 let fx = Float(x), fy = Float(y)
                 let detail = sin(fx * 1.05 + fy * 0.30) * sin(fy * 0.95 - fx * 0.20)
-                let i = (y * w + x) * 4
+                var v = SIMD4<Float>(0, 0, 0, 1)
                 for c in 0..<3 {
                     let coarse = 0.15 * sin(fx * 0.020 + Float(c) * 1.7)
                                + 0.15 * sin(fy * 0.017 - Float(c) * 0.9)
-                    p[i + c] = min(max(0.5 + coarse + 0.18 * detail, 0), 1)
+                    v[c] = min(max(0.5 + coarse + 0.18 * detail, 0), 1)
                 }
-                p[i + 3] = 1
+                hfStoreRGBA(p, (y * w + x) * 4, v)
             } }
         }
         let blurred = Filters.convolveSeparableRGBA(
@@ -765,18 +766,21 @@ public enum WgpuParity {
         return (0..<frameCount).map { fi -> ImageBuffer in
             var img = ImageBuffer(width: w, height: h)
             let lo = Float(fi) * stripW, hi = Float(fi + 1) * stripW
-            img.pixels.withUnsafeMutableBufferPointer { p in
-                base.pixels.withUnsafeBufferPointer { sharp in
-                    blurred.pixels.withUnsafeBufferPointer { soft in
+            img.pixels.withUnsafeMutableBufferPointer { pBuf in
+                let p = pBuf.baseAddress!
+                base.pixels.withUnsafeBufferPointer { sharpBuf in
+                    let sharp = sharpBuf.baseAddress!
+                    blurred.pixels.withUnsafeBufferPointer { softBuf in
+                        let soft = softBuf.baseAddress!
                         for y in 0..<h { for x in 0..<w {
                             // 1 inside the strip, fading to 0 over 6 px outside.
                             let out = max(lo - Float(x), Float(x) + 1 - hi)
                             let m = min(max(1 - out / 6, 0), 1)
                             let i = (y * w + x) * 4
-                            for c in 0..<3 {
-                                p[i + c] = m * sharp[i + c] + (1 - m) * soft[i + c]
-                            }
-                            p[i + 3] = 1
+                            var v = hfLoadRGBA(sharp, i) * m
+                                  + hfLoadRGBA(soft, i) * (1 - m)
+                            v.w = 1
+                            hfStoreRGBA(p, i, v)
                         } }
                     }
                 }

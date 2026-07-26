@@ -95,15 +95,22 @@ public enum Warp {
     /// measured SLOWER (16.6 vs 9.0 ns/set — and any SIMD8<Int32> conversion
     /// init is an unspecialized generic at ~250 ns/call; see
     /// PortableSIMD.swift's contract before "improving" this).
+    ///
+    /// With f16 storage the pair load is `hfLoad8` (one `ldp` + two `fcvtl`)
+    /// rather than a raw `SIMD8<Float>` load: the taps HALVE the bytes read —
+    /// 288 B per output pixel instead of 576 — while every FMA below still
+    /// runs in f32 registers, so the ~1 ulp reassociation note above is the
+    /// only numerical difference from the tap-at-a-time form.
     static func applyLanczos3(_ src: ImageBuffer, outputToSource H: simd_float3x3,
-                              outWidth: Int, outHeight: Int, into dst: inout [Float]) {
+                              outWidth: Int, outHeight: Int, into dst: inout [Float16]) {
         precondition(dst.count == outWidth * outHeight * 4)
         let sw = src.width, sh = src.height
         lanczos3Table.withUnsafeBufferPointer { lutBuf in
         let lut = lutBuf.baseAddress!
-        src.pixels.withUnsafeBufferPointer { s in
-            let sraw = UnsafeRawPointer(s.baseAddress!)
-            dst.withUnsafeMutableBufferPointer { o in
+        src.pixels.withUnsafeBufferPointer { sBuf in
+            let s = sBuf.baseAddress!
+            dst.withUnsafeMutableBufferPointer { oBuf in
+                let o = oBuf.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: outHeight) { y in
                     for x in 0..<outWidth {
                         let p = H * simd_float3(Float(x), Float(y), 1)
@@ -134,23 +141,20 @@ public enum Warp {
                             let w45 = SIMD8<Float>(lowHalf: SIMD4<Float>(repeating: wx[4]),
                                                    highHalf: SIMD4<Float>(repeating: wx[5]))
                             for ky in 0..<6 {
-                                let rowBase = (y0 - 2 + ky) * sw + (x0 - 2)
-                                let p01 = sraw.loadUnaligned(fromByteOffset: rowBase << 4,
-                                                             as: SIMD8<Float>.self)
-                                let p23 = sraw.loadUnaligned(fromByteOffset: (rowBase + 2) << 4,
-                                                             as: SIMD8<Float>.self)
-                                let p45 = sraw.loadUnaligned(fromByteOffset: (rowBase + 4) << 4,
-                                                             as: SIMD8<Float>.self)
+                                let rowBase = ((y0 - 2 + ky) * sw + (x0 - 2)) * 4
+                                let p01 = hfLoad8(s, rowBase)
+                                let p23 = hfLoad8(s, rowBase + 8)
+                                let p45 = hfLoad8(s, rowBase + 16)
                                 let row8 = p01 * w01 + p23 * w23 + p45 * w45
                                 acc += (row8.lowHalf + row8.highHalf) * wy[ky]
                             }
                             sample = acc / (sumX * sumY)
-                            let ia = (y0 * sw + x0) << 4
-                            let ic = ((y0 + 1) * sw + x0) << 4
-                            let a = sraw.loadUnaligned(fromByteOffset: ia, as: SIMD4<Float>.self)
-                            let b = sraw.loadUnaligned(fromByteOffset: ia + 16, as: SIMD4<Float>.self)
-                            let c = sraw.loadUnaligned(fromByteOffset: ic, as: SIMD4<Float>.self)
-                            let d = sraw.loadUnaligned(fromByteOffset: ic + 16, as: SIMD4<Float>.self)
+                            let ia = (y0 * sw + x0) * 4
+                            let ic = ((y0 + 1) * sw + x0) * 4
+                            let a = hfLoadRGBA(s, ia)
+                            let b = hfLoadRGBA(s, ia + 4)
+                            let c = hfLoadRGBA(s, ic)
+                            let d = hfLoadRGBA(s, ic + 4)
                             // hfMin/hfMax (concrete, PortableSIMD): the generic
                             // simd_* shims don't specialize cross-file (1089 vs
                             // 35 ns/px), and on the Mac toolchain even the
@@ -166,8 +170,7 @@ public enum Warp {
                                 var row = SIMD4<Float>()
                                 for kx in 0..<6 {
                                     let tx = min(max(x0 - 2 + kx, 0), sw - 1)
-                                    let i = (rowBase + tx) * 4
-                                    row += SIMD4<Float>(s[i], s[i + 1], s[i + 2], s[i + 3]) * wx[kx]
+                                    row += hfLoadRGBA(s, (rowBase + tx) * 4) * wx[kx]
                                 }
                                 acc += row * wy[ky]
                             }
@@ -178,23 +181,18 @@ public enum Warp {
                             // engages on overshoot and keeps in-range detail.
                             let cx0 = min(max(x0, 0), sw - 1), cx1 = min(max(x0 + 1, 0), sw - 1)
                             let cy0 = min(max(y0, 0), sh - 1), cy1 = min(max(y0 + 1, 0), sh - 1)
-                            let ia = (cy0 * sw + cx0) * 4, ib = (cy0 * sw + cx1) * 4
-                            let ic = (cy1 * sw + cx0) * 4, id = (cy1 * sw + cx1) * 4
-                            let a = SIMD4<Float>(s[ia], s[ia + 1], s[ia + 2], s[ia + 3])
-                            let b = SIMD4<Float>(s[ib], s[ib + 1], s[ib + 2], s[ib + 3])
-                            let c = SIMD4<Float>(s[ic], s[ic + 1], s[ic + 2], s[ic + 3])
-                            let d = SIMD4<Float>(s[id], s[id + 1], s[id + 2], s[id + 3])
+                            let a = hfLoadRGBA(s, (cy0 * sw + cx0) * 4)
+                            let b = hfLoadRGBA(s, (cy0 * sw + cx1) * 4)
+                            let c = hfLoadRGBA(s, (cy1 * sw + cx0) * 4)
+                            let d = hfLoadRGBA(s, (cy1 * sw + cx1) * 4)
                             let lo = hfMin(hfMin(a, b), hfMin(c, d))
                             let hi = hfMax(hfMax(a, b), hfMax(c, d))
                             sample = hfMin(hfMax(sample, lo), hi)
                         }
                         let inside = sx >= -0.5 && sx <= Float(sw) - 0.5
                             && sy >= -0.5 && sy <= Float(sh) - 0.5
-                        let oi = (y * outWidth + x) * 4
-                        o[oi] = sample.x
-                        o[oi + 1] = sample.y
-                        o[oi + 2] = sample.z
-                        o[oi + 3] = inside ? sample.w : 0
+                        sample.w = inside ? sample.w : 0
+                        hfStoreRGBA(o, (y * outWidth + x) * 4, sample)
                     }
                 }
             }
@@ -206,8 +204,10 @@ public enum Warp {
                               outWidth: Int, outHeight: Int) -> ImageBuffer {
         let sw = src.width, sh = src.height
         var out = ImageBuffer(width: outWidth, height: outHeight)
-        src.pixels.withUnsafeBufferPointer { s in
-            out.pixels.withUnsafeMutableBufferPointer { o in
+        src.pixels.withUnsafeBufferPointer { sBuf in
+            let s = sBuf.baseAddress!
+            out.pixels.withUnsafeMutableBufferPointer { oBuf in
+                let o = oBuf.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: outHeight) { y in
                     for x in 0..<outWidth {
                         let p = H * simd_float3(Float(x), Float(y), 1)
@@ -225,12 +225,11 @@ public enum Warp {
                         let i01 = (cy1 * sw + cx0) * 4, i11 = (cy1 * sw + cx1) * 4
                         let inside = sx >= -0.5 && sx <= Float(sw) - 0.5
                             && sy >= -0.5 && sy <= Float(sh) - 0.5
-                        let oi = (y * outWidth + x) * 4
-                        for c in 0..<4 {
-                            let top = s[i00 + c] * (1 - wx) + s[i10 + c] * wx
-                            let bot = s[i01 + c] * (1 - wx) + s[i11 + c] * wx
-                            o[oi + c] = c == 3 && !inside ? 0 : top * (1 - wy) + bot * wy
-                        }
+                        let top = hfLoadRGBA(s, i00) * (1 - wx) + hfLoadRGBA(s, i10) * wx
+                        let bot = hfLoadRGBA(s, i01) * (1 - wx) + hfLoadRGBA(s, i11) * wx
+                        var sample = top * (1 - wy) + bot * wy
+                        sample.w = inside ? sample.w : 0
+                        hfStoreRGBA(o, (y * outWidth + x) * 4, sample)
                     }
                 }
             }

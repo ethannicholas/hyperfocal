@@ -831,8 +831,11 @@ struct DebugDiff: ParsableCommand {
             throw ValidationError("size mismatch")
         }
         var out = ImageBuffer(width: a.width, height: a.height)
+        // Widen before differencing: an f16 subtraction would quantize the
+        // very residual this view exists to show.
         for i in out.pixels.indices {
-            out.pixels[i] = i % 4 == 3 ? 1 : min(abs(a.pixels[i] - b.pixels[i]) * gain, 1)
+            let d = min(abs(Float(a.pixels[i]) - Float(b.pixels[i])) * gain, 1)
+            out.pixels[i] = i % 4 == 3 ? 1 : Float16(d)
         }
         try ImageFile.save(out, to: URL(fileURLWithPath: output))
         print("wrote \(output)")
@@ -852,7 +855,7 @@ struct DebugBoost: ParsableCommand {
     func run() throws {
         var img = try ImageFile.load(url: URL(fileURLWithPath: input))
         for i in img.pixels.indices where i % 4 != 3 {
-            img.pixels[i] = min(img.pixels[i] * gain, 1)
+            img.pixels[i] = Float16(min(Float(img.pixels[i]) * gain, 1))
         }
         try ImageFile.save(img, to: URL(fileURLWithPath: output))
         print("wrote \(output)")

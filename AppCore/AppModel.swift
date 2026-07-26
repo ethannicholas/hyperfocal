@@ -1158,8 +1158,8 @@ public final class AppModel: ObservableObject {
     /// unattended queue must keep moving; the engine skips the cache
     /// silently and the skip is logged). Returns false to cancel the fuse.
     /// Engine-independent — every dmap path caches now — and sized to the
-    /// fp16 fallback footprint: when fp32 doesn't fit the engine degrades
-    /// to fp16 on its own, so the prompt is only for "not even fp16 fits".
+    /// spill's actual f16 footprint (8 bytes per pixel per frame), which is
+    /// the only tier there is.
     private func preflightDiskCache(urls: [URL]) -> Bool {
         guard !batchMode, FrameSpill.wanted(fusionDiskCache),
               let first = urls.first,
@@ -3394,15 +3394,15 @@ public final class AppModel: ObservableObject {
                         let ix = Int(sx), iy = Int(sy)
                         let ix1 = min(ix + 1, srcW - 1), iy1 = min(iy + 1, srcH - 1)
                         let fx = sx - Float(ix), fy = sy - Float(iy)
-                        let a = (iy * srcW + ix) * 4, b = (iy * srcW + ix1) * 4
-                        let c = (iy1 * srcW + ix) * 4, e = (iy1 * srcW + ix1) * 4
-                        let di = (v * w + u) * 4
-                        for ch in 0..<3 {
-                            let top = src[a + ch] + (src[b + ch] - src[a + ch]) * fx
-                            let bot = src[c + ch] + (src[e + ch] - src[c + ch]) * fx
-                            dst[di + ch] = top + (bot - top) * fy
-                        }
-                        dst[di + 3] = 1
+                        let pa = hfLoadRGBA(src.baseAddress!, (iy * srcW + ix) * 4)
+                        let pb = hfLoadRGBA(src.baseAddress!, (iy * srcW + ix1) * 4)
+                        let pc = hfLoadRGBA(src.baseAddress!, (iy1 * srcW + ix) * 4)
+                        let pe = hfLoadRGBA(src.baseAddress!, (iy1 * srcW + ix1) * 4)
+                        let top = pa + (pb - pa) * fx
+                        let bot = pc + (pe - pc) * fx
+                        var val = top + (bot - top) * fy
+                        val.w = 1
+                        hfStoreRGBA(dst.baseAddress!, (v * w + u) * 4, val)
                     }
                 }
             }

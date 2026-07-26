@@ -58,7 +58,7 @@ public enum DMapFusion {
         /// Let the GPU path cache warped frames on disk between its two
         /// passes instead of decoding the stack twice (see FrameSpill —
         /// output is bit-identical either way, this is purely a time/disk
-        /// trade). The temp file is width×height×16 bytes per frame, so
+        /// trade). The temp file is width×height×8 bytes per frame, so
         /// users short on disk can turn it off and accept the slower fuse.
         public var spillEnabled: Bool
         /// Retain the grid planes the render-stage rim despill consumes
@@ -263,7 +263,7 @@ public enum DMapFusion {
                 bestIndex = [Float](repeating: 0, count: width * height)
                 guidePlane = [Float](repeating: 0, count: width * height)
                 if wantSpill {
-                    spill = FrameSpill(frameBytes: width * height * 16,
+                    spill = FrameSpill(frameBytes: width * height * 8,
                                        frameCount: frameCount, log: log)
                 }
             }
@@ -317,7 +317,8 @@ public enum DMapFusion {
             let index = Float(fi)
             let first = fi == 0
             energy.withUnsafeBufferPointer { ep in
-                img.pixels.withUnsafeBufferPointer { fp in
+                img.pixels.withUnsafeBufferPointer { fpBuf in
+                    let fp = fpBuf.baseAddress!
                     lum.withUnsafeBufferPointer { lp in
                         bestEnergy.withUnsafeMutableBufferPointer { be in
                             bestIndex.withUnsafeMutableBufferPointer { bi in
@@ -326,7 +327,7 @@ public enum DMapFusion {
                                         for i in (y * width)..<((y + 1) * width) {
                                             // Alpha-masked: no depth vote where this
                                             // frame has no data (warp out-of-bounds).
-                                            let e = ep[i] * fp[i * 4 + 3]
+                                            let e = ep[i] * Float(fp[i * 4 + 3])
                                             let wins = e > be[i]
                                             if wins {
                                                 be[i] = e
@@ -471,24 +472,31 @@ public enum DMapFusion {
             tRenderDecode += now() - t0
             t0 = now()
             let gain = gains?[fi] ?? .one
-            img.pixels.withUnsafeBufferPointer { fp in
+            // `accum`/`wsum` stay f32 planes: this is the accumulation, where
+            // a stack's worth of weighted samples is summed and f16's 11-bit
+            // mantissa genuinely would not do. Only the per-frame SOURCE is
+            // f16, widened here.
+            let gain4 = SIMD4<Float>(gain.x, gain.y, gain.z, 1)
+            img.pixels.withUnsafeBufferPointer { fpBuf in
+                let fp = fpBuf.baseAddress!
                 depth.withUnsafeBufferPointer { dp in
                     accum.withUnsafeMutableBufferPointer { ap in
                         wsum.withUnsafeMutableBufferPointer { wp in
                             DispatchQueue.concurrentPerform(iterations: height) { y in
                                 for i in (y * width)..<((y + 1) * width) {
                                     let pi = i * 4
-                                    let a = fp[pi + 3]
-                                    guard a > 0 else { continue }  // no data here
+                                    let s = hfLoadRGBA(fp, pi)
+                                    guard s.w > 0 else { continue }  // no data here
                                     let tent = max(1 - abs(index - dp[i]) / radius, 0)
                                     // Floor: pixels whose selected frames lack
                                     // coverage average the frames that do cover.
-                                    let w = (tent + 1e-6) * a
+                                    let w = (tent + 1e-6) * s.w
                                     wp[i] += w
-                                    ap[pi] += fp[pi] * w * gain.x
-                                    ap[pi + 1] += fp[pi + 1] * w * gain.y
-                                    ap[pi + 2] += fp[pi + 2] * w * gain.z
-                                    ap[pi + 3] += fp[pi + 3] * w
+                                    let c = s * w * gain4
+                                    ap[pi] += c.x
+                                    ap[pi + 1] += c.y
+                                    ap[pi + 2] += c.z
+                                    ap[pi + 3] += c.w
                                 }
                             }
                         }
@@ -519,17 +527,19 @@ public enum DMapFusion {
         var out = ImageBuffer(width: width, height: height)
         accum.withUnsafeBufferPointer { ap in
             wsum.withUnsafeBufferPointer { wp in
-                out.pixels.withUnsafeMutableBufferPointer { op in
+                out.pixels.withUnsafeMutableBufferPointer { opBuf in
+                    let op = opBuf.baseAddress!
                     DispatchQueue.concurrentPerform(iterations: height) { y in
                         for i in (y * width)..<((y + 1) * width) {
                             let pi = i * 4
+                            var v = SIMD4<Float>(0, 0, 0, 1)  // uncovered: opaque black
                             if wp[i] > 1e-7 {
                                 let inv = 1 / wp[i]
-                                op[pi] = ap[pi] * inv
-                                op[pi + 1] = ap[pi + 1] * inv
-                                op[pi + 2] = ap[pi + 2] * inv
+                                v.x = ap[pi] * inv
+                                v.y = ap[pi + 1] * inv
+                                v.z = ap[pi + 2] * inv
                             }
-                            op[pi + 3] = 1  // uncovered pixels: opaque black
+                            hfStoreRGBA(op, pi, v)
                         }
                     }
                 }
@@ -571,19 +581,21 @@ public enum DMapFusion {
 
     /// Alpha-weighted per-channel mean, stride-subsampled (a global gain
     /// estimate doesn't need every pixel).
-    static func meanChannels(pixels: [Float]) -> SIMD3<Float> {
+    static func meanChannels(pixels: [Float16]) -> SIMD3<Float> {
         var sum = SIMD3<Float>()
         var wsum: Float = 0
         let count = pixels.count / 4
-        var i = 0
-        while i < count {
-            let pi = i * 4
-            let a = pixels[pi + 3]
-            sum += SIMD3(pixels[pi], pixels[pi + 1], pixels[pi + 2]) * a
-            wsum += a
-            i += 7
+        return pixels.withUnsafeBufferPointer { buf in
+            let p = buf.baseAddress!
+            var i = 0
+            while i < count {
+                let v = hfLoadRGBA(p, i * 4)
+                sum += SIMD3(v.x, v.y, v.z) * v.w
+                wsum += v.w
+                i += 7
+            }
+            return wsum > 0 ? sum / wsum : SIMD3()
         }
-        return wsum > 0 ? sum / wsum : SIMD3()
     }
 
     /// Rec. 709 luma of an RGB triple. Public so per-channel gains can be
@@ -686,14 +698,14 @@ public enum DMapFusion {
         let norm = frameCount > 1 ? 1 / Float(frameCount - 1) : 0
         var out = ImageBuffer(width: pw, height: ph)
         bestIndex.withUnsafeBufferPointer { bp in
-            out.pixels.withUnsafeMutableBufferPointer { op in
+            out.pixels.withUnsafeMutableBufferPointer { opBuf in
+                let op = opBuf.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: ph) { y in
                     let sy = min(y * height / ph, height - 1)
                     for x in 0..<pw {
                         let sx = min(x * width / pw, width - 1)
                         let v = 1 - bp[sy * width + sx] * norm
-                        let oi = (y * pw + x) * 4
-                        op[oi] = v; op[oi + 1] = v; op[oi + 2] = v; op[oi + 3] = 1
+                        hfStoreRGBA(op, (y * pw + x) * 4, SIMD4<Float>(v, v, v, 1))
                     }
                 }
             }
@@ -714,21 +726,22 @@ public enum DMapFusion {
         var out = ImageBuffer(width: pw, height: ph)
         accum.withUnsafeBufferPointer { ap in
             wsum.withUnsafeBufferPointer { wp in
-                out.pixels.withUnsafeMutableBufferPointer { op in
+                out.pixels.withUnsafeMutableBufferPointer { opBuf in
+                    let op = opBuf.baseAddress!
                     DispatchQueue.concurrentPerform(iterations: ph) { y in
                         let sy = min(y * height / ph, height - 1)
                         for x in 0..<pw {
                             let sx = min(x * width / pw, width - 1)
                             let si = sy * width + sx
-                            let oi = (y * pw + x) * 4
                             let w = wp[si]
+                            var v = SIMD4<Float>(0, 0, 0, 1)
                             if w > 0.01 {
                                 let inv = 1 / w
-                                op[oi] = ap[si * 4] * inv
-                                op[oi + 1] = ap[si * 4 + 1] * inv
-                                op[oi + 2] = ap[si * 4 + 2] * inv
+                                v.x = ap[si * 4] * inv
+                                v.y = ap[si * 4 + 1] * inv
+                                v.z = ap[si * 4 + 2] * inv
                             }
-                            op[oi + 3] = 1
+                            hfStoreRGBA(op, (y * pw + x) * 4, v)
                         }
                     }
                 }
@@ -1014,17 +1027,24 @@ public enum DMapFusion {
 
     /// Grayscale visualization of a depth plane: white = first frame (near),
     /// black = last (far), assuming the usual close-to-far capture order.
+    ///
+    /// The IMAGE is f16 like every other `ImageBuffer`, so the exported depth
+    /// map resolves ~2048 levels over its top octave rather than an f32
+    /// plane's full range. That is far above what a stack can express (frame
+    /// counts are in the tens), and `resultDepth` — the raw float frame
+    /// indices, what projects persist and what retouch merges into — is
+    /// untouched f32.
     public static func depthImage(from depth: [Float], width: Int, height: Int,
                                   frameCount: Int) -> ImageBuffer {
         var image = ImageBuffer(width: width, height: height)
         let scale = frameCount > 1 ? 1 / Float(frameCount - 1) : 0
         depth.withUnsafeBufferPointer { dp in
-            image.pixels.withUnsafeMutableBufferPointer { op in
+            image.pixels.withUnsafeMutableBufferPointer { opBuf in
+                let op = opBuf.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: height) { y in
                     for i in (y * width)..<((y + 1) * width) {
                         let v = 1 - dp[i] * scale
-                        let pi = i * 4
-                        op[pi] = v; op[pi + 1] = v; op[pi + 2] = v; op[pi + 3] = 1
+                        hfStoreRGBA(op, i * 4, SIMD4<Float>(v, v, v, 1))
                     }
                 }
             }

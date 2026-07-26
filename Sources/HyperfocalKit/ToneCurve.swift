@@ -77,18 +77,21 @@ public enum ToneCurve {
         let table = lut(settings: settings)
         let count = table.count
         let w = image.width
-        image.pixels.withUnsafeMutableBufferPointer { px in
+        image.pixels.withUnsafeMutableBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
             table.withUnsafeBufferPointer { t in
                 DispatchQueue.concurrentPerform(iterations: image.height) { y in
                     var i = y * w * 4
                     for _ in 0..<w {
+                        var p = hfLoadRGBA(px, i)
                         for ch in 0..<3 {
-                            let v = min(max(px[i + ch], 0), 1) * Float(count - 1)
+                            let v = min(max(p[ch], 0), 1) * Float(count - 1)
                             let lo = Int(v)
                             let hi = min(lo + 1, count - 1)
                             let f = v - Float(lo)
-                            px[i + ch] = t[lo] + (t[hi] - t[lo]) * f
+                            p[ch] = t[lo] + (t[hi] - t[lo]) * f
                         }
+                        hfStoreRGBA(px, i, p)
                         i += 4
                     }
                 }
