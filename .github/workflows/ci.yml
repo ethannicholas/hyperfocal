@@ -30,6 +30,42 @@ jobs:
       - name: Build and run regression gates
         run: Scripts/ci-gate.sh
 
+  macos:
+    name: macOS (gates + probe + Metal + shipping app build)
+    # arm64 runner — the Mac build is Apple silicon only (App/project.yml).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-
+
+      # Same script the Linux job runs; its Darwin branches add retouch-probe
+      # and the macOS-calibrated PSNR / DNG floors. `fuse` defaults to
+      # --engine auto, so this is also the only CI coverage of the Metal path.
+      - name: Build and run regression gates
+        run: Scripts/ci-gate.sh
+
+      # The gap this job exists to close: every other gate builds the engine
+      # only, and one architecture of it. The app target went unbuildable for a
+      # day (Float16 vs the then-universal ARCHS) without anything noticing.
+      # package-app.sh IS the release path — it signs ad-hoc when no Developer
+      # ID cert is present, which is exactly the runner's situation.
+      # --no-archives: the .dmg/.zip step adds nothing a compile gate wants.
+      - name: Build the shipping app
+        run: |
+          brew install xcodegen
+          Scripts/package-app.sh --no-archives
+          test "$(lipo -archs dist/Hyperfocal.app/Contents/MacOS/Hyperfocal)" = arm64
+
+      # Not gated here: Scripts/ui-test.sh. The XCUITest suite drives real
+      # mouse and keyboard and needs a one-time Automation approval from a GUI
+      # session, so it stays a local gate.
+
   linux-wgpu:
     name: Linux wgpu (build + kernel/fusion/dmap parity on llvmpipe)
     runs-on: ubuntu-latest
