@@ -46,6 +46,11 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 
 ## UI Improvements
 
+- When adding multiple stacks at once, they should start out collapsed
+- Stack nodes should have a thumbnail derived from the middle image in the set
+- Starting a fuse should expand the current stack
+- The space hotkey doesn't work with a PMax rendering
+- The D key should select the DMap result input
 - Improve the experience of starting retouching. Right now it simply freezes the
   UI for up to several seconds before being ready. If we can't speed it up, we need
   a spinner or similar progress indicator.
@@ -58,6 +63,9 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
   was very proud of what it had built and wanted everybody to understand all of the
   details. They need to be much tighter and focused on what the user actually needs
   to understand.
+- Re-fusing currently produces a warning about insufficient disk space for the disk
+  cache even though the disk cache is already allocated and it's not going to
+  re-scan the frames.
 
 ## Release & licensing compliance
 
