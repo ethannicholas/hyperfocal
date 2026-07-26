@@ -869,6 +869,18 @@ public final class AppModel: ObservableObject {
         noiseFloorPreview = nil
         noiseFloorPreviewData = nil
         MemoryFootprint.mark("stack installed")
+        // Re-warm the retouch session for the incoming stack, off the
+        // Start-Retouching path — the cold build (full-res display
+        // conversions + a zeroed PMax depth plane) is what froze the UI for
+        // seconds when retouch was entered after a project open or stack
+        // switch. Deferred a runloop turn so the surrounding flow settles
+        // first (project open sets phase after installing); prepareRetouch
+        // no-ops unless the stack is fused and idle. Batches never retouch
+        // and switch stacks constantly — skip them.
+        Task { @MainActor [weak self] in
+            guard let self, !self.batchMode else { return }
+            self.prepareRetouch()
+        }
         noiseFloorPreviewDataEpoch += 1  // invalidate any in-flight build
         noiseFloorPreviewActive = false
         progressive = nil
@@ -3172,6 +3184,11 @@ public final class AppModel: ObservableObject {
     public func enterRetouch() {
         guard canStartRetouch else { return }
         prepareRetouch()
+        // Unique the session's mutable planes here — the one moment the user
+        // has declared intent to paint — so the first stroke is copy-free
+        // while idle pre-warmed sessions stay memory-lean (see
+        // RetouchSession.prepareForPainting).
+        retouch?.prepareForPainting()
         retouchMode = true
         // Sync the list to the session's current source immediately.
         if let session = retouch, session.urls.indices.contains(session.sourceIndex) {

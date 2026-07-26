@@ -637,6 +637,19 @@ public final class RetouchSession: ObservableObject {
     /// travel — the large-brush lag, in both shells.)
     private var strokeCarry: Double = 0
 
+    /// Called when the user actually enters retouch mode: force-unique the
+    /// mutable planes so the first brush stamp pays no copy-on-write —
+    /// `working` shares storage with the model's result (and workingDepth
+    /// with originalDepth) until the first mutating access, which put
+    /// ~860 MB of copies at 45 MP on the first stroke's critical path.
+    /// Deliberately NOT done at session build: the pre-warmed idle session
+    /// then keeps sharing the model's buffers and costs no extra memory
+    /// until retouch is actually entered.
+    func prepareForPainting() {
+        working.pixels.withUnsafeMutableBufferPointer { _ in }
+        workingDepth.withUnsafeMutableBufferPointer { _ in }
+    }
+
     public func beginStroke(at point: CGPoint) {
         guard sourceFloat != nil else {
             deadDrag = true
