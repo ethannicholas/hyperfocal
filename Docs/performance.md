@@ -112,6 +112,50 @@ frames-at-once *memory* (not time) is the likelier next lever.**
   gray-decode policy mirrors the `/5` term (see `Aligner.openCVRegisterMaxSide`
   and the `registrationDecodeMinLongest` comments).
 
+## Interaction latency (`HYPERFOCAL_PERFLOG=1`)
+
+Throughput is the engine's problem; *latency* is the shell's. `PerfLog`
+(AppCore, compiled on every platform — the timing companion to
+`MemoryFootprint`) stamps monotonic milestones to stderr behind
+`HYPERFOCAL_PERFLOG=1`: `reset` names an interaction and starts its clock,
+`span` brackets one piece of work, `mark` reports a milestone that arrives in
+its own call stack (a view's first draw). Marks read as both a delta and a
+total offset from the click, so a log answers "where did the wait go" without
+Instruments.
+
+Wired today: Start Retouching (`AppModel.enterRetouch` on the model side; the
+macOS panes' first layout, colour-cube build, and first `ctx.draw`). Trigger
+it without a click via the UI-test command channel's `enter-retouch` /
+`exit-retouch` actions, so a measurement is repeatable and doesn't fight the
+user for the screen.
+
+**Start Retouching, measured 2026-07-26** (Release arm64, M-series, 42 MP ×
+63-frame Azurite project reopened from disk, so the session is pre-warmed):
+**~280–380 ms cold, ~115 ms on re-entry.** The split, cold:
+
+| step | cost |
+|---|---|
+| `prepareForPainting` (CoW-unique ~500 MB of working pixels + depth) | 60–170 ms |
+| SwiftUI update pass → `RetouchCanvas.makeNSView` | 10–22 ms |
+| `makeNSView` itself, including the CI colour cube | < 5 ms |
+| AppKit first layout of the swapped-in pane tree | 82–169 ms |
+| 8076×5237 → 575×764 pt `ctx.draw` | **< 1 ms** |
+
+Both suspects the roadmap had flagged are non-issues: drawing a 42 MP CGImage
+into a pane-sized rect costs under a millisecond (CoreGraphics' downsample is
+not on anyone's critical path), and building the 64³ colour cube costs 1–6 ms.
+The real cost is evenly split between the plane uniquing — which is
+deliberately on the click, because moving it to session build would keep
+~500 MB alive for every idle pre-warmed session — and AppKit laying out the
+replacement view tree. Neither has a cheap fix, and a few hundred
+milliseconds is below the duration where a progress spinner helps rather than
+flashes, so this is left alone. The brush-source pane is a separate,
+already-handled wait: its aligned frame decodes asynchronously (~2.5 s on a
+cold session) behind the existing "Loading source…" spinner.
+
+The Qt shell drives the same model, so the `model:` marks work there
+unchanged; its canvas has no marks of its own yet.
+
 ## The per-pixel specialization contract (read before touching a hot loop)
 
 Cross-file generic calls don't specialize in SwiftPM per-file debug builds — that

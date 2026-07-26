@@ -24,6 +24,42 @@ matrix.
 
 ---
 
+## Blocker: the universal (Intel) Mac build no longer compiles
+
+`Float16` is unavailable on **x86_64 macOS**, so the f16 pixel-storage change
+broke every shippable Mac build: `Scripts/package-app.sh` and
+`Scripts/upload-mas.sh` both build `ARCHS="arm64 x86_64"`, and that
+configuration now fails with 49 errors in `HyperfocalKit`
+(23 × "'Float16' is unavailable in macOS", plus the knock-on
+`SIMDScalar`-conformance, initializer, and operator failures, and four
+type-check timeouts in `DNGWriter`). Nothing caught it because every routine
+gate builds one architecture: `swift build` and Debug `xcodebuild` use the
+host arch, and `Scripts/ci-gate.sh`'s release build is `swift build -c
+release`. Reproduce with:
+
+```sh
+cd App && xcodebuild -project Hyperfocal.xcodeproj -scheme Hyperfocal \
+    -configuration Release -destination 'platform=macOS' \
+    ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build
+```
+
+Decide the policy before writing code — the two options are not close in
+cost:
+
+- **Drop Intel** (deployment target stays 14.0, `ARCHS` becomes `arm64`).
+  Cheap and honest: an f16-storage engine wants the hardware f16 that Intel
+  Macs don't have. Costs the Intel installed base, which is a product call,
+  not an engineering one.
+- **Keep Intel** by making pixel storage a per-architecture typealias
+  (`Float16` on arm64, `Float` elsewhere) throughout `ImageBuffer` and every
+  consumer. That reinstates the pre-f16 footprint and throughput on Intel and
+  doubles the storage-type surface the CPU↔GPU parity bars have to hold
+  across — the parity ceiling discussion in this file's header is specifically
+  about f16 rounding, so an Intel build would sit at different bars.
+
+Whichever wins, add the universal build to `Scripts/ci-gate.sh` (or at least
+to a pre-release checklist) so a one-arch gate can't hide this again.
+
 ## Cross-platform port (Windows/Linux)
 
 The engine, CLI, and Qt/QML shell are **landed at feature parity** on macOS,
@@ -82,14 +118,6 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 
 ## UI Improvements
 
-- **Retouch startup residual.** The session cold-build freeze and the
-  first-stroke copy-on-write hitch are fixed (the session pre-warms on fuse
-  completion AND stack install/project open; mutable planes unique at
-  enter-retouch — git history has the measurements). Remaining: measure what
-  Start Retouching still costs in the running app — the suspects are the
-  45 MP canvas view creation and the first Core Image color-cube render of
-  the pane (`ToneFilteredPaneView`) — then either shrink it or add the
-  spinner the original version of this item asked for.
 - Improve the experience of opening a project. It can take quite a while to load;
   there should be an indicator in the UI that it is working on it beyond "most of the
   menu items are disabled".

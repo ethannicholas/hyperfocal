@@ -231,6 +231,18 @@ enum UITestSupport {
             default: return finish(false, "unknown slider \(id)")
             }
             finish(true)
+        case "enter-retouch":
+            // Entering retouch swaps in two full-res panes; the latency of
+            // that swap is measured with HYPERFOCAL_PERFLOG=1, which needs a
+            // repeatable trigger that isn't a click (see PerfLog). Reports
+            // not-ready rather than silently doing nothing, so a caller can
+            // poll until the fuse settles.
+            guard model.canStartRetouch else { return finish(false, "not ready") }
+            model.enterRetouch()
+            finish(model.retouchMode)
+        case "exit-retouch":
+            model.exitRetouch()
+            finish(!model.retouchMode)
         default:
             finish(false, "unknown action \(command["action"] ?? "nil")")
         }

@@ -3229,17 +3229,22 @@ public final class AppModel: ObservableObject {
 
     public func enterRetouch() {
         guard canStartRetouch else { return }
-        prepareRetouch()
+        // Origin of the Start Retouching latency measurement — the canvas's
+        // own marks (both shells) land after this and read as offsets from
+        // the click. See PerfLog.
+        PerfLog.reset("enterRetouch")
+        PerfLog.span("model: prepareRetouch") { prepareRetouch() }
         // Unique the session's mutable planes here — the one moment the user
         // has declared intent to paint — so the first stroke is copy-free
         // while idle pre-warmed sessions stay memory-lean (see
         // RetouchSession.prepareForPainting).
-        retouch?.prepareForPainting()
+        PerfLog.span("model: prepareForPainting") { retouch?.prepareForPainting() }
         retouchMode = true
         // Sync the list to the session's current source immediately.
         if let session = retouch, session.urls.indices.contains(session.sourceIndex) {
             selection = [session.urls[session.sourceIndex]]
         }
+        PerfLog.mark("model: enterRetouch returned")
     }
 
     /// Build the retouch session ahead of need — the constructor kicks

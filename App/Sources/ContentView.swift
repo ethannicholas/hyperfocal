@@ -1200,14 +1200,16 @@ class ToneFilteredPaneView: NSView {
         if tone.isNeutral {
             layer?.filters = nil
         } else if let filter = CIFilter(name: "CIColorCubeWithColorSpace") {
-            let dimension = 64
-            filter.setValue(dimension, forKey: "inputCubeDimension")
-            filter.setValue(ToneCurve.colorCubeData(settings: tone,
-                                                    dimension: dimension),
-                            forKey: "inputCubeData")
-            filter.setValue(CGColorSpace(name: CGColorSpace.displayP3),
-                            forKey: "inputColorSpace")
-            layer?.filters = [filter]
+            PerfLog.span("pane: build color cube") {
+                let dimension = 64
+                filter.setValue(dimension, forKey: "inputCubeDimension")
+                filter.setValue(ToneCurve.colorCubeData(settings: tone,
+                                                        dimension: dimension),
+                                forKey: "inputCubeData")
+                filter.setValue(CGColorSpace(name: CGColorSpace.displayP3),
+                                forKey: "inputColorSpace")
+                layer?.filters = [filter]
+            }
         }
     }
 
@@ -1257,6 +1259,9 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
     private var viewportSubscription: AnyCancellable?
     private var lastScale: CGFloat = -1
     private var lastOffset: CGSize = .zero
+    /// Retouch shows a second full-res pane (the brush source) alongside the
+    /// canvas; its first draw is on the same latency path (see PerfLog).
+    private var loggedFirstDraw = false
 
     override func layout() {
         super.layout()
@@ -1314,10 +1319,22 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
         // draw(_:in:) is bottom-up; re-flip within our flipped coordinates.
         ctx.translateBy(x: 0, y: bounds.height)
         ctx.scaleBy(x: 1, y: -1)
-        ctx.draw(cg, in: CGRect(x: originX,
-                                y: bounds.height - originY - canvas.height * scale,
-                                width: canvas.width * scale,
-                                height: canvas.height * scale))
+        let drawRect = CGRect(x: originX,
+                              y: bounds.height - originY - canvas.height * scale,
+                              width: canvas.width * scale,
+                              height: canvas.height * scale)
+        // Same rule as RetouchCanvasNSView: only a draw that reaches the
+        // screen is on the latency path.
+        if loggedFirstDraw || drawRect.isEmpty || dirtyRect.isEmpty {
+            ctx.draw(cg, in: drawRect)
+        } else {
+            loggedFirstDraw = true
+            PerfLog.span("pane: first ctx.draw \(cg.width)×\(cg.height)"
+                         + " → \(Int(dirtyRect.width))×\(Int(dirtyRect.height)) pt") {
+                ctx.draw(cg, in: drawRect)
+            }
+            PerfLog.mark("pane: first draw done")
+        }
         ctx.restoreGState()
     }
 }
@@ -1593,9 +1610,17 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
     private var viewportSubscription: AnyCancellable?
     private var lastScale: CGFloat = -1
     private var lastOffset: CGSize = .zero
+    /// The Start Retouching latency measurement ends at the first completed
+    /// draw — that is when the user sees the canvas (see PerfLog).
+    private var loggedFirstDraw = false
+    private var loggedFirstLayout = false
 
     override func layout() {
         super.layout()
+        if !loggedFirstLayout, !bounds.isEmpty {
+            loggedFirstLayout = true
+            PerfLog.mark("canvas: first layout")
+        }
         needsDisplay = true  // pane resized; recompute fit and redraw
     }
 
@@ -1696,7 +1721,19 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
                                   y: bounds.height - originY - imageSize.height * scale,
                                   width: imageSize.width * scale,
                                   height: imageSize.height * scale)
-            ctx.draw(cg, in: drawRect)
+            // Count the first draw that actually puts pixels on screen: an
+            // early pass at zero bounds draws an empty rect in no time and
+            // would report a latency the user never experienced.
+            if loggedFirstDraw || drawRect.isEmpty || dirtyRect.isEmpty {
+                ctx.draw(cg, in: drawRect)
+            } else {
+                loggedFirstDraw = true
+                PerfLog.span("canvas: first ctx.draw \(cg.width)×\(cg.height)"
+                             + " → \(Int(dirtyRect.width))×\(Int(dirtyRect.height)) pt") {
+                    ctx.draw(cg, in: drawRect)
+                }
+                PerfLog.mark("canvas: first draw done")
+            }
             ctx.restoreGState()
         }
     }
@@ -1711,6 +1748,7 @@ struct RetouchCanvas: NSViewRepresentable {
     var cropAngle: Double = 0
 
     func makeNSView(context: Context) -> RetouchCanvasNSView {
+        PerfLog.mark("canvas: makeNSView entered")
         let view = RetouchCanvasNSView()
         // Without this, macOS silently ignores Core Image layer filters.
         view.layerUsesCoreImageFilters = true
@@ -1721,6 +1759,7 @@ struct RetouchCanvas: NSViewRepresentable {
         view.cropAngle = cropAngle
         // The depth map is a data visualization — never tone it.
         view.applyTone(showDepth ? ToneSettings() : tone)
+        PerfLog.mark("canvas: makeNSView returned")
         return view
     }
 
