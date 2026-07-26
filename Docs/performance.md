@@ -91,6 +91,40 @@ frames-at-once *memory* (not time) is the likelier next lever.**
   and round their weighted averages the same way. Worth re-measuring against
   Metal's warped end-to-end dmap on a Mac — the ≥90 re-baselining was done on the
   unwarped case only.
+- **Metal 4, and "what does Apple-silicon-only unlock?"** — asked when Intel
+  support was dropped (2026-07-26), audited, and the answer is *nothing worth
+  doing*. Two separate points, often conflated:
+  - **Metal 4 is gated on the deployment target, not on Intel.** It needs
+    macOS 26; ours is 14.0, so dropping Intel doesn't unlock it and raising the
+    floor to 26 would cost the 14/15 installed base. What Metal 4 offers —
+    explicit command encoding with argument tables, tensor/ML encoders, faster
+    shader compilation, placement sparse heaps — targets engines bottlenecked on
+    encoding overhead or ML inference. Ours is neither: measured GPU *compute*
+    inside a 63-frame 42 MP fuse is 0.07–0.65 s (pmax) / ~1.2 s (dmap) out of a
+    33–52 s wall clock that is RAW decode and upload. There is no encoding
+    overhead to reclaim.
+  - **The engine was already written Apple-silicon-shaped**, so the strip was
+    scripts, docs, and the site badge — no code. Audited and found clean: no
+    `#if arch(...)` anywhere; every `MTLBuffer` is `.storageModeShared` with no
+    `.storageModeManaged` / `didModifyRange` / `synchronize` blit path (which is
+    what a discrete Intel GPU would have wanted); Homebrew is `/opt/homebrew`
+    only. `MTLGPUFamily.apple7+` guarantees are now unconditional — SIMD-group
+    reductions (`simd_sum`/`simd_shuffle`), quad ops, 32 KB threadgroup memory,
+    imageblocks — but every kernel today is elementwise or a small stencil with
+    no cross-thread reduction, so there is nothing to convert. That changes if
+    the roadmap's cost-volume aggregation or a separable 3D-WLS solve lands:
+    those have real reductions, and they can now assume the Apple-family ops.
+    Core ML on the Neural Engine (the roadmap's unresearched fusion-network
+    item) also no longer needs a CPU-fallback story.
+- **Vectorizing `hfWiden` / `hfNarrow` through Accelerate.** The bulk f16↔f32
+  converters sit at every I/O boundary (decode, DNG, project format, GPU
+  upload) and *look* like scalar loops worth replacing. They aren't: at 46 M
+  elements, best of 3, the scalar loops run 4.6 ms (widen) and 4.7 ms (narrow)
+  — ~10 G elem/s, i.e. memory-bandwidth-bound, because `-O` already
+  auto-vectorizes them. `vImageConvert_Planar16FtoPlanarF` ties (4.5 ms), and
+  the narrow direction gets **worse** (7.7 ms) because matching our clamp to
+  f16's finite range needs a separate `vDSP_vclip` pass. Leave them scalar and
+  portable.
 - **Metal GPUDMap zero-copy upload** — see the ROADMAP item. Two findings:
   `[Float]` elements live at offset 32 past the storage base, so
   `makeBuffer(bytesNoCopy:)` can never page-align without reworking

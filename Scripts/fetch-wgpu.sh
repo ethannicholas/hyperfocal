@@ -9,8 +9,10 @@
 #   dest      where to unpack (default: ../wgpu-native — Package.swift's
 #             default WGPU_ROOT)
 #   platform  release-asset platform (default: autodetected), one of:
-#             macos-aarch64 macos-x86_64 linux-aarch64 linux-x86_64
+#             macos-aarch64 linux-aarch64 linux-x86_64
 #             windows-aarch64-msvc windows-x86_64-msvc
+#             (no macos-x86_64: macOS builds are Apple silicon only — see
+#             App/project.yml's ARCHS)
 #
 # Works on macOS, Linux, and Windows Git Bash (ci-gate.sh's environment).
 set -euo pipefail
@@ -23,7 +25,6 @@ TAG=v29.0.1.1
 sha_for() {
     case "$1" in
         macos-aarch64)        echo a5797a37b1adf720bcd5dcffb291edbbd5b7b14be0a3874c28e6393a655a7a3e ;;
-        macos-x86_64)         echo 8e2f7378548ddd0e2cf21e7d864dda46e953f0af724855a33778b85ead206d41 ;;
         linux-aarch64)        echo 015fcdf1dbae82e614a783cc38017e5399ae0927a889fe9b69c9b664bc61b47a ;;
         linux-x86_64)         echo 95a4d90c071005a98d03eab348beaa6b07e16eb00d1dcdb9f8348f75eb97ec5a ;;
         windows-aarch64-msvc) echo 4a876421a8c1e5fe72f849b3722214280fe485cb1c56f77f8b0c82414be5b29f ;;

@@ -43,12 +43,13 @@ fi
 
 echo "== building Hyperfocal $VERSION ($BUILD_NUMBER)"
 # Sign ad-hoc during the build; the real (or ad-hoc) signature is applied to
-# the final bundle below. Release config builds universal (ARCHS_STANDARD).
+# the final bundle below. arm64-only — Hyperfocal is Apple-silicon-only on
+# macOS (see project.yml's ARCHS for why).
 xcodebuild -project App/Hyperfocal.xcodeproj -scheme Hyperfocal \
     -configuration Release -derivedDataPath .build/xcode \
     CODE_SIGN_IDENTITY="-" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
     MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-    ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+    ARCHS="arm64" ONLY_ACTIVE_ARCH=NO \
     build | grep -E "^\*\* BUILD" || { echo "build failed" >&2; exit 1; }
 
 APP=dist/Hyperfocal.app

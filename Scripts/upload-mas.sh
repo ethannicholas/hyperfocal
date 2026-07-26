@@ -46,7 +46,7 @@ xcodebuild -project App/Hyperfocal.xcodeproj -scheme Hyperfocal \
     -configuration Release -derivedDataPath .build/xcode \
     -archivePath "$ARCHIVE" \
     MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-    ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+    ARCHS="arm64" ONLY_ACTIVE_ARCH=NO \
     -allowProvisioningUpdates archive \
     | grep -E "^\*\* ARCHIVE" || { echo "archive failed" >&2; exit 1; }
 

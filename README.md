@@ -80,6 +80,9 @@ If you'd prefer to skip the build process and the hassle of keeping it up to
 date (and help fund its development in the process), Hyperfocal is available
 from the [Mac App Store](https://apps.apple.com/us/app/hyperfocal-focus-stacker/id6789574802).
 
+The Mac build requires **macOS 14 or later on Apple silicon**; Intel Macs are
+not supported.
+
 ### Building on macOS
 
 To build it yourself for free, you'll need Xcode and
