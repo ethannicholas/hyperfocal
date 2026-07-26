@@ -438,6 +438,15 @@ public final class RetouchSession: ObservableObject {
         selectSource(isDMapSource ? lastFrameSourceIndex : dmapIndex)
     }
 
+    /// The result/base layer — the eraser, whichever algorithm fused it.
+    /// Distinct from `toggleDMapLayer` since PMax primaries: "result" used
+    /// to mean DMap because DMap was the only primary; now R follows the
+    /// base and D pins the DMap layer specifically.
+    public func toggleResultLayer() {
+        selectSource(isBaseSource ? lastFrameSourceIndex
+                                  : (baseMethod == .pmax ? pmaxIndex : dmapIndex))
+    }
+
     /// Hand over the non-base algorithm's image — the model's background pass —
     /// so selecting it as a brush source is instant (no re-fuse). No-op once a
     /// layer is cached. If the user is waiting on it, this resolves the pane.

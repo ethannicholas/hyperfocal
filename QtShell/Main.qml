@@ -401,6 +401,11 @@ ApplicationWindow {
         onActivated: Shell.retouchTogglePmax()
     }
     Shortcut {
+        sequence: "D"
+        enabled: Shell.retouchMode
+        onActivated: Shell.retouchToggleDmap()
+    }
+    Shortcut {
         sequence: "R"
         enabled: Shell.retouchMode
         onActivated: Shell.retouchToggleResult()

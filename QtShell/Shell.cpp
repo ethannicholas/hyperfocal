@@ -423,6 +423,7 @@ void Shell::retouchAdjustBrush(double factor) { hf_retouch_adjust_brush(factor);
 void Shell::retouchCycleSource(int delta) { hf_retouch_cycle_source(delta); }
 void Shell::retouchAutoPick() { hf_retouch_auto_pick(); }
 void Shell::retouchTogglePmax() { hf_retouch_toggle_pmax(); }
+void Shell::retouchToggleDmap() { hf_retouch_toggle_dmap(); }
 void Shell::retouchToggleResult() { hf_retouch_toggle_result(); }
 
 QString Shell::retouchSourceName() const {

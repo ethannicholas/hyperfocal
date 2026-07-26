@@ -189,6 +189,7 @@ public:
     Q_INVOKABLE void retouchCycleSource(int delta);
     Q_INVOKABLE void retouchAutoPick();
     Q_INVOKABLE void retouchTogglePmax();
+    Q_INVOKABLE void retouchToggleDmap();
     Q_INVOKABLE void retouchToggleResult();
     /// Crop-overlay cursors. QML's cursorShape only names the built-in
     /// shapes, and Qt has no rotate cursor at all, so the overlay drives

@@ -793,6 +793,11 @@ public func hf_retouch_toggle_pmax() {
 
 @_cdecl("hf_retouch_toggle_result")
 public func hf_retouch_toggle_result() {
+    MainActor.assumeIsolated { Bridge.model?.retouch?.toggleResultLayer() }
+}
+
+@_cdecl("hf_retouch_toggle_dmap")
+public func hf_retouch_toggle_dmap() {
     MainActor.assumeIsolated { Bridge.model?.retouch?.toggleDMapLayer() }
 }
 

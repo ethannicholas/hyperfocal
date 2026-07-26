@@ -149,7 +149,9 @@ int hf_set_retouch_source_kind(int kind);
 void hf_retouch_cycle_source(int delta);
 void hf_retouch_auto_pick(void);
 void hf_retouch_toggle_pmax(void);
+// The result/base (eraser) layer, whichever algorithm fused it.
 void hf_retouch_toggle_result(void);
+void hf_retouch_toggle_dmap(void);
 int hf_retouch_source_name(char *buf, int cap);     // returns bytes
 int hf_retouch_source_loading(void);
 int hf_retouch_source_error(char *buf, int cap);    // returns bytes

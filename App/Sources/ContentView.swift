@@ -1427,6 +1427,7 @@ final class RetouchEventView: PanZoomEventView {
     var onAutoPick: (() -> Void)?
     var onBrushResize: ((Double) -> Void)?  // multiplicative factor
     var onTogglePMax: (() -> Void)?
+    var onToggleDMap: (() -> Void)?
     var onToggleResult: (() -> Void)?
     /// Crop presentation: `imageSize` is the displayed (cropped) space, but
     /// the session — strokes, cursor, tiles — lives in full-image
@@ -1535,6 +1536,7 @@ final class RetouchEventView: PanZoomEventView {
         case "[": onBrushResize?(1 / 1.15); return
         case "]": onBrushResize?(1.15); return
         case "p": onTogglePMax?(); return
+        case "d": onToggleDMap?(); return
         case "r": onToggleResult?(); return
         default: break
         }
@@ -1754,7 +1756,10 @@ struct RetouchOverlay: NSViewRepresentable {
         }
         view.onBrushResize = { [weak session] in session?.adjustBrushRadius(by: $0) }
         view.onTogglePMax = { [weak session] in session?.togglePMaxLayer() }
-        view.onToggleResult = { [weak session] in session?.toggleDMapLayer() }
+        view.onToggleDMap = { [weak session] in session?.toggleDMapLayer() }
+        // R follows the base/eraser whichever algorithm fused it (it toggled
+        // the DMap layer historically, when DMap was the only primary).
+        view.onToggleResult = { [weak session] in session?.toggleResultLayer() }
         return view
     }
 
