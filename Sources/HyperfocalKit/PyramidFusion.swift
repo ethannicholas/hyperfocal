@@ -207,7 +207,8 @@ public enum PyramidFusion {
                             cancellation: CancellationToken? = nil,
                             focusGate: FocusGate? = nil,
                             prepareDespill: Bool = false,
-                            onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil)
+                            onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil,
+                            onSharpness: ((FrameSharpness) -> Void)? = nil)
         throws -> ImageBuffer {
         let warp = source.transforms.map {
             PyramidWarp(transforms: $0, outputWidth: source.outputWidth,
@@ -219,7 +220,8 @@ public enum PyramidFusion {
                         decodeWorkers: FramePrefetcher.workers(for: source.urls),
                         focusGate: focusGate,
                         prepareDespill: prepareDespill,
-                        onDespillInputs: onDespillInputs) { i in
+                        onDespillInputs: onDespillInputs,
+                        onSharpness: onSharpness) { i in
             var img = try ImageFile.load(url: source.urls[i])
             if let gain = source.gains?[i], gain != SIMD3(repeating: 1) {
                 img.scaleRGB(by: gain)
@@ -249,6 +251,7 @@ public enum PyramidFusion {
                             focusGate: FocusGate? = nil,
                             prepareDespill: Bool = false,
                             onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil,
+                            onSharpness: ((FrameSharpness) -> Void)? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
         // Focus-gate config (CLI/param, with env override for tuning). When on,
@@ -276,7 +279,8 @@ public enum PyramidFusion {
                                            log: log, progress: progress,
                                            cancellation: cancellation,
                                            decodeWorkers: decodeWorkers,
-                                           focusGate: gpuFocusGate, frame: frame)
+                                           focusGate: gpuFocusGate,
+                                           onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
                 log?("GPU pyramid failed (\(error)); falling back to CPU")
             }
@@ -289,7 +293,8 @@ public enum PyramidFusion {
                                             log: log, progress: progress,
                                             cancellation: cancellation,
                                             decodeWorkers: decodeWorkers,
-                                            focusGate: gpuFocusGate, frame: frame)
+                                            focusGate: gpuFocusGate,
+                                            onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
                 log?("wgpu pyramid failed (\(error)); falling back to CPU")
             }
@@ -331,6 +336,7 @@ public enum PyramidFusion {
         // that stands in for DMap's noise-floor×concentration plane.
         var luminancePlanes: [[Float]] = []
         var focusMax: [Float] = []
+        var sharpnessPlanes: [[Float]] = []
         // Wall-clock phase buckets, reported through `log` at the end — the
         // GPU path's discipline: optimization here must start from
         // measurements, not vibes. `decode` is time *blocked on* the
@@ -464,33 +470,40 @@ public enum PyramidFusion {
             }
             for l in 0..<levels { ws.fusedDownsample(level: l) }
             ws.level0BandEnergy()
-            if prepareDespill {
-                // Both planes are reductions of buffers that are live right
-                // here and nowhere else: gauss[0] is this frame warped onto the
-                // canvas (gains already applied by the source closure, so the
-                // luminance is gain-corrected as DMap's is), and `energy` is the
-                // grit-blurred level-0 focus `level0BandEnergy` just wrote.
+            if prepareDespill || onSharpness != nil {
+                // Reductions of buffers that are live right here and nowhere
+                // else: gauss[0] is this frame warped onto the canvas (gains
+                // already applied by the source closure, so the luminance is
+                // gain-corrected as DMap's is), and `energy` is the
+                // grit-blurred level-0 focus `level0BandEnergy` just wrote —
+                // the same per-frame measurement the despill gate consumes
+                // and, retained per frame, the sharpness planes retouch's
+                // space auto-pick queries (a PMax primary has no DMap pass
+                // to retain them from).
                 let f = DMapFusion.sharpnessDownsample
-                var lum = [Float](repeating: 0, count: cw * ch)
-                ws.gauss[0].withUnsafeBufferPointer { gp in
-                    lum.withUnsafeMutableBufferPointer { lp in
-                        DispatchQueue.concurrentPerform(iterations: ch) { y in
-                            for x in 0..<cw {
-                                let pi = (y * cw + x) * 4
-                                lp[y * cw + x] = 0.2126 * gp[pi] + 0.7152 * gp[pi + 1]
-                                    + 0.0722 * gp[pi + 2]
+                let focusGrid = DMapFusion.boxDownsample(ws.energy, width: cw, height: ch,
+                                                         factor: f)
+                if onSharpness != nil { sharpnessPlanes.append(focusGrid) }
+                if prepareDespill {
+                    var lum = [Float](repeating: 0, count: cw * ch)
+                    ws.gauss[0].withUnsafeBufferPointer { gp in
+                        lum.withUnsafeMutableBufferPointer { lp in
+                            DispatchQueue.concurrentPerform(iterations: ch) { y in
+                                for x in 0..<cw {
+                                    let pi = (y * cw + x) * 4
+                                    lp[y * cw + x] = 0.2126 * gp[pi] + 0.7152 * gp[pi + 1]
+                                        + 0.0722 * gp[pi + 2]
+                                }
                             }
                         }
                     }
-                }
-                luminancePlanes.append(DMapFusion.boxDownsample(lum, width: cw, height: ch,
-                                                                factor: f))
-                let focusGrid = DMapFusion.boxDownsample(ws.energy, width: cw, height: ch,
-                                                         factor: f)
-                if focusMax.isEmpty {
-                    focusMax = focusGrid
-                } else {
-                    for i in focusMax.indices { focusMax[i] = max(focusMax[i], focusGrid[i]) }
+                    luminancePlanes.append(DMapFusion.boxDownsample(lum, width: cw, height: ch,
+                                                                    factor: f))
+                    if focusMax.isEmpty {
+                        focusMax = focusGrid
+                    } else {
+                        for i in focusMax.indices { focusMax[i] = max(focusMax[i], focusGrid[i]) }
+                    }
                 }
             }
             tBuild += now() - t0
@@ -622,6 +635,12 @@ public enum PyramidFusion {
             } else {
                 log?("pmax: despill inputs unavailable (need > 2 frames)")
             }
+        }
+        if let onSharpness, let ws = workspace, !sharpnessPlanes.isEmpty {
+            let (w, h) = ws.sizes[0]
+            onSharpness(FrameSharpness(fullWidth: w, fullHeight: h,
+                                       factor: DMapFusion.sharpnessDownsample,
+                                       planes: sharpnessPlanes))
         }
         let t0 = now()
         let out = collapse(fused!)

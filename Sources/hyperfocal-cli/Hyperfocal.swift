@@ -416,6 +416,15 @@ struct Fuse: ParsableCommand {
                 if wantDespill {
                     print("note: despill on pmax runs the CPU engine (GPU port pending)")
                 }
+                // HYPERFOCAL_PMAX_SHARPNESS=1: retain the per-frame sharpness
+                // planes the app's retouch auto-pick consumes — the CLI has no
+                // use for them; this is the timing/ablation tap for measuring
+                // the retention's cost on a real fuse.
+                var sharpnessTap: ((FrameSharpness) -> Void)? = nil
+                if env["HYPERFOCAL_PMAX_SHARPNESS"] == "1" {
+                    sharpnessTap = { print("retained \($0.planes.count) sharpness planes "
+                                           + "(\($0.planes.first?.count ?? 0) cells each)") }
+                }
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),
                                                 log: log,
@@ -424,7 +433,8 @@ struct Fuse: ParsableCommand {
                                                             threshold: pmaxFocusThreshold)
                                                     : nil,
                                                 prepareDespill: wantDespill,
-                                                onDespillInputs: { despillInputs = $0 })
+                                                onDespillInputs: { despillInputs = $0 },
+                                                onSharpness: sharpnessTap)
             }
         }
         print("fused (\(fusion.method.rawValue)) \(source.count) frames in \(fuseTime)")

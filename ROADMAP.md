@@ -46,7 +46,6 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 
 ## UI Improvements
 
-- The space hotkey doesn't work with a PMax rendering
 - The D key should select the DMap result input
 - Improve the experience of starting retouching. Right now it simply freezes the
   UI for up to several seconds before being ready. If we can't speed it up, we need

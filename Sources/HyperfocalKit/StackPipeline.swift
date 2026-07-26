@@ -32,6 +32,14 @@ public enum StackPipeline {
         /// with the issues; return the frame indices to drop). Lets a UI ask
         /// the user mid-fuse. nil → `autoExcludeBadFrames` excludes all or none.
         public var badFrameHandler: (([FrameQualityIssue]) -> Set<Int>)?
+        /// PMax only: retain per-frame sharpness planes (the grit-blurred
+        /// level-0 focus each engine already computes for selection, reduced
+        /// to the sharpness grid) on `Output.sharpness`. This is what
+        /// retouch's space auto-pick queries — a DMap fuse retains the
+        /// equivalent unconditionally; a PMax primary has no other source.
+        /// Costs one small reduction + ~3 MB readback per frame, hidden
+        /// under decode. Ignored by `.dmap`.
+        public var retainPMaxSharpness: Bool = false
         /// Warped frames retained from a prior DMap fuse of the SAME frame
         /// list (`Options.retainSpill` → `Output.warpedFrames`). A `.pmax`
         /// fuse whose canvas matches streams these instead of re-decoding
@@ -185,6 +193,9 @@ public enum StackPipeline {
                                          sourceFrameIndex: frame))
             }
             let image: ImageBuffer
+            var pmaxSharpness: FrameSharpness? = nil
+            let onSharpness: ((FrameSharpness) -> Void)? =
+                configuration.retainPMaxSharpness ? { pmaxSharpness = $0 } : nil
             if let cache = configuration.warpedFrameCache,
                cache.frameCount == source.count,
                cache.width == source.outputWidth, cache.height == source.outputHeight {
@@ -196,7 +207,8 @@ public enum StackPipeline {
                     frameCount: cache.frameCount, preferGPU: configuration.preferGPU,
                     warp: nil, log: log, progress: pmaxProgress,
                     cancellation: cancellation,
-                    focusGate: configuration.pmaxFocusGate) { try cache.frame($0) }
+                    focusGate: configuration.pmaxFocusGate,
+                    onSharpness: onSharpness) { try cache.frame($0) }
             } else {
                 if configuration.warpedFrameCache != nil {
                     log?("pmax: warped-frame cache doesn't match this canvas — re-decoding")
@@ -204,10 +216,11 @@ public enum StackPipeline {
                 image = try PyramidFusion.fuse(
                     source: source, preferGPU: configuration.preferGPU, log: log,
                     progress: pmaxProgress,
-                    cancellation: cancellation, focusGate: configuration.pmaxFocusGate)
+                    cancellation: cancellation, focusGate: configuration.pmaxFocusGate,
+                    onSharpness: onSharpness)
             }
             output = DMapFusion.Output(image: image, depthMap: ImageBuffer(width: 0, height: 0),
-                                       depth: [], sharpness: nil, gains: nil)
+                                       depth: [], sharpness: pmaxSharpness, gains: nil)
         case .dmap:
         #if canImport(Metal)
         if configuration.preferGPU, MetalEngine.shared != nil {

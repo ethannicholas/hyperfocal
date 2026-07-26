@@ -2609,6 +2609,10 @@ public final class AppModel: ObservableObject {
         // engine (measured ≥4× slower end-to-end). The spill is released when
         // the background pass finishes (its task drops the configuration).
         config.fusion.retainSpill = method == .dmap && !batchMode
+        // A PMax primary retains its per-frame sharpness planes so retouch's
+        // space auto-pick works immediately (a DMap fuse retains them
+        // unconditionally). Batches never retouch — skip the readback there.
+        config.retainPMaxSharpness = !batchMode
         frameIssues = [:]
         // Bad frames (misfires, failed alignment): ask before excluding. The
         // handler runs on the fusion thread; the alert blocks it while the
@@ -2752,6 +2756,10 @@ public final class AppModel: ObservableObject {
                         // the background DMap pass kicked below.
                         self.pmaxResult = output.image
                         self.pmaxFusedSettings = pmaxSettingsInUse
+                        // PMax's own per-frame sharpness planes — what space
+                        // auto-pick queries. Unconditional so a previous DMap
+                        // fuse's planes can't linger past this result.
+                        self.resultSharpness = output.sharpness
                         // PMax has no depth yet; if the pane was in Depth mode
                         // there'd be nothing to show until the background DMap
                         // pass lands — show the image instead of an empty pane.

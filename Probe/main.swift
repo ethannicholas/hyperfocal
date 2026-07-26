@@ -949,6 +949,23 @@ Task { @MainActor in
             print("probe: PMAX-FROM-SPILL DIVERGES (\(dB) dB vs direct)"); exit(1)
         }
         print(String(format: "probe: pmax warped-frame cache OK (%.1f dB vs direct)", dB))
+
+        // 5e. PMax sharpness retention: a pmax fuse with retainPMaxSharpness
+        // must hand back one plane per frame at the sharpness grid — this is
+        // what makes retouch's space auto-pick work on a PMax primary.
+        var sharpCfg = StackPipeline.Configuration()
+        sharpCfg.method = .pmax
+        sharpCfg.retainPMaxSharpness = true
+        let sharpOut = try! StackPipeline.fuse(urls: Array(urls), configuration: sharpCfg,
+                                               alignmentCache: cache)
+        guard let planes = sharpOut.sharpness, planes.planes.count == urls.count,
+              planes.factor == DMapFusion.sharpnessDownsample,
+              planes.planes.allSatisfy({ $0.contains(where: { $0 > 0 }) }) else {
+            print("probe: PMAX SHARPNESS PLANES MISSING/EMPTY "
+                + "(\(sharpOut.sharpness?.planes.count ?? -1) of \(urls.count))")
+            exit(1)
+        }
+        print("probe: pmax sharpness retention OK (\(planes.planes.count) planes)")
     }
 
     // 6. Session auto-split + batch queue: two capture-time-stamped stacks in

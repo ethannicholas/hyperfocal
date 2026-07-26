@@ -54,6 +54,7 @@ enum WgpuPyramid {
                      cancellation: CancellationToken? = nil,
                      decodeWorkers: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
+                     onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = WgpuEngine.shared else {
             throw StackError.metal("no wgpu adapter available")
@@ -65,7 +66,8 @@ enum WgpuPyramid {
                      "pyr_band_energy", "pyr_add4", "pyr_scale4", "pyr_fill",
                      "blur_h", "blur_v"]
                     + (warp == nil ? [] : ["warp_lanczos3"])
-                    + (focusGate == nil ? [] : ["box_downsample", "pyr_select_focus_gated",
+                    + (focusGate == nil && onSharpness == nil ? [] : ["box_downsample"])
+                    + (focusGate == nil ? [] : ["pyr_select_focus_gated",
                                                 "pyr_base_darkest", "pyr_merge_focus",
                                                 "pyr_lum_min", "pyr_merge_focus_gated"]) {
             _ = try engine.pipeline(name)
@@ -130,11 +132,26 @@ enum WgpuPyramid {
         // of the same command buffer — a separate synchronous readback pass
         // would force the serializing wait the deferred drain exists to
         // avoid).
-        var pending: (frame: Int, preview: WgpuEngine.Buffer?)? = nil
+        // Per-frame sharpness retention (retouch's space auto-pick on a PMax
+        // primary): level-0 grit energy reduced to the sharpness grid, read
+        // back in drain() — mirrors the Metal path.
+        var sharpBufs: [WgpuEngine.Buffer] = []
+        var sharpnessPlanes: [[Float]] = []
+        var sharpGrid = (w: 0, h: 0)
+        var pending: (frame: Int, preview: WgpuEngine.Buffer?,
+                      sharp: WgpuEngine.Buffer?)? = nil
         func drain() throws {
             guard let p = pending else { return }
             pending = nil
             bucket(&tGPU) { engine.waitIdle() }
+            if let sharp = p.sharp {
+                var plane = [Float](repeating: 0, count: sharpGrid.w * sharpGrid.h)
+                try plane.withUnsafeMutableBufferPointer {
+                    try engine.download(sharp, into: $0.baseAddress!,
+                                        byteCount: sharpGrid.w * sharpGrid.h * 4)
+                }
+                sharpnessPlanes.append(plane)
+            }
             if let progress {
                 var preview: ImageBuffer? = nil
                 if let buf = p.preview {
@@ -181,6 +198,12 @@ enum WgpuPyramid {
                 scratchA = try engine.makeBuffer(floats: width * height * 4)
                 scratchB = try engine.makeBuffer(floats: width * height * 4)
                 gritA = try engine.makeBuffer(floats: width * height)
+                if onSharpness != nil {
+                    let f = DMapFusion.sharpnessDownsample
+                    sharpGrid = ((width + f - 1) / f, (height + f - 1) / f)
+                    sharpBufs = [try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h),
+                                 try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h)]
+                }
                 gritB = try engine.makeBuffer(floats: width * height)
                 gritWeightsBuf = try engine.makeBuffer(floats: gritWeights.count)
                 gritWeights.withUnsafeBytes {
@@ -370,11 +393,28 @@ enum WgpuPyramid {
                         scratchA: scratchA, scratchB: scratchB)
                 }
             }
+            var sharpBuf: WgpuEngine.Buffer? = nil
+            if onSharpness != nil {
+                // gritA still holds this frame's grit-blurred level-0 energy
+                // (gated levels only read it) — reduce to the sharpness grid.
+                sharpBuf = sharpBufs[fi % 2]
+                let box = BoxDownParams(srcW: UInt32(width), srcH: UInt32(height),
+                                        dstW: UInt32(sharpGrid.w), dstH: UInt32(sharpGrid.h),
+                                        factor: UInt32(DMapFusion.sharpnessDownsample))
+                try batch.dispatch("box_downsample", buffers: [gritA, sharpBuf!],
+                                   uniforms: bytes(of: box),
+                                   gridW: sharpGrid.w, gridH: sharpGrid.h)
+            }
             batch.submit()
-            pending = (fi, previewBuf)
+            pending = (fi, previewBuf, sharpBuf)
             log?("pyramid \(fi + 1)/\(frameCount) (wgpu)")
         }
         try drain()
+        if let onSharpness, sharpnessPlanes.count == frameCount {
+            onSharpness(FrameSharpness(fullWidth: width, fullHeight: height,
+                                       factor: DMapFusion.sharpnessDownsample,
+                                       planes: sharpnessPlanes))
+        }
         log?(String(format: "pyramid phases: decode-wait %.2fs, upload %.2fs, "
                     + "gpu %.2fs, preview %.2fs", tDecodeWait, tUpload, tGPU, tPreview))
 

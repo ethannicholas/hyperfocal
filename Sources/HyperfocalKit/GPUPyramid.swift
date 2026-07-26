@@ -30,6 +30,7 @@ enum GPUPyramid {
                      cancellation: CancellationToken? = nil,
                      decodeWorkers: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
+                     onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = MetalEngine.shared else {
             throw StackError.metal("no Metal device available")
@@ -38,7 +39,8 @@ enum GPUPyramid {
         // Focus-gate kernels: box_downsample builds the per-level focus map,
         // the two-track select replaces pyr_select, darkest-base replaces
         // pyr_add4, and the merge folds track B in after the last frame.
-        let boxDownsample = focusGate == nil ? nil : try engine.pipeline("box_downsample")
+        let boxDownsample = (focusGate == nil && onSharpness == nil)
+            ? nil : try engine.pipeline("box_downsample")
         let selectFocusGated = focusGate == nil ? nil : try engine.pipeline("pyr_select_focus_gated")
         let baseDarkest = focusGate == nil ? nil : try engine.pipeline("pyr_base_darkest")
         let mergeFocus = focusGate == nil ? nil : try engine.pipeline("pyr_merge_focus")
@@ -120,12 +122,28 @@ enum GPUPyramid {
         // waits, then reads back and emits its preview (encoded at the tail
         // of the same command buffer — a separate preview commit would force
         // the serializing wait the ping-pong exists to avoid).
-        var pending: (cmd: MTLCommandBuffer, frame: Int, preview: MTLBuffer?)? = nil
+        // Per-frame sharpness retention (retouch's space auto-pick on a PMax
+        // primary): the level-0 grit energy `gritA` box-downsampled to the
+        // sharpness grid, read back in drain() via the same ping-pong that
+        // paces the preview readback. ~3 MB per 45 MP frame.
+        var sharpBufs: [MTLBuffer] = []
+        var sharpnessPlanes: [[Float]] = []
+        var sharpGrid = (w: 0, h: 0)
+        var pending: (cmd: MTLCommandBuffer, frame: Int, preview: MTLBuffer?,
+                      sharp: MTLBuffer?)? = nil
         func drain() {
             guard let p = pending else { return }
             pending = nil
             bucket(&tGPU) {
                 p.cmd.waitUntilCompleted()
+            }
+            if let sharp = p.sharp {
+                var plane = [Float](repeating: 0, count: sharpGrid.w * sharpGrid.h)
+                plane.withUnsafeMutableBufferPointer {
+                    _ = memcpy($0.baseAddress!, sharp.contents(),
+                               sharpGrid.w * sharpGrid.h * 4)
+                }
+                sharpnessPlanes.append(plane)
             }
             if let progress, let buf = p.preview {
                 var preview: ImageBuffer! = nil
@@ -178,6 +196,12 @@ enum GPUPyramid {
                 scratchB = try engine.makeBuffer(floats: width * height * 4)
                 gritA = try engine.makeBuffer(floats: width * height)
                 gritB = try engine.makeBuffer(floats: width * height)
+                if onSharpness != nil {
+                    let f = DMapFusion.sharpnessDownsample
+                    sharpGrid = ((width + f - 1) / f, (height + f - 1) / f)
+                    sharpBufs = [try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h),
+                                 try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h)]
+                }
                 baseTmp = try engine.makeBuffer(floats: sizes[levels].w * sizes[levels].h * 4)
                 previewLevel = sizes.firstIndex { max($0.w, $0.h) <= 1600 } ?? levels
                 memset(fused[levels].contents(), 0, sizes[levels].w * sizes[levels].h * 16)
@@ -406,6 +430,21 @@ enum GPUPyramid {
                 enc.setBytes(&baseCount, length: 4, index: 2)
                 engine.dispatch1D(enc, add4, count: Int(baseCount))
             }
+            var sharpBuf: MTLBuffer? = nil
+            if onSharpness != nil {
+                // gritA still holds this frame's grit-blurred level-0 energy
+                // (gated levels only read it) — reduce it to the sharpness
+                // grid; drain() reads it back as this frame's plane.
+                sharpBuf = sharpBufs[fi % 2]
+                var box = GPUDMap.BoxDownParams(
+                    srcW: UInt32(width), srcH: UInt32(height),
+                    dstW: UInt32(sharpGrid.w), dstH: UInt32(sharpGrid.h),
+                    factor: UInt32(DMapFusion.sharpnessDownsample))
+                enc.setBuffer(gritA, offset: 0, index: 0)
+                enc.setBuffer(sharpBuf!, offset: 0, index: 1)
+                enc.setBytes(&box, length: MemoryLayout<GPUDMap.BoxDownParams>.size, index: 2)
+                engine.dispatch2D(enc, boxDownsample!, width: sharpGrid.w, height: sharpGrid.h)
+            }
             enc.endEncoding()
             var previewBuf: MTLBuffer? = nil
             if progress != nil {
@@ -425,10 +464,15 @@ enum GPUPyramid {
                 }
             }
             cmd.commit()
-            pending = (cmd, fi, previewBuf)
+            pending = (cmd, fi, previewBuf, sharpBuf)
             log?("pyramid \(fi + 1)/\(frameCount) (GPU)")
         }
         drain()
+        if let onSharpness, sharpnessPlanes.count == frameCount {
+            onSharpness(FrameSharpness(fullWidth: width, fullHeight: height,
+                                       factor: DMapFusion.sharpnessDownsample,
+                                       planes: sharpnessPlanes))
+        }
         log?(String(format: "pyramid phases: decode-wait %.2fs, upload %.2fs, "
                     + "gpu %.2fs, preview %.2fs", tDecodeWait, tUpload, tGPU, tPreview))
 
