@@ -47,9 +47,14 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 
 ## UI Improvements
 
-- Improve the experience of starting retouching. Right now it simply freezes the
-  UI for up to several seconds before being ready. If we can't speed it up, we need
-  a spinner or similar progress indicator.
+- **Retouch startup residual.** The session cold-build freeze and the
+  first-stroke copy-on-write hitch are fixed (the session pre-warms on fuse
+  completion AND stack install/project open; mutable planes unique at
+  enter-retouch — git history has the measurements). Remaining: measure what
+  Start Retouching still costs in the running app — the suspects are the
+  45 MP canvas view creation and the first Core Image color-cube render of
+  the pane (`ToneFilteredPaneView`) — then either shrink it or add the
+  spinner the original version of this item asked for.
 - Improve the experience of opening a project. It can take quite a while to load;
   there should be an indicator in the UI that it is working on it beyond "most of the
   menu items are disabled".
@@ -116,6 +121,53 @@ landable):
 Throughput breakdowns, measured dead-ends, ablation taps, and the per-pixel
 specialization contract: `Docs/performance.md` — read it before touching a hot
 loop or re-attempting a parked optimization.
+
+### Memory (characterized 2026-07-26; instruments are permanent)
+
+Tooling: `HYPERFOCAL_MEMLOG=1` logs phys_footprint deltas at every model
+retention milestone; `EngineStats` splits a footprint into Metal-held vs
+malloc-held; `retouch-probe --memprofile <frames…>` runs the whole app-layer
+lifecycle headless on real frames and prints the marks;
+`retouch-probe --memdecode <frames…>` isolates decode-cache behavior. Measured
+on a 43-frame 46 MP NEF stack: fused-idle ≈ 5–6 GB of deliberate full-res
+retention (ledger in the instrumentation commit), transients to ~11 GB while
+the background secondary runs, and ~5.9 GB surviving project close with every
+model property provably empty. That residual is NOT an app leak; its
+composition drives the two items below.
+
+- **Return the Metal allocator's memory (~2–2.6 GB).** MTLDevice retains freed
+  buffer memory for the process lifetime — measured flat across project close
+  with zero live MTLBuffer references (`EngineStats.metalAllocatedBytes`).
+  Fix: back the engine's frame-sized buffers with our own page-aligned
+  vm_allocate'd memory via `makeBuffer(bytesNoCopy:deallocator:)` in
+  `MetalEngine.makeBuffer(floats:)` so freeing genuinely returns pages.
+  Done = post-close `metalAllocatedBytes` near zero and phys_footprint drops
+  accordingly in `--memprofile`, with fuse wall-clock unchanged (buffer
+  creation is not on the hot path, but measure — the doc's loaded-machine
+  rule applies).
+- **RAW-decode pipeline cache (~2.3 GB, Apple's).** A bounded working set —
+  flat whether 10 or 43 distinct NEFs are decoded (`--memdecode`), partly on
+  ImageIO's own internal Metal device where `EngineStats` can't see it, and
+  only partially reclaimed by malloc pressure relief. Options to investigate,
+  each measured with `--memdecode`: `kCGImageSourceShouldCache(Immediately)`
+  = false on the decode paths in `ImageFile`, scoping decodes to a discardable
+  context, or accepting it as the cost of Apple's RAW engine and documenting
+  it. Do not chase it below ~2 GB without checking decode throughput — the
+  cache exists for a reason.
+- **f16 storage format (halves everything).** The working buffers are RGBA
+  f32 (16 bytes/px; ~0.7 GB per 46 MP plane) — every number above scales
+  with it. In-repo precedent says f16 storage is quality-viable: FrameSpill's
+  degraded tier stores these exact frames at f16 and measures 75–80 dB vs
+  f32 (95.9 dB effect on a real fused output), far below fusion error
+  (~38–41 dB vs truth). Accumulation stays f32 in registers; the layout keeps
+  float4→half4 shape everywhere. Costs to plan for: every engine + kernel,
+  CPU-path performance off Apple Silicon (x86 Float16 is emulated — convert
+  tiles to f32 for compute), wgpu's shader-f16 feature isn't universal, and
+  the ≥90 dB parity gates need re-baselining. Decided and recorded: dropping
+  the ALPHA channel instead (RGB f32, 12 bytes/px) is dominated — alpha
+  carries the warp-coverage mask through fusion, `vec3` storage buffers
+  stride 16 bytes anyway, and CG float contexts require alpha; 25% savings
+  for a bigger rewrite than f16's 50%.
 
 - **Serve retouch source loads from the retained warped-frame spill.** The
   background PMax generation now streams the DMap primary's `WarpedFrameCache`
