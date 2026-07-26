@@ -1569,6 +1569,61 @@ public func hf_stack_expanded(_ index: Int32) -> Int32 {
     }
 }
 
+/// Nonzero once the stack's middle-frame thumbnail is ready — a stable id
+/// of its source frame, for image-URL cache busting. Calling it also kicks
+/// background generation when none exists, so the shell's stacks refresh
+/// doubles as the request path (the thumbnail landing re-fires the changed
+/// callback, and the next refresh sees a token).
+@_cdecl("hf_stack_thumbnail_token")
+public func hf_stack_thumbnail_token(_ index: Int32) -> Int64 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)) else { return 0 }
+        let stack = model.stacks[Int(index)]
+        model.requestStackThumbnail(for: stack.id)
+        guard model.stackThumbnails[stack.id] != nil,
+              !stack.frames.isEmpty else { return 0 }
+        let middle = stack.frames[stack.frames.count / 2]
+        // 31-bit token: the value round-trips through QML string
+        // interpolation, i.e. a JS Number — a full 64-bit hash exceeds
+        // JS's safe-integer range and comes back mangled (cache misses).
+        let token = Int64(middle.path.hashValue & 0x7FFF_FFFF)
+        return token == 0 ? 1 : token
+    }
+}
+
+@_cdecl("hf_stack_thumbnail")
+public func hf_stack_thumbnail(_ index: Int32, _ out: UnsafeMutablePointer<UInt8>?,
+                               _ capacity: Int32,
+                               _ w: UnsafeMutablePointer<Int32>?,
+                               _ h: UnsafeMutablePointer<Int32>?) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model,
+              model.stacks.indices.contains(Int(index)),
+              let image = model.stackThumbnails[model.stacks[Int(index)].id],
+              let out, let w, let h else { return 0 }
+        let iw = image.width, ih = image.height
+        guard Int(capacity) >= iw * ih * 4 else { return 0 }
+        w.pointee = Int32(iw)
+        h.pointee = Int32(ih)
+        #if canImport(CoreGraphics)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: out, width: iw, height: ih,
+                                  bitsPerComponent: 8, bytesPerRow: iw * 4,
+                                  space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return 0 }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: iw, height: ih))
+        return 1
+        #else
+        image.rgba.withUnsafeBufferPointer { src in
+            out.update(from: src.baseAddress!, count: iw * ih * 4)
+        }
+        return 1
+        #endif
+    }
+}
+
 @_cdecl("hf_set_stack_expanded")
 public func hf_set_stack_expanded(_ index: Int32, _ expanded: Int32) -> Int32 {
     MainActor.assumeIsolated {

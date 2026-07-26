@@ -138,8 +138,10 @@ struct ContentView: View {
                                     StackRow(stack: stack,
                                              isSelected: stack.id == model.selectedStackID,
                                              status: model.status(of: stack),
+                                             thumbnail: model.stackThumbnails[stack.id],
                                              setEnabled: { model.setStackEnabled(stack.id, to: $0) },
                                              select: { model.selectStack(stack.id) })
+                                        .onAppear { model.requestStackThumbnail(for: stack.id) }
                                 }
                                 // Explicit scroll target: each ForEach element
                                 // is two sibling views (header + frame rows) —
@@ -884,6 +886,9 @@ struct StackRow: View {
     let stack: Stack
     let isSelected: Bool
     let status: AppModel.StackStatus
+    /// The stack's middle-frame thumbnail (AppModel.stackThumbnails) —
+    /// replaces the generic stack glyph once it has decoded.
+    let thumbnail: CGImage?
     let setEnabled: (Bool) -> Void
     let select: () -> Void
 
@@ -915,9 +920,20 @@ struct StackRow: View {
                 select()
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "square.stack.3d.up")
-                        .font(.caption)
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    if let thumbnail {
+                        Image(decorative: thumbnail, scale: 2)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 30, height: 21)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .overlay(RoundedRectangle(cornerRadius: 3)
+                                .strokeBorder(.separator, lineWidth: 0.5))
+                    } else {
+                        Image(systemName: "square.stack.3d.up")
+                            .font(.caption)
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                            .frame(width: 30, height: 21)
+                    }
                     Text(stack.name)
                         .fontWeight(isSelected ? .semibold : .regular)
                         .foregroundStyle(stack.enabled

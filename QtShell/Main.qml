@@ -950,6 +950,22 @@ ApplicationWindow {
                         enabled: !Shell.isRunning
                         onToggled: Shell.setStackEnabled(index, checked)
                     }
+                    Image {
+                        // Middle-frame thumbnail, like native's stack rows.
+                        // thumbToken is 0 until the background generation
+                        // lands (the item collapses away meanwhile) and
+                        // cache-busts the URL when the source frame changes.
+                        visible: modelData.thumbToken !== 0
+                        source: modelData.thumbToken !== 0
+                                ? "image://hfthumb/" + index + "?" + modelData.thumbToken
+                                : ""
+                        sourceSize.width: 30
+                        sourceSize.height: 21
+                        Layout.preferredWidth: 30
+                        Layout.preferredHeight: 21
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                    }
                     Label {
                         text: modelData.name
                         // Native: the title alone dims when the stack

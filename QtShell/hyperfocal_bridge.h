@@ -269,6 +269,16 @@ int hf_stack_frame_count(int index);
 // issue by stack+frame index, through the same model helpers native
 // uses; inclusion toggles are URL-global and undo-recorded).
 int hf_stack_expanded(int index);
+// Middle-frame thumbnail. hf_stack_thumbnail_token: nonzero once a
+// thumbnail is available for the stack (a stable id of the frame it came
+// from — bake it into the image URL as a cache-buster); calling it also
+// kicks the background generation when none exists yet, so polling it
+// from the stacks refresh is the request path. hf_stack_thumbnail copies
+// RGBA8 rows into `out` (capacity in bytes) and reports the dimensions;
+// returns 1 on success, 0 when absent or the buffer is too small.
+long long hf_stack_thumbnail_token(int index);
+int hf_stack_thumbnail(int index, uint8_t *out, int32_t capacity,
+                       int32_t *w, int32_t *h);
 int hf_set_stack_expanded(int index, int expanded);
 int hf_stack_frame_name(int stack, int frame, char *buf, int cap);
 int hf_stack_frame_included(int stack, int frame);

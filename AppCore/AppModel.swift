@@ -213,6 +213,58 @@ public final class AppModel: ObservableObject {
     @Published public var expandedStacks: Set<UUID> = []
     var selectedStack: Stack? { stacks.first { $0.id == selectedStackID } }
 
+    // MARK: - Stack thumbnails
+
+    /// Stack-row thumbnails: each stack's MIDDLE frame (typically the most
+    /// in-focus region of a rail sweep, and stable — the frame list is fixed
+    /// at ingest, so checkbox toggles don't churn it), extracted from the
+    /// file's embedded preview in the background and cached. Keyed by stack
+    /// id; `stackThumbnailSources` remembers which frame produced each so a
+    /// changed frame list regenerates. UIs call `requestStackThumbnail` when
+    /// a row appears and read this map — both shells share the one cache.
+    @Published public private(set) var stackThumbnails: [UUID: PlatformImage] = [:]
+    private var stackThumbnailSources: [UUID: URL] = [:]
+    private var stackThumbnailsInFlight: Set<UUID> = []
+
+    /// Longest thumbnail edge, sized for stack rows at 2× displays in both
+    /// shells (rows draw it around 32×22 points). nonisolated: read from the
+    /// detached decode task.
+    public nonisolated static let stackThumbnailMaxSide = 96
+
+    public func requestStackThumbnail(for stackID: UUID) {
+        guard let stack = stacks.first(where: { $0.id == stackID }),
+              let middle = stack.frames.isEmpty
+                  ? nil : stack.frames[stack.frames.count / 2] as URL?,
+              stackThumbnailSources[stackID] != middle,
+              !stackThumbnailsInFlight.contains(stackID) else { return }
+        stackThumbnailsInFlight.insert(stackID)
+        Task.detached(priority: .utility) { [weak self] in
+            let image = (try? ImageFile.thumbnail(url: middle,
+                                                  maxSide: Self.stackThumbnailMaxSide))
+                .flatMap { try? Preview.image(from: $0) }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.stackThumbnailsInFlight.remove(stackID)
+                // The stack may be gone, or its frame list changed while we
+                // decoded — requestStackThumbnail re-runs on the next row
+                // appearance; don't publish a stale image.
+                guard let stack = self.stacks.first(where: { $0.id == stackID }),
+                      !stack.frames.isEmpty,
+                      stack.frames[stack.frames.count / 2] == middle else { return }
+                self.stackThumbnailSources[stackID] = middle
+                if let image { self.stackThumbnails[stackID] = image }
+            }
+        }
+    }
+
+    /// Drops cache entries for stacks that no longer exist (stack close,
+    /// project replace).
+    private func pruneStackThumbnails() {
+        let live = Set(stacks.map(\.id))
+        stackThumbnails = stackThumbnails.filter { live.contains($0.key) }
+        stackThumbnailSources = stackThumbnailSources.filter { live.contains($0.key) }
+    }
+
     public enum StackStatus {
         case unfused, fusing, fused, failed(String)
     }
@@ -890,6 +942,7 @@ public final class AppModel: ObservableObject {
         let index = stacks.firstIndex { $0.id == stack.id } ?? 0
         stacks.removeAll { $0.id == stack.id }
         expandedStacks.remove(stack.id)
+        pruneStackThumbnails()
         guard let neighbor = stacks.indices.contains(index)
             ? stacks[index] : stacks.last else {
             clearProject()  // last stack closed = fresh state
@@ -2019,6 +2072,7 @@ public final class AppModel: ObservableObject {
         stacks = []
         selectedStackID = nil
         expandedStacks = []
+        pruneStackThumbnails()
         cropRect = nil  // BEFORE the unsaved flag clears: its didSet marks unsaved
         cropAngle = 0
         hasUnsavedWork = false

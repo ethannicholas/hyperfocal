@@ -10,8 +10,11 @@
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QGridLayout>
+#include <QHash>
 #include <QImage>
 #include <QLabel>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QIcon>
 #include <QMessageBox>
 #include <QPainter>
@@ -556,6 +559,17 @@ int Shell::lutEpoch() const { return liveLutEpoch; }
 
 QByteArray Shell::currentLut() { return liveLut; }
 
+// Stack thumbnails, keyed by their bridge token. Filled by buildStacks on
+// the main thread (the only place bridge calls are legal), read by
+// StackThumbProvider on QtQuick's pixmap-reader thread — hence the mutex.
+static QHash<qlonglong, QImage> thumbCache;
+static QMutex thumbCacheMutex;
+
+QImage Shell::thumbnailForToken(qlonglong token) {
+    QMutexLocker lock(&thumbCacheMutex);
+    return thumbCache.value(token);
+}
+
 bool Shell::depthMode() const { return hf_output_depth() != 0; }
 
 void Shell::setDepthMode(bool depth) {
@@ -581,6 +595,28 @@ QVariantList Shell::buildStacks() const {
         row.insert(QStringLiteral("orderWarning"), QString::fromUtf8(text, n));
         row.insert(QStringLiteral("frameCount"), hf_stack_frame_count(i));
         row.insert(QStringLiteral("expanded"), hf_stack_expanded(i) != 0);
+        // Nonzero once the middle-frame thumbnail is ready; the call also
+        // kicks its background generation, so refreshing the stacks list IS
+        // the request. Baked into the image URL as a cache-buster, and the
+        // pixels are copied into the provider cache here, on the main
+        // thread, because the provider itself must not touch the bridge.
+        const qlonglong thumbToken = qlonglong(hf_stack_thumbnail_token(i));
+        row.insert(QStringLiteral("thumbToken"), thumbToken);
+        if (thumbToken != 0) {
+            QMutexLocker lock(&thumbCacheMutex);
+            if (!thumbCache.contains(thumbToken)) {
+                static QByteArray buffer(96 * 96 * 4, Qt::Uninitialized);
+                int32_t tw = 0, th = 0;
+                if (hf_stack_thumbnail(i,
+                                       reinterpret_cast<uint8_t *>(buffer.data()),
+                                       int32_t(buffer.size()), &tw, &th)
+                    && tw > 0 && th > 0) {
+                    thumbCache.insert(thumbToken,
+                        QImage(reinterpret_cast<const uchar *>(buffer.constData()),
+                               tw, th, tw * 4, QImage::Format_RGBA8888).copy());
+                }
+            }
+        }
         QVariantList stackFrames;
         if (hf_stack_expanded(i) != 0) {
             const int frames = hf_stack_frame_count(i);

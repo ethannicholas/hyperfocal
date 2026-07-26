@@ -46,7 +46,6 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
 
 ## UI Improvements
 
-- Stack nodes should have a thumbnail derived from the middle image in the set
 - The space hotkey doesn't work with a PMax rendering
 - The D key should select the DMap result input
 - Improve the experience of starting retouching. Right now it simply freezes the

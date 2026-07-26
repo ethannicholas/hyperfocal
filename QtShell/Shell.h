@@ -124,6 +124,11 @@ public:
     Q_INVOKABLE bool exportTo(const QUrl &file);
     /// The current 16-bit tone ramp (4096 entries) for the LUT provider.
     static QByteArray currentLut();
+    /// Thread-safe read of a stack thumbnail by its token — the image
+    /// provider runs on QtQuick's pixmap-reader thread, where bridge calls
+    /// are off-limits (the model is main-thread-only); buildStacks fills
+    /// this cache on the main thread as tokens appear.
+    static QImage thumbnailForToken(qlonglong token);
 
     Q_INVOKABLE bool hasDisplay() const;
     /// Display-pixel currency, exposed for the selftest: the epoch moves

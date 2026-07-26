@@ -11,6 +11,7 @@
 
 #include "CatalogTranslator.h"
 #include "LutImageProvider.h"
+#include "StackThumbProvider.h"
 #include "PaneItem.h"
 #include "Shell.h"
 #include "hyperfocal_bridge.h"
@@ -576,6 +577,7 @@ int main(int argc, char *argv[]) {
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("hflut"), new LutImageProvider);
+    engine.addImageProvider(QStringLiteral("hfthumb"), new StackThumbProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
                      &app, [] { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);

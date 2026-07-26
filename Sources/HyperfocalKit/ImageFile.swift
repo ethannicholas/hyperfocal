@@ -214,6 +214,23 @@ public enum ImageFile {
         return buf
     }
 
+    /// Small display thumbnail, favoring the file's embedded preview (RAW
+    /// files carry one — extracting it is milliseconds, vs seconds for the
+    /// full mosaic decode) and falling back to a reduced decode when a file
+    /// has none. Orientation applied. At most `maxSide` on the long edge.
+    public static func thumbnail(url: URL, maxSide: Int) throws -> ImageBuffer {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                  kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: maxSide,
+              ] as CFDictionary) else {
+            throw ImageFileError.cannotLoad(
+                "cannot extract thumbnail from \(url.lastPathComponent)")
+        }
+        return try previewBuffer(from: cg, maxSide: maxSide)
+    }
+
     /// 8-bit grayscale CGImage from a float buffer's luminance.
     public static func grayCGImage8(from image: ImageBuffer) throws -> CGImage {
         let w = image.width, h = image.height
@@ -427,6 +444,13 @@ public enum ImageFile {
         let count = Int(w) * Int(h) * 4
         let pixels = Array(UnsafeBufferPointer(start: ptr, count: count))
         return ImageBuffer(width: Int(w), height: Int(h), pixels: pixels)
+    }
+
+    /// No embedded-preview extraction on the CImaging path yet (LibRaw's
+    /// unpack_thumb would be the upgrade) — decode and downsample. Slow for
+    /// RAW, but stack thumbnails generate once, in the background, and cache.
+    public static func thumbnail(url: URL, maxSide: Int) throws -> ImageBuffer {
+        try load(url: url).downsampledNearest(maxSide: maxSide)
     }
 
     public static func loadRAW(url: URL) throws -> ImageBuffer {
