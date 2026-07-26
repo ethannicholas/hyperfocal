@@ -2846,6 +2846,11 @@ public final class AppModel: ObservableObject {
         // cache lives exactly as long as this task holds its configuration.
         bg.warpedFrameCache = warpedFrames
         bg.fusion.retainSpill = false   // the secondary spills for no one
+        // …and its sharpness planes serve no one either: resultSharpness is
+        // the PRIMARY's set (space auto-pick), and the secondary's completion
+        // keeps only the image. Without this, a PMax secondary inherited the
+        // flag and generated ~3 MB/frame of planes just to drop them.
+        bg.retainPMaxSharpness = false
         let cancellation = CancellationToken()
         backgroundFusionCancellation = cancellation
         let cache = alignmentCache
