@@ -52,6 +52,15 @@ public struct WarpedFrameCache {
         }
         return buf
     }
+
+    /// Disk actually held by the retained spill (its unlinked temp file),
+    /// reclaimed the moment the last reference dies. A caller preflighting a
+    /// NEW fuse's disk needs (which supersedes and releases this cache)
+    /// should credit these bytes as available — see
+    /// `FrameSpill.shortfall(frameBytes:frameCount:reclaimable:)`.
+    public var diskBytes: Int64 {
+        Int64(spill.slotBytes) * Int64(frameCount)
+    }
 }
 
 public final class FrameSpill {
@@ -61,7 +70,7 @@ public final class FrameSpill {
     private let fd: Int32
     #endif
     private let frameBytes: Int   // fp32 payload size per frame (callers' unit)
-    private let slotBytes: Int    // on-disk slot (halved when fp16)
+    let slotBytes: Int            // on-disk slot (halved when fp16)
     private let halfPrecision: Bool
     private var scratch: [UInt16] = []
     private let scratchLock = NSLock()
@@ -101,9 +110,14 @@ public final class FrameSpill {
     /// How a full spill compares to the temp volume's free capacity — nil
     /// when it fits (with margin) or capacity can't be determined. Public so
     /// the app can warn *before* fusing that the cache won't fit, instead of
-    /// silently fusing slower.
-    public static func shortfall(frameBytes: Int,
-                                 frameCount: Int) -> (needed: Int64, available: Int64)? {
+    /// silently fusing slower. `reclaimable` is disk the caller knows it is
+    /// about to release before this spill grows (the previous fuse's retained
+    /// `WarpedFrameCache`, superseded by the new fuse) — credited to the
+    /// volume's capacity so a re-fuse isn't warned about space its own stale
+    /// cache is holding.
+    public static func shortfall(frameBytes: Int, frameCount: Int,
+                                 reclaimable: Int64 = 0)
+        -> (needed: Int64, available: Int64)? {
         let slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
         let spillBytes = Int64(slotBytes) * Int64(frameCount)
         let needed = spillBytes + margin(for: spillBytes)
@@ -132,8 +146,9 @@ public final class FrameSpill {
         }
         let capacity = Int64(vfs.f_bavail) * Int64(vfs.f_frsize)
         #endif
-        guard capacity < needed else { return nil }
-        return (needed, capacity)
+        let effective = capacity + reclaimable
+        guard effective < needed else { return nil }
+        return (needed, effective)
     }
 
     /// Returns nil (logging why) when the temp volume can't hold even the

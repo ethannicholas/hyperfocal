@@ -63,9 +63,6 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
   was very proud of what it had built and wanted everybody to understand all of the
   details. They need to be much tighter and focused on what the user actually needs
   to understand.
-- Re-fusing currently produces a warning about insufficient disk space for the disk
-  cache even though the disk cache is already allocated and it's not going to
-  re-scan the frames.
 
 ## Release & licensing compliance
 

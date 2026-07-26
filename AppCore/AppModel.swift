@@ -506,12 +506,21 @@ public final class AppModel: ObservableObject {
     private var backgroundFusionCancellation: CancellationToken?
     private var backgroundFusionTask: Task<Void, Never>?
 
+    /// The primary fuse's retained warped-frame cache while the background
+    /// secondary generation is consuming it. Mirror of the reference inside
+    /// the background task's configuration, kept ONLY so a re-fuse's disk
+    /// preflight can credit its bytes as about-to-be-reclaimed (the new fuse
+    /// cancels that generation, which releases the cache) — cleared wherever
+    /// the background pass ends so this mirror never extends the lifetime.
+    private var retainedWarpedFrames: WarpedFrameCache?
+
     /// Stops the background secondary-algorithm generation, if any.
     private func cancelBackgroundFusion() {
         backgroundFusionCancellation?.cancel()
         backgroundFusionCancellation = nil
         backgroundFusionTask?.cancel()
         backgroundFusionTask = nil
+        retainedWarpedFrames = nil
     }
 
     // Noise-floor preview: while the slider is dragged, the output pane shows
@@ -1078,7 +1087,12 @@ public final class AppModel: ObservableObject {
               let first = urls.first,
               let size = ImageFile.pixelSize(url: first),
               let short = FrameSpill.shortfall(frameBytes: size.width * size.height * 8,
-                                               frameCount: urls.count) else { return true }
+                                               frameCount: urls.count,
+                                               // A stale secondary generation's
+                                               // retained cache is released by
+                                               // this fuse — its disk is ours.
+                                               reclaimable: retainedWarpedFrames?.diskBytes ?? 0)
+              else { return true }
         let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         return runConfirmAlert(
             message: localizedString("Not enough disk space for the fusion cache", comment: ""),
@@ -2710,6 +2724,7 @@ public final class AppModel: ObservableObject {
                     // discarded — depth belongs to a DMap *primary*). It is
                     // never the displayed result. Batches stay single-algorithm.
                     if !self.batchMode {
+                        self.retainedWarpedFrames = output.warpedFrames
                         self.startBackgroundFusion(other: method == .dmap ? .pmax : .dmap,
                                                    generation: generation,
                                                    urls: result.fusedURLs,
@@ -2791,6 +2806,7 @@ public final class AppModel: ObservableObject {
                           !cancellation.isCancelled else { return }
                     self.backgroundFusionCancellation = nil
                     self.backgroundFusionTask = nil
+                    self.retainedWarpedFrames = nil
                     // Either way this IS the non-base ("other") algorithm — the
                     // foreground fused the primary — so hand it to a live retouch
                     // session as its alternate brush source, no rebuild.
