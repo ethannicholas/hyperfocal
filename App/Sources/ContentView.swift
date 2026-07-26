@@ -156,7 +156,16 @@ struct ContentView: View {
                     .frame(minHeight: 140, idealHeight: 280, maxHeight: 360)
                     .onChange(of: model.selection) { _, newValue in
                         model.selectionChanged()
-                        if let url = newValue.first {
+                        // Multi-selection (fusion progress selects every frame
+                        // in flight): Set.first is arbitrary, so anchor on the
+                        // LAST selected frame in list order. Scrolled minimally
+                        // into view it lands at the viewport's bottom edge,
+                        // which keeps the earlier rows of the working band
+                        // visible above it — anchoring the first row instead
+                        // parks it at the bottom and hides the rest of the
+                        // band below the fold.
+                        if let url = model.frames.last(where: newValue.contains)
+                            ?? newValue.first {
                             proxy.scrollTo(url)
                         }
                     }

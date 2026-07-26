@@ -44,6 +44,10 @@ class Shell : public QObject {
     Q_PROPERTY(bool inputLoading READ inputLoading NOTIFY changed)
     Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY framesChanged)
+    // All selected frame indices, ascending — during a fuse this is the
+    // in-flight working set (registration processes frames concurrently),
+    // which the stack list highlights as a whole; selectedFrame is -1 then.
+    Q_PROPERTY(QList<int> selectedFrames READ selectedFrames NOTIFY framesChanged)
     Q_PROPERTY(QRectF displayCrop READ displayCrop NOTIFY changed)
     Q_PROPERTY(bool cropMode READ cropMode NOTIFY changed)
     Q_PROPERTY(bool retouchMode READ retouchMode NOTIFY changed)
@@ -102,6 +106,7 @@ public:
     bool inputLoading() const;
     QString inputTitle() const;
     int selectedFrame() const;
+    QList<int> selectedFrames() const;
     /// Bumps only when the tone curve's bytes actually change — the LUT
     /// Image reloads off this, not off every model change.
     int lutEpoch() const;
@@ -277,6 +282,7 @@ private:
     QString cachedStage_;
     bool cachedRunning_ = false;
     int cachedSelectedStack_ = -1, cachedSelectedFrame_ = -1;
+    QList<int> cachedSelectedFrames_;
     int cachedPending_ = 0;
     bool cachedCanFuse_ = false;
 };

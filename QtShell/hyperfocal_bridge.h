@@ -304,7 +304,13 @@ int hf_select_frame(int index);
 // Any stack's frame, like clicking its nested tree row — a frame in
 // another stack switches stack selection with it (no-op while running).
 int hf_select_stack_frame(int stack, int frame);
-int hf_selected_frame(void);                        // index, -1 = none
+int hf_selected_frame(void);                        // index, -1 = none / multi
+// All selected frame indices, ascending. During a fuse the model selects
+// every frame currently being processed (registration passes run frames
+// concurrently), so this is the set a stack list should highlight.
+// Fills up to `capacity` entries of `out` (may be NULL to size);
+// returns the total selected count.
+int hf_selected_frames(int32_t *out, int32_t capacity);
 int hf_input_size(int32_t *w, int32_t *h);
 int hf_input_epoch(void);
 int hf_input_tile(int32_t level, int32_t x, int32_t y,

@@ -26,7 +26,7 @@ enum GPUPyramid {
     static func fuse(frameCount: Int,
                      warp: PyramidWarp? = nil,
                      log: ((String) -> Void)? = nil,
-                     progress: ((Double, ImageBuffer?) -> Void)? = nil,
+                     progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                      cancellation: CancellationToken? = nil,
                      decodeWorkers: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
@@ -137,7 +137,7 @@ enum GPUPyramid {
                     }
                     preview = img
                 }
-                progress(Double(p.frame + 1) / Double(frameCount), preview)
+                progress(Double(p.frame + 1) / Double(frameCount), p.frame, preview)
             }
         }
 

@@ -1811,6 +1811,25 @@ public func hf_selected_frame() -> Int32 {
     }
 }
 
+@_cdecl("hf_selected_frames")
+public func hf_selected_frames(_ out: UnsafeMutablePointer<Int32>?,
+                               _ capacity: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        // Ascending frame order (selection is a Set); during a fuse this is
+        // the in-flight working set the model selects from fusion progress.
+        let indices = model.frames.indices.filter {
+            model.selection.contains(model.frames[$0])
+        }
+        if let out {
+            for (i, v) in indices.prefix(Int(capacity)).enumerated() {
+                out[i] = Int32(v)
+            }
+        }
+        return Int32(indices.count)
+    }
+}
+
 /// Input-pane image surface, mirroring hf_display_*: the cycling
 /// processing source mid-fuse, else the selected frame's preview
 /// (decoded raw, or warped into the fused canvas once alignment

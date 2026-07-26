@@ -30,11 +30,19 @@ public struct FusionProgress {
     public let sourcePreview: ImageBuffer?
     public let sourceFullWidth: Int
     public let sourceFullHeight: Int
+    /// ALL frames in flight at this tick, sorted — non-empty only for stages
+    /// that work several frames concurrently (registration's decode and
+    /// gradient-matching passes). A UI reflecting "what is being processed"
+    /// should prefer this over `sourceFrameIndex`: concurrent completions
+    /// land out of order, so a single highlight driven by the last tick
+    /// bounces around instead of showing the working set.
+    public let activeFrames: [Int]
 
     public init(stage: Stage, fraction: Double, preview: ImageBuffer? = nil,
                 previewFullWidth: Int = 0, previewFullHeight: Int = 0,
                 sourceFrameIndex: Int = -1, sourcePreview: ImageBuffer? = nil,
-                sourceFullWidth: Int = 0, sourceFullHeight: Int = 0) {
+                sourceFullWidth: Int = 0, sourceFullHeight: Int = 0,
+                activeFrames: [Int] = []) {
         self.stage = stage
         self.fraction = fraction
         self.preview = preview
@@ -44,6 +52,7 @@ public struct FusionProgress {
         self.sourcePreview = sourcePreview
         self.sourceFullWidth = sourceFullWidth
         self.sourceFullHeight = sourceFullHeight
+        self.activeFrames = activeFrames
     }
 }
 

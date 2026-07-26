@@ -101,7 +101,7 @@ public enum StackPipeline {
                 log?("registering \(urls.count) frames")
                 let registration = try Aligner.transformsAndQuality(
                     forFrames: urls, log: log,
-                    cancellation: cancellation) { fraction, index, gray, pass in
+                    cancellation: cancellation) { fraction, index, gray, pass, active in
                     guard let progress else { return }
                     var buffer: ImageBuffer? = nil
                     var fw = 0, fh = 0
@@ -116,14 +116,16 @@ public enum StackPipeline {
                         progress(FusionProgress(stage: .registering, fraction: fraction,
                                                 sourceFrameIndex: index,
                                                 sourcePreview: buffer,
-                                                sourceFullWidth: fw, sourceFullHeight: fh))
+                                                sourceFullWidth: fw, sourceFullHeight: fh,
+                                                activeFrames: active))
                     case .register:
                         // Gradient-magnitude image, a derived artifact — show
                         // it output-side, not as if it were a source frame.
                         progress(FusionProgress(stage: .aligning, fraction: fraction,
                                                 preview: buffer,
                                                 previewFullWidth: fw, previewFullHeight: fh,
-                                                sourceFrameIndex: index))
+                                                sourceFrameIndex: index,
+                                                activeFrames: active))
                     }
                 }
                 alignmentCache?.store(registration.transforms, for: urls)
@@ -171,11 +173,16 @@ public enum StackPipeline {
             // PMax (Laplacian-pyramid max-coefficient): image only, no depth.
             // Alignment/exclusion above is method-independent, so both
             // algorithms share the one registration pass.
-            let pmaxProgress: (Double, ImageBuffer?) -> Void = { fraction, preview in
+            let pmaxProgress: (Double, Int, ImageBuffer?) -> Void = { fraction, frame, preview in
+                // PMax streams frames through the accumulator one at a time,
+                // so its render progress names the frame being folded in —
+                // the Stack panel follows it like DMap's per-frame stages.
+                // The final collapse reports -1 (whole-image work).
                 progress?(FusionProgress(stage: .render, fraction: fraction,
                                          preview: preview,
                                          previewFullWidth: source.outputWidth ?? (preview?.width ?? 0),
-                                         previewFullHeight: source.outputHeight ?? (preview?.height ?? 0)))
+                                         previewFullHeight: source.outputHeight ?? (preview?.height ?? 0),
+                                         sourceFrameIndex: frame))
             }
             let image: ImageBuffer
             if let cache = configuration.warpedFrameCache,

@@ -203,7 +203,7 @@ public enum PyramidFusion {
     /// CPU, which costs more than the fusion itself on big stacks.
     public static func fuse(source: StackSource, preferGPU: Bool = true,
                             log: ((String) -> Void)? = nil,
-                            progress: ((Double, ImageBuffer?) -> Void)? = nil,
+                            progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
                             focusGate: FocusGate? = nil,
                             prepareDespill: Bool = false,
@@ -243,7 +243,7 @@ public enum PyramidFusion {
     public static func fuse(frameCount: Int, preferGPU: Bool = true,
                             warp: PyramidWarp? = nil,
                             log: ((String) -> Void)? = nil,
-                            progress: ((Double, ImageBuffer?) -> Void)? = nil,
+                            progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
                             decodeWorkers: Int? = nil,
                             focusGate: FocusGate? = nil,
@@ -537,7 +537,7 @@ public enum PyramidFusion {
             }
             tSelect += now() - t0
             log?("pyramid \(fi + 1)/\(frameCount)")
-            progress?(Double(fi + 1) / Double(frameCount), nil)
+            progress?(Double(fi + 1) / Double(frameCount), fi, nil)
         }
 
         // Average the accumulated base level (unless darkest-base kept a winner).

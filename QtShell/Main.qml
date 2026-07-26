@@ -286,6 +286,66 @@ ApplicationWindow {
         }
     }
 
+    // Keep the Stack panel's selected row in view — both for a manual
+    // click and for fusion progress, which points selection at whichever
+    // frame is currently being read/processed (see AppModel's fuse()
+    // progress handler; the bridge's hf_selected_frame just mirrors
+    // AppModel.selection, so this needs no bridge changes, only reacting
+    // to it here like native's ScrollViewReader/scrollTo). framesChanged/
+    // stacksChanged also fire for unrelated content edits (e.g. a
+    // checkbox toggle) — track the last value scrolled to so those don't
+    // yank the list back to the selected row out from under a user who
+    // scrolled elsewhere on purpose.
+    property int trackedSelectedFrame: -1
+    property int trackedSelectedStack: -1
+    function scrollSelectedFrameIntoView() {
+        // Multi-selection (fusion progress selects the in-flight working
+        // set): anchor on its LAST frame — the list is ascending, and a
+        // minimal scroll leaves that row at the viewport's bottom edge with
+        // the band's earlier rows visible above it (anchoring the first row
+        // hides the rest of the band below the fold). Track the anchor, not
+        // the whole set, so the view doesn't chase every membership change
+        // within a stable working window.
+        var sel = Shell.selectedFrames
+        var frameIndex = sel.length > 0 ? sel[sel.length - 1] : Shell.selectedFrame
+        if (frameIndex === trackedSelectedFrame
+                && Shell.selectedStack === trackedSelectedStack) return
+        trackedSelectedFrame = frameIndex
+        trackedSelectedStack = Shell.selectedStack
+        if (frameIndex < 0) return
+        if (stackList.count > 1) {
+            // Multi-stack tree: frame rows live inside each stack's
+            // delegate (a Repeater, not their own ListView items), so
+            // positionViewAtIndex only brings the stack's header on
+            // screen — reach into its frame Repeater for the exact row.
+            var stackIndex = Shell.selectedStack
+            if (stackIndex < 0) return
+            stackList.positionViewAtIndex(stackIndex, ListView.Contain)
+            // The stack's delegate (and its nested frame Repeater) may not
+            // be instantiated until layout settles after the scroll above —
+            // finish the fine adjustment next tick, like native's dispatch
+            // -after-layout comment on its own scrollTo call.
+            Qt.callLater(function() {
+                var stackItem = stackList.itemAtIndex(stackIndex)
+                var rowItem = stackItem && stackItem.frameRepeater
+                    ? stackItem.frameRepeater.itemAt(frameIndex) : null
+                if (!rowItem) return
+                var pos = rowItem.mapToItem(stackList.contentItem, 0, 0)
+                if (pos.y < stackList.contentY)
+                    stackList.contentY = pos.y
+                else if (pos.y + rowItem.height > stackList.contentY + stackList.height)
+                    stackList.contentY = pos.y + rowItem.height - stackList.height
+            })
+        } else {
+            frameList.positionViewAtIndex(frameIndex, ListView.Contain)
+        }
+    }
+    Connections {
+        target: Shell
+        function onFramesChanged() { scrollSelectedFrameIntoView() }
+        function onStacksChanged() { scrollSelectedFrameIntoView() }
+    }
+
     // The native ⌘Z family (platform-correct sequences via StandardKey);
     // menu entries with the mode-scoped titles arrive with the menu bar.
     Shortcut {
@@ -858,6 +918,10 @@ ApplicationWindow {
                     required property var modelData
                     width: stackList.width
                     spacing: 2
+                    // Exposes the nested frame Repeater below so
+                    // scrollSelectedFrameIntoView() can reach a specific
+                    // frame row from outside this delegate instance.
+                    property alias frameRepeater: frameRepeater
                     RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
@@ -931,6 +995,7 @@ ApplicationWindow {
                     // Nested frame rows while disclosed; dimmed and
                     // inert when the stack is disabled, like native.
                     Repeater {
+                        id: frameRepeater
                         model: stackDelegate.modelData.expanded
                                ? stackDelegate.modelData.frames : []
                         delegate: RowLayout {
@@ -955,7 +1020,7 @@ ApplicationWindow {
                                 color: modelData.included ? theme.textPrimary
                                                           : theme.textFaint
                                 font.bold: stackDelegate.index === Shell.selectedStack
-                                           && index === Shell.selectedFrame
+                                           && Shell.selectedFrames.indexOf(index) !== -1
                                 elide: Text.ElideMiddle
                                 Layout.fillWidth: true
                                 TapHandler {
@@ -1068,7 +1133,7 @@ ApplicationWindow {
                         // Click selects the frame — the input pane follows.
                         text: modelData.name
                         color: modelData.included ? theme.textPrimary : theme.textFaint
-                        font.bold: index === Shell.selectedFrame
+                        font.bold: Shell.selectedFrames.indexOf(index) !== -1
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
                         TapHandler { onTapped: Shell.selectFrame(index) }

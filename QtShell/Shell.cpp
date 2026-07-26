@@ -122,6 +122,8 @@ void bridgeChanged(void *) {
 }
 }  // namespace
 
+static QList<int> readSelectedFrames();
+
 Shell::Shell(QObject *parent) : QObject(parent) {
     hf_init();
     refreshLut();
@@ -146,9 +148,12 @@ void Shell::refreshFromBridge() {
     }
     QVariantList frames = buildFrames();
     const int selectedFrame = hf_selected_frame();
-    if (frames != cachedFrames_ || selectedFrame != cachedSelectedFrame_) {
+    QList<int> selectedFrames = readSelectedFrames();
+    if (frames != cachedFrames_ || selectedFrame != cachedSelectedFrame_
+        || selectedFrames != cachedSelectedFrames_) {
         cachedFrames_ = std::move(frames);
         cachedSelectedFrame_ = selectedFrame;
+        cachedSelectedFrames_ = std::move(selectedFrames);
         emit framesChanged();
     }
     QVariantList stacks = buildStacks();
@@ -340,6 +345,19 @@ QString Shell::inputTitle() const {
 }
 
 int Shell::selectedFrame() const { return hf_selected_frame(); }
+
+// Two-call sizing against the bridge: count first, then fill. Ascending.
+static QList<int> readSelectedFrames() {
+    const int n = hf_selected_frames(nullptr, 0);
+    QList<int> out;
+    if (n <= 0)
+        return out;
+    out.resize(n);
+    hf_selected_frames(reinterpret_cast<int32_t *>(out.data()), n);
+    return out;
+}
+
+QList<int> Shell::selectedFrames() const { return readSelectedFrames(); }
 
 void Shell::selectFrame(int index) { hf_select_frame(index); }
 

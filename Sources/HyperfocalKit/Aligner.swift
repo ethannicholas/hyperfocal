@@ -85,7 +85,7 @@ public enum Aligner {
     public static func transforms(forFrames urls: [URL],
                                   log: ((String) -> Void)? = nil,
                                   cancellation: CancellationToken? = nil,
-                                  progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: RegistrationPreview?, _ pass: RegistrationPass) -> Void)? = nil) throws -> [simd_float3x3] {
+                                  progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: RegistrationPreview?, _ pass: RegistrationPass, _ active: [Int]) -> Void)? = nil) throws -> [simd_float3x3] {
         let output = try transformsAndQuality(forFrames: urls, log: log,
                                               cancellation: cancellation, progress: progress)
         if let failure = output.issues.first(where: {
@@ -119,7 +119,7 @@ public enum Aligner {
     public static func transformsAndQuality(forFrames urls: [URL],
                                             log: ((String) -> Void)? = nil,
                                             cancellation: CancellationToken? = nil,
-                                            progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: RegistrationPreview?, _ pass: RegistrationPass) -> Void)? = nil) throws -> RegistrationOutput {
+                                            progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: RegistrationPreview?, _ pass: RegistrationPass, _ active: [Int]) -> Void)? = nil) throws -> RegistrationOutput {
         let n = urls.count
         guard n > 1 else {
             return RegistrationOutput(transforms: [matrix_identity_float3x3], issues: [])
@@ -129,16 +129,36 @@ public enum Aligner {
         // handing back the frame just touched so a UI can cycle its preview.
         // Bridge/spur registrations after exclusions aren't counted (few, and
         // the fraction clamps).
+        //
+        // Both passes run frames concurrently, so alongside each tick goes the
+        // sorted set of frames in flight right now: completions land out of
+        // order, and a UI showing "what is being worked on" off the last tick
+        // alone bounces around instead of showing the working set. `begin`
+        // ticks (no preview, no unit counted) open each frame's membership so
+        // the set is live from the first seconds of a pass, not only after
+        // the first completion.
         let totalUnits = Double(n + n - 1)
         var completedUnits = 0
+        var inFlight = Set<Int>()
         let progressLock = NSLock()
+        func begin(frameIndex: Int, pass: RegistrationPass) {
+            guard let progress else { return }
+            progressLock.lock()
+            inFlight.insert(frameIndex)
+            let fraction = min(Double(completedUnits) / totalUnits, 1)
+            let active = inFlight.sorted()
+            progressLock.unlock()
+            progress(fraction, frameIndex, nil, pass, active)
+        }
         func bump(frameIndex: Int, frame: RegistrationPreview?, pass: RegistrationPass) {
             guard let progress else { return }
             progressLock.lock()
             completedUnits += 1
+            inFlight.remove(frameIndex)
             let fraction = min(Double(completedUnits) / totalUnits, 1)
+            let active = inFlight.sorted()
             progressLock.unlock()
-            progress(fraction, frameIndex, frame, pass)
+            progress(fraction, frameIndex, frame, pass, active)
         }
 
         // Decode grayscale frames concurrently (bounded — decode dominates this
@@ -153,6 +173,7 @@ public enum Aligner {
         // luminance mean rides along for the exposure check.
         let decoded = try boundedConcurrentMap(count: n, concurrency: registrationConcurrency) { i -> (GrayImage, GrayStats, Float, RegistrationFrame) in
             try cancellation?.checkCancelled()
+            begin(frameIndex: i, pass: .decode)
             // JPEGs decode at a DCT-domain reduction on the CImaging path
             // (decodeFactor 2 or 4) — gradient, stats, and SIFT prep all run
             // on the reduced plane; transforms map back to full-res through
@@ -206,6 +227,7 @@ public enum Aligner {
         let pairs = try boundedConcurrentMap(count: kept.count - 1, concurrency: registrationConcurrency) { j -> Pair in
             try cancellation?.checkCancelled()
             let a = kept[j], b = kept[j + 1]
+            begin(frameIndex: b, pass: .register)
             defer { bump(frameIndex: b, frame: preview(of: grays[b]), pass: .register) }
             do {
                 let h = try register(moving: regFrames[b], fixed: regFrames[a])

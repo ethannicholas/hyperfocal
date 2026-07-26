@@ -2366,11 +2366,20 @@ public final class AppModel: ObservableObject {
         guard let url = frames.first(where: { selection.contains($0) }) ?? selection.first else {
             return  // keep showing the last frame rather than blanking the pane
         }
+        // While a fusion is running, the preview pane shows the live
+        // processing source rather than the input preview (see
+        // showProcessingSource in ContentView), so decoding another frame
+        // here would be wasted work — and, worse, would race the pipeline's
+        // own reads of the same files. This also covers the reading-progress
+        // -driven selection tracking below (fuse()'s progress handler sets
+        // `selection` to the frame currently being read/processed so the
+        // Stack panel's row follows it): it reuses this same selection
+        // state rather than a parallel one, so it must no-op here too.
+        guard !phase.isRunning else { return }
         // A frame from another stack switches stack selection with it.
         if !frames.contains(url),
            let owner = stacks.first(where: { $0.frames.contains(url) }),
            owner.id != selectedStackID {
-            guard !phase.isRunning else { return }
             selectStack(owner.id)   // resets selection to the stack's first…
             selection = [url]       // …then honor the actual click
             showInputFrame(url)
@@ -2618,6 +2627,26 @@ public final class AppModel: ObservableObject {
                             self.processingSource = source
                             self.processingSourceLabel = sourceLabel
                             if let sourceNominal { self.processingSourceNominalSize = sourceNominal }
+                        }
+                        // Follow the frame(s) being processed in the Stack
+                        // panel. Concurrent stages (registration's decode and
+                        // gradient-matching passes) report their whole
+                        // in-flight set — a single highlight driven by the
+                        // last tick bounces between out-of-order completions;
+                        // sequential per-frame stages carry one source frame.
+                        // Deliberately NOT gated on sourcePreview: the
+                        // gradient-matching pass names frames without one.
+                        // Whole-image stages (regularizing, PMax's render,
+                        // finishing) carry neither and leave the selection
+                        // alone. Reuses the same `selection` state a user
+                        // click sets — not a parallel one — and this is
+                        // transient view state, not a model edit, so it must
+                        // not go through recordEdit()/undo.
+                        let active = update.activeFrames.filter(urls.indices.contains)
+                        if !active.isEmpty {
+                            self.selection = Set(active.map { urls[$0] })
+                        } else if urls.indices.contains(update.sourceFrameIndex) {
+                            self.selection = [urls[update.sourceFrameIndex]]
                         }
                     }
                 }, cancellation: cancellation)
