@@ -23,10 +23,6 @@ The engine, CLI, and Qt/QML shell are **landed at feature parity** on macOS,
 Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan.md`
 (+ git history). Remaining:
 
-- **Windows CI runner.** `Scripts/ci-gate.sh` already passes under Git Bash with
-  the `Scripts/windows-env.ps1` environment; needs a GitHub Actions Windows job
-  (or a self-hosted arm64 runner), possibly with Windows-calibrated PSNR floors
-  (margins above the shared floors are thin: pmax ~0.25 dB).
 - **Rocking-animation MP4 on non-Apple.** GIF exports on all three OSes now
   (giflib, via `hf_gif_*`); H.264 is still Apple-only and the non-Apple path
   refuses a non-`.gif` filename rather than failing obscurely. The blocker is

@@ -4,15 +4,22 @@
 # runners (free for public repos), matching the arm64-windows triplet the
 # port is developed against.
 #
-# Iteration trigger: pushes to the ci-windows branch (plus manual
-# dispatch). Promote to main pushes/PRs once the gate is green and the
-# vcpkg cache is warm — the first cold run builds OpenCV and friends from
-# source and can take well over an hour.
+# Runs on main pushes and PRs. A run is ~40 minutes against a warm vcpkg
+# binary cache (a cold one builds OpenCV and friends from source and takes
+# well over an hour), so it is far slower than the Linux job — hence the
+# concurrency group: superseded runs are cancelled rather than queued
+# behind each other. The ci-windows branch stays wired up for iterating on
+# this file itself without touching main.
 name: windows
 on:
   workflow_dispatch:
   push:
-    branches: [ci-windows]
+    branches: [main, ci-windows]
+  pull_request:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci-gate:
