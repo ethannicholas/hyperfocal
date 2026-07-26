@@ -868,6 +868,7 @@ public final class AppModel: ObservableObject {
         retouchMode = false
         noiseFloorPreview = nil
         noiseFloorPreviewData = nil
+        MemoryFootprint.mark("stack installed")
         noiseFloorPreviewDataEpoch += 1  // invalidate any in-flight build
         noiseFloorPreviewActive = false
         progressive = nil
@@ -2077,6 +2078,7 @@ public final class AppModel: ObservableObject {
         cropAngle = 0
         hasUnsavedWork = false
         projectURL = nil  // the next Save must ask where to put it
+        MemoryFootprint.mark("project cleared")
         frames = []
         included = []
         selection = []
@@ -2538,6 +2540,7 @@ public final class AppModel: ObservableObject {
         // Before any state changes: a cancelled preflight must leave the
         // current result and phase untouched.
         guard preflightDiskCache(urls: includedFrames) else { return }
+        MemoryFootprint.mark("fuse begin")
         // The selection band is about to march through this stack's frame
         // rows — make sure they're visible (multi-stack tree; the one-stack
         // layout has no headers to expand).
@@ -2733,6 +2736,7 @@ public final class AppModel: ObservableObject {
                     }
                 }, cancellation: cancellation)
                 let output = result.output
+                MemoryFootprint.mark("engine output landed")
                 let resultCG = try Preview.image(from: output.image)
                 // PMax has no depth map; only render its preview for DMap.
                 let depthCG = method == .dmap ? try Preview.image(from: output.depthMap) : nil
@@ -2788,9 +2792,11 @@ public final class AppModel: ObservableObject {
                         self.inputPreviewURL = nil
                         self.showInputFrame(url)
                     }
+                    MemoryFootprint.mark("results + previews stored")
                     // Retouch is available on the primary result immediately —
                     // depth-optional, so a PMax primary never waits for depth.
                     if !self.batchMode { self.prepareRetouch() }
+                    MemoryFootprint.mark("retouch session pre-warmed")
                     // Background-generate the OTHER algorithm as a retouch paint
                     // source (image only; a DMap secondary's depth map is
                     // discarded — depth belongs to a DMap *primary*). It is
@@ -2894,6 +2900,7 @@ public final class AppModel: ObservableObject {
                         self.dmapResult = image
                     }
                     self.retouch?.provideOtherResult(image)
+                    MemoryFootprint.mark("secondary result landed")
                 }
             } catch {
                 // Background failure is non-fatal: the primary result stands.

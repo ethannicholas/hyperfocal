@@ -599,6 +599,7 @@ public final class RetouchSession: ObservableObject {
         guard sourceCache[index] == nil else { return }
         sourceCache[index] = loaded
         sourceCacheOrder.append(index)
+        MemoryFootprint.mark("retouch source cached (\(sourceCacheOrder.count) held)")
         // Keep 3 full-res float frames at most (~2 GB at 45 MP).
         while sourceCacheOrder.count > 3 {
             sourceCache.removeValue(forKey: sourceCacheOrder.removeFirst())

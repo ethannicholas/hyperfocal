@@ -8,6 +8,134 @@ import simd
 
 // Headless integration tests for the app layer: retouch session loading,
 // session serialization round-trip, and model-level project save/restore.
+
+// Hidden characterization mode, NOT a regression gate:
+//   retouch-probe --memprofile <frames…>
+// runs the app-layer lifecycle on real frames — load → fuse (which
+// pre-warms the retouch session) → background secondary → enter retouch →
+// first stroke → close project → reload — printing a phys_footprint delta
+// at every retention milestone (the HYPERFOCAL_MEMLOG marks in AppModel /
+// RetouchSession fire too). Built to answer "what is holding N GB while
+// the app sits idle" with a log instead of an Instruments session.
+func memComposition(_ label: String) {
+    let metal = Double(EngineStats.metalAllocatedBytes) / Double(1 << 30)
+    let m = EngineStats.mallocBytes
+    print(String(format: "memsplit: %@ — metal %.2f GB, malloc used %.2f GB, malloc free %.2f GB",
+                 label, metal,
+                 Double(m.used) / Double(1 << 30), Double(m.free) / Double(1 << 30)))
+}
+
+// Decode-cache isolation: --memdecode <frames…> decodes each frame once
+// (dropping every result), then one frame five more times — if footprint
+// stays elevated per DISTINCT file, a process-global decode cache (ImageIO/
+// RAW pipeline) is holding rasters the app never references. Fast: no fuse.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--memdecode" {
+    setenv("HYPERFOCAL_MEMLOG", "1", 1)
+    let frameURLs = CommandLine.arguments.dropFirst(2).map { URL(fileURLWithPath: $0) }
+    MemoryFootprint.mark("baseline")
+    for (i, url) in frameURLs.enumerated() {
+        _ = try? ImageFile.load(url: url)
+        if (i + 1) % 10 == 0 { MemoryFootprint.mark("decoded \(i + 1) distinct") }
+    }
+    MemoryFootprint.mark("all distinct decoded + released")
+    for i in 0..<5 {
+        _ = try? ImageFile.load(url: frameURLs[0])
+        MemoryFootprint.mark("repeat decode \(i + 1) of frame 0")
+    }
+    malloc_zone_pressure_relief(nil, 0)
+    try? await Task.sleep(nanoseconds: 1_000_000_000)
+    MemoryFootprint.mark("after pressure relief")
+    exit(0)
+}
+
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--memprofile" {
+    setenv("HYPERFOCAL_MEMLOG", "1", 1)
+    let frameURLs = CommandLine.arguments.dropFirst(2).map { URL(fileURLWithPath: $0) }
+    MemoryFootprint.mark("baseline (empty model)")
+    let model = AppModel()
+    model.fuseFailureAlertOverride = { print("memprofile: fuse failed: \($0)"); exit(1) }
+    model.confirmAlertOverride = { _ in true }
+    model.ingest(urls: frameURLs)
+    // Ingest lands asynchronously (capture-time split → install) — wait for
+    // the stack before fusing, or fuse() no-ops on canFuse == false.
+    var ticks = 0
+    while !model.canFuse && ticks < 600 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard model.canFuse else { print("memprofile: ingest never became fuseable"); exit(1) }
+    MemoryFootprint.mark("frames loaded")
+    model.fuse()
+    ticks = 0
+    while model.phase != .done && ticks < 36000 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard model.phase == .done else { print("memprofile: fuse never completed"); exit(1) }
+    MemoryFootprint.mark("fuse done (results + previews + session pre-warm)")
+    memComposition("fuse done")
+    ticks = 0
+    while (model.resultMethod == .pmax ? model.dmapResult : model.pmaxResult) == nil
+            && ticks < 36000 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    MemoryFootprint.mark("background secondary landed")
+    model.enterRetouch()
+    MemoryFootprint.mark("entered retouch")
+    if let session = model.retouch {
+        ticks = 0
+        while session.sourceFloat == nil && ticks < 600 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            ticks += 1
+        }
+        let c = CGPoint(x: session.width / 2, y: session.height / 2)
+        session.beginStroke(at: c)
+        session.continueStroke(from: c, to: CGPoint(x: c.x + 200, y: c.y))
+        session.endStroke()
+        MemoryFootprint.mark("first stroke done")
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        MemoryFootprint.mark("retouch source caches settled")
+    }
+    model.exitRetouch()
+    MemoryFootprint.mark("exited retouch")
+    model.closeProject()
+    try? await Task.sleep(nanoseconds: 2_000_000_000)
+    MemoryFootprint.mark("project closed")
+    // Bisect: what does the model still hold? (all should be empty/nil)
+    var holders: [String] = []
+    holders.append("dmap=\(model.dmapResult != nil)")
+    holders.append("pmax=\(model.pmaxResult != nil)")
+    holders.append("depthImg=\(model.depthResult != nil)")
+    holders.append("depthFloats=\(model.resultDepth.count)")
+    holders.append("sharp=\(model.resultSharpness != nil)")
+    holders.append("gains=\(model.resultGains != nil)")
+    holders.append("outPrev=\(model.outputPreview != nil)")
+    holders.append("depthPrev=\(model.depthPreview != nil)")
+    holders.append("retouch=\(model.retouch != nil)")
+    holders.append("stacks=\(model.stacks.count)")
+    holders.append("frames=\(model.frames.count)")
+    holders.append("thumbs=\(model.stackThumbnails.count)")
+    print("post-close holders: " + holders.joined(separator: " "))
+    autoreleasepool {}
+    try? await Task.sleep(nanoseconds: 1_000_000_000)
+    MemoryFootprint.mark("after explicit pool drain")
+    memComposition("post-close")
+    // The decisive experiment: if the unowned residual is malloc's
+    // MADV_FREE slack (freed pages that stay in phys_footprint until
+    // memory pressure), forcing the reclaim collapses the footprint.
+    malloc_zone_pressure_relief(nil, 0)
+    try? await Task.sleep(nanoseconds: 1_000_000_000)
+    MemoryFootprint.mark("after malloc pressure relief")
+    memComposition("post-relief")
+    model.ingest(urls: frameURLs)
+    try? await Task.sleep(nanoseconds: 3_000_000_000)
+    MemoryFootprint.mark("fresh folder loaded, nothing fused")
+    try? await Task.sleep(nanoseconds: 5_000_000_000)
+    MemoryFootprint.mark("settled")
+    memComposition("settled")
+    exit(0)
+}
 // 0. Guided depth regularizer on synthetic ramps: a flat guide must turn a
 // confidence gap into a smooth ramp between the confident depths; a step
 // guide must hold the depth transition to the guide edge.
