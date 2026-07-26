@@ -53,6 +53,7 @@ enum WgpuPyramid {
                      progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                      cancellation: CancellationToken? = nil,
                      decodeWorkers: Int? = nil,
+                     decodeLookahead: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
                      onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
@@ -111,6 +112,8 @@ enum WgpuPyramid {
         // previous frame — decode dominates wall-clock otherwise. Callers'
         // frame closures must tolerate concurrent invocation.
         let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
+                                         lookahead: decodeLookahead
+                                             ?? FramePrefetcher.defaultLookahead,
                                          workers: decodeWorkers, decode: frame)
         defer { prefetcher.cancel() }
 

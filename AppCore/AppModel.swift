@@ -405,7 +405,17 @@ public final class AppModel: ObservableObject {
     /// True pixel dimensions of the input preview (the preview CGImage may be
     /// a reduced-resolution bitmap stretched to this size).
     @Published var inputPixelSize: CGSize?
-    @Published public var outputMode: OutputMode = .result
+    @Published public var outputMode: OutputMode = .result {
+        didSet {
+            // The panes render depth from the PREVIEW (depthPreview) — the
+            // full-res depth image only exists for export, derived on demand
+            // (`depthResultImage`). Leaving depth mode releases any copy an
+            // export materialized; nothing is built on entry.
+            if oldValue == .depth && outputMode != .depth {
+                depthResult = nil
+            }
+        }
+    }
     /// Lightroom-style tone adjustments (per stack, saved in projects):
     /// live on every preview — panes and retouch canvas — and baked into
     /// TIFF/PNG/JPEG exports at full float precision before quantization.
@@ -806,7 +816,9 @@ public final class AppModel: ObservableObject {
         stack.included = included
         stack.frameIssues = frameIssues
         stack.dmapResult = dmapResult
-        stack.depthResult = depthResult
+        // Never park the 0.7 GB depth image on the Stack — it re-derives
+        // from resultDepth (which IS stashed) on the next depth-mode visit.
+        stack.depthResult = nil
         stack.resultDepth = resultDepth
         stack.resultSharpness = resultSharpness
         stack.resultGains = resultGains
@@ -871,12 +883,12 @@ public final class AppModel: ObservableObject {
         MemoryFootprint.mark("stack installed")
         // Re-warm the retouch session for the incoming stack, off the
         // Start-Retouching path — the cold build (full-res display
-        // conversions + a zeroed PMax depth plane) is what froze the UI for
-        // seconds when retouch was entered after a project open or stack
-        // switch. Deferred a runloop turn so the surrounding flow settles
-        // first (project open sets phase after installing); prepareRetouch
-        // no-ops unless the stack is fused and idle. Batches never retouch
-        // and switch stacks constantly — skip them.
+        // conversions + buffer uniquing) is what froze the UI for seconds
+        // when retouch was entered after a project open or stack switch.
+        // Deferred a runloop turn so the surrounding flow settles first
+        // (project open sets phase after installing); prepareRetouch
+        // no-ops unless the stack is fused and idle. Batches never
+        // retouch and switch stacks constantly — skip them.
         Task { @MainActor [weak self] in
             guard let self, !self.batchMode else { return }
             self.prepareRetouch()
@@ -1318,7 +1330,9 @@ public final class AppModel: ObservableObject {
                 $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil
             }
             stack.cropAngle = item.payload.cropAngle ?? 0
-            stack.depthResult = item.depthImage
+            // Restored projects re-derive the depth image from the restored
+            // depth floats on demand — don't retain the decoded copy.
+            stack.depthResult = nil
             stack.savedWorking = item.payload.working
             stack.savedSourceIndex = item.payload.sourceIndex
             stack.outputPreview = item.outputCG
@@ -1485,7 +1499,27 @@ public final class AppModel: ObservableObject {
     /// Always generated (foreground when DMap is fused, background otherwise)
     /// because depth and retouch need it.
     public private(set) var dmapResult: ImageBuffer?
+    /// The depth map as a display/export image — a CACHE, not a store: at
+    /// ~0.7 GB of RGBA float for what is one byte of information per pixel,
+    /// retaining it permanently was the single silliest entry in the memory
+    /// ledger. `resultDepth` (the raw per-pixel frame indices, retained
+    /// anyway for retouch) is the source of truth; this image derives from
+    /// it on demand (`depthResultImage`), lives while the output pane is in
+    /// depth mode, and releases when the pane leaves it.
     private(set) var depthResult: ImageBuffer?
+
+    /// The depth image for display/export, deriving (and caching) it from
+    /// `resultDepth` when needed. ~0.2 s at 45 MP on first use per depth-mode
+    /// visit; nil when the stack has no depth (PMax primary, unfused).
+    func depthResultImage() -> ImageBuffer? {
+        if let depthResult { return depthResult }
+        guard !resultDepth.isEmpty, let base = dmapResult else { return nil }
+        let image = DMapFusion.depthImage(from: resultDepth,
+                                          width: base.width, height: base.height,
+                                          frameCount: max(fuseURLs.count, 2))
+        depthResult = image
+        return image
+    }
     /// The PMax-algorithm image, peer of `dmapResult`. In-memory only —
     /// regenerated, never saved.
     public private(set) var pmaxResult: ImageBuffer?
@@ -2090,6 +2124,15 @@ public final class AppModel: ObservableObject {
         cropAngle = 0
         hasUnsavedWork = false
         projectURL = nil  // the next Save must ask where to put it
+        // The model has released its buffers here, but macOS malloc keeps
+        // freed large allocations counted in the process footprint until
+        // memory pressure — which reads as "Hyperfocal holds gigabytes
+        // doing nothing" in Activity Monitor. Hand the pages back now.
+        // (Measured: reclaims the malloc-slack share of the residual; the
+        // rest is the Metal allocator and Apple's RAW-decode caches.)
+        #if canImport(Darwin)
+        malloc_zone_pressure_relief(nil, 0)
+        #endif
         MemoryFootprint.mark("project cleared")
         frames = []
         included = []
@@ -2788,7 +2831,10 @@ public final class AppModel: ObservableObject {
                         // What this result was fused with (staleness tracking
                         // for the Fuse buttons) — the start-of-fuse snapshot.
                         self.fusedSettings = settingsInUse
-                        self.depthResult = output.depthMap
+                        // The full-res depth IMAGE is not retained — export
+                        // derives it from resultDepth on demand; the panes
+                        // render from the preview CG below.
+                        self.depthResult = nil
                         if let depthCG { self.depthPreview = depthCG }
                     }
                     self.resultMethod = method  // the fused algorithm IS the result
@@ -3265,7 +3311,9 @@ public final class AppModel: ObservableObject {
                                           width: session.width,
                                           height: session.height,
                                           frameCount: max(session.urls.count, 2))
-        depthResult = image
+        // The preview refresh is what the panes need from the merge; the
+        // full image re-derives at export.
+        depthResult = nil
         if let cg = try? Preview.image(from: image) {
             depthPreview = cg
         }
@@ -3285,7 +3333,7 @@ public final class AppModel: ObservableObject {
     private func runExportPanel() {
         // Retouch edits, once made, are the result.
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
-        guard (outputMode == .depth ? depthResult : baseImage) != nil else { return }
+        guard (outputMode == .depth ? depthResultImage() : baseImage) != nil else { return }
         // Name after the stack's folder — stable and meaningful, unlike
         // whichever frame happens to be first or selected.
         let base = (fuseURLs.first ?? frames.first)?
@@ -3405,7 +3453,7 @@ public final class AppModel: ObservableObject {
     public func writeExport(to url: URL) -> Bool {
         if outputMode == .depth { mergeRetouchDepth() }
         let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
-        guard let raw = outputMode == .depth ? depthResult : baseImage else { return false }
+        guard let raw = outputMode == .depth ? depthResultImage() : baseImage else { return false }
         let image = Self.cropped(raw, to: cropRect, angle: cropAngle)
         do {
             // Tone bakes into display-referred formats only: DNG stays

@@ -372,6 +372,14 @@ public final class RetouchSession: ObservableObject {
         // keeps the still-running build from touching this pane.
         sourceLoadGeneration += 1
         if let cached = sourceCache[clamped] {
+            // LRU refresh: a hit keeps the frame hot, or FIFO eviction could
+            // drop the frame being painted right after a neighbor prefetch
+            // lands (the tighter 2-slot cap made that a real race — the
+            // supersede probe caught a toggle-back losing its cache hit).
+            if let pos = sourceCacheOrder.firstIndex(of: clamped) {
+                sourceCacheOrder.remove(at: pos)
+                sourceCacheOrder.append(clamped)
+            }
             sourceFloat = cached.buffer
             sourceDisplay = cached.image
             sourceLoading = false
@@ -600,9 +608,16 @@ public final class RetouchSession: ObservableObject {
         sourceCache[index] = loaded
         sourceCacheOrder.append(index)
         MemoryFootprint.mark("retouch source cached (\(sourceCacheOrder.count) held)")
-        // Keep 3 full-res float frames at most (~2 GB at 45 MP).
-        while sourceCacheOrder.count > 3 {
-            sourceCache.removeValue(forKey: sourceCacheOrder.removeFirst())
+        // Keep 2 full-res float frames at most (~1.7 GB at 45 MP with their
+        // display images — the cache was the largest single entry in the
+        // fused-idle memory ledger at 3). Current + one neighbor still makes
+        // directional frame-cycling instant; a third slot mostly held the
+        // trailing neighbor nobody returns to. Never evict the CURRENT
+        // source: with LRU order (refreshed on hit) the oldest non-current
+        // entry is the right victim.
+        while sourceCacheOrder.count > 2 {
+            guard let victim = sourceCacheOrder.firstIndex(where: { $0 != sourceIndex }) else { break }
+            sourceCache.removeValue(forKey: sourceCacheOrder.remove(at: victim))
         }
     }
 

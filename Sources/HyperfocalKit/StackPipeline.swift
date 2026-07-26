@@ -203,10 +203,16 @@ public enum StackPipeline {
                 // decode, no warp — plain SSD streaming. `warp: nil` because
                 // the cache already holds aligned frames on this canvas.
                 log?("pmax: streaming \(cache.frameCount) warped frames from the primary fuse's cache")
+                // Spill reads outrun the GPU consumer, so the default
+                // decode-ahead window (up to 8 frames) just fills with ~0.7 GB
+                // buffers — measured as a ~5-6 GB transient while the
+                // background secondary ran. Two in flight keeps the overlap;
+                // SSD latency needs no deeper pipeline.
                 image = try PyramidFusion.fuse(
                     frameCount: cache.frameCount, preferGPU: configuration.preferGPU,
                     warp: nil, log: log, progress: pmaxProgress,
                     cancellation: cancellation,
+                    decodeWorkers: 2, decodeLookahead: 2,
                     focusGate: configuration.pmaxFocusGate,
                     onSharpness: onSharpness) { try cache.frame($0) }
             } else {

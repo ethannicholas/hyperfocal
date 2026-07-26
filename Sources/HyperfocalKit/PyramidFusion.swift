@@ -248,6 +248,7 @@ public enum PyramidFusion {
                             progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
                             decodeWorkers: Int? = nil,
+                            decodeLookahead: Int? = nil,
                             focusGate: FocusGate? = nil,
                             prepareDespill: Bool = false,
                             onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil,
@@ -279,6 +280,7 @@ public enum PyramidFusion {
                                            log: log, progress: progress,
                                            cancellation: cancellation,
                                            decodeWorkers: decodeWorkers,
+                                           decodeLookahead: decodeLookahead,
                                            focusGate: gpuFocusGate,
                                            onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
@@ -293,6 +295,7 @@ public enum PyramidFusion {
                                             log: log, progress: progress,
                                             cancellation: cancellation,
                                             decodeWorkers: decodeWorkers,
+                                            decodeLookahead: decodeLookahead,
                                             focusGate: gpuFocusGate,
                                             onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
@@ -348,6 +351,8 @@ public enum PyramidFusion {
         // frame — same overlap (and same concurrent-invocation contract on
         // `frame`) as the GPU paths.
         let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
+                                         lookahead: decodeLookahead
+                                             ?? FramePrefetcher.defaultLookahead,
                                          workers: decodeWorkers, decode: frame)
         defer { prefetcher.cancel() }
 
