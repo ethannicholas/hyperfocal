@@ -563,6 +563,20 @@ int main(int argc, char *argv[]) {
     const QString forcedLang = QString::fromLocal8Bit(qgetenv("HFQT_LANG"));
     const bool selftest = argc >= 2
         && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--selftest");
+    // A bare `--selftest` used to fall through to app.exec() and launch an
+    // ordinary window: it reads as a hung test rather than a misuse, and cost
+    // a debugging detour. Reject it here — before the QML engine is built, so
+    // nothing flashes on screen — since no form of `--selftest` was ever
+    // meant to start the GUI.
+    if (selftest && argc < 4) {
+        qCritical().noquote()
+            << "usage: hyperfocal-qt --selftest <stack-dir> <out.tif> [screenshot.png]\n"
+               "  <stack-dir>  directory of input frames to open and fuse\n"
+               "  <out.tif>    export path; the run passes only if this lands\n"
+               "  env: HFQT_STACK2, HFQT_AUTOCONFIRM, HFQT_EXPECT_DISPLAY,\n"
+               "       HFQT_EXPECT_EXCLUDED, HFQT_LANG";
+        return 2;
+    }
     if (!selftest && forcedLang != QStringLiteral("en")) {
         const QStringList tags = forcedLang.isEmpty()
             ? CatalogTranslator::candidateTags(QLocale::system())

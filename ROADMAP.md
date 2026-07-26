@@ -35,7 +35,10 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
   the Adobe DNG Converter (`RawConverter`), but the Linux/Wine path was punted;
   see `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
 - **Qt shell polish toward native parity** (`QtShell/`; the shell self-tests via
-  `hyperfocal-qt --selftest` with `HFQT_*` env hooks):
+  `hyperfocal-qt --selftest <stack-dir> <out.tif> [screenshot.png]`, exit 0 only
+  if the export lands, plus the `HFQT_*` env hooks — the flag REQUIRES its two
+  paths and now exits 2 with usage without them, because falling through to a
+  normal window read as a hung test):
   - **Known non-native behaviors to close** — a running "works, but not the
     native way" list; add to it the moment a new deviation is introduced:
     - Confirms/notices are Qt message boxes (fine on Linux; non-native chrome on
