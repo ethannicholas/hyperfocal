@@ -2735,7 +2735,8 @@ public final class AppModel: ObservableObject {
                         guard let self, generation == self.fusionGeneration,
                               !cancellation.isCancelled else { return }
                         self.retouch?.otherSourceProgress(
-                            fraction: Self.overallProgress(stage, rawFraction),
+                            fraction: Self.secondaryProgress(stage, rawFraction,
+                                                             method: other),
                             preview: preview, isData: isData)
                     }
                 }, cancellation: cancellation)
@@ -2843,6 +2844,31 @@ public final class AppModel: ObservableObject {
         case .regularizing: window = (0.80, 0.85)
         case .render: window = (0.85, 0.99)
         case .finishing: window = (0.99, 1.00)
+        }
+        return window.0 + (window.1 - window.0) * min(max(fraction, 0), 1)
+    }
+
+    /// Progress windows for the background ("other algorithm") fuse. It always
+    /// runs with cached registration, so `overallProgress`'s foreground
+    /// windows don't fit: a PMax secondary emits only `.render` progress,
+    /// which the foreground mapping squeezes into (0.85, 0.99) — the entire
+    /// generation then displays as 85→99%, reading as "stuck in the high
+    /// 80s/90s" no matter how normally it is running. Windows here are sized
+    /// to the secondary's actual work: PMax IS its render pass; a DMap
+    /// secondary spends most of its time in the decode-dominated depth pass.
+    static func secondaryProgress(_ stage: FusionProgress.Stage,
+                                  _ fraction: Double,
+                                  method: FusionMethod) -> Double {
+        let window: (Double, Double)
+        switch (method, stage) {
+        case (_, .finishing):        window = (0.99, 1.00)
+        case (.pmax, .render):       window = (0.00, 0.99)
+        case (.pmax, _):             window = (0.00, 0.00)  // cache-hit registration tick
+        case (.dmap, .registering), (.dmap, .aligning):
+                                     window = (0.00, 0.02)
+        case (.dmap, .depth):        window = (0.02, 0.60)
+        case (.dmap, .regularizing): window = (0.60, 0.70)
+        case (.dmap, .render):       window = (0.70, 0.99)
         }
         return window.0 + (window.1 - window.0) * min(max(fraction, 0), 1)
     }
