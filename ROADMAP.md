@@ -13,13 +13,25 @@ PASS`; `hyperfocal-cli synth` baselines (default params) are **plane ≈ 38.4 dB
 dmap / 38.2 pmax** vs truth. The dmap figure was 38.7 before the focus
 measure gained its pre-Laplacian denoise; the synth scenes are noiseless, so
 that is the one input class the denoise can only cost — judge DMap changes on
-real stacks too (`Docs/research/2026-07-26-dmap-focus-measure.md`). CPU↔GPU parity is **≥ 90 dB for dmap** (≈ 101 on
-the synth plane) and **≥ 65 dB for pmax** (≈ 70). The two bars differ because
-pixel storage is **f16**: two engines that agree to better than one f16 ulp
-still land on different halves, so ~75–80 dB is the arithmetic ceiling for any
-value near 1.0, and PMax's multi-level collapse compounds a few ulps of it.
-DMap clears 90 because its output is a weighted average both engines round
-identically. Anything *below* these bars is drift, not quantization — and the
+real stacks too (`Docs/research/2026-07-26-dmap-focus-measure.md`). CPU↔GPU
+parity is **≥ 90 dB for dmap** (≈ 101 on the synth plane) and **≥ 65 dB for
+pmax** (≈ 70). The two bars differ because pixel storage is **f16**: two
+engines that agree to better than one f16 ulp still land on different halves,
+so ~75–80 dB is the arithmetic ceiling for any value near 1.0, and PMax's
+multi-level collapse compounds a few ulps of it. DMap clears 90 because its
+output is a weighted average both engines round identically.
+
+**One exception, and it is the wgpu backend only:** warped dmap on wgpu is
+gated at **≥ 71**, not 90 (`debug-wgpu --dmap-warp-floor`, ≈ 74 measured).
+That is not a property of warped frames — CPU↔**Metal** warped dmap clears 90
+comfortably (≈ 103). It is the unfinished f16 port below: wgpu's WGSL kernels
+are still f32 while storage is f16, so it alone warps in f32 and stores
+through half, and where its result straddles a rounding boundary the argmax
+flips a frame index. The bar should return to 90 when that port lands.
+Derivation, the evidence that it is quantization rather than drift, and a
+refuted one-seam fix: `WgpuParity.runDMap`.
+
+Anything *below* these bars is drift, not quantization — and the
 usual cause is a buffer that should be f32 (an accumulator, or a separable
 filter's intermediate) being stored as half. `retouch-probe` is macOS-only —
 off Apple, gate on the CLI synth→fuse→compare path plus the Qt shell selftest
@@ -265,11 +277,15 @@ stack before quoting a new ledger.
   `shader-f16` is not universal, and the only validated surfaces here are WARP
   and llvmpipe. Mirror the Metal split exactly — accumulators (`tent_accumulate`'s
   accum, the pyramid base sum) and the separable blur's H→V intermediate stay
-  f32; see `MetalEngine`'s kernel header for why each one does. Done = the
-  staging arrays in `WgpuDMap` are gone, `WgpuParity` passes, and parity holds
-  at the bars above. **Note this is unverified even as it stands**: the host-seam
-  conversion above was written without a wgpu-enabled build (syntax-checked
-  only), so type-check it on a `HYPERFOCAL_WGPU=1` build first.
+  f32; see `MetalEngine`'s kernel header for why each one does. This port is
+  also what should retire the warped-dmap exception in the header: it exists
+  precisely because these kernels are f32 under f16 storage, and Metal — which
+  has no such asymmetry — clears 90 on the same frames. Done = the staging
+  arrays in `WgpuDMap` are gone, `WgpuParity` passes, and warped dmap parity is
+  back at **90**, not 71. Before starting, read the refuted experiment in
+  `Docs/performance.md`: quantizing *only* the warp output to f16 on-device, to
+  match the CPU's storage, measurably worsened warped dmap parity — so this has
+  to move the whole kernel chain to half, not narrow at one seam.
 - **Depth-map export precision.** `DMapFusion.depthImage` now returns an f16
   `ImageBuffer` like everything else, so a 16-bit depth-map export resolves
   ~2048 levels over its top octave instead of 65535. Far above what a stack can
