@@ -50,8 +50,17 @@ struct DebugWgpu: ParsableCommand {
     @Option(help: "Fail below this minimum CPU↔GPU fusion PSNR in dB.")
     var fusionFloor: Double = 60
 
-    @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB.")
+    @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (unwarped frames).")
     var dmapFloor: Double = 90
+
+    // Warped frames get their own floor: each engine resamples in f32 and then
+    // stores through f16, so the two land on adjacent halves wherever their f32
+    // results straddle a rounding boundary, and dmap's argmax amplifies that
+    // into frame-index flips. 75 sits just under the measured 78.2 dB and
+    // inside f16's 75-80 dB ceiling near 1.0 — see WgpuParity.runDMap for the
+    // full derivation and the refuted on-device-quantization fix.
+    @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (warped frames — lower because f16 storage, not slack).")
+    var dmapWarpFloor: Double = 75
 
     func run() throws {
         let minPSNR = try WgpuParity.run()
@@ -66,9 +75,10 @@ struct DebugWgpu: ParsableCommand {
             throw StackError.metal("wgpu fusion parity below floor")
         }
         print("wgpu fusion: ALL PASS")
-        let dmapMin = try WgpuParity.runDMap()
-        print(String(format: "dmap minimum: %.1f dB (floor %.1f)", dmapMin, dmapFloor))
-        if dmapMin < dmapFloor {
+        let dmap = try WgpuParity.runDMap()
+        print(String(format: "dmap: plain %.1f dB (floor %.1f), warped %.1f dB (floor %.1f)",
+                     dmap.plain, dmapFloor, dmap.warped, dmapWarpFloor))
+        if dmap.plain < dmapFloor || dmap.warped < dmapWarpFloor {
             throw StackError.metal("wgpu dmap parity below floor")
         }
         print("wgpu dmap: ALL PASS")

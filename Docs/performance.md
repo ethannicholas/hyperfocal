@@ -74,6 +74,23 @@ frames-at-once *memory* (not time) is the likelier next lever.**
   four combinations (e.g. dmap/gpu 2.45 → 1.83 GB); it is not 50 % because
   decode buffers, the scalar f32 planes, and the Metal/OS baseline don't scale
   with pixel storage.
+- **Quantizing the wgpu warp output to f16 on-device**, to make the wgpu backend
+  carry byte-identical halves to the CPU (`pack2x16float`/`unpack2x16float`, core
+  WGSL — no `shader-f16` feature needed). Motivated by CPU↔wgpu dmap parity
+  splitting by variant once pixel storage went f16: unwarped 106.3 dB, warped
+  **78.2 dB** against a 90 dB bar (WARP, 9 × 360×240 synth plane scene). The fix
+  made it **worse — 78.2 → 70.7 dB** (pyramid_warp 68.7 → 67.5), because the
+  asymmetry it removes is many *small* disagreements and what it leaves is fewer
+  *full-ulp* ones, which dmap's argmax amplifies into whole frame-index flips.
+  Reverted. The residual gap is arithmetic, not drift: each engine resamples in
+  f32 then stores through f16, so wherever their f32 results straddle a rounding
+  boundary they land on adjacent halves, and 78 dB is inside the 75–80 dB ceiling
+  f16 imposes near 1.0. Hence the warped variant carries its own 75 dB floor
+  (`debug-wgpu --dmap-warp-floor`); a miss *below* that is drift and should be
+  chased. Unwarped keeps 90 because both engines hold identical decoded halves
+  and round their weighted averages the same way. Worth re-measuring against
+  Metal's warped end-to-end dmap on a Mac — the ≥90 re-baselining was done on the
+  unwarped case only.
 - **Metal GPUDMap zero-copy upload** — see the ROADMAP item. Two findings:
   `[Float]` elements live at offset 32 past the storage base, so
   `makeBuffer(bytesNoCopy:)` can never page-align without reworking

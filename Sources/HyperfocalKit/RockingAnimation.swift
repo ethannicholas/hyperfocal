@@ -366,7 +366,19 @@ public enum RockingAnimation {
         // GIF delays are centiseconds; below 2 many players silently clamp to
         // 10, so keep the written value honest rather than promising 30 fps.
         let delay = max(2, Int((100.0 / options.fps).rounded()))
-        guard let gif = base.pixels.withUnsafeBufferPointer({
+        // The shim speaks f32 (see ImageBuffer): widen each frame through one
+        // reusable staging plane rather than allocating a `floatPixels()` copy
+        // per frame — at 1920 px and 30 fps that is ~90 × 40 MB of churn.
+        var staging = [Float](repeating: 0, count: w * h * 4)
+        func widen(_ img: ImageBuffer) {
+            img.pixels.withUnsafeBufferPointer { src in
+                staging.withUnsafeMutableBufferPointer { dst in
+                    hfWiden(src.baseAddress!, dst.baseAddress!, count: dst.count)
+                }
+            }
+        }
+        widen(base)
+        guard let gif = staging.withUnsafeBufferPointer({
             hf_gif_begin(url.path, CInt(w), CInt(h), $0.baseAddress)
         }) else {
             throw StackError.io("couldn't create GIF at \(url.path)")
@@ -380,7 +392,8 @@ public enum RockingAnimation {
             let shift = options.shift(frame: frame, of: frameCount, width: w)
             warp(base, disparity: disparity, shiftX: shift.x, shiftY: shift.y,
                  into: &warped)
-            let status = warped.pixels.withUnsafeBufferPointer {
+            widen(warped)
+            let status = staging.withUnsafeBufferPointer {
                 hf_gif_add_frame(gif, $0.baseAddress, CInt(delay))
             }
             guard status == hf_ok else {

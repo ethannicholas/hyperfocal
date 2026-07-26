@@ -100,7 +100,7 @@ public enum WgpuParity {
 
         // -- warps vs Warp.apply (the production CPU reference) --------------
         let sw = 257, sh = 181, dw = 241, dh = 173
-        let src = ImageBuffer(width: sw, height: sh, pixels: c.rand(sw * sh * 4))
+        let src = ImageBuffer(width: sw, height: sh, floatPixels: c.rand(sw * sh * 4))
         let a: Float = 0.03, s: Float = 1.02
         let H = simd_float3x3(rows: [
             SIMD3<Float>(s * cos(a), -s * sin(a), 3.7),
@@ -120,7 +120,17 @@ public enum WgpuParity {
                            uniforms: bytes(of: wp), gridW: dw, gridH: dh)
             let cpu = Warp.apply(src, outputToSource: H, outWidth: dw, outHeight: dh,
                                  method: method)
-            c.report(kernel, cpu.floatPixels(), try c.read(dstBuf, dw * dh * 4))
+            // Compare at the precision the pipeline actually retains. These are
+            // the only RGBA cases here: `Warp.apply` returns an ImageBuffer, so
+            // the CPU side is already f16, while the WGSL kernels are still f32
+            // (the deferred half-storage port). Narrowing the download is what
+            // production does — `WgpuDMap.downloadHalves`, `WgpuPyramid`'s
+            // `init(floatPixels:)` — and without it this check measures f16
+            // storage error (~79 dB, the ROADMAP header's ceiling) rather than
+            // engine agreement. The plane kernels below are f32 on both sides.
+            let gpu = ImageBuffer(width: dw, height: dh,
+                                  floatPixels: try c.read(dstBuf, dw * dh * 4))
+            c.report(kernel, cpu.floatPixels(), gpu.floatPixels())
         }
 
         // -- blur_h + blur_v --------------------------------------------------
@@ -868,15 +878,35 @@ public enum WgpuParity {
     /// `SynthStack` plane scene in a temp dir — the dmap path streams from
     /// URLs, so the prefetcher and the frame spill run for real, and the
     /// warped variant covers the mid-frame exposure-mean readback (flicker
-    /// keeps the exposure gains non-unity). The bar is ≥ 90 dB (the Metal
-    /// DMap's bar — nothing here amplifies fast-math ties), which needs a
-    /// realistic stack: the pyramid checks' strip frames give dmap's 4-bin
+    /// keeps the exposure gains non-unity). The bars (≥ 90 dB unwarped, ≥ 75
+    /// warped — see below for why they differ) need a realistic stack either
+    /// way: the pyramid checks' strip frames give dmap's 4-bin
     /// argmax broad flat energy curves whose dense near-ties flip whole frame
     /// indices on fp noise. The plane scene's smooth depth gradient is the
     /// regime the regularizer is stable in (and the file-level synth gate
     /// measures). Depth-map agreement is reported but the gate is the fused
     /// image: depth drives the render, so a depth regression shows there.
-    public static func runDMap(log: @escaping (String) -> Void = { print($0) }) throws -> Double {
+    ///
+    /// **The two variants carry different bars, and the split is f16 storage,
+    /// not slack.** Unwarped, both engines hold identical decoded halves and
+    /// their weighted averages round to the same half almost everywhere — that
+    /// is why DMap clears 90 (106.3 dB measured on WARP). Warped, each engine
+    /// resamples in f32 and then stores through f16, so wherever the two f32
+    /// results straddle a rounding boundary they land on adjacent halves; the
+    /// argmax turns a full-ulp disagreement into a whole frame-index flip.
+    /// That puts the warped variant at 78.2 dB — inside the 75–80 dB ceiling
+    /// f16 imposes on any value near 1.0, and unreachable by 90 for as long as
+    /// pixel storage is half. Confirmed by experiment rather than assumed:
+    /// quantizing the wgpu warp output to f16 on-device (`pack2x16float`) so
+    /// both engines carry byte-identical halves made it *worse*, 78.2 → 70.7,
+    /// because it converts many small disagreements into fewer full-ulp ones
+    /// that the argmax amplifies. It was reverted.
+    ///
+    /// So a warped miss below ~75 still means drift and should be chased; the
+    /// gap between 78 and 90 is arithmetic. Returns both figures so the caller
+    /// can gate each against its own floor.
+    public static func runDMap(log: @escaping (String) -> Void = { print($0) })
+        throws -> (plain: Double, warped: Double) {
         let w = 360, h = 240, frameCount = 9  // SynthStack forces an odd count
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
             "hyperfocal-wgpu-dmap-\(ProcessInfo.processInfo.processIdentifier)")
@@ -888,7 +918,7 @@ public enum WgpuParity {
         let (_, urls) = try SynthStack.generate(options: synthOpts, outDir: dir,
                                                 frameExtension: "tif")
 
-        var minPSNR = Double.infinity
+        var results: [String: Double] = [:]
         let variants: [(String, [simd_float3x3]?)] = [
             ("dmap_plain", nil),
             ("dmap_warp", synthTransforms(width: w, height: h, frameCount: frameCount)),
@@ -906,12 +936,13 @@ public enum WgpuParity {
             log(String(format: "%@: %@ (depth %@)", name,
                        psnr.isInfinite ? "inf dB" : String(format: "%.1f dB", psnr),
                        depthPSNR.isInfinite ? "inf dB" : String(format: "%.1f dB", depthPSNR)))
-            minPSNR = min(minPSNR, psnr)
+            results[name] = psnr
             guard progressCalls > 0 else {
                 throw StackError.metal("wgpu dmap emitted no progress")
             }
         }
-        return minPSNR
+        return (plain: results["dmap_plain"] ?? -.infinity,
+                warped: results["dmap_warp"] ?? -.infinity)
     }
 }
 #endif // HYPERFOCAL_HAVE_WGPU
