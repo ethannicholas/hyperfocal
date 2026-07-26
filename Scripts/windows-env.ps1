@@ -54,6 +54,16 @@ if (-not $env:VCPKG_ROOT) {
     if (Test-Path $sibling) { $env:VCPKG_ROOT = (Resolve-Path $sibling).Path }
 }
 
+# The vcpkg we intend to build against, remembered across the vcvarsall import
+# below. vcvarsall exports its OWN VCPKG_ROOT whenever the VS install bundles
+# vcpkg — Enterprise does, Build Tools usually doesn't — and the import loop
+# copies every variable it emits, so an inherited or sibling-derived
+# VCPKG_ROOT would be silently replaced by VS's manifest-mode-only copy. That
+# is exactly what failed the Windows CI job: the workflow set
+# VCPKG_ROOT=C:\hf-vcpkg, vcvarsall overwrote it with the VS one, and the
+# build died on a missing tiffio.h.
+$chosenVcpkgRoot = $env:VCPKG_ROOT
+
 # MSVC + Windows SDK via vcvarsall for the native arch. vcvarsall locates the
 # toolset with vswhere.exe and silently produces a half-initialized
 # environment when that isn't on PATH — put the Installer dir there first.
@@ -74,6 +84,8 @@ if (Test-Path "$installer\vswhere.exe") {
         }
     }
 }
+
+if ($chosenVcpkgRoot) { $env:VCPKG_ROOT = $chosenVcpkgRoot }
 
 # vcpkg's DLLs must be findable at runtime (dynamic triplet).
 if ($env:VCPKG_ROOT) {

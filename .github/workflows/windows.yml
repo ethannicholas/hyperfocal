@@ -77,6 +77,13 @@ jobs:
           Write-Host "::notice::VCPKG_ROOT = $env:VCPKG_ROOT (triplet $env:VCPKG_TRIPLET)"
           $tiff = Join-Path $env:VCPKG_ROOT 'installed\arm64-windows\include\tiffio.h'
           Write-Host "::notice::tiffio.h at $tiff = $(Test-Path $tiff)"
+          # Fail here rather than 40 minutes later in a compile error: if the
+          # environment points at the wrong vcpkg, nothing downstream can work.
+          # (It pointed at VS's bundled, manifest-only copy for five runs —
+          # vcvarsall exports its own VCPKG_ROOT; see Scripts/windows-env.ps1.)
+          if (-not (Test-Path $tiff)) {
+            throw "VCPKG_ROOT=$env:VCPKG_ROOT has no arm64-windows tiffio.h - wrong vcpkg tree"
+          }
           & 'C:\Program Files\Git\bin\bash.exe' Scripts/ci-gate.sh 2>&1 |
               Tee-Object -FilePath gate.log
           if ($LASTEXITCODE) {
