@@ -1951,7 +1951,13 @@ public final class AppModel: ObservableObject {
             stacks += newStacks
         }
         disambiguateStackNames()
-        expandedStacks.formUnion(newStacks.map(\.id))
+        // Several stacks arriving together (a folder of sessions) start
+        // collapsed — a wall of expanded frame lists buries the stack rows
+        // themselves. A single added stack still expands: it's about to be
+        // selected, and in the one-stack layout there are no headers anyway.
+        if newStacks.count == 1 {
+            expandedStacks.formUnion(newStacks.map(\.id))
+        }
         if replacing || selectedStackID == nil {
             if let first = stacks.first {
                 selectedStackID = first.id
@@ -2478,6 +2484,10 @@ public final class AppModel: ObservableObject {
         // Before any state changes: a cancelled preflight must leave the
         // current result and phase untouched.
         guard preflightDiskCache(urls: includedFrames) else { return }
+        // The selection band is about to march through this stack's frame
+        // rows — make sure they're visible (multi-stack tree; the one-stack
+        // layout has no headers to expand).
+        if let id = selectedStackID { expandedStacks.insert(id) }
         phase = .running
         stageText = localizedString("Starting…", comment: "")
         stageFraction = 0
