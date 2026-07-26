@@ -68,6 +68,13 @@ public enum DMapFusion {
         /// cleanup is always-on there); the `fuse` CLI turns it on when its
         /// resolved despill amount is > 0 or the input-dump env is set.
         public var prepareDespill: Bool
+        /// Keep the pass-1 warped-frame spill alive on `Output.warpedFrames`
+        /// after the fuse instead of reclaiming it, so a follow-on consumer
+        /// (the app's background PMax generation) streams already-warped
+        /// frames instead of re-decoding the stack — see `WarpedFrameCache`.
+        /// Off by default: the spill is multi-GB of temp disk, and it should
+        /// outlive the fuse only while someone will actually consume it.
+        public var retainSpill: Bool = false
 
         public init(sharpnessSigma: Float = 10, blendRadius: Float = 1, noiseFloor: Float = 0.05,
                     medianRadius: Int = 20, normalizeExposure: Bool = true,
@@ -114,6 +121,12 @@ public enum DMapFusion {
         /// each engine's (≈90 dB-parity) luminance planes + guide, so a
         /// despilled result inherits that parity rather than re-deriving it.
         public var despill: Despill.DespillInputs? = nil
+        /// The pass-1 warped-frame spill, retained only when
+        /// `Options.retainSpill` is set (and the spill actually ran) —
+        /// consumed by the app's background PMax generation via
+        /// `StackPipeline.Configuration.warpedFrameCache`. Dropping the
+        /// last reference reclaims its multi-GB temp file.
+        public var warpedFrames: WarpedFrameCache? = nil
     }
 
     public static func fuse(frameCount: Int, options: Options = Options(),
@@ -532,6 +545,11 @@ public enum DMapFusion {
                                                       planes: sharpnessPlanes),
                             gains: gains)
         output.despill = despillInputs
+        if options.retainSpill, let spill {
+            output.warpedFrames = WarpedFrameCache(spill: spill, width: width,
+                                                   height: height,
+                                                   frameCount: frameCount)
+        }
         return output
     }
 

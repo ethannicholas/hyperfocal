@@ -32,6 +32,15 @@ public enum StackPipeline {
         /// with the issues; return the frame indices to drop). Lets a UI ask
         /// the user mid-fuse. nil → `autoExcludeBadFrames` excludes all or none.
         public var badFrameHandler: (([FrameQualityIssue]) -> Set<Int>)?
+        /// Warped frames retained from a prior DMap fuse of the SAME frame
+        /// list (`Options.retainSpill` → `Output.warpedFrames`). A `.pmax`
+        /// fuse whose canvas matches streams these instead of re-decoding
+        /// and re-warping the stack — the app's background PMax generation
+        /// uses this to stay off Apple's RAW engine, which retouch's
+        /// on-demand source loads are hammering at the same time (concurrent
+        /// RAW decode measured ≥4× slower end-to-end). Ignored by `.dmap`
+        /// (its own spill covers its second pass).
+        public var warpedFrameCache: WarpedFrameCache?
 
         public init(fusion: DMapFusion.Options = DMapFusion.Options(),
                     align: Bool = true, preferGPU: Bool = true,
@@ -162,15 +171,34 @@ public enum StackPipeline {
             // PMax (Laplacian-pyramid max-coefficient): image only, no depth.
             // Alignment/exclusion above is method-independent, so both
             // algorithms share the one registration pass.
-            let image = try PyramidFusion.fuse(
-                source: source, preferGPU: configuration.preferGPU, log: log,
-                progress: { fraction, preview in
-                    progress?(FusionProgress(stage: .render, fraction: fraction,
-                                             preview: preview,
-                                             previewFullWidth: source.outputWidth ?? (preview?.width ?? 0),
-                                             previewFullHeight: source.outputHeight ?? (preview?.height ?? 0)))
-                },
-                cancellation: cancellation, focusGate: configuration.pmaxFocusGate)
+            let pmaxProgress: (Double, ImageBuffer?) -> Void = { fraction, preview in
+                progress?(FusionProgress(stage: .render, fraction: fraction,
+                                         preview: preview,
+                                         previewFullWidth: source.outputWidth ?? (preview?.width ?? 0),
+                                         previewFullHeight: source.outputHeight ?? (preview?.height ?? 0)))
+            }
+            let image: ImageBuffer
+            if let cache = configuration.warpedFrameCache,
+               cache.frameCount == source.count,
+               cache.width == source.outputWidth, cache.height == source.outputHeight {
+                // Frames come pre-warped off the retained spill: no RAW
+                // decode, no warp — plain SSD streaming. `warp: nil` because
+                // the cache already holds aligned frames on this canvas.
+                log?("pmax: streaming \(cache.frameCount) warped frames from the primary fuse's cache")
+                image = try PyramidFusion.fuse(
+                    frameCount: cache.frameCount, preferGPU: configuration.preferGPU,
+                    warp: nil, log: log, progress: pmaxProgress,
+                    cancellation: cancellation,
+                    focusGate: configuration.pmaxFocusGate) { try cache.frame($0) }
+            } else {
+                if configuration.warpedFrameCache != nil {
+                    log?("pmax: warped-frame cache doesn't match this canvas — re-decoding")
+                }
+                image = try PyramidFusion.fuse(
+                    source: source, preferGPU: configuration.preferGPU, log: log,
+                    progress: pmaxProgress,
+                    cancellation: cancellation, focusGate: configuration.pmaxFocusGate)
+            }
             output = DMapFusion.Output(image: image, depthMap: ImageBuffer(width: 0, height: 0),
                                        depth: [], sharpness: nil, gains: nil)
         case .dmap:

@@ -116,6 +116,27 @@ Throughput breakdowns, measured dead-ends, ablation taps, and the per-pixel
 specialization contract: `Docs/performance.md` — read it before touching a hot
 loop or re-attempting a parked optimization.
 
+- **Serve retouch source loads from the retained warped-frame spill.** The
+  background PMax generation now streams the DMap primary's `WarpedFrameCache`
+  instead of re-decoding (measured: concurrent RAW decode ran a pmax fuse ≥7×
+  slower end-to-end, because Apple's RAW engine degrades under exactly the
+  concurrency retouch's on-demand `loadAligned` produces). Retouch itself still
+  re-decodes: every frame-source switch is a full RAW decode + warp
+  (`RetouchSession.selectSource` → `loadAligned`, plus `prefetchNeighbors`).
+  Serving those from the same cache would make frame switching near-instant and
+  remove the app's remaining self-contention — at the cost of keeping the
+  multi-GB spill alive for the whole retouch session (it already degrades to
+  fp16 / skips itself on tight disks; the decode path stays as the fallback).
+  Decide the lifetime policy (session-long vs release-on-low-space) before
+  wiring it.
+- **Symmetric spill for a PMax primary.** The reuse above only helps the
+  DMap-primary direction: a PMax primary spills nothing, so its background
+  DMap secondary re-decodes the stack (twice the exposure to the same
+  contention — untimed so far, user report pending). The pyramid engines
+  consume warped frames but never write a spill; adding `retainSpill` there
+  (write-through during the accumulation pass, like GPUDMap's pass 1) would
+  give the DMap secondary the same free ride.
+
 - **Fusion throughput on modest hardware** — hit the **< 2 min end-to-end** bar
   on the 2-core reference (currently ~175 s dmap / ~132 s pmax at 11 MP; ~295 s
   dmap at 45 MP). The biggest remaining prize is a **cheaper feature detector**

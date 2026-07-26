@@ -2515,6 +2515,13 @@ public final class AppModel: ObservableObject {
                                            medianRadius: Int(medianRadius),
                                            normalizeExposure: normalizeExposure,
                                            spillEnabled: fusionDiskCache)
+        // A DMap primary (outside a batch) is followed by the background PMax
+        // generation: keep the warped-frame spill so that pass streams frames
+        // off disk instead of re-decoding the stack — its RAW decodes and
+        // retouch's on-demand source loads otherwise contend on Apple's RAW
+        // engine (measured ≥4× slower end-to-end). The spill is released when
+        // the background pass finishes (its task drops the configuration).
+        config.fusion.retainSpill = method == .dmap && !batchMode
         frameIssues = [:]
         // Bad frames (misfires, failed alignment): ask before excluding. The
         // handler runs on the fusion thread; the alert blocks it while the
@@ -2677,7 +2684,8 @@ public final class AppModel: ObservableObject {
                         self.startBackgroundFusion(other: method == .dmap ? .pmax : .dmap,
                                                    generation: generation,
                                                    urls: result.fusedURLs,
-                                                   config: config)
+                                                   config: config,
+                                                   warpedFrames: output.warpedFrames)
                     }
                 }
             } catch {
@@ -2712,10 +2720,16 @@ public final class AppModel: ObservableObject {
     /// DMap-primary feature), and neither branch touches the displayed result.
     /// Sequential — starts only once the foreground result has landed.
     private func startBackgroundFusion(other: FusionMethod, generation: Int,
-                                       urls: [URL], config: StackPipeline.Configuration) {
+                                       urls: [URL], config: StackPipeline.Configuration,
+                                       warpedFrames: WarpedFrameCache? = nil) {
         var bg = config
         bg.method = other
         bg.badFrameHandler = nil   // registration is cached; no bad-frame prompts
+        // A PMax secondary streams the primary's already-warped frames off
+        // disk instead of re-decoding the stack (see Configuration docs). The
+        // cache lives exactly as long as this task holds its configuration.
+        bg.warpedFrameCache = warpedFrames
+        bg.fusion.retainSpill = false   // the secondary spills for no one
         let cancellation = CancellationToken()
         backgroundFusionCancellation = cancellation
         let cache = alignmentCache

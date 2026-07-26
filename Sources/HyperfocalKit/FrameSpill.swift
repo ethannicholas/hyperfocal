@@ -27,6 +27,33 @@ import WinSDK
 /// process death (even a crash can't leak a multi-GB temp file). Slots are
 /// 16 KiB-aligned and the fd is F_NOCACHE: written once, read once, the
 /// traffic shouldn't churn the unified buffer cache.
+/// A DMap fuse's pass-1 warped-frame spill, retained past the fuse so a
+/// follow-on consumer can stream the already-decoded, already-warped frames
+/// instead of re-decoding the stack. The motivating consumer is the app's
+/// background PMax generation: its RAW re-decode contends with retouch's
+/// on-demand source loads on Apple's internally-parallel RAW engine (see
+/// `FramePrefetcher.workers(for:)`), measured ≥4× slower end-to-end under
+/// that load — while spill reads are plain SSD I/O, immune to it. Dimensions
+/// ride along so the consumer can verify the cache matches its canvas. The
+/// spill's disk space (multi-GB, unlinked temp) is reclaimed when the last
+/// reference dies — holders should be scoped, not stored for the session.
+public struct WarpedFrameCache {
+    let spill: FrameSpill
+    public let width: Int
+    public let height: Int
+    public let frameCount: Int
+
+    /// Streams frame `i` back as an ImageBuffer (fp32 RGBA; fp16-quantized
+    /// when the spill degraded — same tier the primary's render consumed).
+    func frame(_ i: Int) throws -> ImageBuffer {
+        var buf = ImageBuffer(width: width, height: height)
+        try buf.pixels.withUnsafeMutableBufferPointer { p in
+            try spill.read(frame: i, into: p.baseAddress!)
+        }
+        return buf
+    }
+}
+
 public final class FrameSpill {
     #if os(Windows)
     private let handle: HANDLE

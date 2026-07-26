@@ -565,6 +565,11 @@ public enum WgpuDMap {
                                                                  planes: sharpnessPlanes),
                                        gains: gains)
         output.despill = despillInputs
+        if options.retainSpill, let spill {
+            output.warpedFrames = WarpedFrameCache(spill: spill, width: width,
+                                                   height: height,
+                                                   frameCount: frameCount)
+        }
         return output
     }
 

@@ -918,6 +918,39 @@ Task { @MainActor in
     try? FileManager.default.removeItem(at: cancelDir)
     print("probe: immediate cancel + act-during-drain OK")
 
+    // 5d. Warped-frame cache handoff: a PMax fuse streaming a DMap primary's
+    // retained spill (Options.retainSpill → Output.warpedFrames →
+    // Configuration.warpedFrameCache — the app's background-generation path)
+    // must match a direct PMax fuse of the same frames. Both engines warp
+    // through the one warp_lanczos3 kernel and the fp32 spill stores those
+    // warps bit-identically, so the paths differ only by decode+warp vs
+    // spill read (floor calibrated under the measured value, which is GPU
+    // run-to-run jitter, not path divergence).
+    do {
+        var dmapCfg = StackPipeline.Configuration()
+        dmapCfg.fusion.retainSpill = true
+        let primary = try! StackPipeline.fuseResult(urls: Array(urls),
+                                                    configuration: dmapCfg,
+                                                    alignmentCache: cache)
+        guard let warped = primary.output.warpedFrames else {
+            print("probe: RETAINED SPILL MISSING (retainSpill set, no warpedFrames)")
+            exit(1)
+        }
+        var pmaxCfg = StackPipeline.Configuration()
+        pmaxCfg.method = .pmax
+        pmaxCfg.warpedFrameCache = warped
+        let cached = try! StackPipeline.fuse(urls: Array(urls), configuration: pmaxCfg,
+                                             alignmentCache: cache)
+        pmaxCfg.warpedFrameCache = nil
+        let direct = try! StackPipeline.fuse(urls: Array(urls), configuration: pmaxCfg,
+                                             alignmentCache: cache)
+        let dB = Metrics.psnrBestOffset(cached.image, direct.image, margin: 8).psnr
+        guard dB > 70 else {
+            print("probe: PMAX-FROM-SPILL DIVERGES (\(dB) dB vs direct)"); exit(1)
+        }
+        print(String(format: "probe: pmax warped-frame cache OK (%.1f dB vs direct)", dB))
+    }
+
     // 6. Session auto-split + batch queue: two capture-time-stamped stacks in
     // one list split at the gap, batch-fuse serially, and export two results.
     let pid = ProcessInfo.processInfo.processIdentifier
