@@ -823,7 +823,7 @@ public enum WgpuParity {
         var previews = 0
         var lastPreview: ImageBuffer? = nil
         let gpuPlain = try WgpuPyramid.fuse(frameCount: frameCount,
-                                            progress: { _, img in
+                                            progress: { _, _, img in
                                                 if let img { previews += 1; lastPreview = img }
                                             }) { frames[$0] }
         let cpuPlain = try PyramidFusion.fuse(frameCount: frameCount,
