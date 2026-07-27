@@ -205,7 +205,12 @@ do {
 }
 
 let args = CommandLine.arguments.dropFirst()
-let urls = args.map { URL(fileURLWithPath: $0) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+// absoluteURL matters: a relative path here yields a URL carrying a baseURL,
+// which compares UNEQUAL to its round-tripped absolute twin even though the
+// paths match — the included-set check then fails with two identical-looking
+// lists. Invoking the probe with relative frame paths used to do exactly that.
+let urls = args.map { URL(fileURLWithPath: $0).absoluteURL }
+    .sorted { $0.lastPathComponent < $1.lastPathComponent }
 
 // Stroke-cost measurement harness (HYPERFOCAL_BENCH_STROKE=1), not a
 // regression check: builds a session directly over frame 0 (no fusion)
