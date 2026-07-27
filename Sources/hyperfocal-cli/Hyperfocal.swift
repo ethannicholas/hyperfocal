@@ -17,7 +17,7 @@ import WinSDK   // GetProcessMemoryInfo for the peak-memory report
 private let subcommandList: [ParsableCommand.Type] = {
     var list: [ParsableCommand.Type] =
         [Fuse.self, Batch.self, Animate.self, Synth.self, Compare.self,
-         DebugAlign.self, DebugChain.self,
+         DebugAlign.self, DebugChain.self, DebugRegister.self,
          DebugWarp.self, DebugDiff.self, DebugBoost.self, DebugSource.self,
          DebugBench.self, DebugDespill.self]
     #if HYPERFOCAL_HAVE_WGPU
@@ -852,6 +852,70 @@ struct DebugDiff: ParsableCommand {
         }
         try ImageFile.save(out, to: URL(fileURLWithPath: output))
         print("wrote \(output)")
+    }
+}
+
+/// Warps one image onto another's pixel grid with the engine's own registration.
+///
+/// Exists for measurement, and it closes a real hole. Scoring a fusion against
+/// real stacks means comparing images that do NOT share a pixel grid: our
+/// coverage crop against another tool's full frame, or a source frame against a
+/// fused result. Focus breathing makes that mismatch a *homography*, not an
+/// offset — on an 82-frame 11 MP stack it measured 2.2% of magnification, ~76 px
+/// — and hand-rolled substitutes in the scoring harness all failed on it
+/// (translation-only cross-correlation silently compared different parts of the
+/// scene; a least-squares similarity fit still left 57 px of residual). That
+/// produced two separate phantom "100× worse" findings before the real answer
+/// turned out to be "aligned wrong". The estimator that solves it properly was
+/// already in the tree.
+///
+/// Registering across focus difference is the aligner's day job, so a defocused
+/// source frame registers to an all-in-focus render fine.
+struct DebugRegister: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "debug-register",
+        abstract: "Warp `moving` onto `fixed`'s pixel grid via the aligner "
+            + "(measurement aid: puts two differently-registered renders on one grid).",
+        shouldDisplay: false)
+
+    @Argument(help: "Image to warp.") var moving: String
+    @Argument(help: "Image whose grid to warp onto.") var fixed: String
+    @Option(name: .shortAndLong, help: "Output path for the warped image.")
+    var output: String
+
+    func run() throws {
+        let mov = try ImageFile.load(url: URL(fileURLWithPath: moving))
+        let fix = try ImageFile.load(url: URL(fileURLWithPath: fixed))
+        #if canImport(Vision)
+        // 8-bit is what the registrator consumes; the homography it returns is
+        // resolution-independent, and it is applied to the full-precision buffer.
+        // Vision's registration requires both images to have identical
+        // dimensions, and the interesting case here never does (another tool's
+        // uncropped frame against our coverage crop). Estimate on the common
+        // top-left region: cropping rather than padding, because a synthetic
+        // black border is a strong edge the feature matcher would happily latch
+        // onto. Both crops keep their original origin, so the homography comes
+        // back in the full images' own coordinates and applies unchanged.
+        let cw = min(mov.width, fix.width), ch = min(mov.height, fix.height)
+        let H = try Aligner.register(
+            moving: ImageFile.cgImage8(from: mov.cropped(x: 0, y: 0,
+                                                        width: cw, height: ch)),
+            fixed: ImageFile.cgImage8(from: fix.cropped(x: 0, y: 0,
+                                                        width: cw, height: ch)))
+        // `register` returns moving → fixed; `Warp.apply` samples the source, so
+        // it wants the inverse.
+        let out = Warp.apply(mov, outputToSource: H.inverse,
+                             outWidth: fix.width, outHeight: fix.height)
+        try ImageFile.save(out, to: URL(fileURLWithPath: output))
+        print(String(format: "registered %dx%d → %dx%d grid "
+                     + "(scale %.5f, translate %+.1f %+.1f)",
+                     mov.width, mov.height, fix.width, fix.height,
+                     (H[0][0] * H[1][1] - H[0][1] * H[1][0]).squareRoot(),
+                     H[2][0], H[2][1]))
+        print("wrote \(output)")
+        #else
+        throw ValidationError("debug-register needs Vision (macOS)")
+        #endif
     }
 }
 
