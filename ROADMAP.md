@@ -118,9 +118,16 @@ number that moves when depth selection fails.
   and track A never engages (no fine focus in the band). The candidate design:
   a track B that keeps the frame *closest to the local clean background
   level*, which needs a local clean-field luminance estimate — the analog of
-  despill's backdrop reconstruction. Second thread: `specimen_2` is the widest
-  per-stack PMax deficit (−12/−14% normalized, both registration directions,
-  broad rather than localized) and may have a different cause entirely.
+  despill's backdrop reconstruction. Second thread, now diagnosed: the widest
+  per-stack PMax deficit (≈ −13% normalized, both registration directions)
+  turned out to be mostly the reference's output sharpening — its render
+  exceeds the best *registered source frame* on two-thirds of tiles (energy
+  its sources don't contain), and a plain unsharp mask on our render flips
+  the comparison to +20% — plus one narrow real weakness worth keeping: in
+  tiles of weak, near-noise-floor speckle, our max-selection lets other
+  frames' noise dilute the single frame that carries coherent detail (fused
+  lands at 0.7–0.9× the best source frame there; DMap holds 1.0–1.07). The
+  measurements and per-stack numbers live with the private corpus README.
 - **Close the remaining DMap gaps.** Against the commercial DMap we are at
   parity on the small stacks (contrast-normalized, within ±5% either way) and
   well ahead on the high-resolution raw ones — though that margin plausibly

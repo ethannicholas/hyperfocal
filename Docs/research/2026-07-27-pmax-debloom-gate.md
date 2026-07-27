@@ -189,3 +189,11 @@ DMap is at parity on the same set. The stacks where we appear far ahead are all
 raw, where the comparison also includes each tool's raw decode and so cannot be
 attributed to fusion. Treat closing the PMax gap as open work; the per-stack
 numbers live with the reference corpus, not here, because they will age.
+
+(2026-07-27, later: the worst-case stack was diagnosed — mostly the
+reference's output sharpening, plus a narrow weak-speckle selection loss on
+our side; see ROADMAP and the corpus README. The fusion-gain-vs-registered-
+source-frames test used there is the general instrument for splitting
+"their sharpening" from "our loss": a fused render owing its energy to
+sharpening *exceeds* the best registered source frame broadly, which honest
+fusion cannot.)
