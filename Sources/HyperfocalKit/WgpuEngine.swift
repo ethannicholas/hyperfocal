@@ -1179,18 +1179,37 @@ public final class WgpuEngine {
         }
     }
 
-    @group(0) @binding(0) var<storage, read_write> plm_dst: array<f32>;
-    @group(0) @binding(1) var<storage, read> plm_gauss: array<vec4f>;
-    @group(0) @binding(2) var<uniform> plm_p: Count1;
+    @group(0) @binding(0) var<storage, read_write> plm_min: array<f32>;
+    @group(0) @binding(1) var<storage, read_write> plm_max: array<f32>;
+    @group(0) @binding(2) var<storage, read> plm_gauss: array<vec4f>;
+    @group(0) @binding(3) var<uniform> plm_p: Count1;
 
-    // Running per-cell MIN luminance over all frames, at level 0 — the input to
-    // the near-black gate. Mirrors the CPU loop's lumMin0.
+    // Running per-cell MIN and MAX luminance over all frames, at level 0 — the
+    // near-black gate reads the min, the contamination-sign test both.
+    // Mirrors the CPU loop's lumMin0/lumMax0.
     @compute @workgroup_size(256)
-    fn pyr_lum_min(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_lum_minmax(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= plm_p.count) { return; }
         let g = plm_gauss[gid.x];
         let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
-        plm_dst[gid.x] = min(plm_dst[gid.x], lum);
+        plm_min[gid.x] = min(plm_min[gid.x], lum);
+        plm_max[gid.x] = max(plm_max[gid.x], lum);
+    }
+
+    @group(0) @binding(0) var<storage, read_write> pfm_min: array<f32>;
+    @group(0) @binding(1) var<storage, read_write> pfm_max: array<f32>;
+    @group(0) @binding(2) var<storage, read> pfm_src: array<f32>;
+    @group(0) @binding(3) var<uniform> pfm_p: Count1;
+
+    // Running per-pixel min/max over frames of the level-0 grit energy — the
+    // focus-movement planes the debloom membership reads. Mirrors the CPU
+    // loop's focusMin0/focusMax0.
+    @compute @workgroup_size(256)
+    fn pyr_focus_minmax(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pfm_p.count) { return; }
+        let e = pfm_src[gid.x];
+        pfm_min[gid.x] = min(pfm_min[gid.x], e);
+        pfm_max[gid.x] = max(pfm_max[gid.x], e);
     }
 
     @group(0) @binding(0) var<storage, read_write> pmg_fused: array<vec4f>;

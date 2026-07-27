@@ -888,16 +888,33 @@ public final class MetalEngine {
         }
     }
 
-    // Running per-cell MIN luminance over all frames, at level 0 — the input to
-    // the near-black gate. Mirrors the CPU loop's lumMin0.
-    kernel void pyr_lum_min(device float* dst [[buffer(0)]],
-                            device const half4* gauss [[buffer(1)]],
-                            constant uint& count [[buffer(2)]],
-                            uint gid [[thread_position_in_grid]]) {
+    // Running per-cell MIN and MAX luminance over all frames, at level 0 — the
+    // near-black gate reads the min, the contamination-sign test both.
+    // Mirrors the CPU loop's lumMin0/lumMax0.
+    kernel void pyr_lum_minmax(device float* dstMin [[buffer(0)]],
+                               device float* dstMax [[buffer(1)]],
+                               device const half4* gauss [[buffer(2)]],
+                               constant uint& count [[buffer(3)]],
+                               uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
         float4 g = float4(gauss[gid]);
         float lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
-        dst[gid] = min(dst[gid], lum);
+        dstMin[gid] = min(dstMin[gid], lum);
+        dstMax[gid] = max(dstMax[gid], lum);
+    }
+
+    // Running per-pixel min/max over frames of the level-0 grit energy — the
+    // focus-movement planes the debloom membership reads. Mirrors the CPU
+    // loop's focusMin0/focusMax0.
+    kernel void pyr_focus_minmax(device float* dstMin [[buffer(0)]],
+                                 device float* dstMax [[buffer(1)]],
+                                 device const float* src [[buffer(2)]],
+                                 constant uint& count [[buffer(3)]],
+                                 uint gid [[thread_position_in_grid]]) {
+        if (gid >= count) return;
+        float e = src[gid];
+        dstMin[gid] = min(dstMin[gid], e);
+        dstMax[gid] = max(dstMax[gid], e);
     }
 
     // Near-black-gated focus merge. `fused` holds track A, `trackB` the darkest

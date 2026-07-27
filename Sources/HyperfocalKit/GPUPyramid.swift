@@ -45,7 +45,8 @@ enum GPUPyramid {
         let selectFocusGated = focusGate == nil ? nil : try engine.pipeline("pyr_select_focus_gated")
         let baseDarkest = focusGate == nil ? nil : try engine.pipeline("pyr_base_darkest")
         let mergeFocus = focusGate == nil ? nil : try engine.pipeline("pyr_merge_focus")
-        let lumMinPipe = focusGate == nil ? nil : try engine.pipeline("pyr_lum_min")
+        let lumMinMax = focusGate == nil ? nil : try engine.pipeline("pyr_lum_minmax")
+        let focusMinMax = focusGate == nil ? nil : try engine.pipeline("pyr_focus_minmax")
         let mergeFocusGated = focusGate == nil ? nil
             : try engine.pipeline("pyr_merge_focus_gated")
         let bandEnergyPipeline = try engine.pipeline("pyr_band_energy")
@@ -91,6 +92,9 @@ enum GPUPyramid {
         var plainC: [MTLBuffer?] = []
         var plainBestE: [MTLBuffer?] = []
         var lumMin0: MTLBuffer! = nil
+        var lumMax0: MTLBuffer! = nil
+        var focusMin0: MTLBuffer! = nil
+        var focusMax0: MTLBuffer! = nil
         // Coarsest band levels are focus-gated: l in [max(1, levels−coarse), levels).
         func gated(_ l: Int) -> Bool {
             guard let fg = focusGate else { return false }
@@ -235,6 +239,9 @@ enum GPUPyramid {
                         plainBestE.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                     }
                     lumMin0 = try engine.makeBuffer(floats: width * height)
+                    lumMax0 = try engine.makeBuffer(floats: width * height)
+                    focusMin0 = try engine.makeBuffer(floats: width * height)
+                    focusMax0 = try engine.makeBuffer(floats: width * height)
                 }
             }
             precondition(img.width == srcWidth && img.height == srcHeight,
@@ -313,16 +320,20 @@ enum GPUPyramid {
                     }
                     fillBuf(baseDarkLum, .infinity, sizes[levels].w * sizes[levels].h)
                     fillBuf(lumMin0, .infinity, width * height)
+                    fillBuf(lumMax0, 0, width * height)
+                    fillBuf(focusMin0, .infinity, width * height)
+                    fillBuf(focusMax0, 0, width * height)
                 }
             }
             if focusGate != nil {
-                // Running level-0 min luminance for the near-black gate, taken
+                // Running level-0 min/max luminance for the membership, taken
                 // from the warped frame before the pyramid consumes it.
                 var c0 = UInt32(width * height)
                 enc.setBuffer(lumMin0, offset: 0, index: 0)
-                enc.setBuffer(gauss[0], offset: 0, index: 1)
-                enc.setBytes(&c0, length: 4, index: 2)
-                engine.dispatch1D(enc, lumMinPipe!, count: width * height)
+                enc.setBuffer(lumMax0, offset: 0, index: 1)
+                enc.setBuffer(gauss[0], offset: 0, index: 2)
+                enc.setBytes(&c0, length: 4, index: 3)
+                engine.dispatch1D(enc, lumMinMax!, count: width * height)
             }
             for l in 0..<levels {
                 let (w, h) = sizes[l]
@@ -428,6 +439,16 @@ enum GPUPyramid {
                     engine.dispatch1D(enc, select, count: w * h)
                 }
             }
+            if focusGate != nil {
+                // gritA still holds this frame's grit-blurred level-0 energy —
+                // accumulate the focus-movement min/max the membership reads.
+                var c0 = UInt32(width * height)
+                enc.setBuffer(focusMin0, offset: 0, index: 0)
+                enc.setBuffer(focusMax0, offset: 0, index: 1)
+                enc.setBuffer(gritA, offset: 0, index: 2)
+                enc.setBytes(&c0, length: 4, index: 3)
+                engine.dispatch1D(enc, focusMinMax!, count: width * height)
+            }
             // Base level: darkest-frame Gaussian (focus gate) or running sum
             // (standard, averaged after the last frame).
             var baseCount = UInt32(sizes[levels].w * sizes[levels].h)
@@ -506,16 +527,29 @@ enum GPUPyramid {
             let lm = UnsafeBufferPointer(start: lumMin0.contents()
                                             .assumingMemoryBound(to: Float.self),
                                          count: width * height)
-            let gate = PyramidFusion.nearBlackMasks(lumMin0: Array(lm),
-                                                    width: width, height: height,
-                                                    sizes: sizes, levels: levels,
-                                                    darkCoarse: focusGate!.coarseLevels)
-            log?(String(format: "pmax near-black gate: scale=%.4f, mean mask %.3f (GPU)",
-                        gate.scale, gate.mean))
+            let lx = UnsafeBufferPointer(start: lumMax0.contents()
+                                            .assumingMemoryBound(to: Float.self),
+                                         count: width * height)
+            let fmin = UnsafeBufferPointer(start: focusMin0.contents()
+                                            .assumingMemoryBound(to: Float.self),
+                                           count: width * height)
+            let fmax = UnsafeBufferPointer(start: focusMax0.contents()
+                                            .assumingMemoryBound(to: Float.self),
+                                           count: width * height)
+            let gate = PyramidFusion.debloomMasks(lumMin0: Array(lm),
+                                                  lumMax0: Array(lx),
+                                                  focusMax0: Array(fmax),
+                                                  focusMin0: Array(fmin),
+                                                  frameCount: frameCount,
+                                                  width: width, height: height,
+                                                  sizes: sizes, levels: levels,
+                                                  darkCoarse: focusGate!.coarseLevels)
+            log?(String(format: "pmax debloom gate: scale=%.4f, mean mask %.3f, open-bg %.3f (GPU)",
+                        gate.scale, gate.mean, gate.bgFraction))
             for l in 0..<levels where gated(l) {
                 var count = UInt32(sizes[l].w * sizes[l].h)
                 guard l >= 1, !gate.masks[l].isEmpty else {
-                    // Level 0 is never gated by `nearBlackMasks` (it carries no
+                    // Level 0 is never gated by `debloomMasks` (it carries no
                     // track B); fall back to the plain focus merge there.
                     enc.setBuffer(fused[l], offset: 0, index: 0)
                     enc.setBuffer(trackB[l]!, offset: 0, index: 1)

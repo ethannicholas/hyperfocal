@@ -70,7 +70,8 @@ enum WgpuPyramid {
                     + (focusGate == nil && onSharpness == nil ? [] : ["box_downsample"])
                     + (focusGate == nil ? [] : ["pyr_select_focus_gated",
                                                 "pyr_base_darkest", "pyr_merge_focus",
-                                                "pyr_lum_min", "pyr_merge_focus_gated"]) {
+                                                "pyr_lum_minmax", "pyr_focus_minmax",
+                                                "pyr_merge_focus_gated"]) {
             _ = try engine.pipeline(name)
         }
         let gritWeights = Filters.gaussianKernel(sigma: PyramidFusion.gritSigma)
@@ -99,6 +100,9 @@ enum WgpuPyramid {
         var plainBestE: [WgpuEngine.Buffer?] = []
         var maskBuf: [WgpuEngine.Buffer?] = []
         var lumMin0Buf: WgpuEngine.Buffer! = nil
+        var lumMax0Buf: WgpuEngine.Buffer! = nil
+        var focusMin0Buf: WgpuEngine.Buffer! = nil
+        var focusMax0Buf: WgpuEngine.Buffer! = nil
         var baseDarkLum: WgpuEngine.Buffer! = nil
         func gated(_ l: Int) -> Bool {
             guard let fg = focusGate else { return false }
@@ -235,6 +239,9 @@ enum WgpuPyramid {
                         maskBuf.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                     }
                     lumMin0Buf = try engine.makeBuffer(floats: width * height)
+                    lumMax0Buf = try engine.makeBuffer(floats: width * height)
+                    focusMin0Buf = try engine.makeBuffer(floats: width * height)
+                    focusMax0Buf = try engine.makeBuffer(floats: width * height)
                 }
             }
             precondition(img.width == srcWidth && img.height == srcHeight,
@@ -287,6 +294,9 @@ enum WgpuPyramid {
                     }
                     try fill(baseDarkLum, .infinity, sizes[levels].w * sizes[levels].h)
                     try fill(lumMin0Buf, .infinity, width * height)
+                    try fill(lumMax0Buf, 0, width * height)
+                    try fill(focusMin0Buf, .infinity, width * height)
+                    try fill(focusMax0Buf, 0, width * height)
                 }
             }
             if warp != nil && !needsWarp {
@@ -307,8 +317,9 @@ enum WgpuPyramid {
                                    uniforms: bytes(of: params), gridW: width, gridH: height)
             }
             if focusGate != nil {
-                // Running level-0 min luminance for the near-black gate.
-                try batch.dispatch("pyr_lum_min", buffers: [lumMin0Buf, gauss[0]],
+                // Running level-0 min/max luminance for the membership.
+                try batch.dispatch("pyr_lum_minmax",
+                                   buffers: [lumMin0Buf, lumMax0Buf, gauss[0]],
                                    uniforms: bytes(of: Count1(count: UInt32(width * height))),
                                    gridW: width * height)
             }
@@ -373,6 +384,14 @@ enum WgpuPyramid {
                                        uniforms: bytes(of: count), gridW: w * h)
                 }
             }
+            if focusGate != nil {
+                // gritA still holds this frame's grit-blurred level-0 energy —
+                // accumulate the focus-movement min/max the membership reads.
+                try batch.dispatch("pyr_focus_minmax",
+                                   buffers: [focusMin0Buf, focusMax0Buf, gritA],
+                                   uniforms: bytes(of: Count1(count: UInt32(width * height))),
+                                   gridW: width * height)
+            }
             // Base level: darkest-frame Gaussian (focus gate) or running sum
             // (standard, averaged after the last frame).
             let baseCount = sizes[levels].w * sizes[levels].h
@@ -435,12 +454,27 @@ enum WgpuPyramid {
             try lm.withUnsafeMutableBytes {
                 try engine.download(lumMin0Buf, into: $0.baseAddress!, byteCount: $0.count)
             }
-            let gate = PyramidFusion.nearBlackMasks(lumMin0: lm, width: width,
-                                                    height: height, sizes: sizes,
-                                                    levels: levels,
-                                                    darkCoarse: focusGate!.coarseLevels)
-            log?(String(format: "pmax near-black gate: scale=%.4f, mean mask %.3f (wgpu)",
-                        gate.scale, gate.mean))
+            var lx = [Float](repeating: 0, count: width * height)
+            try lx.withUnsafeMutableBytes {
+                try engine.download(lumMax0Buf, into: $0.baseAddress!, byteCount: $0.count)
+            }
+            var fmin = [Float](repeating: 0, count: width * height)
+            try fmin.withUnsafeMutableBytes {
+                try engine.download(focusMin0Buf, into: $0.baseAddress!, byteCount: $0.count)
+            }
+            var fmax = [Float](repeating: 0, count: width * height)
+            try fmax.withUnsafeMutableBytes {
+                try engine.download(focusMax0Buf, into: $0.baseAddress!, byteCount: $0.count)
+            }
+            let gate = PyramidFusion.debloomMasks(lumMin0: lm, lumMax0: lx,
+                                                  focusMax0: fmax,
+                                                  focusMin0: fmin,
+                                                  frameCount: frameCount,
+                                                  width: width, height: height,
+                                                  sizes: sizes, levels: levels,
+                                                  darkCoarse: focusGate!.coarseLevels)
+            log?(String(format: "pmax debloom gate: scale=%.4f, mean mask %.3f, open-bg %.3f (wgpu)",
+                        gate.scale, gate.mean, gate.bgFraction))
             let mergeBatch = try engine.makeBatch()
             for l in 0..<levels where gated(l) {
                 let count = sizes[l].w * sizes[l].h

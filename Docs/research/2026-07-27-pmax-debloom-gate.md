@@ -106,6 +106,81 @@ luminance restriction is lifted. Any candidate must be judged against both:
    case — all three, because they fail differently.
 3. Azurite edge profiles stay monotonic (no trough, no moat).
 
+## 2026-07-27, later: the discriminator, what shipped, and the criterion this
+## doc was missing
+
+A candidate discriminator was built and measured against the criteria above.
+Most of it shipped; the headline case did not, for a reason the criteria as
+first written could not see. Three results, in order of importance:
+
+### The missing criterion: the source-frame floor
+
+Criterion 2 (top-1% highlight luminance) is necessary but not sufficient. The
+keep-darkest track B, once admitted to a bright backdrop, renders the band
+beside a dark silhouette **below the darkest source frame's own rendition** —
+on the train stack's blue backdrop, 66% of the most-affected pixels fell below
+the per-pixel minimum over registered source frames (0.478 vs a frame floor of
+0.507), and on a dark-specimens-on-white stack, 73% (0.759 vs 0.785). That is
+darkness no frame contains — a painted dark halo. The commercial reference is
+at 0% on both stacks: crisp *without* undershooting. The top-1% check misses
+this entirely because the damage sits at backdrop luminance (~0.5), nowhere
+near the top percentile; the edge profiles read it as *improvement* (steeper
+falloff = "crisper"). **Add to the criteria: in never-focused background, the
+fused result must not drop below the per-pixel min over registered source
+frames.** Check it with `debug-register` on 2-3 frames spanning the sweep.
+This is the same lesson as the top-1% check, one octave down: energy and
+profile metrics reward manufactured contrast wherever it comes from.
+
+By that standard the "ungated fixes the silhouette" result earlier in this doc
+was partly the same trap. Ungated debloom does fix the smear — and pays for a
+chunk of the crispness with sub-floor darkening that the Azurite profiles
+(black backdrop, nothing below to undershoot *to*) could not show.
+
+### The train silhouette is not the additive case
+
+The doc above implicitly modeled the bright-backdrop defect as bright features
+blooming outward (additive). Measured per pixel (is `lumMin` or `lumMax` the
+one matching the local clean level?), the train's silhouette band is
+**subtractive-dominated** — the roofline is a dark subject on a bright
+backdrop, the same contamination sign as the inverted-contrast marble case,
+just at different absolute levels. Keep-darkest there keeps the *most*
+contaminated frame plus overshoot; keep-brightest was already rejected (the
+other extreme). Track A cannot help either: measured with track B disabled,
+the profiles revert exactly to shipped — the band cells have no fine focus in
+any frame, so the A/C choice never engages there. **No merge built from
+per-cell extreme order statistics fixes a subtractive band without painting a
+halo.** The fix that remains open: a track B that keeps the frame *closest to
+the local clean background level* — which needs a local clean-field estimate
+(the luminance analog of despill's backdrop reconstruction), not just per-pixel
+min/max.
+
+### What shipped: the membership, sign-gated
+
+`debloomMasks` (was `nearBlackMasks`) now unions two background proofs — the
+near-black membership, unchanged, and an **open-background membership**: pixels
+in a connected smooth field that (a) reaches the frame border without crossing
+sharp structure (small-radius close of the sharp mask + border-connected
+components — enclosure is what protects bright feature interiors, half of
+whose top-1% pixels have no fine detail in any frame), (b) never comes into
+focus (per-component median of focus max/min across frames — an in-focus
+background's energy moves ~5000:1 with the sweep, a never-focused backdrop's
+~2:1, and absolute energy cannot separate them because a white-marble
+substrate's real texture overlaps a blue backdrop's noise floor), and (c) is
+**additively contaminated** where contaminated at all (per-component vote +
+per-pixel veto against the component's far-field level, from the full-res
+per-pixel min/max luminance planes all three engines now accumulate).
+
+Clause (c) is what the frame-floor criterion forces: it correctly holds the
+train and the white-background specimens at shipped behavior (their bands are
+subtractive), while opening additive cases. Measured effect on the corpus: one
+stack with a defocused-foliage background improved — its background tiles had
+been rendering **2-4x more focus energy than any registered source frame
+carries** (max-of-N noise amplification, the same signature this corpus uses
+to discount the commercial render's sharpened backgrounds), and now sit inside
+the source envelope; top-1% moved −0.6%. Every other corpus stack is
+bit-identical or within engine noise; Azurite acceptance profiles unchanged
+and monotonic; probe and wgpu parity green.
+
 ## Status when this was written
 
 PMax trails the commercial reference on nearly every stack where both tools

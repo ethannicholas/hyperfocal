@@ -737,21 +737,45 @@ public enum WgpuParity {
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             c.report("pyr_merge_focus", cpuMerge, try c.read(gmFused, n * 4))
 
-            // pyr_lum_min: running per-cell min luminance across frames.
+            // pyr_lum_minmax: running per-cell min/max luminance across frames.
             let lmFrames = [c.rand(n * 4), c.rand(n * 4)]
             var cpuLumMin = [Float](repeating: .infinity, count: n)
+            var cpuLumMax = [Float](repeating: 0, count: n)
             for f in lmFrames {
                 for i in 0..<n {
-                    cpuLumMin[i] = min(cpuLumMin[i], 0.2126 * f[i * 4] + 0.7152 * f[i * 4 + 1]
-                                                     + 0.0722 * f[i * 4 + 2])
+                    let lum = 0.2126 * f[i * 4] + 0.7152 * f[i * 4 + 1]
+                        + 0.0722 * f[i * 4 + 2]
+                    cpuLumMin[i] = min(cpuLumMin[i], lum)
+                    cpuLumMax[i] = max(cpuLumMax[i], lum)
                 }
             }
             let glm = try c.buf([Float](repeating: .infinity, count: n))
+            let glx = try c.buf([Float](repeating: 0, count: n))
             for f in lmFrames {
-                try engine.run("pyr_lum_min", buffers: [glm, try c.buf(f)],
+                try engine.run("pyr_lum_minmax", buffers: [glm, glx, try c.buf(f)],
                                uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             }
-            c.report("pyr_lum_min", san(cpuLumMin), san(try c.read(glm, n)))
+            c.report("pyr_lum_minmax", san(cpuLumMin) + san(cpuLumMax),
+                     san(try c.read(glm, n)) + san(try c.read(glx, n)))
+
+            // pyr_focus_minmax: running per-pixel min/max of the level-0 energy.
+            let fmFrames = [c.rand(n), c.rand(n)]
+            var cpuFMin = [Float](repeating: .infinity, count: n)
+            var cpuFMax = [Float](repeating: 0, count: n)
+            for f in fmFrames {
+                for i in 0..<n {
+                    cpuFMin[i] = min(cpuFMin[i], f[i])
+                    cpuFMax[i] = max(cpuFMax[i], f[i])
+                }
+            }
+            let gfMin = try c.buf([Float](repeating: .infinity, count: n))
+            let gfMax = try c.buf([Float](repeating: 0, count: n))
+            for f in fmFrames {
+                try engine.run("pyr_focus_minmax", buffers: [gfMin, gfMax, try c.buf(f)],
+                               uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
+            }
+            c.report("pyr_focus_minmax", san(cpuFMin) + san(cpuFMax),
+                     san(try c.read(gfMin, n)) + san(try c.read(gfMax, n)))
 
             // pyr_merge_focus_gated: blend the debloom answer toward the plain
             // max-energy selection by the near-black mask.

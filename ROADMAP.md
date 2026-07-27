@@ -102,17 +102,25 @@ number that moves when depth selection fails.
 - **Close the PMax gap — the biggest open quality item.** PMax trails the
   commercial reference on nearly every stack where both tools consume identical
   input pixels (contrast-normalized, worst ≈ −13%), while DMap is at parity on
-  the same set. The concrete, diagnosed piece:
-  `Docs/research/2026-07-27-pmax-debloom-gate.md` — the debloom focus gate is
-  restricted to **dark backdrops** by its near-black membership, so a subject
-  silhouetted against a *bright* out-of-focus background gets no debloom at all
-  and renders with a soft, haloed edge. Removing the restriction fixes the edge
-  and improves every sharpness number, and is **rejected**: it dims the top 1%
-  of highlights by 8–10%, near-indiscriminately (in-focus highlights lose almost
-  as much as bloomed ones). The fix belongs in how the coarse selection decides,
-  not in the mask threshold. That doc carries the acceptance criteria a
-  candidate must meet — including the photometric check, which is the one that
-  catches this and which no sharpness metric will.
+  the same set. Read `Docs/research/2026-07-27-pmax-debloom-gate.md` first —
+  it carries the acceptance criteria (now four, including the source-frame
+  floor added 2026-07-27) and the measured dead ends. State of the diagnosed
+  piece: the debloom membership is no longer dark-backdrop-only (`debloomMasks`
+  unions the near-black proof with an open-background proof: border-connected
+  never-focusing smooth field, additive contamination only), which cleaned
+  PMax's noise-amplified defocused backgrounds without touching anything else.
+  The remaining, still-open defect is the **soft silhouette where a subject
+  meets a bright out-of-focus background**: measured per-pixel, that band is
+  *subtractively* contaminated (dark subject spreading into bright backdrop),
+  and no per-cell extreme order statistic can fix it — keep-darkest paints
+  darkness below the darkest source frame (a halo the top-1% check cannot see;
+  the frame-floor check exists because of it), keep-brightest keeps the glow,
+  and track A never engages (no fine focus in the band). The candidate design:
+  a track B that keeps the frame *closest to the local clean background
+  level*, which needs a local clean-field luminance estimate — the analog of
+  despill's backdrop reconstruction. Second thread: `specimen_2` is the widest
+  per-stack PMax deficit (−12/−14% normalized, both registration directions,
+  broad rather than localized) and may have a different cause entirely.
 - **Close the remaining DMap gaps.** Against the commercial DMap we are at
   parity on the small stacks (contrast-normalized, within ±5% either way) and
   well ahead on the high-resolution raw ones — though that margin plausibly
