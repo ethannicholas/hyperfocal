@@ -27,6 +27,7 @@ public enum WgpuDMap {
     struct Dims2 { var w: UInt32; var h: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct Count1 { var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
     struct ArgmaxParams { var frameIdx: Float; var count: UInt32; var gain: Float; var pad: UInt32 = 0 }
+    struct MinMaxParams { var count: UInt32; var gain: Float; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
     struct TentParams {
         var gain: SIMD4<Float>
         var index: Float
@@ -87,7 +88,7 @@ public enum WgpuDMap {
         for name in ["warp_lanczos3", "lum_laplacian", "blur_h", "blur_v",
                      "argmax_update", "tent_accumulate", "normalize_out",
                      "progressive_preview", "plane_preview", "box_downsample",
-                     "plane_upsample", "luma_plane", "confidence_map",
+                     "plane_upsample", "luma_plane", "minmax_update", "confidence_map",
                      "weighted_median", "guided_apply_blend", "clamp_plane",
                      "pyr_fill"] {
             _ = try engine.pipeline(name)
@@ -114,6 +115,10 @@ public enum WgpuDMap {
         var lumGridBuf: WgpuEngine.Buffer!
         var guideBuf: WgpuEngine.Buffer!
         var blurWeightsBuf: WgpuEngine.Buffer!
+        // Per-pixel despill floor accumulators (see DespillInputs.perPixelFloor).
+        let wantPixelFloor = DMapFusion.wantsPixelFloor(options)
+        var min1Buf: WgpuEngine.Buffer!, min2Buf: WgpuEngine.Buffer!,
+            maxBuf: WgpuEngine.Buffer!
         var sw = 0, sh = 0
         var sharpnessPlanes: [[Float]] = []
         var luminancePlanes: [[Float]] = []  // per-frame grid luminance (spill floor)
@@ -242,6 +247,20 @@ public enum WgpuDMap {
                                        uniforms: bytes(of: FillParams(v: 0, count: UInt32(pixelCount))),
                                        gridW: pixelCount)
                 }
+                if wantPixelFloor {
+                    min1Buf = try engine.makeBuffer(floats: pixelCount)
+                    min2Buf = try engine.makeBuffer(floats: pixelCount)
+                    maxBuf = try engine.makeBuffer(floats: pixelCount)
+                    for buf in [min1Buf!, min2Buf!] {
+                        try init0.dispatch("pyr_fill", buffers: [buf],
+                                           uniforms: bytes(of: FillParams(v: .infinity,
+                                                                          count: UInt32(pixelCount))),
+                                           gridW: pixelCount)
+                    }
+                    try init0.dispatch("pyr_fill", buffers: [maxBuf],
+                                       uniforms: bytes(of: FillParams(v: 0, count: UInt32(pixelCount))),
+                                       gridW: pixelCount)
+                }
                 init0.submit()
                 if wantSpill {
                     spill = FrameSpill(frameBytes: pixelCount * 8,
@@ -348,6 +367,14 @@ public enum WgpuDMap {
             try batch.dispatch("luma_plane", buffers: [input, tmpBuf],
                                uniforms: bytes(of: Count1(count: UInt32(pixelCount))),
                                gridW: pixelCount)
+            // Per-pixel floor accumulators, off the same full-res luminance.
+            if wantPixelFloor {
+                try batch.dispatch("minmax_update",
+                                   buffers: [tmpBuf, input, min1Buf, min2Buf, maxBuf],
+                                   uniforms: bytes(of: MinMaxParams(count: UInt32(pixelCount),
+                                                                    gain: gain)),
+                                   gridW: pixelCount)
+            }
             try batch.dispatch("box_downsample", buffers: [tmpBuf, lumGridBuf],
                                uniforms: bytes(of: boxParams), gridW: sw, gridH: sh)
 
@@ -451,6 +478,19 @@ public enum WgpuDMap {
                                         despillOut: { despillInputs = $0 }) {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         }
+
+        if wantPixelFloor, despillInputs != nil {
+            var min1 = [Float](repeating: 0, count: pixelCount)
+            var min2 = [Float](repeating: 0, count: pixelCount)
+            var maxL = [Float](repeating: 0, count: pixelCount)
+            try min1.withUnsafeMutableBytes { try engine.download(min1Buf, into: $0.baseAddress!) }
+            try min2.withUnsafeMutableBytes { try engine.download(min2Buf, into: $0.baseAddress!) }
+            try maxL.withUnsafeMutableBytes { try engine.download(maxBuf, into: $0.baseAddress!) }
+            DMapFusion.foldPixelFloor(min1: &min1, min2: min2, width: width, height: height)
+            despillInputs?.perPixelFloor = min1
+            despillInputs?.perPixelMax = maxL
+        }
+        min1Buf = nil; min2Buf = nil; maxBuf = nil
 
         let gains = DMapFusion.renderGains(from: gains0, options: options, log: log)
 

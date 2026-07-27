@@ -46,6 +46,25 @@ public enum Despill {
         /// (low `rel`), while the glow — spill over near-black — swings hard.
         /// High = spill (correct); low = real signal (protect).
         public let spillStrength: [Float]
+        /// Optional FULL-RES robust dark floor — mean of the two darkest
+        /// frames per PIXEL, encoded luminance, `width × height` (retained
+        /// when the fuse prepares the despill; `HYPERFOCAL_DESPILL_PIXEL_FLOOR=0`
+        /// disables for A/B). The grid floor is structurally blind in the 1–2
+        /// cells straddling a silhouette — rim pixels inflate the cell's
+        /// floor and its "real signal" reading, which is exactly the 6–15 px
+        /// residual halo band `apply` otherwise leaves. This plane resolves
+        /// the same darkest-frame judgment at pixel scale, so the band gets a
+        /// truthful subtract target and the physical rim tail (bright in
+        /// every frame) protects itself. Two-smallest selection is
+        /// order-independent and exact in float, so engine parity is a
+        /// non-issue for the plane itself.
+        public var perPixelFloor: [Float]? = nil
+        /// Companion full-res plane, same domain and lifecycle: the brightest
+        /// luminance any frame showed per pixel. `apply`'s subject-ness gate
+        /// is l ÷ this — a glow pixel renders far under its brightest frame,
+        /// a dim subject rim / bokeh disc / shadowed background renders AT
+        /// its brightest.
+        public var perPixelMax: [Float]? = nil
 
         public init(gridWidth: Int, gridHeight: Int, factor: Int,
                     perCellFloor: [Float], spillStrength: [Float]) {
@@ -411,6 +430,93 @@ public enum Despill {
         let shFullHi = max((Float(env["HYPERFOCAL_DESPILL_LSHIELD_HI"] ?? "") ?? 0.9) * lRock,
                            shFullLo + 1e-8)
 
+        // Per-pixel rim floor (prototype). Inside the rim-adjacent band the
+        // grid path under-corrects for two measured reasons (Fluorite 2 top
+        // edge, 2026-07-26): mixed cells read as subject to the spill gate
+        // (spill-strength 0.25–0.39, under even the relaxed edge), and a
+        // mixed cell's floor is rim-inflated so the l−floor bound blocks the
+        // correction outright. Per-pixel, both signals are truthful: the glow
+        // band is dark in the edge-sharp frames (floor ≈ clean backdrop →
+        // subtract to it), the physical rim tail is bright in every frame
+        // (floor ≈ own luminance → bit-exact). Gates, each load-bearing:
+        // - rim adjacency (upsampled backdrop-anchor dilation): interior
+        //   contacts and light-background scenes (no anchors) stay inert;
+        // - relative excess (`HYPERFOCAL_DESPILL_PIXEL_GLO`/`_GHI`, default
+        //   0.45/0.75): the tail's own floor zeroes it here;
+        // - absolute dimness cap (`HYPERFOCAL_DESPILL_PIXEL_DIM_LO`/`_DIM_HI`,
+        //   linear luminance, default 0.10/0.30): a specular glint lit in one
+        //   frame reads like spill to the excess test but is orders brighter
+        //   than any glow — protect on brightness alone. The lower edge sits
+        //   clear above the brightest measured glow (~0.055 linear): every
+        //   gate here multiplies (l − t), so a gate at 0.97 instead of 1.0
+        //   leaves 3% of a bright glow — ~1800 counts — as a fresh halo;
+        // - the L-shield, same as the grid path;
+        // - target clamped up to the reconstructed backdrop: per-pixel min is
+        //   alignment-jitter-sensitive, never subtract below the clean level.
+        // - subject-ness (`HYPERFOCAL_DESPILL_PIXEL_SUBJ_LO`/`_HI`, default
+        //   0.35/0.60, over l ÷ per-pixel MAX in linear light): the decisive
+        //   discriminator, measured 2026-07-26 across every failure site. A
+        //   halo pixel's fused value is a blend the render mixed from
+        //   moderately-defocused frames — far under the brightest frame
+        //   (l/max ≈ 0.02 median in the Fluorite 2 band) — while a dim
+        //   subject rim, a bokeh disc, or shadowed light background renders
+        //   at its own brightest (l/max 0.86–0.97 median). Without this term
+        //   the excess test alone ate dim subject texture at silhouettes
+        //   (defocused background sweeps darkness over a dark crystal's rim,
+        //   faking "excess" in the fused value) and dimmed bokeh discs. The
+        //   winner-frame luminance was evaluated for the same duty and
+        //   rejected: argmax picks defocused bokeh-rim false sharpness in
+        //   the band, so a winner floor blocks the halo correction itself.
+        // `HYPERFOCAL_DESPILL_PIXEL_FLOOR=0` at apply time disables for A/B.
+        let pixelFloorOK = inputs.perPixelFloor?.count == width * height
+            && inputs.perPixelMax?.count == width * height
+            && (env["HYPERFOCAL_DESPILL_PIXEL_FLOOR"] ?? "1") != "0"
+        let pGLo = Float(env["HYPERFOCAL_DESPILL_PIXEL_GLO"] ?? "") ?? 0.45
+        let pGHi = max(Float(env["HYPERFOCAL_DESPILL_PIXEL_GHI"] ?? "") ?? 0.75, pGLo + 1e-6)
+        let pDimLo = Float(env["HYPERFOCAL_DESPILL_PIXEL_DIM_LO"] ?? "") ?? 0.10
+        let pDimHi = max(Float(env["HYPERFOCAL_DESPILL_PIXEL_DIM_HI"] ?? "") ?? 0.30,
+                         pDimLo + 1e-6)
+        let pSubjLo = Float(env["HYPERFOCAL_DESPILL_PIXEL_SUBJ_LO"] ?? "") ?? 0.35
+        let pSubjHi = max(Float(env["HYPERFOCAL_DESPILL_PIXEL_SUBJ_HI"] ?? "") ?? 0.60,
+                          pSubjLo + 1e-6)
+        let ppfPlane = pixelFloorOK ? inputs.perPixelFloor! : []
+        let pmaxPlane = pixelFloorOK ? inputs.perPixelMax! : []
+        // The pixel path's own adjacency, distinct from the grid path's
+        // `rimAdj`: anchors are near-black cells that ALSO read spill-ish
+        // (`HYPERFOCAL_DESPILL_PIXEL_ANCHOR_LO`/`_HI`, default 0.25/0.40, on
+        // the regularizer's spill-strength). A near-black cell with real
+        // signal is a dark SUBJECT body — anchoring on it would run the
+        // pixel path across the whole crystal face and eat the defocus
+        // spread of its own specular texture (measured: dark-subject cells
+        // read spill 0.15–0.31 vs true backdrop's 0.30–0.45+). The halo band
+        // doesn't lose its adjacency: maxPool takes it from the genuine
+        // backdrop cells beside the silhouette.
+        // Sharpened to a full-on plateau after upsampling: the bilinear
+        // rolloff lands exactly on the cells nearest the rim — the halo band
+        // itself — and any fractional value there leaves a proportional
+        // residue (see the dimness-cap note above).
+        var rimAdjFull: [Float] = []
+        if pixelFloorOK {
+            let aLo = Float(env["HYPERFOCAL_DESPILL_PIXEL_ANCHOR_LO"] ?? "") ?? 0.25
+            let aHi = max(Float(env["HYPERFOCAL_DESPILL_PIXEL_ANCHOR_HI"] ?? "") ?? 0.40,
+                          aLo + 1e-6)
+            var pixAnchor = [Float](repeating: 0, count: gridCount)
+            for i in 0..<gridCount {
+                pixAnchor[i] = cleanW[i]
+                    * smoothstep(aLo, aHi, inputs.spillStrength[i])
+            }
+            let pixAdj = rimRadius > 0
+                ? maxPool(pixAnchor, width: gw, height: gh, radius: rimRadius) : pixAnchor
+            rimAdjFull = Filters.resizePlaneBilinear(pixAdj, width: gw, height: gh,
+                                                     toWidth: width, toHeight: height)
+            for i in rimAdjFull.indices {
+                rimAdjFull[i] = smoothstep(0.15, 0.50, rimAdjFull[i])
+            }
+        }
+        let backdropFull = pixelFloorOK
+            ? Filters.resizePlaneBilinear(backdropInterp, width: gw, height: gh,
+                                          toWidth: width, toHeight: height) : []
+
         // Apply in linear light, per channel proportionally. Constraints:
         // correction never negative, never drives luminance below the spatial
         // floor (out ≥ floor → no over-subtracted moat). Where no correction
@@ -423,6 +529,10 @@ public enum Despill {
                     bFull.withUnsafeBufferPointer { bfp in
                         floorFull.withUnsafeBufferPointer { ffp in
                         spillFull.withUnsafeBufferPointer { spfp in
+                        withPlane(ppfPlane) { ppfp in
+                        withPlane(pmaxPlane) { pmxp in
+                        withPlane(rimAdjFull) { rafp in
+                        withPlane(backdropFull) { bkfp in
                             let counts = UnsafeMutablePointer<Int>.allocate(capacity: height)
                             counts.initialize(repeating: 0, count: height)
                             DispatchQueue.concurrentPerform(iterations: height) { y in
@@ -437,6 +547,28 @@ public enum Despill {
                                     var corr = (afp[idx] * l + bfp[idx]) * amount * spfp[idx] * sh
                                     let bound = max(l - ffp[idx], 0)
                                     if corr > bound { corr = bound }
+                                    // Per-pixel path: its own target IS its
+                                    // bound, so it bypasses the (possibly
+                                    // rim-inflated) grid bound above; taking
+                                    // the max keeps the stronger of the two
+                                    // corrections, never both.
+                                    if let ppfp, let pmxp, let rafp, let bkfp {
+                                        let ra = rafp[idx]
+                                        let t = max(ToneCurve.srgbLinearize(max(ppfp[idx], 0)),
+                                                    bkfp[idx])
+                                        if ra > 0 && l > t {
+                                            let mxLin = ToneCurve.srgbLinearize(
+                                                max(pmxp[idx], 0))
+                                            let subj = mxLin > 1e-9
+                                                ? min(l / mxLin, 1) : 1
+                                            let keep = 1 - smoothstep(pSubjLo, pSubjHi, subj)
+                                            let dim = 1 - smoothstep(pDimLo, pDimHi, l)
+                                            let g = smoothstep(pGLo, pGHi, (l - t) / l)
+                                                * ra * sh * dim * keep
+                                            let cp = amount * g * (l - t)
+                                            if cp > corr { corr = cp }
+                                        }
+                                    }
                                     if corr > 0 && l > 1e-8 {
                                         let scale = (l - corr) / l
                                         var p = hfLoadRGBA(px, pi)
@@ -456,16 +588,29 @@ public enum Despill {
                             counts.deallocate()
                         }
                         }
+                        }
+                        }
+                        }
+                        }
                     }
                 }
             }
         }
         log?(String(format: "despill: intensity %.2f, r=%d cells, eps frac %.3f, "
                     + "touched %.1f%% of pixels",
-                    amount, r, epsFrac, 100 * Double(touched) / Double(width * height)))
+                    amount, r, epsFrac, 100 * Double(touched) / Double(width * height))
+             + (pixelFloorOK ? ", pixel floor on" : ""))
     }
 
     // MARK: - Helpers
+
+    /// `withUnsafeBufferPointer` over an optional plane (empty = absent), so
+    /// the hot loop can branch on a single nullable pointer instead of paying
+    /// bounds-checked subscripts.
+    static func withPlane<R>(_ plane: [Float], _ body: (UnsafePointer<Float>?) -> R) -> R {
+        if plane.isEmpty { return body(nil) }
+        return plane.withUnsafeBufferPointer { body($0.baseAddress) }
+    }
 
     /// Square dilation (clipped max filter) of a grid plane — grows high values
     /// into their neighborhood by `radius` cells.

@@ -102,6 +102,7 @@ public enum GPUDMap {
         let boxDownPipeline = try engine.pipeline("box_downsample")
         let lumaPipeline = try engine.pipeline("luma_plane")
         let upsamplePipeline = try engine.pipeline("plane_upsample")
+        let minmaxPipeline = try engine.pipeline("minmax_update")
 
         // Energy blur runs on the energyGridFactor grid at σ/factor (see
         // DMapFusion.energyGridFactor — cross-engine algorithm constant).
@@ -122,6 +123,9 @@ public enum GPUDMap {
         var sharpBuf: MTLBuffer!
         var lumGridBuf: MTLBuffer!
         var guideBuf: MTLBuffer!  // guided path only
+        // Per-pixel despill floor accumulators (see DespillInputs.perPixelFloor).
+        let wantPixelFloor = DMapFusion.wantsPixelFloor(options)
+        var min1Buf: MTLBuffer!, min2Buf: MTLBuffer!, maxBuf: MTLBuffer!
         var sw = 0, sh = 0
         var sharpnessPlanes: [[Float]] = []
         var luminancePlanes: [[Float]] = []  // per-frame grid luminance (spill floor)
@@ -228,6 +232,15 @@ public enum GPUDMap {
                 lumGridBuf = try engine.makeBuffer(floats: sw * sh)
                 guideBuf = try engine.makeBuffer(floats: pixelCount)
                 memset(guideBuf.contents(), 0, pixelCount * 4)
+                if wantPixelFloor {
+                    min1Buf = try engine.makeBuffer(floats: pixelCount)
+                    min2Buf = try engine.makeBuffer(floats: pixelCount)
+                    maxBuf = try engine.makeBuffer(floats: pixelCount)
+                    let m1 = min1Buf.contents().assumingMemoryBound(to: Float.self)
+                    let m2 = min2Buf.contents().assumingMemoryBound(to: Float.self)
+                    for i in 0..<pixelCount { m1[i] = .infinity; m2[i] = .infinity }
+                    memset(maxBuf.contents(), 0, pixelCount * 4)
+                }
                 if wantSpill {
                     spill = FrameSpill(frameBytes: pixelCount * 8,
                                        frameCount: frameCount, log: log)
@@ -346,6 +359,17 @@ public enum GPUDMap {
             encoder.setBuffer(tmpBuf, offset: 0, index: 1)
             encoder.setBytes(&count32, length: 4, index: 2)
             engine.dispatch1D(encoder, lumaPipeline, count: pixelCount)
+            // Per-pixel floor accumulators, off the same full-res luminance.
+            if wantPixelFloor {
+                encoder.setBuffer(tmpBuf, offset: 0, index: 0)
+                encoder.setBuffer(input, offset: 0, index: 1)
+                encoder.setBuffer(min1Buf, offset: 0, index: 2)
+                encoder.setBuffer(min2Buf, offset: 0, index: 3)
+                encoder.setBuffer(maxBuf, offset: 0, index: 4)
+                encoder.setBytes(&count32, length: 4, index: 5)
+                encoder.setBytes(&gain, length: 4, index: 6)
+                engine.dispatch1D(encoder, minmaxPipeline, count: pixelCount)
+            }
             encoder.setBuffer(tmpBuf, offset: 0, index: 0)
             encoder.setBuffer(lumGridBuf, offset: 0, index: 1)
             encoder.setBytes(&boxParams, length: MemoryLayout<BoxDownParams>.size, index: 2)
@@ -465,6 +489,21 @@ public enum GPUDMap {
                                         despillOut: { despillInputs = $0 }) {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         }
+
+        if wantPixelFloor, despillInputs != nil {
+            var min1 = [Float](UnsafeBufferPointer(
+                start: min1Buf.contents().assumingMemoryBound(to: Float.self),
+                count: pixelCount))
+            let min2 = [Float](UnsafeBufferPointer(
+                start: min2Buf.contents().assumingMemoryBound(to: Float.self),
+                count: pixelCount))
+            DMapFusion.foldPixelFloor(min1: &min1, min2: min2, width: width, height: height)
+            despillInputs?.perPixelFloor = min1
+            despillInputs?.perPixelMax = [Float](UnsafeBufferPointer(
+                start: maxBuf.contents().assumingMemoryBound(to: Float.self),
+                count: pixelCount))
+        }
+        min1Buf = nil; min2Buf = nil; maxBuf = nil
 
         let gains = DMapFusion.renderGains(from: gains0, options: options, log: log)
 

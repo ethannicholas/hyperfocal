@@ -69,9 +69,11 @@ Script: see the end of this file.
   contact, so a tail of that scale near y≈3400 is *matching* it, not failing).
   Defaults-on cleanup measured: calcite row y=2200 went 6141 → 78 at −10 px
   (reference ~0); the wide 20–30 px band matches the reference everywhere.
-  With the rim-adjacency gate relaxation the top-edge residual is ~2k at
-  −6/−10 vs the reference's ~70–335 — a whisper at 4× shadow lift, accepted
-  (see the gate-retune note below for what was tried).
+  With the rim-adjacency gate relaxation the top-edge residual was ~2k at
+  −6/−10 vs the reference's ~70–335 — accepted at the time as guided-filter
+  smoothing, then shown to be visible at normal brightness and eliminated by
+  the per-pixel floor (2026-07-26 entry below): the band now measures 100–500
+  at −10/−15/−20 across all seven probe columns, at or under the reference.
 
 ## Acceptance numbers
 
@@ -139,6 +141,48 @@ that no pixel got *brighter*, since these passes only ever subtract.
   so the residual ~2k at −6/−10 is guided-filter smoothing itself, not
   weighting — accepted (reference leaves ~73–335 there; ours is a whisper at
   4× lift).
+- **Per-pixel despill floor (2026-07-26).** The ~2k "accepted whisper" above
+  was visible at normal brightness on Fluorite 2 (user report, crop of the
+  calcite top edge). Root cause, measured from the grid dumps: the residual
+  band lives in the last 1–2 grid cells before the silhouette, where mixed
+  cells corrupt BOTH despill signals — spill-strength reads 0.25–0.39 (below
+  even the relaxed rim edge, so the gate starves) and a cell straddling the
+  edge carries a rim-inflated floor (4362 vs a 1990 glow at x=3880, so the
+  l−floor bound blocks correction regardless of any gate knob). Apply-time
+  knob turns cannot fix this: the best combination measured
+  (`SPILL_LO_RIM` 0.20 + `CONTAM` 5/15) halved the band but ate the subject
+  (−39% at 3–6 px inside the silhouette at x=3700) — rejected. What shipped
+  instead: fusion retains per-PIXEL two-smallest and max luminance
+  (`DespillInputs.perPixelFloor`/`perPixelMax`, all three engines, wgpu
+  kernel parity inf dB), and `Despill.apply` subtracts straight to
+  max(pixel floor, reconstructed backdrop) inside a rim-adjacent band.
+  Gate lessons, each measured:
+  - Every gate term multiplies (l − t), so a term at 0.97 leaves 3% of a
+    bright glow ≈ 1800 counts of fresh halo. Terms must plateau at exactly 1
+    inside the band (dim cap starts at 0.10 linear, above the brightest
+    measured glow ~0.055; the upsampled adjacency is re-smoothstepped to a
+    plateau).
+  - The decisive subject/glow discriminator is **l ÷ per-pixel max**: a halo
+    pixel renders far under its brightest frame (0.02 median in the band), a
+    dim subject rim / bokeh disc / shadowed background renders at its
+    brightest (0.86–0.97 at every wrongly-eaten site). Window 0.35/0.60.
+    Winner-frame luminance was evaluated for the same duty and rejected —
+    argmax picks defocused bokeh-rim false sharpness in the band, so a
+    winner floor blocks the halo correction itself.
+  - Pixel-path adjacency anchors need a spill-ish veto (0.25/0.40): a
+    near-black cell with real signal is a dark subject body (spill
+    0.15–0.31), not backdrop (0.30–0.45+); anchoring on it ran the pass
+    across whole dark crystal faces. The veto cut sample-stack subject
+    touches 94% (20638 → 1206 px) with the band fix intact.
+  Landed state: Fluorite 2 band 100–500 (was 500–4600) at −10..−20, at/under
+  the Helicon reference, monotonic; Azurite acceptance columns bit-identical;
+  sample-stack metrics identical; Fluorite glint cores (>30k) untouched.
+  Residual open point: dim (5–30k) defocus-spread of specular streaks within
+  ~2 cells of a silhouette is statistically identical to glow and gets
+  debloomed (~11k px on the Fluorite stack) — glint cores stay, the haze
+  around them thins. Judged acceptable; revisit if a stack shows it as
+  damage. CPU↔GPU cross-check on the real stack: default GPU fuse matches
+  the CPU chain within a few counts at every probe point.
 - **Black-point veil gate** (`HYPERFOCAL_BLACK_POINT_GATE_LO`/`_HI`, default
   0.02/0.06 over the max-channel *encoded* veil): anchor measurements are
   0.4–0.6% for genuine dark-backdrop veils (Azurite R263 G229 B0; Fluorite 2

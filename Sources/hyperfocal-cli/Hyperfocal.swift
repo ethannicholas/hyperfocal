@@ -929,10 +929,11 @@ struct DebugAlign: ParsableCommand {
 
 // MARK: - Rim despill tuning tools
 
-/// Serializes `Despill.DespillInputs` to a directory (three raw Float32 grid
-/// planes + a `gw gh factor` meta line) so the render-stage despill can be
-/// tuned with `debug-despill` in seconds, without paying for a re-fuse. Written
-/// by `fuse` when HYPERFOCAL_DESPILL_DUMP names a directory.
+/// Serializes `Despill.DespillInputs` to a directory (raw Float32 grid planes,
+/// a `gw gh factor` meta line, and — when the fuse retained it — the full-res
+/// `perPixelFloor.f32`) so the render-stage despill can be tuned with
+/// `debug-despill` in seconds, without paying for a re-fuse. Written by `fuse`
+/// when HYPERFOCAL_DESPILL_DUMP names a directory.
 enum DespillDump {
     static func write(_ di: Despill.DespillInputs, toDir dir: String) {
         let base = URL(fileURLWithPath: dir)
@@ -944,6 +945,8 @@ enum DespillDump {
         }
         f32(di.perCellFloor, "perCellFloor.f32")
         f32(di.spillStrength, "spillStrength.f32")
+        if let p = di.perPixelFloor { f32(p, "perPixelFloor.f32") }
+        if let p = di.perPixelMax { f32(p, "perPixelMax.f32") }
         try? "\(di.gridWidth) \(di.gridHeight) \(di.factor)\n"
             .write(to: base.appendingPathComponent("meta.txt"), atomically: true, encoding: .utf8)
     }
@@ -957,9 +960,13 @@ enum DespillDump {
             let d = try Data(contentsOf: base.appendingPathComponent(name))
             return d.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
         }
-        return Despill.DespillInputs(gridWidth: parts[0], gridHeight: parts[1], factor: parts[2],
-                                     perCellFloor: try f32("perCellFloor.f32"),
-                                     spillStrength: try f32("spillStrength.f32"))
+        var di = Despill.DespillInputs(gridWidth: parts[0], gridHeight: parts[1],
+                                       factor: parts[2],
+                                       perCellFloor: try f32("perCellFloor.f32"),
+                                       spillStrength: try f32("spillStrength.f32"))
+        di.perPixelFloor = try? f32("perPixelFloor.f32")
+        di.perPixelMax = try? f32("perPixelMax.f32")
+        return di
     }
 }
 

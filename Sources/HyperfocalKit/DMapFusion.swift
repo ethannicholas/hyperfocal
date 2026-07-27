@@ -216,6 +216,16 @@ public enum DMapFusion {
         let wantSpill = FrameSpill.wanted(options.spillEnabled)
         var spill: FrameSpill?
 
+        // Per-pixel despill floor: retain the two darkest and the brightest
+        // gain-corrected luminances per PIXEL across the stack, for
+        // `Despill`'s rim band where the 8-px grid floor is blind (see
+        // `DespillInputs.perPixelFloor`). Three full-res f32 planes (~12 B/px)
+        // while enabled; freed into the inputs after the regularizer runs.
+        let wantPixelFloor = Self.wantsPixelFloor(options)
+        var lumMin1: [Float] = []
+        var lumMin2: [Float] = []
+        var lumMax: [Float] = []
+
         // Wall-clock phase buckets, reported through `log` at the end — the
         // pyramid paths' discipline: optimization here must start from
         // measurements, not vibes. `decode` is time *blocked on* the
@@ -312,6 +322,36 @@ public enum DMapFusion {
                 for i in lumGrid.indices { lumGrid[i] *= gain }
             }
             luminancePlanes.append(lumGrid)
+            if wantPixelFloor {
+                if lumMin1.isEmpty {
+                    lumMin1 = [Float](repeating: .infinity, count: width * height)
+                    lumMin2 = [Float](repeating: .infinity, count: width * height)
+                    lumMax = [Float](repeating: 0, count: width * height)
+                }
+                lum.withUnsafeBufferPointer { lp in
+                    img.pixels.withUnsafeBufferPointer { fpBuf in
+                        let fp = fpBuf.baseAddress!
+                        lumMin1.withUnsafeMutableBufferPointer { m1 in
+                            lumMin2.withUnsafeMutableBufferPointer { m2 in
+                                lumMax.withUnsafeMutableBufferPointer { mx in
+                                    DispatchQueue.concurrentPerform(iterations: height) { y in
+                                        for i in (y * width)..<((y + 1) * width) {
+                                            // Alpha-masked like the depth vote:
+                                            // no floor opinion where the warp
+                                            // left no data.
+                                            guard Float(fp[i * 4 + 3]) > 0.5 else { continue }
+                                            let l = lp[i] * gain
+                                            if l < m1[i] { m2[i] = m1[i]; m1[i] = l }
+                                            else if l < m2[i] { m2[i] = l }
+                                            if l > mx[i] { mx[i] = l }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             tEnergy += now() - t0
             t0 = now()
             let index = Float(fi)
@@ -402,6 +442,15 @@ public enum DMapFusion {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         })
         tRegularize = now() - t0
+
+        if wantPixelFloor, despillInputs != nil, !lumMin1.isEmpty {
+            Self.foldPixelFloor(min1: &lumMin1, min2: lumMin2, width: width, height: height)
+            despillInputs?.perPixelFloor = lumMin1
+            despillInputs?.perPixelMax = lumMax
+        }
+        lumMin1 = []
+        lumMin2 = []
+        lumMax = []
 
         let gains = renderGains(from: gains0, options: options, log: log)
 
@@ -567,6 +616,37 @@ public enum DMapFusion {
     /// HYPERFOCAL_DUMP_GUIDE (raw Float32, row-major). Shared by both engines.
     static func dumpGuide(_ guide: [Float]) {
         dumpPlane(guide, env: "HYPERFOCAL_DUMP_GUIDE")
+    }
+
+    /// Whether this fuse retains the per-pixel despill planes (see
+    /// `DespillInputs.perPixelFloor`). On whenever the despill is being
+    /// prepared; `HYPERFOCAL_DESPILL_PIXEL_FLOOR=0` disables for A/B against
+    /// the grid-only pass. Shared by all three engines.
+    static func wantsPixelFloor(_ options: Options) -> Bool {
+        options.prepareDespill
+            && (ProcessInfo.processInfo.environment["HYPERFOCAL_DESPILL_PIXEL_FLOOR"]
+                ?? "1") != "0"
+    }
+
+    /// Folds the two-smallest accumulators into the per-pixel floor plane, in
+    /// place in `min1`: mean of the two darkest frames (the second-smallest
+    /// hardens the floor against 1-px alignment jitter pulling background
+    /// under a bright rim). A pixel only one frame covered keeps its single
+    /// value; a pixel no frame covered reads 0 — `Despill.apply` clamps its
+    /// target up to the reconstructed backdrop anyway. Shared by all three
+    /// engines so the fold stays bit-identical.
+    static func foldPixelFloor(min1: inout [Float], min2: [Float],
+                               width: Int, height: Int) {
+        min1.withUnsafeMutableBufferPointer { m1 in
+            min2.withUnsafeBufferPointer { m2 in
+                DispatchQueue.concurrentPerform(iterations: height) { y in
+                    for i in (y * width)..<((y + 1) * width) {
+                        if m2[i].isFinite { m1[i] = (m1[i] + m2[i]) * 0.5 }
+                        else if !m1[i].isFinite { m1[i] = 0 }
+                    }
+                }
+            }
+        }
     }
 
     /// Writes a raw Float32 row-major plane to the path in the given env var,

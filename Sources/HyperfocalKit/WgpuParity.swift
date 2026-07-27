@@ -83,6 +83,7 @@ public enum WgpuParity {
     struct ClampParams { var maxV: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct ScaleParams { var s: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct FillParams { var v: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
+    struct MinMaxParams { var count: UInt32; var gain: Float; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
     struct PyrFocusParams { var count: UInt32; var threshold: Float; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
 
     static func luma(_ p: [Float], _ i: Int) -> Float {
@@ -289,6 +290,35 @@ public enum WgpuParity {
             try engine.run("plane_upsample", buffers: [try c.buf(small), ou],
                            uniforms: bytes(of: up), gridW: w, gridH: h)
             c.report("plane_upsample", cpuUp, try c.read(ou, n))
+        }
+
+        // -- minmax_update: 3-frame accumulation, alpha-masked, per-frame gain.
+        // The mask pattern leaves every pixel ≥2 covered frames, so the
+        // expected planes stay finite (the fold's infinity handling is CPU
+        // logic shared by all engines, not a kernel behavior).
+        do {
+            var m1 = [Float](repeating: .infinity, count: n)
+            var m2 = [Float](repeating: .infinity, count: n)
+            var mx = [Float](repeating: 0, count: n)
+            let gm1 = try c.buf(m1), gm2 = try c.buf(m2), gmx = try c.buf(mx)
+            for f in 0..<3 {
+                let lum = c.rand(n, scale: 2)
+                var img = c.rand(n * 4)
+                for i in 0..<n { img[i * 4 + 3] = (i % 5 == f) ? 0 : 1 }
+                let gain: Float = 1 + Float(f) * 0.05
+                for i in 0..<n where img[i * 4 + 3] > 0.5 {
+                    let l = lum[i] * gain
+                    if l < m1[i] { m2[i] = m1[i]; m1[i] = l }
+                    else if l < m2[i] { m2[i] = l }
+                    if l > mx[i] { mx[i] = l }
+                }
+                try engine.run("minmax_update",
+                               buffers: [try c.buf(lum), try c.buf(img), gm1, gm2, gmx],
+                               uniforms: bytes(of: MinMaxParams(count: UInt32(n), gain: gain)),
+                               gridW: n)
+            }
+            c.report("minmax_update", m1 + m2 + mx,
+                     try c.read(gm1, n) + c.read(gm2, n) + c.read(gmx, n))
         }
 
         // -- progressive_preview / normalize_out ------------------------------
