@@ -99,12 +99,16 @@ number that moves when depth selection fails.
   chroma-subsampled JPEG round-trip to mimic the reference stacks' artifacts)
   and gate on a noisy scene alongside the clean one. Done: a change that
   degrades real-stack sharpness can no longer pass CI on the synth number.
-- **Close the remaining DMap gaps.** Ours averages ~94% of best achievable
-  against the commercial DMap's ~96%. One stack has a gap wide enough to be a
-  distinct bug rather than tuning; two more match on the mean while sitting
-  ~15 points lower on the tile floor, which means a localized region is still
-  mis-selected. Diagnose those from the depth map (`fuse --depth-map`), not the
-  score. Per-stack numbers and the priority order are in the corpus README.
+- **Close the remaining DMap gaps.** Against the commercial DMap we are at
+  parity on the small stacks (contrast-normalized, within ±5% either way) and
+  well ahead on the high-resolution raw ones — though that margin plausibly
+  includes raw *decode* differences, not just fusion, so do not bank it. Two
+  stacks are genuinely behind: one by a margin wide enough to be a distinct bug
+  rather than tuning, one on the tile floor only. Diagnose from the depth map
+  (`fuse --depth-map`), not the score. Per-stack numbers and the priority order
+  are in the corpus README — and re-derive them there rather than trusting this
+  paragraph, because an earlier version of it named a third stack that turned
+  out to be an artifact of a mis-calibrated tile mask.
 - **Verify the regularization radii above the reference resolution.**
   `DMapFusion.regularizationScale` scales `medianRadius`/`guidedRadius` by the
   frame diagonal against a 9780 px reference but is **clamped to 1**: it only

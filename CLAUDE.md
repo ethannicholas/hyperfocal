@@ -55,6 +55,38 @@ rejected alternatives, and why). Cross-platform strategy and phases:
 
 ## Invariants & gotchas
 
+- **One set of algorithm defaults, shared by the app and the CLI — no
+  exceptions.** A parameter that both surfaces expose must have the *same*
+  default value and the *same* on/off semantics in both. This is not tidiness:
+  a divergence silently invalidates every measurement, because analysis runs
+  through the CLI while users see the app. PMax debloom shipped ON in the app
+  (`AppModel.defaultPMaxCoarseLevels = 5`, gated `pmaxCoarseLevels > 0`) and
+  OFF in the CLI (a separate `--pmax-debloom` boolean defaulting false) — so
+  every PMax render, benchmark, and baseline snapshot taken through the CLI
+  described a configuration no user ever saw, and the gap was found only by
+  eye, in a quality comparison against another tool.
+  - Prefer making divergence *impossible* over making it correct: the fix was
+    deleting the CLI’s redundant boolean so the level count is the single
+    off-switch-and-dial, matching the app's one slider. Two controls for one
+    concept is how they drift.
+  - **One `Options` struct per algorithm, and it is the only place the numbers
+    live** — `DMapFusion.Options` and `PyramidFusion.Options`, deliberately
+    parallel in name, shape, and non-optional usage so neither is a special
+    case. `StackPipeline.Configuration` carries them as `dmap` and `pmax`.
+    Anything new belongs *inside* the relevant `Options`, never as a parameter
+    riding alongside it.
+  - **Both surfaces derive, never restate.** `AppModel.default*` and the CLI's
+    `@Option` defaults are initialized *from* those structs
+    (`DMapFusion.Options().sharpnessSigma`, `PyramidFusion.Options().coarseLevels`),
+    so a literal in either is a bug. Changing a default is a one-line change in
+    the engine, and both surfaces follow.
+  - **"Off" is a value in the struct, not a wrapper around it.** Debloom is off
+    at `coarseLevels == 0` (`Options.isEnabled`), not via an optional or a
+    boolean — an `Options?` forces every caller to decide what nil means, which
+    is exactly how the app and CLI disagreed.
+  - `retouch-probe` asserts this (`probe: fusion defaults shared app↔engine
+    OK`): the app's constants against the engine's, and that a default
+    `StackPipeline.Configuration` carries them with debloom enabled.
 - **Two UIs, kept in sync — forever.** Every user-facing change lands in
   BOTH the macOS SwiftUI app (`App/`) and the Qt shell (`QtShell/*.qml` +
   `QtShell/Shell.cpp`). Logic/state lives in the shared `AppCore`: the SwiftUI

@@ -22,7 +22,7 @@ enum GPUPyramid {
     ///
     /// With `focusGate`, the coarsest `coarseLevels` band levels are
     /// focus-gated (--pmax-debloom): the same two-track select the CPU
-    /// streaming loop runs, on-device — see `PyramidFusion.FocusGate`.
+    /// streaming loop runs, on-device — see `PyramidFusion.Options`.
     static func fuse(frameCount: Int,
                      warp: PyramidWarp? = nil,
                      log: ((String) -> Void)? = nil,

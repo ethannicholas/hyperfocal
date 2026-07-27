@@ -16,15 +16,20 @@ public enum FusionMethod: String, Sendable, CaseIterable {
 public enum StackPipeline {
 
     public struct Configuration {
-        public var fusion: DMapFusion.Options
+        /// DMap settings. Parallel to `pmax` below: same shape, both
+        /// non-optional, neither algorithm a special case.
+        public var dmap: DMapFusion.Options
         public var align: Bool
         public var preferGPU: Bool
         /// Which fusion algorithm to run. `.dmap` (the default) produces a
         /// depth map; `.pmax` produces an image only.
         public var method: FusionMethod
-        /// PMax focus-gate (`--pmax-debloom`). Ignored unless `method == .pmax`;
-        /// nil leaves the standard (un-debloomed) PMax selection.
-        public var pmaxFocusGate: PyramidFusion.FocusGate?
+        /// PMax settings. Ignored unless `method == .pmax`; debloom is disabled
+        /// by `coarseLevels == 0`, not by a separate switch. Non-optional and
+        /// named to match `dmap` above — when this was an optional `FocusGate?`
+        /// every caller had to decide what nil meant, and the app and the CLI
+        /// decided differently, shipping debloom on in one and off in the other.
+        public var pmax: PyramidFusion.Options
         /// When registration flags bad frames (misfires, failed alignment),
         /// exclude them all and fuse the rest. Overridden by `badFrameHandler`.
         public var autoExcludeBadFrames: Bool
@@ -50,20 +55,21 @@ public enum StackPipeline {
         /// (its own spill covers its second pass).
         public var warpedFrameCache: WarpedFrameCache?
 
-        public init(fusion: DMapFusion.Options = DMapFusion.Options(),
+        public init(dmap: DMapFusion.Options = DMapFusion.Options(),
                     align: Bool = true, preferGPU: Bool = true,
                     method: FusionMethod = .dmap,
-                    pmaxFocusGate: PyramidFusion.FocusGate? = nil,
+                    pmax: PyramidFusion.Options = .init(),
                     autoExcludeBadFrames: Bool = false,
                     badFrameHandler: (([FrameQualityIssue]) -> Set<Int>)? = nil) {
-            self.fusion = fusion
+            self.dmap = dmap
             self.align = align
             self.preferGPU = preferGPU
             self.method = method
-            self.pmaxFocusGate = pmaxFocusGate
+            self.pmax = pmax
             self.autoExcludeBadFrames = autoExcludeBadFrames
             self.badFrameHandler = badFrameHandler
         }
+
     }
 
     public struct FuseResult {
@@ -170,7 +176,7 @@ public enum StackPipeline {
         }
         let source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
         var output: DMapFusion.Output
-        var fusionOptions = configuration.fusion
+        var fusionOptions = configuration.dmap
         // Always retain the despill grid inputs on the DMap path: the render
         // cleanup below is on by default, and the planes are cheap next to a
         // fuse. (PMax only retains them on its CPU streaming loop, so its
@@ -213,7 +219,7 @@ public enum StackPipeline {
                     warp: nil, log: log, progress: pmaxProgress,
                     cancellation: cancellation,
                     decodeWorkers: 2, decodeLookahead: 2,
-                    focusGate: configuration.pmaxFocusGate,
+                    options: configuration.pmax,
                     onSharpness: onSharpness) { try cache.frame($0) }
             } else {
                 if configuration.warpedFrameCache != nil {
@@ -222,7 +228,7 @@ public enum StackPipeline {
                 image = try PyramidFusion.fuse(
                     source: source, preferGPU: configuration.preferGPU, log: log,
                     progress: pmaxProgress,
-                    cancellation: cancellation, focusGate: configuration.pmaxFocusGate,
+                    cancellation: cancellation, options: configuration.pmax,
                     onSharpness: onSharpness)
             }
             output = DMapFusion.Output(image: image, depthMap: ImageBuffer(width: 0, height: 0),

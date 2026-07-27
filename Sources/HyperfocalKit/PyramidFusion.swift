@@ -196,9 +196,29 @@ public enum PyramidFusion {
     /// untouched. Runs on the CPU, Metal and wgpu paths; the near-black gate
     /// that keeps track B out of the regime it is invalid in is built by shared
     /// code (`nearBlackMasks`) that every backend calls.
-    public struct FocusGate: Sendable {
+    /// PMax's settings — the per-algorithm settings object, and the single
+    /// source of its shipped defaults. Deliberately parallel to
+    /// `DMapFusion.Options`: same name, same non-optional usage, same
+    /// "construct it and mutate fields" shape, so neither algorithm's
+    /// configuration is a special case. It happens to hold only debloom
+    /// (focus-gate) fields today; anything added later belongs here too rather
+    /// than as a new parameter alongside it.
+    ///
+    /// Both shells and the CLI must take their defaults from `Options()` rather
+    /// than restating 5 and 0.07, and must express "off" as `coarseLevels == 0`
+    /// rather than inventing their own switch.
+    ///
+    /// That is not style. Debloom shipped ON in the app and OFF in the CLI
+    /// because the CLI wrapped this in a separate boolean, so every PMax
+    /// measurement taken through the CLI described a configuration no user ever
+    /// saw. `isEnabled` lives here so no caller has to decide what "off" means.
+    public struct Options: Sendable {
+        /// Number of coarsest band levels to focus-gate. 0 disables the gate —
+        /// this one value is both the off-switch and the strength dial, which
+        /// is exactly what the app's single "Debloom levels" slider drives.
         public var coarseLevels: Int
         public var threshold: Float
+        public var isEnabled: Bool { coarseLevels > 0 }
         public init(coarseLevels: Int = 5, threshold: Float = 0.07) {
             self.coarseLevels = coarseLevels
             self.threshold = threshold
@@ -221,7 +241,7 @@ public enum PyramidFusion {
                             log: ((String) -> Void)? = nil,
                             progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
-                            focusGate: FocusGate? = nil,
+                            options: Options = Options(),
                             prepareDespill: Bool = false,
                             onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil,
                             onSharpness: ((FrameSharpness) -> Void)? = nil)
@@ -234,7 +254,7 @@ public enum PyramidFusion {
                         warp: warp, log: log, progress: progress,
                         cancellation: cancellation,
                         decodeWorkers: FramePrefetcher.workers(for: source.urls),
-                        focusGate: focusGate,
+                        options: options,
                         prepareDespill: prepareDespill,
                         onDespillInputs: onDespillInputs,
                         onSharpness: onSharpness) { i in
@@ -265,21 +285,22 @@ public enum PyramidFusion {
                             cancellation: CancellationToken? = nil,
                             decodeWorkers: Int? = nil,
                             decodeLookahead: Int? = nil,
-                            focusGate: FocusGate? = nil,
+                            options: Options = Options(),
                             prepareDespill: Bool = false,
                             onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil,
                             onSharpness: ((FrameSharpness) -> Void)? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
-        // Focus-gate config (CLI/param, with env override for tuning). When on,
-        // stay on the CPU — the GPU ports are a follow-up.
+        // Settings, with env overrides for tuning/ablation — `options` is
+        // authoritative, exactly as `DMapFusion.Options` is for dmap. There is
+        // no separate enable var: `coarseLevels == 0` IS off (Options.isEnabled),
+        // so `HYPERFOCAL_PMAX_DARK_COARSE=0` is the debloom ablation switch.
+        // (A `HYPERFOCAL_PMAX_FOCUS_GATE` force-on used to exist because the
+        // default was off; it is redundant now that the default is on.)
         let env = ProcessInfo.processInfo.environment
-        let fgOn = focusGate != nil || env["HYPERFOCAL_PMAX_FOCUS_GATE"] != nil
-        let fgCoarse = Int(env["HYPERFOCAL_PMAX_DARK_COARSE"] ?? "")
-            ?? focusGate?.coarseLevels ?? (fgOn ? 5 : 0)
-        let fgThreshold = Float(env["HYPERFOCAL_PMAX_FOCUS_THRESH"] ?? "")
-            ?? focusGate?.threshold ?? 0.07
-        let focusGateEnabled = fgOn && fgCoarse > 0
+        let fgCoarse = Int(env["HYPERFOCAL_PMAX_DARK_COARSE"] ?? "") ?? options.coarseLevels
+        let fgThreshold = Float(env["HYPERFOCAL_PMAX_FOCUS_THRESH"] ?? "") ?? options.threshold
+        let focusGateEnabled = fgCoarse > 0
         if focusGateEnabled { log?("pmax: focus-gate on") }
         // Focus-gate config for the GPU paths (nil = standard PMax).
         let gpuFocusGate = focusGateEnabled
@@ -330,7 +351,7 @@ public enum PyramidFusion {
         // paints that spread into the low frequencies. The least-luminous frame
         // at each base cell is the least-bloomed (spill floor logic), so keeping
         // it kills the halo. Env-gated for A/B.
-        // Focus-gated coarse selection (see FocusGate): the bloom is a
+        // Focus-gated coarse selection (see Options): the bloom is a
         // low-frequency spread that enters through the coarse band levels — a
         // defocused bright feature's smooth bright gradient wins the
         // max-|Laplacian| selection over the dark in-focus neighbour. On the

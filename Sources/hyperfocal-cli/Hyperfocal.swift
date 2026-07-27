@@ -124,32 +124,32 @@ struct FusionOptions: ParsableArguments {
     var autoExclude: Bool = false
 
     @Option(help: "DMap: sharpness smoothing sigma in pixels.")
-    var sharpnessSigma: Float = 10
+    var sharpnessSigma: Float = DMapFusion.Options().sharpnessSigma
 
     @Option(help: "DMap: luminance denoise sigma applied before the Laplacian, in pixels. The Laplacian measures the band at Nyquist, where sensor and JPEG noise live; blurring first moves the focus measurement into the band defocus actually destroys. 0 restores the undenoised measure.")
-    var focusPreSigma: Float = 1
+    var focusPreSigma: Float = DMapFusion.Options().focusPreSigma
 
     @Option(help: "DMap: render blend radius in frame-index units.")
-    var blendRadius: Float = 1
+    var blendRadius: Float = DMapFusion.Options().blendRadius
 
     @Option(help: "DMap: fraction of p95 sharpness treated as no-signal (halo control).")
-    var noiseFloor: Float = 0.05
+    var noiseFloor: Float = DMapFusion.Options().noiseFloor
 
     @Option(help: "DMap: depth-map median filter radius in pixels (0 disables).")
-    var medianRadius: Int = 20
+    var medianRadius: Int = DMapFusion.Options().medianRadius
 
     @Option(help: "DMap: required peak concentration (fraction of a pixel's above-median sharpness within its focus peak) to hold a depth opinion; suppresses bokeh-rim false sharpness on smooth surfaces near glossy subjects. 0 disables.")
-    var peakConcentration: Float = 0.5
+    var peakConcentration: Float = DMapFusion.Options().peakConcentration
 
     @Flag(inversion: .prefixedNo,
           help: "DMap: normalize per-frame exposure flicker before blending.")
     var normalizeExposure: Bool = true
 
     @Option(help: "DMap: guided-filter window radius in full-resolution pixels.")
-    var guidedRadius: Float = 128
+    var guidedRadius: Float = DMapFusion.Options().guidedRadius
 
     @Option(help: "DMap: guided-filter edge-stop epsilon (guide is normalized, so unit-free; smaller keeps weaker edges).")
-    var guidedEps: Float = 1e-3
+    var guidedEps: Float = DMapFusion.Options().guidedEps
 
     @Flag(inversion: .prefixedNo,
           help: "DMap: cache aligned frames in a temp file between fusion passes instead of decoding the stack twice (needs width×height×16 bytes per frame of free disk; output is identical, fusing is just faster). Skipped automatically when the disk is short on space.")
@@ -302,19 +302,30 @@ struct Fuse: ParsableCommand {
             + "format. Override with HYPERFOCAL_BLACK_POINT."))
     var blackPoint: Float = 1
 
-    @Flag(name: .customLong("pmax-debloom"),
-          help: ArgumentHelp("PMax: gate the coarse pyramid selection by focus to suppress "
-            + "highlight bloom (defocused bright features spreading into their surroundings), "
-            + "without dimming the subject. --method pmax only (CPU or GPU)."))
-    var pmaxDebloom: Bool = false
-
+    // No separate on/off flag: `pmax-coarse-levels` is both the off-switch and
+    // the strength dial, exactly as the app's single Debloom levels slider is
+    // (AppModel gates on `pmaxCoarseLevels > 0`). There used to be a
+    // `--pmax-debloom` boolean here defaulting to false, which meant the CLI
+    // shipped debloom OFF while the app shipped it ON at the same 5 levels —
+    // so every measurement taken through the CLI described a configuration no
+    // user ever saw. One control, one default, no way to drift.
     @Option(name: .customLong("pmax-coarse-levels"),
-            help: "PMax debloom: number of coarsest band levels to focus-gate (0 = off).")
-    var pmaxCoarseLevels: Int = 5
+            help: ArgumentHelp("PMax debloom: number of coarsest band levels to focus-gate, "
+                + "suppressing highlight bloom (defocused bright features spreading "
+                + "into their surroundings) without dimming the subject. 0 = off "
+                + "(standard PMax). --method pmax only (CPU or GPU)."))
+    var pmaxCoarseLevels: Int = PyramidFusion.Options().coarseLevels
 
     @Option(name: .customLong("pmax-focus-threshold"),
             help: "PMax debloom: fine-scale focus threshold for the two-track select.")
-    var pmaxFocusThreshold: Float = 0.07
+    var pmaxFocusThreshold: Float = PyramidFusion.Options().threshold
+
+    /// PMax settings, built the same way `FusionOptions.dmapOptions` is — no
+    /// on/off flag, because `coarseLevels == 0` is off (Options.isEnabled).
+    var pmaxOptions: PyramidFusion.Options {
+        PyramidFusion.Options(coarseLevels: pmaxCoarseLevels,
+                              threshold: pmaxFocusThreshold)
+    }
 
     @Flag(name: .shortAndLong, help: "Print progress.")
     var verbose: Bool = false
@@ -441,10 +452,7 @@ struct Fuse: ParsableCommand {
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),
                                                 log: log,
-                                                focusGate: pmaxDebloom
-                                                    ? .init(coarseLevels: pmaxCoarseLevels,
-                                                            threshold: pmaxFocusThreshold)
-                                                    : nil,
+                                                options: pmaxOptions,
                                                 prepareDespill: wantDespill,
                                                 onDespillInputs: { despillInputs = $0 },
                                                 onSharpness: sharpnessTap)
@@ -568,7 +576,7 @@ struct Batch: ParsableCommand {
                     switch fusion.method {
                     case .dmap:
                         var config = StackPipeline.Configuration(
-                            fusion: fusion.dmapOptions, align: fusion.align,
+                            dmap: fusion.dmapOptions, align: fusion.align,
                             preferGPU: useGPU)
                         config.autoExcludeBadFrames = fusion.autoExclude
                         let result = try StackPipeline.fuseResult(urls: group,
@@ -655,7 +663,7 @@ struct Animate: ParsableCommand {
         }
         let log = vlog(verbose)
         let urls = inputs.map { URL(fileURLWithPath: $0) }
-        var config = StackPipeline.Configuration(fusion: fusion.dmapOptions,
+        var config = StackPipeline.Configuration(dmap: fusion.dmapOptions,
                                                  align: fusion.align,
                                                  preferGPU: try fusion.resolveUseGPU())
         config.autoExcludeBadFrames = fusion.autoExclude

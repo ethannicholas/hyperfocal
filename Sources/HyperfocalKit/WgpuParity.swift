@@ -868,8 +868,14 @@ public enum WgpuParity {
                                             progress: { _, _, img in
                                                 if let img { previews += 1; lastPreview = img }
                                             }) { frames[$0] }
+        // Debloom explicitly OFF: these cases check the *plain* pyramid against
+        // WgpuPyramid's ungated path. `Options()` now defaults debloom ON (it
+        // matches the app), so relying on the default here would silently start
+        // comparing a gated CPU result against an ungated GPU one.
+        let plain = PyramidFusion.Options(coarseLevels: 0)
         let cpuPlain = try PyramidFusion.fuse(frameCount: frameCount,
-                                              preferGPU: false) { frames[$0] }
+                                              preferGPU: false,
+                                              options: plain) { frames[$0] }
         check("pyramid_plain", cpuPlain, gpuPlain, margin: 8)
         guard previews == frameCount, let lastPreview else {
             throw StackError.metal("wgpu pyramid emitted \(previews)/\(frameCount) previews")
@@ -884,20 +890,20 @@ public enum WgpuParity {
                                                            frameCount: frameCount))
         let gpuWarp = try WgpuPyramid.fuse(frameCount: frameCount, warp: warp) { frames[$0] }
         let cpuWarp = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
-                                             warp: warp) { frames[$0] }
+                                             warp: warp, options: plain) { frames[$0] }
         check("pyramid_warp", cpuWarp, gpuWarp, margin: 16)
 
         // Focus-gated mode (--pmax-debloom): the coarsest band levels run the
         // two-track select + darkest base + merge on-device. Same fusion bar
         // (both tracks amplify fast-math ties into flips at coefficient
         // near-equality, so agreement is tie-bounded, not precision-bounded).
-        let fg = PyramidFusion.FocusGate()
+        let fg = PyramidFusion.Options()
         let gpuGated = try WgpuPyramid.fuse(
             frameCount: frameCount,
             focusGate: PyramidFusion.GPUFocusGate(coarseLevels: fg.coarseLevels,
                                                   threshold: fg.threshold)) { frames[$0] }
         let nbCPU = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
-                                              focusGate: fg) { frames[$0] }
+                                              options: fg) { frames[$0] }
         check("pyramid_focus_gated", nbCPU, gpuGated, margin: 8)
         return minPSNR
     }

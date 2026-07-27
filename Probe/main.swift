@@ -305,7 +305,7 @@ Task { @MainActor in
     // 1a. PMax result as a brush source: the model's background pass provides
     // it (synthesized here), it becomes the brush source instantly, and
     // toggling back returns to the frame that was selected.
-    let pmaxImage = try PyramidFusion.fuse(source: source, focusGate: .init())
+    let pmaxImage = try PyramidFusion.fuse(source: source, options: .init())
     session.provideOtherResult(pmaxImage)
     let frameBefore = session.sourceIndex
     session.togglePMaxLayer()
@@ -754,6 +754,48 @@ Task { @MainActor in
     }
     print("probe: noise floor preview OK")
 
+    // 3a0. The app's fusion sliders must start at the engine's shipped
+    // defaults, and the pipeline configuration the app builds from an untouched
+    // model must equal the engine's own defaults. Debloom once shipped ON in
+    // the app and OFF in the CLI (a redundant boolean gate on the CLI side), so
+    // every PMax measurement taken through the CLI described a configuration no
+    // user ever saw — found by eye, months later. This asserts the app half;
+    // the CLI half is structural (its @Option defaults now read the same
+    // objects). See CLAUDE.md's shared-defaults invariant.
+    do {
+        let engineDMap = DMapFusion.Options()
+        let enginePMax = PyramidFusion.Options()
+        guard Float(AppModel.defaultSharpnessSigma) == engineDMap.sharpnessSigma,
+              Float(AppModel.defaultNoiseFloor) == engineDMap.noiseFloor,
+              Int(AppModel.defaultMedianRadius) == engineDMap.medianRadius,
+              Float(AppModel.defaultBlendRadius) == engineDMap.blendRadius,
+              AppModel.defaultPMaxCoarseLevels == enginePMax.coarseLevels,
+              Float(AppModel.defaultPMaxFocusThreshold) == enginePMax.threshold else {
+            print("probe: APP FUSION DEFAULTS DIVERGE FROM THE ENGINE")
+            exit(1)
+        }
+        // And a default-constructed pipeline configuration — what any caller
+        // gets for free — must already carry them, with debloom enabled. This
+        // is the half that actually broke: the values agreed, the enable did
+        // not. (Deliberately not asserted against the live `model` here: the
+        // probe has exercised the sliders by this point, so its state says
+        // nothing about the shipped defaults.)
+        let config = StackPipeline.Configuration()
+        guard config.dmap.sharpnessSigma == engineDMap.sharpnessSigma,
+              config.dmap.medianRadius == engineDMap.medianRadius,
+              config.pmax.coarseLevels == enginePMax.coarseLevels,
+              config.pmax.threshold == enginePMax.threshold else {
+            print("probe: PIPELINE CONFIG DEFAULTS DIVERGE FROM THE ENGINE")
+            exit(1)
+        }
+        guard enginePMax.isEnabled, config.pmax.isEnabled,
+              AppModel.defaultPMaxCoarseLevels > 0 else {
+            print("probe: PMAX DEBLOOM DEFAULTS TO OFF")
+            exit(1)
+        }
+    }
+    print("probe: fusion defaults shared app↔engine OK")
+
     // 3a1. Retouch depth merge: strokes co-paint the depth plane, and
     // leaving retouch folds it into resultDepth (what saves, the depth
     // export, and the rocking animation read). Reverting and re-merging
@@ -1069,7 +1111,7 @@ Task { @MainActor in
     // run-to-run jitter, not path divergence).
     do {
         var dmapCfg = StackPipeline.Configuration()
-        dmapCfg.fusion.retainSpill = true
+        dmapCfg.dmap.retainSpill = true
         let primary = try! StackPipeline.fuseResult(urls: Array(urls),
                                                     configuration: dmapCfg,
                                                     alignmentCache: cache)

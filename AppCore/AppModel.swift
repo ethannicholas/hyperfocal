@@ -1547,14 +1547,18 @@ public final class AppModel: ObservableObject {
         ImageFile.rawExtensions.union(["tif", "tiff", "png", "jpg", "jpeg"])
 
     var includedFrames: [URL] { frames.filter { included.contains($0) } }
-    // The engine's shipped defaults for the sidebar's fusion sliders —
-    // what the Reset button restores (mirrors DMapFusion.Options defaults).
-    static let defaultSharpnessSigma = 10.0
-    static let defaultNoiseFloor = 0.05
-    static let defaultMedianRadius = 20.0
-    static let defaultBlendRadius = 1.0
-    static let defaultPMaxCoarseLevels = 5
-    static let defaultPMaxFocusThreshold = 0.07
+    // The engine's shipped defaults for the sidebar's fusion sliders — what
+    // the sliders initialize to and what Reset restores. READ from the engine's
+    // per-algorithm settings objects; never restate the numbers here. Literals
+    // in this block are how the app and the CLI came to ship different debloom
+    // defaults, which silently invalidated every PMax measurement taken through
+    // the CLI (see CLAUDE.md's shared-defaults invariant).
+    static let defaultSharpnessSigma = Double(DMapFusion.Options().sharpnessSigma)
+    static let defaultNoiseFloor = Double(DMapFusion.Options().noiseFloor)
+    static let defaultMedianRadius = Double(DMapFusion.Options().medianRadius)
+    static let defaultBlendRadius = Double(DMapFusion.Options().blendRadius)
+    static let defaultPMaxCoarseLevels = PyramidFusion.Options().coarseLevels
+    static let defaultPMaxFocusThreshold = Double(PyramidFusion.Options().threshold)
 
     public var fusionSettingsAreDefault: Bool {
         sharpnessSigma == Self.defaultSharpnessSigma
@@ -2650,11 +2654,10 @@ public final class AppModel: ObservableObject {
         config.align = alignFrames
         config.preferGPU = useGPU
         config.method = method
-        config.pmaxFocusGate = pmaxCoarseLevels > 0
-            ? PyramidFusion.FocusGate(coarseLevels: pmaxCoarseLevels,
-                                      threshold: Float(pmaxFocusThreshold))
-            : nil
-        config.fusion = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
+        // No on/off decision here: coarseLevels == 0 disables, inside Options.
+        config.pmax = PyramidFusion.Options(
+            coarseLevels: pmaxCoarseLevels, threshold: Float(pmaxFocusThreshold))
+        config.dmap = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
                                            blendRadius: Float(blendRadius),
                                            noiseFloor: Float(noiseFloor),
                                            medianRadius: Int(medianRadius),
@@ -2666,7 +2669,7 @@ public final class AppModel: ObservableObject {
         // retouch's on-demand source loads otherwise contend on Apple's RAW
         // engine (measured ≥4× slower end-to-end). The spill is released when
         // the background pass finishes (its task drops the configuration).
-        config.fusion.retainSpill = method == .dmap && !batchMode
+        config.dmap.retainSpill = method == .dmap && !batchMode
         // A PMax primary retains its per-frame sharpness planes so retouch's
         // space auto-pick works immediately (a DMap fuse retains them
         // unconditionally). Batches never retouch — skip the readback there.
@@ -2909,7 +2912,7 @@ public final class AppModel: ObservableObject {
         // disk instead of re-decoding the stack (see Configuration docs). The
         // cache lives exactly as long as this task holds its configuration.
         bg.warpedFrameCache = warpedFrames
-        bg.fusion.retainSpill = false   // the secondary spills for no one
+        bg.dmap.retainSpill = false   // the secondary spills for no one
         // …and its sharpness planes serve no one either: resultSharpness is
         // the PRIMARY's set (space auto-pick), and the secondary's completion
         // keeps only the image. Without this, a PMax secondary inherited the
