@@ -99,6 +99,20 @@ number that moves when depth selection fails.
   chroma-subsampled JPEG round-trip to mimic the reference stacks' artifacts)
   and gate on a noisy scene alongside the clean one. Done: a change that
   degrades real-stack sharpness can no longer pass CI on the synth number.
+- **Close the PMax gap — the biggest open quality item.** PMax trails the
+  commercial reference on nearly every stack where both tools consume identical
+  input pixels (contrast-normalized, worst ≈ −13%), while DMap is at parity on
+  the same set. The concrete, diagnosed piece:
+  `Docs/research/2026-07-27-pmax-debloom-gate.md` — the debloom focus gate is
+  restricted to **dark backdrops** by its near-black membership, so a subject
+  silhouetted against a *bright* out-of-focus background gets no debloom at all
+  and renders with a soft, haloed edge. Removing the restriction fixes the edge
+  and improves every sharpness number, and is **rejected**: it dims the top 1%
+  of highlights by 8–10%, near-indiscriminately (in-focus highlights lose almost
+  as much as bloomed ones). The fix belongs in how the coarse selection decides,
+  not in the mask threshold. That doc carries the acceptance criteria a
+  candidate must meet — including the photometric check, which is the one that
+  catches this and which no sharpness metric will.
 - **Close the remaining DMap gaps.** Against the commercial DMap we are at
   parity on the small stacks (contrast-normalized, within ±5% either way) and
   well ahead on the high-resolution raw ones — though that margin plausibly
