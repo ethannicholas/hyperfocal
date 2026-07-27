@@ -20,6 +20,32 @@ public enum DMapFusion {
 
     public struct Options {
         public var sharpnessSigma: Float
+        /// Luminance denoise sigma applied *before* the Laplacian, in pixels.
+        ///
+        /// A 3x3 Laplacian measures the frequency band at Nyquist — which is
+        /// exactly where sensor and JPEG-quantization noise live, and where
+        /// low-contrast material carries little real signal either way. Measured
+        /// on a low-resolution JPEG stack whose background substrate resolves
+        /// only in the last frames, the focus peak came out 1.09x the
+        /// off-peak baseline: the argmax was noise, and averaging it put the
+        /// background at mid-stack (7.1 against a true 13), rendering it as
+        /// mush. Blurring first moves the measurement into the band defocus
+        /// actually destroys — same stack, same region, 15x peak-to-baseline
+        /// and depth 12.95 ± 0.41.
+        ///
+        /// Absolute pixels on purpose: this tracks the *noise* scale, which is
+        /// per-pixel whatever the frame's resolution. It costs sensitivity to
+        /// detail finer than the sigma, so it stays well under the pooling
+        /// `sharpnessSigma` that follows. 0 disables (the pre-2026-07 measure).
+        ///
+        /// The default sits at the conservative end of a plateau: across the
+        /// nine sample stacks σ 1…2 all score within 0.2 points of each other
+        /// (90.3% undenoised → 94.2% at σ=1, 94.4% at σ=1.5), while the cost on
+        /// noiseless synthetic ground truth grows with σ (38.74 → 38.36 dB at
+        /// σ=1, 38.23 at 1.5). σ=1 is the smallest that suppresses the Nyquist
+        /// band, so it takes ~97% of the real-world gain for the least risk to
+        /// genuine fine detail in clean high-resolution stacks.
+        public var focusPreSigma: Float
         /// Tent-kernel radius (in frame-index units) for rendering: pixels blend
         /// frames within this distance of their depth. Wider = smoother transitions.
         public var blendRadius: Float
@@ -80,8 +106,10 @@ public enum DMapFusion {
                     medianRadius: Int = 20, normalizeExposure: Bool = true,
                     peakConcentration: Float = 0.5,
                     guidedRadius: Float = 128, guidedEps: Float = 1e-3,
-                    spillEnabled: Bool = true, prepareDespill: Bool = false) {
+                    spillEnabled: Bool = true, prepareDespill: Bool = false,
+                    focusPreSigma: Float = 1) {
             self.sharpnessSigma = sharpnessSigma
+            self.focusPreSigma = focusPreSigma
             self.blendRadius = blendRadius
             self.noiseFloor = noiseFloor
             self.medianRadius = medianRadius
@@ -91,6 +119,24 @@ public enum DMapFusion {
             self.guidedEps = guidedEps
             self.spillEnabled = spillEnabled
             self.prepareDespill = prepareDespill
+        }
+
+        /// A copy with the spatial regularization radii resolved for a frame of
+        /// this size — see `DMapFusion.regularizationScale`. Every engine calls
+        /// this exactly once, as soon as the output canvas is known; callers
+        /// that drive `regularizeDepth` directly (the app's noise-floor
+        /// preview) call it too, so preview and fuse agree.
+        public func resolved(width: Int, height: Int) -> Options {
+            let scale = DMapFusion.regularizationScale(width: width, height: height)
+            guard scale < 1 else { return self }
+            var out = self
+            // 0 means "disabled" for the median — preserve that exactly;
+            // otherwise never round a live radius away to nothing.
+            if out.medianRadius > 0 {
+                out.medianRadius = max(1, Int((Float(out.medianRadius) * scale).rounded()))
+            }
+            out.guidedRadius = max(1, out.guidedRadius * scale)
+            return out
         }
     }
 
@@ -127,6 +173,35 @@ public enum DMapFusion {
         /// `StackPipeline.Configuration.warpedFrameCache`. Dropping the
         /// last reference reclaims its multi-GB temp file.
         public var warpedFrames: WarpedFrameCache? = nil
+    }
+
+    /// Frame diagonal the spatial regularization defaults were tuned against
+    /// (~45 MP, the stacks this was developed on).
+    public static let referenceDiagonal: Float = 9780
+
+    /// Scale factor for the spatial regularization radii on a frame of the
+    /// given size.
+    ///
+    /// `medianRadius` and `guidedRadius` are absolute pixel counts, but the
+    /// artifacts they suppress are defocus artifacts — their size in pixels
+    /// scales with the frame's dimensions for the same optics. Tuned at ~45 MP
+    /// and applied unchanged to a 1 MP web-sized stack, `guidedRadius` 128
+    /// covers 12% of the frame width instead of 1.3%, and the regularizer
+    /// averages correct per-feature depth into mid-stack mush. Measured on the
+    /// low-resolution sample stacks, scaling by the diagonal recovered 3.2
+    /// points of mean sharpness — and independently landed on the radii a
+    /// manual sweep picked as best (2.9 / 18.6 against a hand-tuned 3 / 20).
+    ///
+    /// Only ever scales *down*. Above the reference the physical argument says
+    /// radii should keep growing, but that is unverified here and the risk is
+    /// one-directional: clamping at 1 leaves every high-resolution stack
+    /// exactly as it was.
+    ///
+    /// Cross-engine algorithm constant — the CPU, Metal, and WGSL paths must
+    /// apply it identically or the ≥ 90 dB dmap parity gate breaks.
+    public static func regularizationScale(width: Int, height: Int) -> Float {
+        let diagonal = (Float(width) * Float(width) + Float(height) * Float(height)).squareRoot()
+        return min(1, diagonal / referenceDiagonal)
     }
 
     public static func fuse(frameCount: Int, options: Options = Options(),
@@ -200,6 +275,8 @@ public enum DMapFusion {
                                      decodeWorkers: Int? = nil,
                                      frame: @escaping (Int) throws -> ImageBuffer) throws -> Output {
         precondition(frameCount > 0)
+        // Resolved once the canvas is known (first frame), below.
+        var options = options
         var width = 0, height = 0
         var bestEnergy: [Float] = []
         var bestIndex: [Float] = []
@@ -269,6 +346,7 @@ public enum DMapFusion {
             if fi == 0 {
                 width = warp?.outputWidth ?? decoded.width
                 height = warp?.outputHeight ?? decoded.height
+                options = options.resolved(width: width, height: height)
                 bestEnergy = [Float](repeating: 0, count: width * height)
                 bestIndex = [Float](repeating: 0, count: width * height)
                 guidePlane = [Float](repeating: 0, count: width * height)
@@ -300,13 +378,19 @@ public enum DMapFusion {
                     .clamped(lowerBound: .init(repeating: 0.5),
                              upperBound: .init(repeating: 2))
                 : .one)
-            let lap = Filters.laplacianAbs(lum, width: width, height: height)
+            let denoised = Filters.blurPlane(lum, width: width, height: height,
+                                             sigma: options.focusPreSigma)
+            let lap = Filters.laplacianSquared(denoised, width: width, height: height)
             var energy = Self.gridEnergy(lap, width: width, height: height,
                                          sigma: options.sharpnessSigma)
-            if gain != 1 {
+            // Squared, so the energy is *quadratic* in the frame's gain — the
+            // correction has to be too, or normalizing exposure would bias
+            // selection toward whichever frames the flicker made brightest.
+            let energyGain = gain * gain
+            if energyGain != 1 {
                 energy.withUnsafeMutableBufferPointer { ep in
                     DispatchQueue.concurrentPerform(iterations: height) { y in
-                        for i in (y * width)..<((y + 1) * width) { ep[i] *= gain }
+                        for i in (y * width)..<((y + 1) * width) { ep[i] *= energyGain }
                     }
                 }
             }

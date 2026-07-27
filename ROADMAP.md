@@ -9,8 +9,11 @@ the record.
 
 **Regression gates** (re-check before trusting any algorithm change): `swift
 build && .build/debug/retouch-probe <synth frames…>` must print `probe: ALL
-PASS`; `hyperfocal-cli synth` baselines (default params) are **plane ≈ 38.7 dB
-dmap / 38.2 pmax** vs truth. CPU↔GPU parity is **≥ 90 dB for dmap** (≈ 101 on
+PASS`; `hyperfocal-cli synth` baselines (default params) are **plane ≈ 38.4 dB
+dmap / 38.2 pmax** vs truth. The dmap figure was 38.7 before the focus
+measure gained its pre-Laplacian denoise; the synth scenes are noiseless, so
+that is the one input class the denoise can only cost — judge DMap changes on
+real stacks too (`Docs/research/2026-07-26-dmap-focus-measure.md`). CPU↔GPU parity is **≥ 90 dB for dmap** (≈ 101 on
 the synth plane) and **≥ 65 dB for pmax** (≈ 70). The two bars differ because
 pixel storage is **f16**: two engines that agree to better than one f16 ulp
 still land on different halves, so ~75–80 dB is the arithmetic ceiling for any
@@ -79,6 +82,38 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
     screenshot of the same panel. Worth considering whether any part of this
     can become a gate rather than a one-off audit — the formatting drift in
     particular is comparable data on both sides.
+
+## Fusion quality on real stacks
+
+Method: `Docs/research/2026-07-26-dmap-focus-measure.md`. Scoring needs a corpus
+of real stacks; one lives outside the repo, with its harness and its per-stack
+numbers — ask the maintainer. The score is per-tile sharpness as a percentage of
+the best any source frame resolves at that pixel, and the **tile floor** is the
+number that moves when depth selection fails.
+
+- **A synth scene with sensor noise.** `hyperfocal-cli synth` renders noiseless
+  frames, so the CI PSNR gate is blind to every noise-driven failure — it
+  scored a DMap that left a whole background out of focus as fine, and it
+  *penalizes* the denoise that fixed it (dmap floor moved 38.7 → 38.2 dB). Add
+  a `--noise` option (per-pixel Gaussian in linear light, plus an optional
+  chroma-subsampled JPEG round-trip to mimic the reference stacks' artifacts)
+  and gate on a noisy scene alongside the clean one. Done: a change that
+  degrades real-stack sharpness can no longer pass CI on the synth number.
+- **Close the remaining DMap gaps.** Ours averages ~94% of best achievable
+  against the commercial DMap's ~96%. One stack has a gap wide enough to be a
+  distinct bug rather than tuning; two more match on the mean while sitting
+  ~15 points lower on the tile floor, which means a localized region is still
+  mis-selected. Diagnose those from the depth map (`fuse --depth-map`), not the
+  score. Per-stack numbers and the priority order are in the corpus README.
+- **Verify the regularization radii above the reference resolution.**
+  `DMapFusion.regularizationScale` scales `medianRadius`/`guidedRadius` by the
+  frame diagonal against a 9780 px reference but is **clamped to 1**: it only
+  ever scales down, because every reference stack is under 2 MP and the
+  large-frame direction was untestable here. The physical argument (defocus
+  artifacts scale with the frame) says a 100 MP stack wants radii larger than
+  the 45 MP defaults. Measure on a real high-resolution stack before removing
+  the clamp — and note `medianRadius` is a user-facing slider persisted in
+  projects, so its effective meaning is already resolution-relative.
 
 ## UI Improvements
 

@@ -26,7 +26,14 @@ public enum WgpuDMap {
     struct BlurParams { var width: UInt32; var height: UInt32; var radius: Int32; var pad: UInt32 = 0 }
     struct Dims2 { var w: UInt32; var h: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct Count1 { var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
-    struct ArgmaxParams { var frameIdx: Float; var count: UInt32; var gain: Float; var pad: UInt32 = 0 }
+    /// `gain` corrects the guide luminance (linear in exposure); `energyGain`
+    /// is gain² for the vote, whose measure is a squared Laplacian.
+    struct ArgmaxParams {
+        var frameIdx: Float
+        var count: UInt32
+        var gain: Float
+        var energyGain: Float
+    }
     struct MinMaxParams { var count: UInt32; var gain: Float; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
     struct TentParams {
         var gain: SIMD4<Float>
@@ -82,10 +89,12 @@ public enum WgpuDMap {
         }
         let frameCount = source.count
         precondition(frameCount > 0)
+        // Resolved once the canvas is known (first frame), below.
+        var options = options
 
         // Resolve every kernel up front so a missing entry point fails loudly
         // before any decode work starts.
-        for name in ["warp_lanczos3", "lum_laplacian", "blur_h", "blur_v",
+        for name in ["warp_lanczos3", "plane_laplacian_sq", "blur_h", "blur_v",
                      "argmax_update", "tent_accumulate", "normalize_out",
                      "progressive_preview", "plane_preview", "box_downsample",
                      "plane_upsample", "luma_plane", "minmax_update", "confidence_map",
@@ -100,6 +109,11 @@ public enum WgpuDMap {
         let blurWeights = Filters.gaussianKernel(
             sigma: options.sharpnessSigma / Float(egf))
         let blurRadius = blurWeights.count / 2
+        // Luminance denoise ahead of the Laplacian (Options.focusPreSigma) —
+        // full resolution, so its own weights and dims.
+        let preWeights = options.focusPreSigma > 0.01
+            ? Filters.gaussianKernel(sigma: options.focusPreSigma) : []
+        let preRadius = preWeights.count / 2
 
         var width = 0, height = 0, pixelCount = 0   // output canvas (may be cropped)
         var srcWidth = 0, srcHeight = 0             // source frame dimensions
@@ -115,6 +129,7 @@ public enum WgpuDMap {
         var lumGridBuf: WgpuEngine.Buffer!
         var guideBuf: WgpuEngine.Buffer!
         var blurWeightsBuf: WgpuEngine.Buffer!
+        var preWeightsBuf: WgpuEngine.Buffer!
         // Per-pixel despill floor accumulators (see DespillInputs.perPixelFloor).
         let wantPixelFloor = DMapFusion.wantsPixelFloor(options)
         var min1Buf: WgpuEngine.Buffer!, min2Buf: WgpuEngine.Buffer!,
@@ -211,6 +226,7 @@ public enum WgpuDMap {
                 width = source.outputWidth ?? img.width
                 height = source.outputHeight ?? img.height
                 pixelCount = width * height
+                options = options.resolved(width: width, height: height)
                 rawBuf = try engine.makeBuffer(floats: srcWidth * srcHeight * 4)
                 warpedBuf = try engine.makeBuffer(floats: pixelCount * 4)
                 lapBuf = try engine.makeBuffer(floats: pixelCount)
@@ -238,6 +254,12 @@ public enum WgpuDMap {
                 blurWeightsBuf = try engine.makeBuffer(floats: blurWeights.count)
                 blurWeights.withUnsafeBytes {
                     engine.upload($0.baseAddress!, byteCount: $0.count, to: blurWeightsBuf)
+                }
+                if !preWeights.isEmpty {
+                    preWeightsBuf = try engine.makeBuffer(floats: preWeights.count)
+                    preWeights.withUnsafeBytes {
+                        engine.upload($0.baseAddress!, byteCount: $0.count, to: preWeightsBuf)
+                    }
                 }
                 // Explicit zero fills (not the spec's lazy zero-init) so a
                 // rerun on recycled buffers can never inherit stale state.
@@ -316,8 +338,26 @@ public enum WgpuDMap {
                              upperBound: .init(repeating: 2))
                 : .one)
 
-            try batch.dispatch("lum_laplacian", buffers: [input, lapBuf],
-                               uniforms: bytes(of: Dims2(w: UInt32(width), h: UInt32(height))),
+            // Focus energy: luminance → denoise (focusPreSigma) → (∇²)².
+            // Same buffer round-trip as the Metal path: the luminance lands in
+            // energyBuf, the separable pre-blur borrows tmpBuf and returns
+            // there, and the Laplacian writes lapBuf — where the grid reduction
+            // below picks it up. energyBuf is overwritten by the energy field
+            // further down, after this is done with it.
+            let fullDims = Dims2(w: UInt32(width), h: UInt32(height))
+            try batch.dispatch("luma_plane", buffers: [input, energyBuf],
+                               uniforms: bytes(of: Count1(count: UInt32(pixelCount))),
+                               gridW: pixelCount)
+            if !preWeights.isEmpty {
+                let preParams = BlurParams(width: UInt32(width), height: UInt32(height),
+                                           radius: Int32(preRadius))
+                try batch.dispatch("blur_h", buffers: [energyBuf, tmpBuf, preWeightsBuf],
+                                   uniforms: bytes(of: preParams), gridW: width, gridH: height)
+                try batch.dispatch("blur_v", buffers: [tmpBuf, energyBuf, preWeightsBuf],
+                                   uniforms: bytes(of: preParams), gridW: width, gridH: height)
+            }
+            try batch.dispatch("plane_laplacian_sq", buffers: [energyBuf, lapBuf],
+                               uniforms: bytes(of: fullDims),
                                gridW: width, gridH: height)
             // Energy field: blur on the grid then upsample (egf > 1), or the
             // plain full-res blur (egf == 1) — same rule as the CPU path.
@@ -351,7 +391,8 @@ public enum WgpuDMap {
                                buffers: [energyBuf, input, bestEBuf, bestIdxBuf, guideBuf],
                                uniforms: bytes(of: ArgmaxParams(frameIdx: Float(fi),
                                                                 count: UInt32(pixelCount),
-                                                                gain: gain)),
+                                                                gain: gain,
+                                                                energyGain: gain * gain)),
                                gridW: pixelCount)
 
             // Retain this frame's raw sharpness at reduced resolution — the
@@ -412,9 +453,11 @@ public enum WgpuDMap {
             try plane.withUnsafeMutableBytes {
                 try engine.download(sharpBuf, into: $0.baseAddress!)
             }
-            if gain != 1 {
-                // The retained sharpness must match what the argmax compared.
-                for i in plane.indices { plane[i] *= gain }
+            let energyGain = gain * gain
+            if energyGain != 1 {
+                // The retained sharpness must match what the argmax compared —
+                // squared measure, so the same gain² the vote used.
+                for i in plane.indices { plane[i] *= energyGain }
             }
             sharpnessPlanes.append(plane)
             var lumPlane = [Float](repeating: 0, count: sw * sh)

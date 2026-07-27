@@ -526,12 +526,16 @@ public final class WgpuEngine {
 
     struct Dims2 { w: u32, h: u32, pad0: u32, pad1: u32 }
 
-    @group(0) @binding(0) var<storage, read> ll_img: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> ll_src: array<f32>;
     @group(0) @binding(1) var<storage, read_write> ll_out: array<f32>;
     @group(0) @binding(2) var<uniform> ll_p: Dims2;
 
+    // (∇²)² of a float plane — the CPU's Filters.laplacianSquared. Input is
+    // luminance already denoised by Options.focusPreSigma (the Laplacian's band
+    // sits at Nyquist, where noise lives); squared because everything
+    // downstream pools this as energy.
     @compute @workgroup_size(16, 16)
-    fn lum_laplacian(@builtin(global_invocation_id) gid: vec3u) {
+    fn plane_laplacian_sq(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= ll_p.w || gid.y >= ll_p.h) { return; }
         let w = i32(ll_p.w);
         let h = i32(ll_p.h);
@@ -541,15 +545,12 @@ public final class WgpuEngine {
         let xr = min(x + 1, w - 1);
         let yu = max(y - 1, 0);
         let yd = min(y + 1, h - 1);
-        let c = dot(ll_img[y * w + x].rgb, kLuma);
-        let l = dot(ll_img[y * w + xl].rgb, kLuma);
-        let r = dot(ll_img[y * w + xr].rgb, kLuma);
-        let u = dot(ll_img[yu * w + x].rgb, kLuma);
-        let d = dot(ll_img[yd * w + x].rgb, kLuma);
-        ll_out[y * w + x] = abs(l + r + u + d - 4.0 * c);
+        let v = ll_src[y * w + xl] + ll_src[y * w + xr] + ll_src[yu * w + x]
+              + ll_src[yd * w + x] - 4.0 * ll_src[y * w + x];
+        ll_out[y * w + x] = v * v;
     }
 
-    struct ArgmaxParams { frameIdx: f32, count: u32, gain: f32, pad: u32 }
+    struct ArgmaxParams { frameIdx: f32, count: u32, gain: f32, energyGain: f32 }
 
     @group(0) @binding(0) var<storage, read> am_energy: array<f32>;
     @group(0) @binding(1) var<storage, read> am_frame: array<vec4f>;
@@ -561,7 +562,9 @@ public final class WgpuEngine {
     @compute @workgroup_size(256)
     fn argmax_update(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= am_p.count) { return; }
-        let e = am_energy[gid.x] * am_frame[gid.x].w * am_p.gain;
+        // energyGain is gain²: the measure is a squared Laplacian, so quadratic
+        // in the frame's gain, while the guide luminance below is linear in it.
+        let e = am_energy[gid.x] * am_frame[gid.x].w * am_p.energyGain;
         let wins = e > am_bestE[gid.x];
         if (wins) {
             am_bestE[gid.x] = e;

@@ -3149,9 +3149,14 @@ public final class AppModel: ObservableObject {
         noiseFloorPreviewComputing = true
         let counter = noiseFloorPreviewGeneration
         let generation = counter.bump()
+        // Resolution-scale the radii exactly as the engines do, so the preview
+        // predicts the fuse on small stacks too (data.width/height are the
+        // sharpness grid, so recover full resolution first).
         var options = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
                                          noiseFloor: Float(noiseFloor),
                                          medianRadius: Int(medianRadius))
+            .resolved(width: data.width * DMapFusion.sharpnessDownsample,
+                      height: data.height * DMapFusion.sharpnessDownsample)
         // The preview grid is 1/sharpnessDownsample of full resolution;
         // scale the spatial parameters to match.
         options.medianRadius = options.medianRadius > 0

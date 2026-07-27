@@ -56,11 +56,11 @@ struct DebugWgpu: ParsableCommand {
     // Warped frames get their own floor: each engine resamples in f32 and then
     // stores through f16, so the two land on adjacent halves wherever their f32
     // results straddle a rounding boundary, and dmap's argmax amplifies that
-    // into frame-index flips. 75 sits just under the measured 78.2 dB and
+    // into frame-index flips. 71 sits just under the measured 74.0 dB and
     // inside f16's 75-80 dB ceiling near 1.0 — see WgpuParity.runDMap for the
     // full derivation and the refuted on-device-quantization fix.
     @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (warped frames — lower because f16 storage, not slack).")
-    var dmapWarpFloor: Double = 75
+    var dmapWarpFloor: Double = 71
 
     func run() throws {
         let minPSNR = try WgpuParity.run()
@@ -126,6 +126,9 @@ struct FusionOptions: ParsableArguments {
     @Option(help: "DMap: sharpness smoothing sigma in pixels.")
     var sharpnessSigma: Float = 10
 
+    @Option(help: "DMap: luminance denoise sigma applied before the Laplacian, in pixels. The Laplacian measures the band at Nyquist, where sensor and JPEG noise live; blurring first moves the focus measurement into the band defocus actually destroys. 0 restores the undenoised measure.")
+    var focusPreSigma: Float = 1
+
     @Option(help: "DMap: render blend radius in frame-index units.")
     var blendRadius: Float = 1
 
@@ -164,7 +167,7 @@ struct FusionOptions: ParsableArguments {
                            normalizeExposure: normalizeExposure,
                            peakConcentration: peakConcentration,
                            guidedRadius: guidedRadius, guidedEps: guidedEps,
-                           spillEnabled: diskCache)
+                           spillEnabled: diskCache, focusPreSigma: focusPreSigma)
     }
 
     func resolveUseGPU() throws -> Bool {

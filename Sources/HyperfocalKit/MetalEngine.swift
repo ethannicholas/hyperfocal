@@ -209,21 +209,22 @@ public final class MetalEngine {
 
     constant float3 kLuma = float3(0.2126, 0.7152, 0.0722);
 
-    kernel void lum_laplacian(device const half4* img [[buffer(0)]],
-                              device float* out [[buffer(1)]],
-                              constant uint2& dims [[buffer(2)]],
-                              uint2 gid [[thread_position_in_grid]]) {
+    // (∇²)² of a float plane — the CPU's Filters.laplacianSquared. The plane
+    // handed in is luminance already denoised by Options.focusPreSigma (the
+    // Laplacian's band sits at Nyquist, where noise lives); squared because
+    // every stage downstream pools this as energy.
+    kernel void plane_laplacian_sq(device const float* src [[buffer(0)]],
+                                   device float* out [[buffer(1)]],
+                                   constant uint2& dims [[buffer(2)]],
+                                   uint2 gid [[thread_position_in_grid]]) {
         int w = int(dims.x), h = int(dims.y);
         if (gid.x >= dims.x || gid.y >= dims.y) return;
         int x = int(gid.x), y = int(gid.y);
         int xl = max(x - 1, 0), xr = min(x + 1, w - 1);
         int yu = max(y - 1, 0), yd = min(y + 1, h - 1);
-        float c = dot(float4(img[y * w + x]).rgb, kLuma);
-        float l = dot(float4(img[y * w + xl]).rgb, kLuma);
-        float r = dot(float4(img[y * w + xr]).rgb, kLuma);
-        float u = dot(float4(img[yu * w + x]).rgb, kLuma);
-        float d = dot(float4(img[yd * w + x]).rgb, kLuma);
-        out[y * w + x] = fabs(l + r + u + d - 4.0 * c);
+        float v = src[y * w + xl] + src[y * w + xr] + src[yu * w + x]
+                + src[yd * w + x] - 4.0 * src[y * w + x];
+        out[y * w + x] = v * v;
     }
 
     struct BlurParams { uint width; uint height; int radius; };
@@ -267,12 +268,15 @@ public final class MetalEngine {
                               constant uint& count [[buffer(5)]],
                               constant float& gain [[buffer(6)]],
                               device float* guide [[buffer(7)]],
+                              constant float& energyGain [[buffer(8)]],
                               uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
         // Alpha-masked: a frame gets no depth vote where it has no data.
-        // Gain: exposure-normalized energy (Laplacian is linear in gain).
+        // energyGain is gain² — the measure is a *squared* Laplacian, so it is
+        // quadratic in the frame's gain, while the guide luminance below is
+        // linear in it.
         float4 f = float4(frame[gid]);
-        float e = energy[gid] * f.w * gain;
+        float e = energy[gid] * f.w * energyGain;
         bool wins = e > bestE[gid];
         if (wins) {
             bestE[gid] = e;

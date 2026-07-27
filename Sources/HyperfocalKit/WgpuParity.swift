@@ -71,7 +71,9 @@ public enum WgpuParity {
     struct BlurParams { var width: UInt32; var height: UInt32; var radius: Int32; var pad: UInt32 = 0 }
     struct Dims2 { var w: UInt32; var h: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct Count1 { var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
-    struct ArgmaxParams { var frameIdx: Float; var count: UInt32; var gain: Float; var pad: UInt32 = 0 }
+    /// Mirrors WgpuDMap.ArgmaxParams: `gain` for the guide luminance (linear in
+    /// exposure), `energyGain` = gain² for the vote (squared-Laplacian energy).
+    struct ArgmaxParams { var frameIdx: Float; var count: UInt32; var gain: Float; var energyGain: Float }
     struct TentParams { var gain: SIMD4<Float>; var index: Float; var radius: Float; var count: UInt32; var pad: UInt32 = 0 }
     struct PlanePreviewParams { var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32; var scale: Float; var bias: Float; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct BoxDownParams { var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32; var factor: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
@@ -167,22 +169,15 @@ public enum WgpuParity {
         // Small shared grids for the per-pixel kernels.
         let w = 64, h = 48, n = w * h
 
-        // -- lum_laplacian ----------------------------------------------------
+        // -- plane_laplacian_sq -----------------------------------------------
         do {
-            let img = c.rand(n * 4)
-            var cpu = [Float](repeating: 0, count: n)
-            for y in 0..<h { for x in 0..<w {
-                let xl = max(x - 1, 0), xr = min(x + 1, w - 1)
-                let yu = max(y - 1, 0), yd = min(y + 1, h - 1)
-                cpu[y * w + x] = abs(luma(img, y * w + xl) + luma(img, y * w + xr)
-                    + luma(img, yu * w + x) + luma(img, yd * w + x)
-                    - 4 * luma(img, y * w + x))
-            } }
-            let i = try c.buf(img), o = try engine.makeBuffer(floats: n)
-            try engine.run("lum_laplacian", buffers: [i, o],
+            let plane = c.rand(n)
+            let cpu = Filters.laplacianSquared(plane, width: w, height: h)
+            let i = try c.buf(plane), o = try engine.makeBuffer(floats: n)
+            try engine.run("plane_laplacian_sq", buffers: [i, o],
                            uniforms: bytes(of: Dims2(w: UInt32(w), h: UInt32(h))),
                            gridW: w, gridH: h)
-            c.report("lum_laplacian", cpu, try c.read(o, n))
+            c.report("plane_laplacian_sq", cpu, try c.read(o, n))
         }
 
         // -- argmax_update (two frames) --------------------------------------
@@ -191,9 +186,11 @@ public enum WgpuParity {
             let f0 = c.rand(n * 4), f1 = c.rand(n * 4)
             var bestE = [Float](repeating: 0, count: n)
             var bestIdx = bestE, guide = bestE
+            // The vote scales by gain² (squared-Laplacian energy), the guide
+            // luminance by gain — distinct factors, so the check uses both.
             for (fi, (e, f, g)) in [(e0, f0, Float(1.02)), (e1, f1, Float(0.97))].enumerated() {
                 for i in 0..<n {
-                    let ei = e[i] * f[i * 4 + 3] * g
+                    let ei = e[i] * f[i * 4 + 3] * g * g
                     let wins = ei > bestE[i]
                     if wins { bestE[i] = ei; bestIdx[i] = Float(fi) }
                     if wins || fi == 0 { guide[i] = luma(f, i) * g }
@@ -203,7 +200,8 @@ public enum WgpuParity {
             let bI = try c.buf([Float](repeating: 0, count: n))
             let gd = try c.buf([Float](repeating: 0, count: n))
             for (fi, (e, f, g)) in [(e0, f0, Float(1.02)), (e1, f1, Float(0.97))].enumerated() {
-                let p = ArgmaxParams(frameIdx: Float(fi), count: UInt32(n), gain: g)
+                let p = ArgmaxParams(frameIdx: Float(fi), count: UInt32(n),
+                                     gain: g, energyGain: g * g)
                 try engine.run("argmax_update",
                                buffers: [try c.buf(e), try c.buf(f), bE, bI, gd],
                                uniforms: bytes(of: p), gridW: n)
@@ -924,7 +922,7 @@ public enum WgpuParity {
     /// resamples in f32 and then stores through f16, so wherever the two f32
     /// results straddle a rounding boundary they land on adjacent halves; the
     /// argmax turns a full-ulp disagreement into a whole frame-index flip.
-    /// That puts the warped variant at 78.2 dB — inside the 75–80 dB ceiling
+    /// That puts the warped variant at 74.0 dB — inside the 75–80 dB ceiling
     /// f16 imposes on any value near 1.0, and unreachable by 90 for as long as
     /// pixel storage is half. Confirmed by experiment rather than assumed:
     /// quantizing the wgpu warp output to f16 on-device (`pack2x16float`) so
@@ -932,8 +930,27 @@ public enum WgpuParity {
     /// because it converts many small disagreements into fewer full-ulp ones
     /// that the argmax amplifies. It was reverted.
     ///
-    /// So a warped miss below ~75 still means drift and should be chased; the
-    /// gap between 78 and 90 is arithmetic. Returns both figures so the caller
+    /// The figure was 78.2 dB until the focus measure gained its pre-Laplacian
+    /// denoise (`Options.focusPreSigma`, 2026-07-26), which moved it to 74.0.
+    /// That is more of the same mechanism, not new drift, and the evidence for
+    /// saying so is worth keeping because "it's only quantization" is exactly
+    /// what would hide a real regression:
+    ///   * 74.0 dB is an RMSE of 2.0e-4, *below* one f16 ulp near 0.5 (≈4.9e-4)
+    ///     — most pixels agree exactly and a minority sit one half apart, which
+    ///     is the adjacent-halves regime above, not a systematic offset.
+    ///   * The squaring is not the cause. Squared measure with the denoise
+    ///     disabled measures 78.3 dB, i.e. the pre-denoise baseline; it is the
+    ///     blur that moves the number, by smoothing energy curves into more
+    ///     near-ties for the argmax to flip on and by spreading values across
+    ///     neighborhoods so more of them land near a rounding boundary.
+    ///   * The kernels themselves agree — `plane_laplacian_sq` 131 dB,
+    ///     `argmax_update` 154 dB — and CPU↔**Metal** warped dmap *improved*
+    ///     over the same change (90.4 → 102.7 dB on the synth object scene).
+    ///     Metal has no f32-warp/f16-store asymmetry with the CPU path, so an
+    ///     algorithmic divergence would have shown there too. It did not.
+    ///
+    /// So a warped miss below ~71 still means drift and should be chased; the
+    /// gap between 74 and 90 is arithmetic. Returns both figures so the caller
     /// can gate each against its own floor.
     public static func runDMap(log: @escaping (String) -> Void = { print($0) })
         throws -> (plain: Double, warped: Double) {

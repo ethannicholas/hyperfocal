@@ -89,9 +89,11 @@ public enum GPUDMap {
         }
         let frameCount = source.count
         precondition(frameCount > 0)
+        // Resolved once the canvas is known (first frame), below.
+        var options = options
 
         let warpPipeline = try engine.pipeline("warp_lanczos3")
-        let lapPipeline = try engine.pipeline("lum_laplacian")
+        let lapPipeline = try engine.pipeline("plane_laplacian_sq")
         let blurHPipeline = try engine.pipeline("blur_h")
         let blurVPipeline = try engine.pipeline("blur_v")
         let argmaxPipeline = try engine.pipeline("argmax_update")
@@ -110,6 +112,11 @@ public enum GPUDMap {
         let blurWeights = Filters.gaussianKernel(
             sigma: options.sharpnessSigma / Float(egf))
         let blurRadius = blurWeights.count / 2
+        // Luminance denoise ahead of the Laplacian (Options.focusPreSigma) —
+        // full resolution, so its own weights and dims.
+        let preWeights = options.focusPreSigma > 0.01
+            ? Filters.gaussianKernel(sigma: options.focusPreSigma) : []
+        let preRadius = preWeights.count / 2
 
         var width = 0, height = 0, pixelCount = 0   // output canvas (may be cropped)
         var srcWidth = 0, srcHeight = 0             // source frame dimensions
@@ -205,6 +212,7 @@ public enum GPUDMap {
                 width = source.outputWidth ?? img.width
                 height = source.outputHeight ?? img.height
                 pixelCount = width * height
+                options = options.resolved(width: width, height: height)
                 rawBuf = try engine.makeBuffer(halves: srcWidth * srcHeight * 4)
                 warpedBuf = try engine.makeBuffer(halves: pixelCount * 4)
                 lapBuf = try engine.makeBuffer(floats: pixelCount)
@@ -285,7 +293,35 @@ public enum GPUDMap {
                 throw StackError.metal("cannot create command buffer")
             }
             var dims = SIMD2<UInt32>(UInt32(width), UInt32(height))
+            // Focus energy: luminance → denoise (focusPreSigma) → (∇²)².
+            // Buffer round-trip mirrors the CPU's plane sequence: lapBuf holds
+            // luminance, then the separable pre-blur lands the denoised plane in
+            // energyBuf, and the Laplacian writes back into lapBuf — which is
+            // where the existing grid reduction picks it up. energyBuf is only
+            // borrowed here; the energy field overwrites it further down.
+            var count32Lum = UInt32(pixelCount)
             encoder.setBuffer(input, offset: 0, index: 0)
+            encoder.setBuffer(energyBuf, offset: 0, index: 1)
+            encoder.setBytes(&count32Lum, length: 4, index: 2)
+            engine.dispatch1D(encoder, lumaPipeline, count: pixelCount)
+            if !preWeights.isEmpty {
+                var preParams = BlurParams(width: UInt32(width), height: UInt32(height),
+                                           radius: Int32(preRadius))
+                preWeights.withUnsafeBufferPointer { wp in
+                    encoder.setBuffer(energyBuf, offset: 0, index: 0)
+                    encoder.setBuffer(tmpBuf, offset: 0, index: 1)
+                    encoder.setBytes(wp.baseAddress!, length: wp.count * 4, index: 2)
+                    encoder.setBytes(&preParams, length: MemoryLayout<BlurParams>.size, index: 3)
+                    engine.dispatch2D(encoder, blurHPipeline, width: width, height: height)
+
+                    encoder.setBuffer(tmpBuf, offset: 0, index: 0)
+                    encoder.setBuffer(energyBuf, offset: 0, index: 1)
+                    encoder.setBytes(wp.baseAddress!, length: wp.count * 4, index: 2)
+                    encoder.setBytes(&preParams, length: MemoryLayout<BlurParams>.size, index: 3)
+                    engine.dispatch2D(encoder, blurVPipeline, width: width, height: height)
+                }
+            }
+            encoder.setBuffer(energyBuf, offset: 0, index: 0)
             encoder.setBuffer(lapBuf, offset: 0, index: 1)
             encoder.setBytes(&dims, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
             engine.dispatch2D(encoder, lapPipeline, width: width, height: height)
@@ -337,10 +373,13 @@ public enum GPUDMap {
             encoder.setBuffer(bestIdxBuf, offset: 0, index: 3)
             encoder.setBytes(&frameIdx, length: 4, index: 4)
             encoder.setBytes(&count32, length: 4, index: 5)
-            encoder.setBytes(&gain, length: 4, index: 6)  // exposure-corrected vote
+            encoder.setBytes(&gain, length: 4, index: 6)  // guide luminance: linear
             // The kernel also records the winning frame's luminance — the
             // regularizer's all-in-focus guide estimate.
             encoder.setBuffer(guideBuf, offset: 0, index: 7)
+            // The vote: energy is a squared Laplacian, so quadratic in gain.
+            var energyGain = gain * gain
+            encoder.setBytes(&energyGain, length: 4, index: 8)
             engine.dispatch1D(encoder, argmaxPipeline, count: pixelCount)
 
             // Retain this frame's raw sharpness at reduced resolution — the
@@ -408,9 +447,10 @@ public enum GPUDMap {
             if let error = cmd.error { throw StackError.metal("depth pass: \(error)") }
             var plane = [Float](UnsafeBufferPointer(
                 start: sharpBuf.contents().assumingMemoryBound(to: Float.self), count: sw * sh))
-            if gain != 1 {
-                // The retained sharpness must match what the argmax compared.
-                for i in plane.indices { plane[i] *= gain }
+            if energyGain != 1 {
+                // The retained sharpness must match what the argmax compared —
+                // squared measure, so the same gain² the vote used.
+                for i in plane.indices { plane[i] *= energyGain }
             }
             sharpnessPlanes.append(plane)
             var lumPlane = [Float](UnsafeBufferPointer(

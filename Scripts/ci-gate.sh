@@ -15,10 +15,21 @@ mkdir -p "$WORK"
 
 # PSNR floors are platform-calibrated just under each platform's
 # measured baseline (plane scene, default synth params, P3 export to
-# match the ground truth): Linux measures 39.1 dmap / 38.6 pmax
-# (aarch64, 2026-07-19); macOS 38.71 dmap / 38.26 pmax (the ROADMAP
+# match the ground truth): Linux measured 39.1 dmap / 38.6 pmax
+# (aarch64, 2026-07-19); macOS 38.41 dmap / 38.26 pmax (the ROADMAP
 # baselines) — a shared 38.3 pmax floor sat above the macOS baseline
 # and failed on noise alone.
+#
+# The dmap floor dropped from 38.7 to 38.2 when the focus measure gained
+# its pre-Laplacian denoise (Options.focusPreSigma, 2026-07-26). The synth
+# plane is *noiseless*, so denoising can only cost precision there — it is
+# the one input class the change cannot help, and it gave up 0.31 dB.
+# Real stacks are the opposite case: across the nine reference sample
+# stacks the same change lifted mean sharpness 86.8% -> 94.2% of best
+# achievable, and took the worst stack from 59% to 101%. Do not "recover"
+# this 0.3 dB by shrinking focusPreSigma without re-running that
+# comparison. A synth scene with sensor noise would gate this honestly —
+# see the ROADMAP item.
 if [ "$(uname)" = Darwin ]; then PMAX_FLOOR=38.1; else PMAX_FLOOR=38.3; fi
 echo "== synth PSNR gates"
 "$BIN" synth -o "$WORK/synth"
@@ -35,7 +46,7 @@ gate() { # method floor
         exit 1
     }
 }
-gate dmap 38.7
+gate dmap 38.2
 gate pmax "$PMAX_FLOOR"
 
 # DNG round-trip: exporting through our DNG writer and decoding back (LibRaw
