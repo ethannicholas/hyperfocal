@@ -225,6 +225,60 @@ Three boundaries found and measured, each now enforced or documented:
   measured gap, and `HYPERFOCAL_PMAX_BG_DEBUG=1` prints each component's
   flatness so the margin can be re-checked when new stacks join the corpus.
 
+## 2026-07-27, last: regional frame consistency at the coarse levels only —
+## built, measured, and NOT shipped
+
+The "regionally frame-consistent selection" follow-up was prototyped end to
+end on the CPU the same day, and the measurements say the increment as scoped
+does not pay. Recording both the parts that work and the reason it stops
+short, because the next attempt should start here:
+
+**What works, verified:**
+
+- **A regularized frame map can be built from data the streaming pass already
+  has.** Per-cell argmax of the box-pooled level-0 focus (with frame
+  identity), then nearest-confident-cell propagation bounded to ~48 px, with
+  votes baseline-subtracted so noise-floor cells contribute exactly nothing.
+  Two formulations failed first and are worth not retrying: requiring the
+  window MEAN to beat noise assigns nothing anywhere, and a windowed
+  (weighted) MEDIAN mixes the subject's own depth gradient into the verdict —
+  interior cells, sharp in other frames, outvote the silhouette edge.
+  Confidence must come from ALL cells (the adjacent subject edge is where it
+  lives; background-only voting covered 6% of the band), while assignment
+  stays background-only. Verified against the bright-backdrop stack: the map
+  assigns the subject-sharp frame across the whole band beside the roofline.
+- **A selective second pass is cheap and architecturally clean.** Re-decode
+  only the frames the map assigns significant coverage to (at most four),
+  rebuild their pyramids in the existing workspace, and materialize their
+  gated-level bands and base Gaussian for substitution. The decode closure is
+  still available after streaming; cost is 1-4 extra frame decodes.
+
+**Why it still doesn't pay:** substituting the map frame's COARSE bands (and
+base) while the fine levels stay plain max-of-N mixes two inconsistent
+selections in the same region. Measured: the bright-backdrop silhouette shows
+no decisive improvement over the shipped clean-field merge (the edge-anchored
+profile even under-reports it, because the darkest base depresses the whole
+far field and the relative anchor moves with it — absolute band values sit
+between the frames' median and max, which is healthy); and on a lively
+defocused background the noisiest tiles got WORSE than plain selection
+(2.8x the liveliest source frame vs 2.1x) — coarse bands from one frame plus
+fine max-of-N from all frames add incoherently. Frame-consistency above the
+frame ceiling did improve (17% -> 6% of worst-band pixels above the source
+maximum, better than the reference's 10%), which confirms the mechanism does
+what it says at the levels it governs — there just aren't enough of them.
+
+**The actual shape of the remaining work:** background regions need
+frame-governed selection at EVERY level, fine ones included — at which point
+the background is being rendered the way DMap renders everything, from a
+depth decision plus per-region blending, not by per-coefficient contests.
+The natural implementation is to consult a depth map (the app already
+computes a DMap peer for every PMax fuse as the depth/retouch source; the
+engine would need it for the CLI too) and render the membership's background
+regions from it, keeping PMax's per-coefficient selection for the subject —
+where overlapping structures are the reason PMax exists. That is a design
+with app/CLI-parity and performance implications; it should start as a
+design note, not a patch.
+
 ## Status when this was written
 
 PMax trails the commercial reference on nearly every stack where both tools

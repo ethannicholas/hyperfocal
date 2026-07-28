@@ -127,11 +127,18 @@ number that moves when depth selection fails.
   violations and top-1% within 0.03% — and every other corpus stack stays
   bit-identical. Open, in order:
   - **The rest of the silhouette transition (10–30 px).** The reference
-    matches the subject-sharp source frame's own edge tail there; rendering
-    that needs regionally frame-consistent selection (what DMap's depth map
-    provides), which per-cell/per-level independent picks cannot deliver —
-    the doc records two measured failures (keep-darkest, peak-focus) that
-    bought the tail only by painting darkness below the source frames.
+    matches the subject-sharp source frame's own edge tail there. A coarse-
+    levels-only frame-consistency mechanism (regularized frame map + selective
+    re-decode of the map's frames) was built and measured — the map and the
+    second pass work, but governing only the gated levels while fine levels
+    stay max-of-N mixes inconsistent selections and does not pay; the doc's
+    final section records what to keep and what not to retry. The real fix is
+    frame-governed selection at EVERY level in background regions — rendering
+    the background the way DMap renders everything, from a depth decision,
+    while PMax's per-coefficient selection keeps the subject. Depth could come
+    from the DMap peer the app already computes for every PMax fuse (the CLI
+    would need it too — an app/CLI-parity question). Start with a design
+    note, not a patch.
   - **Textured defocused backgrounds are excluded on purpose.** The
     clean-field mechanism deadens bokeh/out-of-focus mottle (measured
     0.3–0.7× the liveliest source frame), so the flatness gate scopes it
