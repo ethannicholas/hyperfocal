@@ -191,9 +191,14 @@ number that moves when depth selection fails.
     No visible artifact tied to it yet — treat as a registration-robustness
     lead, and a candidate new check for auto-exclude (adjacent-step scale
     continuity).
-  - The remaining "behind" stack is behind on the tile floor only, and its
-    deficit is suspect for the same geometry artifact — re-derive against a
-    registered reference (corpus README, priority list) before diagnosing.
+  - The remaining "behind" stack was re-derived 2026-07-28 against a
+    registered reference: **same artifact — we actually win its mean and
+    tile-p10**. With that, every reference-based DMap deficit in the corpus
+    is explained; the scoring harness gained a registered-reference mode and
+    a geometry-mismatch flag so the artifact cannot recur silently. DMap's
+    only remaining quality item is the texture-flattening lead above. (The
+    same registered run confirms the PMax background gap is real, which is
+    the hybrid-background design note's problem, not this item's.)
 - **Verify the regularization radii above the reference resolution.**
   `DMapFusion.regularizationScale` scales `medianRadius`/`guidedRadius` by the
   frame diagonal against a 9780 px reference but is **clamped to 1**: it only
