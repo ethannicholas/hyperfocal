@@ -264,3 +264,94 @@ debloom membership). Second pass: 1–4 frame decodes + pyramid rebuilds in
 the existing workspace, only when the membership opens and the map assigns
 coverage; stacks with no open background pay nothing. That is the same
 cost class as the despill second pass the pipeline already tolerates.
+
+## 2026-07-28, later: implemented (env-gated, default off) — what the build
+## taught, and what still stands between the candidate and C5
+
+The renderer above is now in the engine
+(`PyramidFusion.governBackground`), CPU-only, behind
+`Options.backgroundGovernanceRadius` (default 0 = shipped behavior;
+`HYPERFOCAL_PMAX_GOV_RADIUS` is the experimental surface until the ship-on
+decision, so the dual-UI invariant is not tripped early). Default-off is
+bit-identical — verified by A/B against the pre-change build on the CPU
+engine, and `retouch-probe` asserts the default stays 0 until the UI
+surface lands. It landed after (and was re-based onto) the smoothed
+selection + Burt expand + source-envelope work, which independently removed
+about half the C5 fabrication this design was scoped against.
+
+With the prototype's radius (6 cells ≈ 48 px), the acceptance harness
+reads: **C1–C4 exactly unmoved** (C2 within 0.01%, C4 within 0.01 pp) and
+**C5 moved substantially on both stacks but not flipped** — the
+defocused-foliage stack's fabrication 25 → 11 high tiles (with 12 new low),
+the dark-garden stack's deadening 27 → 6 low (with 8 new high). Stacks the
+scope gate skips change only by CPU↔GPU engine variance (~0.3% of pixels).
+
+The design survived contact mostly intact; four of its choices had to be
+*corrected by measurement*, and each correction is load-bearing:
+
+- **Commitment is per block (64 px), not per cell.** Per-cell argmax — even
+  mode-regularized — puts a seam every few cells; with an 8–24 px feather
+  against ~100 px acceptance tiles, most of every tile was transition, and
+  a half-weight blend of decorrelated fields carries HALF their energy
+  (energy is quadratic in blend weight). Regions must be much larger than
+  the feather, and the feather much larger than a cell.
+- **The frame decision is a measured energy argmax, not vote inference.**
+  A per-block × per-frame energy table accumulated during streaming (a few
+  MB even at 45 MP × 80 frames) decides each block over ALL frames;
+  remapping to the ≤ 8 re-decoded dominants is a second measured argmax,
+  never a frame-index guess (index-distance remap committed regions to
+  frames that are dull where they are: 0.6–0.8× the liveliest rendition).
+  Choice sums run over membership cells only — subject cells otherwise hand
+  a boundary block to the subject-sharp frame, whose background is
+  maximally defocused exactly there (measured 0.19×).
+- **The render is a convex composite in image space, not band-coefficient
+  substitution.** Per-level coefficient blending failed twice: a
+  level-pixel-constant feather de-synchronizes transition widths across
+  levels (the coarse-only prototype's incoherent mix, reproduced at every
+  seam), and band-space mixing of slightly misaligned content rings below
+  both sources (2.25% of a flat backdrop under the C4 floor, in clean
+  64 px rectangles). At weight 1 the image composite IS full-pyramid
+  substitution (the collapse of a frame's pyramid is the frame); in
+  feathers it is bounded by its sources, so C2/C4 hold by construction.
+- **Scope is the flatness gate's complement, gated at stack level on the
+  clean-field geometry.** Governing everything the membership reaches
+  repainted healthy flat backdrops wholesale (25–81% of pixels on stacks
+  with no open defect, block-scale luminance mosaics under the C4 floor,
+  a C1 overshoot from seam gradients). One flatness measurement now serves
+  both mechanisms: the clean field keeps components below 0.0035,
+  governance takes components above 0.006 on stacks whose *clean-geometry*
+  components prove texture (the governance-widened geometry merges
+  never-focusing painted surfaces into the open field and cannot be
+  trusted for this judgment); the band between the cuts ships unchanged.
+
+Additions to the do-not-retry list, all measured this session: a raw-vote
+confidence cut relative to p99 (landed below the vote median — half of
+every backdrop "confident" by noise); a pixel never-focuses cut of 50 (the
+gap between bokeh ≤ 30 and focusing ≥ 100 exists, but a hairy subject body
+reads 20–50 and dissolves); absolute energy floors anywhere near dark
+texture (a dark garden's real bokeh sits under every global floor — its
+self-votes must survive); per-cell mode filtering as a regularizer (the
+weights never saturate); and letting flat blocks commit (their argmax is
+noise and the composite paints exposure mosaics).
+
+**What still stands between the candidate and a C5 flip**, mapped per
+tile: (a) partial-weight tiles at governance boundaries deaden by the
+quadratic blend rule — the instrument sees any soft edge as a low; (b)
+the dark-garden stack's remaining highs are seam tiles around a
+misregistered frame (the frame-0 scale outlier the corpus README
+documents) plus border tiles where the harness reference is still
+coverage-thin after the coverage-aware fix; (c) the silhouette-band
+improvement the prototype demonstrated is currently forfeited by the
+stack gate on flat-backdrop stacks — deliberately, since C1 measures
+shipped as already matching the sharp frame's shape. The C5 instrument
+itself gained a calibration fix this session (per-frame tile means over
+covered pixels only, 60% floor — zero-filled means depressed border
+references and let genuinely-focusing sub-content masquerade as
+never-focused); its baseline table moved accordingly.
+
+One more instrument lesson, for whoever measures next: with the radius env
+set the whole fuse runs CPU-side, and the saved snapshots are GPU renders —
+on the old engine that confound alone produced a +2.25% top-1% "regression"
+that was really CPU-shipped vs GPU-shipped. Judge candidates against a
+same-engine baseline (the smoothed-selection ports have since brought the
+engines close enough that the residual is ~0.3% of pixels).

@@ -151,7 +151,19 @@ number that moves when depth selection fails.
     decision goes engine-internal (the prototype's frame map, NOT the app's
     DMap peer, for app/CLI parity), governance is all-levels-or-nothing, and
     acceptance criteria are now six (adds a both-sided source-envelope check
-    and engine parity). Implementation starts from that note's criteria.
+    and engine parity). **Implemented 2026-07-28 (same doc, final section):
+    env-gated, default off** — `PyramidFusion.governBackground` behind
+    `Options.backgroundGovernanceRadius` (0 = off, bit-identical;
+    `HYPERFOCAL_PMAX_GOV_RADIUS=6` is the candidate surface; CPU-only).
+    Block-committed frame map from a streaming energy table, image-space
+    convex composite, scoped to the flatness gate's textured complement.
+    At radius 6 the harness reads C1–C4 exactly unmoved and C5 improved
+    both-sided on both stacks (fabrication 25→11 high on defocused foliage,
+    deadening 27→6 low on the dark garden) but NOT flipped — the remaining
+    tile classes (partial-weight boundary deadening, seams around a
+    misregistered frame, thin-coverage border references) and this round's
+    do-not-retry additions are mapped in the doc. Ship-on still needs the
+    C5 flip, the dual-UI surface, and the GPU story.
   - **Textured defocused backgrounds are excluded on purpose.** The
     clean-field mechanism deadens bokeh/out-of-focus mottle (measured
     0.3–0.7× the liveliest source frame), so the flatness gate scopes it

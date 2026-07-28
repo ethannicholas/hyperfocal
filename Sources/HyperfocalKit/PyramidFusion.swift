@@ -554,6 +554,56 @@ public enum PyramidFusion {
                                frameCount: Int, width: Int, height: Int,
                                env: [String: String])
         -> (bg: [Bool], cleanGrid: [Float], gw: Int, gh: Int)? {
+        guard let open = openFieldCandidates(focusMax0: focusMax0, focusMin0: focusMin0,
+                                             lumMin0: lumMin0, lumMax0: lumMax0,
+                                             frameCount: frameCount,
+                                             width: width, height: height,
+                                             env: env) else { return nil }
+        let comps = open.comps
+        let candidate = open.candidate
+        let flat = componentFlatness(comps: comps, candidate: candidate,
+                                     lumMin0: lumMin0, lumMax0: lumMax0,
+                                     rLo: open.rLo, rHi: open.rHi,
+                                     width: width, height: height, env: env)
+        let flatCut = Float(env["HYPERFOCAL_PMAX_BG_FLAT"] ?? "") ?? 0.0035
+        var keep = [Bool](repeating: false, count: comps.count)
+        var any = false
+        for c in 0..<comps.count where candidate[c] && flat.sigma[c] < flatCut {
+            keep[c] = true
+            any = true
+        }
+        guard any else { return nil }
+        var bg = [Bool](repeating: false, count: width * height)
+        for i in bg.indices where comps.labels[i] > 0 {
+            bg[i] = keep[Int(comps.labels[i]) - 1]
+        }
+        // Drop the anchors of rejected components, then push-pull across the
+        // holes (the contaminated bands beside silhouettes).
+        var vw = flat.vw, wt = flat.wt
+        let gw = flat.gw, gh = flat.gh
+        for gi in 0..<(gw * gh) {
+            if flat.cellLabel[gi] == 0 || !keep[Int(flat.cellLabel[gi]) - 1] {
+                vw[gi] = 0; wt[gi] = 0
+            }
+        }
+        let cleanGrid = DepthRegularize.pushPull(valueWeight: vw, weight: wt,
+                                                 width: gw, height: gh)
+        return (bg, cleanGrid, gw, gh)
+    }
+
+    /// The open-field component analysis shared by the clean-field membership
+    /// (`openBackground`) and background governance (`governBackground`):
+    /// sharp-structure close, border-connected components of the open field,
+    /// and the candidate test (size floor, border contact, clean-anchor
+    /// floor, never-focuses ratio median). One function on purpose — two
+    /// copies of these thresholds is how the two consumers would drift.
+    static func openFieldCandidates(focusMax0: [Float], focusMin0: [Float],
+                                    lumMin0: [Float], lumMax0: [Float],
+                                    frameCount: Int, width: Int, height: Int,
+                                    env: [String: String],
+                                    governance: Bool = false)
+        -> (comps: Morphology.Components, candidate: [Bool],
+            rLo: Float, rHi: Float)? {
         guard focusMax0.count == width * height,
               focusMin0.count == width * height,
               lumMin0.count == width * height,
@@ -564,22 +614,67 @@ public enum PyramidFusion {
         // renditions agree across frames) and fully contaminated above rHi.
         let rLo = Float(env["HYPERFOCAL_PMAX_BG_RLO"] ?? "") ?? 0.02
         let rHi = Float(env["HYPERFOCAL_PMAX_BG_RHI"] ?? "") ?? 0.04
+        let ratioCut = Float(env["HYPERFOCAL_PMAX_BG_RATIO"] ?? "")
+            ?? neverFocusRatioCut(frameCount: frameCount)
+        let logCut = log2(ratioCut)
         let t = alpha * max(Despill.percentileLow(focusMax0, 0.99), 1e-6)
         let r = max(4, Int((closeFrac * Float(min(width, height))).rounded()))
         var sharp = [Bool](repeating: false, count: width * height)
-        for i in sharp.indices { sharp[i] = focusMax0[i] > t }
+        if governance {
+            // Governance's subject test additionally requires the energy to
+            // MOVE with the sweep. `focusMax0` alone is inflated by exactly
+            // the defect governance removes: on defocused foliage the
+            // max-of-N of noisy bokeh energy crosses the sharp threshold
+            // (measured: whole never-focused regions read "sharp" while
+            // their max/min ratios sat at 2.6-3.8 against this cutoff of
+            // ~11), so the amplified regions excluded themselves from the
+            // membership that would fix them. The cutoff is the same
+            // frame-count-scaled never-focuses formula the component test
+            // uses — a higher cut (50) was tried and dissolved the SUBJECT
+            // (a hairy insect body reads 20-50:1), which nothing in the
+            // acceptance criteria measures directly and per-coefficient
+            // selection exists to protect. The clean-field membership keeps
+            // the energy-only test verbatim — its flatness gate already
+            // returns textured components to shipped behavior, so widening
+            // its field would only churn.
+            let sharpCut = Float(env["HYPERFOCAL_PMAX_GOV_SHARP"] ?? "") ?? ratioCut
+            for i in sharp.indices {
+                sharp[i] = focusMax0[i] > t
+                    && focusMax0[i] > sharpCut * max(focusMin0[i], 1e-6)
+            }
+        } else {
+            for i in sharp.indices { sharp[i] = focusMax0[i] > t }
+        }
         // Subject support = close(sharp, r): sharp structure plus the narrow
         // gaps between it. Small r on purpose — see the doc comment above.
         var subject = Morphology.dilate(sharp, width: width, height: height, radius: r)
         subject = Morphology.erode(subject, width: width, height: height, radius: r)
+        if governance {
+            // OPEN the subject support (erode then dilate, radius 2r):
+            // thin-vs-thick is the discriminator the ratio test cannot be.
+            // Two measured hole classes punch through otherwise governed
+            // fields and each keeps a patch of shipped max-of-N sparkle
+            // plus a seam ring: isolated noise-speck ISLANDS (small — tiles
+            // stuck at 1.4-1.5× the liveliest frame with 94% weight), and
+            // defocused petal-edge RIDGES attached to the subject (thin —
+            // breathing bokeh edges read "sharp" by ratio, and no ratio cut
+            // separates them from a subject body without dissolving the
+            // subject too). Opening removes both while the thick subject
+            // core survives. A thin REAL structure (an antenna) losing its
+            // exclusion is approximately safe: the block frame decision is
+            // its own local energy argmax, so the frame that renders it is
+            // the frame it is sharp in.
+            let rOpen = 2 * r
+            subject = Morphology.erode(subject, width: width, height: height,
+                                       radius: rOpen)
+            subject = Morphology.dilate(subject, width: width, height: height,
+                                        radius: rOpen)
+        }
 
         // Components of the open (non-subject) field, with border contact and
         // a log2 histogram of the focus max/min ratio for the median.
         let comps = Morphology.components(open: subject.map { !$0 },
                                           width: width, height: height)
-        let ratioCut = Float(env["HYPERFOCAL_PMAX_BG_RATIO"] ?? "")
-            ?? neverFocusRatioCut(frameCount: frameCount)
-        let logCut = log2(ratioCut)
         let minSize = 1000
         let bins = 64
         let binScale: Float = 4  // bin = log2(ratio) * 4, clamped to [0, 63]
@@ -611,11 +706,37 @@ public enum PyramidFusion {
             anyCandidate = true
         }
         guard anyCandidate else { return nil }
-        // Clean-anchor accumulation on the sharpness grid: midrange of the
-        // per-pixel min/max — where the renditions agree, that IS the clean
-        // value — with weight fading as contamination grows. Anchoring
-        // instead of filtering is what keeps the subject from dragging the
-        // estimate — the same reason despill reconstructs its backdrop.
+        return (comps, candidate, rLo, rHi)
+    }
+
+    /// Clean-anchor accumulation and per-component flatness sigma. Shared by
+    /// the clean-field membership (`openBackground` keeps components BELOW
+    /// the cut — flat backdrops, the only thing the clean field faithfully
+    /// models) and background governance (`governBackground` governs the
+    /// textured complement), so the two scopes stay complementary by
+    /// construction: one measurement, one cut, no component served by both
+    /// mechanisms. `sigma` is +infinity where a component has too few anchor
+    /// cells to judge (< 30) — "not provably flat".
+    ///
+    /// Anchors are the midrange of the per-pixel min/max — where the
+    /// renditions agree, that IS the clean value — with weight fading as
+    /// contamination grows; anchoring instead of filtering is what keeps the
+    /// subject from dragging the estimate. Flatness is judged on the anchors
+    /// with the large-scale gradient removed: sigma of the anchor-cell mean
+    /// minus its 9×9-cell box mean. Measured: flat backdrops sit at
+    /// 0.001-0.003 (their noise floor), textured ones at 0.005-0.04; the cut
+    /// (`HYPERFOCAL_PMAX_BG_FLAT`, default 0.0035) sits at the geometric
+    /// middle of that gap so a borderline component cannot flip open on one
+    /// engine and closed on another (a cut of 0.0045 did exactly that: a
+    /// 0.0046-sigma component closed on the CPU's planes and opened on the
+    /// GPU's).
+    static func componentFlatness(comps: Morphology.Components, candidate: [Bool],
+                                  lumMin0: [Float], lumMax0: [Float],
+                                  rLo: Float, rHi: Float,
+                                  width: Int, height: Int,
+                                  env: [String: String])
+        -> (sigma: [Float], vw: [Float], wt: [Float], cellLabel: [Int32],
+            gw: Int, gh: Int) {
         let f = DMapFusion.sharpnessDownsample
         let gw = (width + f - 1) / f, gh = (height + f - 1) / f
         var vw = [Float](repeating: 0, count: gw * gh)
@@ -636,21 +757,6 @@ public enum PyramidFusion {
                 cellLabel[gi] = comps.labels[i]
             }
         }
-        // Flatness gate, per component: the merge's nearest-to-clean choice
-        // (and the push-pull field itself) is only a faithful model of a FLAT
-        // background. On a lively defocused background — bokeh mottle,
-        // out-of-focus foliage — "closest to a smooth field" systematically
-        // picks the flattest rendition per cell and visibly deadens texture
-        // the scene really has (measured: background tiles at 0.3-0.7x the
-        // liveliest source frame, beside a reference that keeps the mottle).
-        // Flatness is judged on the clean anchors with the large-scale
-        // gradient removed: sigma of the anchor-cell mean minus its 9x9-cell
-        // box mean. Measured: flat backdrops sit at 0.001-0.003 (their noise
-        // floor), textured ones at 0.005-0.04. The cut sits at the geometric
-        // middle of that gap so a borderline component cannot flip open on
-        // one engine and closed on another (a cut of 0.0045 did exactly
-        // that: a 0.0046-sigma component closed on the CPU's planes and
-        // opened on the GPU's).
         let flatCut = Float(env["HYPERFOCAL_PMAX_BG_FLAT"] ?? "") ?? 0.0035
         let minW: Float = 8
         let smoothR = 4
@@ -676,8 +782,7 @@ public enum PyramidFusion {
                 cellN[c] += 1
             }
         }
-        var keep = [Bool](repeating: false, count: comps.count)
-        var any = false
+        var sigmas = [Float](repeating: .infinity, count: comps.count)
         let debug = env["HYPERFOCAL_PMAX_BG_DEBUG"] != nil
         for c in 0..<comps.count where candidate[c] {
             guard cellN[c] >= 30 else { continue }
@@ -688,26 +793,9 @@ public enum PyramidFusion {
                     format: "pmax bg comp: %d px, %d cells, flatness %.5f (cut %.5f)\n",
                     comps.sizes[c], cellN[c], sigma, flatCut).data(using: .utf8)!)
             }
-            if Float(sigma) < flatCut {
-                keep[c] = true
-                any = true
-            }
+            sigmas[c] = Float(sigma)
         }
-        guard any else { return nil }
-        var bg = [Bool](repeating: false, count: width * height)
-        for i in bg.indices where comps.labels[i] > 0 {
-            bg[i] = keep[Int(comps.labels[i]) - 1]
-        }
-        // Drop the anchors of rejected components, then push-pull across the
-        // holes (the contaminated bands beside silhouettes).
-        for gi in 0..<(gw * gh) {
-            if cellLabel[gi] == 0 || !keep[Int(cellLabel[gi]) - 1] {
-                vw[gi] = 0; wt[gi] = 0
-            }
-        }
-        let cleanGrid = DepthRegularize.pushPull(valueWeight: vw, weight: wt,
-                                                 width: gw, height: gh)
-        return (bg, cleanGrid, gw, gh)
+        return (sigmas, vw, wt, cellLabel, gw, gh)
     }
 
     /// Max-pooled reduction, for carrying the near-black membership down to the
@@ -739,6 +827,477 @@ public enum PyramidFusion {
             }
         }
         return out
+    }
+
+    /// Land one decoded frame on the workspace's level-0 canvas — the
+    /// warp/copy step shared by the streaming loop and the governance second
+    /// pass. Identity transform on an uncropped canvas needs no warp — the
+    /// same fast path `PyramidWarp.apply` / the GPU paths take; warped frames
+    /// resample directly into the workspace's level 0.
+    static func installFrame(_ img: ImageBuffer, at fi: Int, warp: PyramidWarp?,
+                             ws: CPUWorkspace) {
+        let (cw, ch) = ws.sizes[0]
+        let needsWarp = warp.map {
+            !($0.transforms[fi] == matrix_identity_float3x3
+                && cw == img.width && ch == img.height)
+        } ?? false
+        if needsWarp {
+            Warp.applyLanczos3(img, outputToSource: warp!.transforms[fi].inverse,
+                               outWidth: cw, outHeight: ch, into: &ws.gauss[0])
+        } else {
+            precondition(img.width == cw && img.height == ch,
+                         "frame size mismatch: \(img.width)x\(img.height)")
+            img.pixels.withUnsafeBufferPointer { src in
+                ws.gauss[0].withUnsafeMutableBufferPointer { dst in
+                    dst.baseAddress!.update(from: src.baseAddress!, count: src.count)
+                }
+            }
+        }
+    }
+
+    /// 3×3 box smooth of a cell-grid plane — the frame map's transition
+    /// feather. With the bilinear upsample to full resolution this widens the
+    /// membership and map-transition seams to one-to-two cells (8-16 px) in
+    /// image space.
+    static func boxSmooth3(_ plane: [Float], width: Int, height: Int) -> [Float] {
+        var out = [Float](repeating: 0, count: plane.count)
+        for y in 0..<height {
+            for x in 0..<width {
+                var s: Float = 0, n: Float = 0
+                for ny in max(y - 1, 0)...min(y + 1, height - 1) {
+                    for nx in max(x - 1, 0)...min(x + 1, width - 1) {
+                        s += plane[ny * width + nx]; n += 1
+                    }
+                }
+                out[y * width + x] = s / n
+            }
+        }
+        return out
+    }
+
+    /// The hybrid background renderer's second pass (design note
+    /// `2026-07-28-pmax-hybrid-background-renderer.md`): in never-focused
+    /// open-background regions, commit each region to ONE frame — the
+    /// regularized frame map's choice — and render that frame faithfully,
+    /// the way DMap renders everything, while the subject keeps the
+    /// per-coefficient contest. Per-coefficient/per-level independent max
+    /// selection has no right answer in a region no frame ever focuses: it
+    /// renders energy no source frame contains, or (via the near-black
+    /// keep-darkest track) deadens texture the scene really has.
+    ///
+    /// The frame decision is engine-internal (the streaming pass's cell and
+    /// block energy tables), NOT the app's DMap peer: consuming an app-only
+    /// input would recreate the app/CLI divergence the shared-defaults
+    /// invariant exists to prevent, and the peer's depth is noise exactly
+    /// where governance needs an answer.
+    ///
+    /// Scope, from the outside in, every clause forced by a measurement:
+    /// the stack must show a provably TEXTURED open component under the
+    /// clean-field geometry (flat-backdrop stacks get nothing from
+    /// commitment and were measurably damaged by it); the membership is
+    /// `openFieldCandidates`' governance variant (subject = focusing
+    /// content, opened so noise-speck islands and petal-edge ridges melt)
+    /// restricted to components that are not provably flat (the flatness
+    /// gate's retirement path — governance takes over exactly where the
+    /// gate excludes the clean field); eligibility within it is
+    /// confidence-seeded propagation bounded by `radius`, plus
+    /// self-commitment for cells whose energy moves at all. The frame per
+    /// 64 px block is the measured level-0 energy argmax over ALL frames
+    /// (re-measured over membership cells only among the dominant few),
+    /// with near-tie hysteresis so adjacent blocks coalesce, and the render
+    /// is a convex per-pixel composite in IMAGE space — bounded by its
+    /// sources, so it cannot undershoot the frame floor or exceed every
+    /// source the way band-space blending measurably did.
+    static func governBackground(ws: CPUWorkspace, out: inout ImageBuffer,
+                                 frameCount: Int,
+                                 lumMin0: [Float], lumMax0: [Float],
+                                 focusMax0: [Float], focusMin0: [Float],
+                                 cellMax: [Float], cellMin: [Float],
+                                 blockEnergy: [Float], blockCells: Int,
+                                 radius: Int,
+                                 warp: PyramidWarp?, env: [String: String],
+                                 log: ((String) -> Void)?,
+                                 cancellation: CancellationToken?,
+                                 frame: (Int) throws -> ImageBuffer) throws {
+        let (w, h) = ws.sizes[0]
+        let debug = env["HYPERFOCAL_PMAX_BG_DEBUG"] != nil
+        // Stack gate: govern only when the CLEAN-FIELD geometry (energy-only
+        // subject test, where bright feature interiors stay enclosed) shows
+        // a provably TEXTURED open component. Governance's own widened
+        // subject test below merges never-focusing painted surfaces into
+        // the open field — necessary to reach amplified texture, but it
+        // destroys the component partition this judgment needs (a flat
+        // backdrop merged with the subject's smooth roofs read "textured",
+        // and the whole stack got repainted). The cut (0.006) sits in the
+        // measured gap between the flattest textured background (0.008) and
+        // the most textured flat one (0.0042); components between the
+        // clean-field cut (0.0035) and this one get NEITHER mechanism —
+        // shipped behavior — which is the safe default for a border case.
+        let govFlatCut = Float(env["HYPERFOCAL_PMAX_GOV_FLAT"] ?? "") ?? 0.006
+        guard let cleanGeo = openFieldCandidates(focusMax0: focusMax0,
+                                                 focusMin0: focusMin0,
+                                                 lumMin0: lumMin0, lumMax0: lumMax0,
+                                                 frameCount: frameCount,
+                                                 width: w, height: h, env: env),
+              componentFlatness(comps: cleanGeo.comps, candidate: cleanGeo.candidate,
+                                lumMin0: lumMin0, lumMax0: lumMax0,
+                                rLo: cleanGeo.rLo, rHi: cleanGeo.rHi,
+                                width: w, height: h, env: env)
+                  .sigma.contains(where: { $0 != .infinity && $0 > govFlatCut })
+        else {
+            log?("pmax gov: no textured open background — pass skipped")
+            return
+        }
+        guard let open = openFieldCandidates(focusMax0: focusMax0, focusMin0: focusMin0,
+                                             lumMin0: lumMin0, lumMax0: lumMax0,
+                                             frameCount: frameCount,
+                                             width: w, height: h, env: env,
+                                             governance: true) else {
+            log?("pmax gov: no open-field candidates — pass skipped")
+            return
+        }
+        // Governance's membership is the TEXTURED complement of the
+        // clean-field scope: candidate components that are NOT provably
+        // flat. Flat components keep the shipped clean-field/near-black
+        // rendering — it is a faithful model exactly there, and governing
+        // them repainted healthy backdrops wholesale.
+        let flat = componentFlatness(comps: open.comps, candidate: open.candidate,
+                                     lumMin0: lumMin0, lumMax0: lumMax0,
+                                     rLo: open.rLo, rHi: open.rHi,
+                                     width: w, height: h, env: env)
+        let flatCut = Float(env["HYPERFOCAL_PMAX_BG_FLAT"] ?? "") ?? 0.0035
+        var govBg = [Float](repeating: 0, count: w * h)
+        var member = 0
+        for i in govBg.indices where open.comps.labels[i] > 0 {
+            let c = Int(open.comps.labels[i]) - 1
+            if open.candidate[c] && !(flat.sigma[c] < flatCut) {
+                govBg[i] = 1; member += 1
+            }
+        }
+        guard member > 0 else {
+            log?("pmax gov: no textured open component — pass skipped")
+            return
+        }
+        DMapFusion.dumpPlane(govBg, env: "HYPERFOCAL_DUMP_GOV_BG")
+
+        let f = DMapFusion.sharpnessDownsample
+        let gw = (w + f - 1) / f, gh = (h + f - 1) / f
+        let cells = gw * gh
+        // Confidence is scale-free: a cell is confident when its energy MOVES
+        // with the sweep — the baseline-subtracted vote (max − min) must
+        // clear a multiple of the cell's own baseline, i.e. a max/min ratio,
+        // the same discriminator family as the never-focuses component test
+        // (noise breathes ~2:1, bokeh 5-30:1, focusing content 100-5000:1) —
+        // plus an absolute floor against dark-noise cells whose near-zero
+        // baseline explodes the ratio. A first formulation cut the raw vote
+        // at 0.02 × its p99, which landed BELOW the vote median on two
+        // corpus stacks: half of every backdrop was "confident" by noise,
+        // and the map was per-cell patchwork instead of regional commitment.
+        let ratioCut = Float(env["HYPERFOCAL_PMAX_GOV_RATIO"] ?? "") ?? 4
+        let floorFrac = Float(env["HYPERFOCAL_PMAX_GOV_FLOOR"] ?? "") ?? 0.002
+        let maxP99 = max(Despill.percentileLow(cellMax, 0.99), 1e-7)
+        let absFloor = floorFrac * maxP99
+        var isConfident = [Bool](repeating: false, count: cells)
+        for i in 0..<cells {
+            isConfident[i] = cellMax[i] > absFloor
+                && cellMax[i] > ratioCut * max(cellMin[i], 1e-7)
+        }
+        // Eligibility: a cell is governed when it is confident itself, a
+        // confident cell reaches it (multi-source BFS, 8-connected, so
+        // `radius` is a Chebyshev reach in image space), or its own energy
+        // moves with the sweep at all (the self tier — leaving weak-textured
+        // cells ungoverned interleaves governed/ungoverned at cell scale,
+        // which dilutes every weight to ~0.5, and a half-weight blend of
+        // decorrelated fields carries HALF their energy). Truly floorless
+        // cells (max == min) outside every seed's reach stay unassigned —
+        // the baseline-subtraction rule. WHICH frame a cell renders is
+        // decided per block below, from measured energies; eligibility and
+        // identity are deliberately separate questions.
+        var assign = [Int32](repeating: -1, count: cells)
+        var dist = [Int32](repeating: .max, count: cells)
+        var queue = [Int32]()
+        for i in 0..<cells where isConfident[i] {
+            assign[i] = 0; dist[i] = 0; queue.append(Int32(i))
+        }
+        let confident = queue.count
+        var head = 0
+        while head < queue.count {
+            let i = Int(queue[head]); head += 1
+            let d = dist[i]
+            guard d < Int32(radius) else { continue }
+            let y = i / gw, x = i % gw
+            for ny in max(y - 1, 0)...min(y + 1, gh - 1) {
+                for nx in max(x - 1, 0)...min(x + 1, gw - 1) {
+                    let ni = ny * gw + nx
+                    if dist[ni] > d + 1 {
+                        dist[ni] = d + 1; assign[ni] = 0
+                        queue.append(Int32(ni))
+                    }
+                }
+            }
+        }
+        var selfAssigned = 0
+        for i in 0..<cells where assign[i] < 0 && cellMax[i] > cellMin[i] {
+            assign[i] = 0
+            selfAssigned += 1
+        }
+        // Eligibility is background-only: a cell participates when any of
+        // its pixels are in the membership (the full-res membership weight
+        // below is what keeps subject pixels of a straddling cell
+        // untouched).
+        let cellGov = DMapFusion.boxDownsample(govBg, width: w, height: h, factor: f)
+        var governed = 0
+        for i in 0..<cells {
+            if cellGov[i] > 0 && assign[i] >= 0 {
+                governed += 1
+            } else {
+                assign[i] = -1
+            }
+        }
+        guard governed > 0 else {
+            log?("pmax gov: no cell reaches a confident vote — pass skipped")
+            return
+        }
+        // Commit per BLOCK against the MEASURED energy table: each block of
+        // `blockCells`² cells takes the frame with the most summed level-0
+        // energy over the sweep — for a never-focused region that IS the
+        // liveliest available rendition, and beside a silhouette the sharp
+        // frame's edge tail dominates the sum, so the band gets the
+        // subject-sharp frame exactly as the prototype's propagation did.
+        // Two measured failures force the block granularity: per-cell
+        // commitment (even mode-regularized) puts a seam every few cells,
+        // and with an 8-24 px feather against ~100 px acceptance tiles most
+        // of every tile was transition — decorrelated blends deadened it
+        // (energy is quadratic in blend weight) while the seams themselves
+        // fabricated. Regions must be much larger than the feather, and the
+        // feather much larger than a cell; blocks of 8 cells (64 px) keep
+        // seams a small fraction of any region.
+        let bw = (gw + blockCells - 1) / blockCells
+        let bh = (gh + blockCells - 1) / blockCells
+        // A block participates only when its energy MOVES with the sweep
+        // (max/min over frames at block scale). On a flat backdrop the
+        // argmax is noise, adjacent blocks commit to arbitrary frames whose
+        // glow/vignette/exposure differ slightly, and the composite paints
+        // a block-scale luminance mosaic — measured: 2.25% of a flat
+        // backdrop under the C4 frame floor, in clean 64 px rectangles. A
+        // flat block also has nothing to GAIN from commitment: every
+        // rendition agrees there. Block-scale noise ratios sit at ~1.1-1.3
+        // (4096 px pooled); moving content (bokeh, silhouette-band tails)
+        // at 2+.
+        let blockRatioCut = Float(env["HYPERFOCAL_PMAX_GOV_BLOCK_RATIO"] ?? "") ?? 1.5
+        var blockBest = [Int32](repeating: -1, count: bw * bh)
+        var wonMass = [Double](repeating: 0, count: frameCount)
+        for b in 0..<(bw * bh) {
+            var bestF = -1
+            var bestE = -Float.infinity
+            var minE = Float.infinity
+            for fr in 0..<frameCount {
+                let e = blockEnergy[b * frameCount + fr]
+                if e > bestE { bestE = e; bestF = fr }
+                if e < minE { minE = e }
+            }
+            guard bestF >= 0, bestE > blockRatioCut * max(minE, 1e-12) else { continue }
+            blockBest[b] = Int32(bestF)
+            // Frame ranking mass is baseline-subtracted per block, so flat
+            // blocks steer the re-decode budget by exactly nothing.
+            wonMass[bestF] += Double(bestE - minE)
+        }
+        // The selective second pass re-decodes only the frames that win
+        // significant mass, capped (a full-field textured background can
+        // legitimately want many — its liveliest frame varies continuously
+        // with background depth, and capping at 4 measurably deadened tiles
+        // to 0.5-0.8× the liveliest rendition). Blocks whose winner did not
+        // make the cut fall back to the best RANKED frame by the same
+        // table — a measured second choice, not a frame-index guess.
+        let maxDom = max(Int(env["HYPERFOCAL_PMAX_GOV_FRAMES"] ?? "") ?? 8, 1)
+        let totalMass = wonMass.reduce(0, +)
+        let dominant = wonMass.indices.filter { wonMass[$0] > 0.02 * totalMass }
+            .sorted { wonMass[$0] > wonMass[$1] }
+            .prefix(maxDom).map { $0 }
+        guard !dominant.isEmpty else {
+            log?("pmax gov: no frame wins significant mass — pass skipped")
+            return
+        }
+        // The block CHOICE re-measures the dominant frames' level-0 energy
+        // over the MEMBERSHIP cells only (re-decode: ≤ 8 frames, and level 0
+        // dominates pyramid cost). The streaming table sums every cell in
+        // the block, and beside the subject that lets subject cells hand the
+        // block to the subject-sharp frame — whose background is maximally
+        // defocused exactly there (measured: subject-adjacent tiles at
+        // 0.19× the liveliest rendition). Background-only sums still give
+        // the silhouette band to the sharp frame — its edge tail is the
+        // dominant energy IN the band cells.
+        var domCell = [[Float]](repeating: [], count: dominant.count)
+        for (k, fr) in dominant.enumerated() {
+            try cancellation?.checkCancelled()
+            let img = try frame(fr)
+            installFrame(img, at: fr, warp: warp, ws: ws)
+            ws.fusedDownsample(level: 0)
+            ws.level0BandEnergy()
+            domCell[k] = DMapFusion.boxDownsample(ws.energy, width: w, height: h,
+                                                  factor: f)
+        }
+        var blockDomE = [Float](repeating: 0, count: bw * bh * dominant.count)
+        for y in 0..<gh {
+            for x in 0..<gw {
+                let i = y * gw + x
+                guard assign[i] >= 0 else { continue }
+                let b = (y / blockCells) * bw + x / blockCells
+                for k in 0..<dominant.count {
+                    blockDomE[b * dominant.count + k] += domCell[k][i]
+                }
+            }
+        }
+        for b in 0..<(bw * bh) where blockBest[b] >= 0 {
+            var bestK = -1
+            var bestE: Float = 0
+            for k in 0..<dominant.count
+                where blockDomE[b * dominant.count + k] > bestE {
+                bestE = blockDomE[b * dominant.count + k]; bestK = k
+            }
+            blockBest[b] = bestK >= 0 ? Int32(dominant[bestK]) : -1
+        }
+        // Near-tie hysteresis: adjacent blocks whose choices are within 15%
+        // of each other coalesce onto the locally most common frame. Every
+        // block boundary between two committed frames is a seam, and where
+        // the stack breathes (or a frame registers imperfectly) the two
+        // sides' bokeh is mutually displaced — the blend prints ghosted
+        // edges the focus measure reads as fabricated energy. Fewer, larger
+        // regions put the seams where the energy actually changes hands.
+        for _ in 0..<2 {
+            var next = blockBest
+            for by in 0..<bh {
+                for bx in 0..<bw {
+                    let b = by * bw + bx
+                    guard blockBest[b] >= 0 else { continue }
+                    let ownK = dominant.firstIndex(of: Int(blockBest[b]))!
+                    let ownE = blockDomE[b * dominant.count + ownK]
+                    var bestFrame = Int(blockBest[b])
+                    var bestCount = 0
+                    for k in 0..<dominant.count {
+                        guard blockDomE[b * dominant.count + k] >= 0.85 * ownE
+                        else { continue }
+                        var count = 0
+                        for ny in max(by - 1, 0)...min(by + 1, bh - 1) {
+                            for nx in max(bx - 1, 0)...min(bx + 1, bw - 1) {
+                                if blockBest[ny * bw + nx] == Int32(dominant[k]) {
+                                    count += 1
+                                }
+                            }
+                        }
+                        if count > bestCount {
+                            bestCount = count; bestFrame = dominant[k]
+                        }
+                    }
+                    next[b] = Int32(bestFrame)
+                }
+            }
+            blockBest = next
+        }
+        for y in 0..<gh {
+            for x in 0..<gw {
+                let i = y * gw + x
+                if assign[i] >= 0 {
+                    let b = (y / blockCells) * bw + x / blockCells
+                    assign[i] = blockBest[b] >= 0 ? blockBest[b] : -1
+                }
+            }
+        }
+        let covTxt = dominant.map { String(format: "%d:%.3g", $0, wonMass[$0]) }
+            .joined(separator: " ")
+        log?("pmax gov: \(governed)/\(cells) cells governed, \(confident) confident, "
+             + "\(selfAssigned) self-assigned, dominant frames [\(covTxt)]")
+        if debug {
+            // The ratio population above the floor, so the cut's margin can
+            // be re-checked when new stacks join the corpus (the flatness
+            // gate's engine-dependence lesson).
+            var ratios: [Float] = []
+            for i in 0..<cells where cellMax[i] > absFloor {
+                ratios.append(cellMax[i] / max(cellMin[i], 1e-7))
+            }
+            let p50 = Despill.percentileLow(ratios, 0.5)
+            let p90 = Despill.percentileLow(ratios, 0.9)
+            FileHandle.standardError.write(String(
+                format: "pmax gov: cell ratio p50 %.2f p90 %.2f (cut %.2f), "
+                    + "abs floor %.3g (p99 %.3g), member px %d\n",
+                p50, p90, ratioCut, absFloor, maxP99, member).data(using: .utf8)!)
+        }
+
+        // Membership weight, full-res, feathered a few pixels inward so the
+        // composite never hard-cuts at the subject boundary; the ramp lives
+        // entirely on the background side (zero outside the membership), so
+        // no subject pixel is ever governed.
+        let blurred = Filters.blurPlane(govBg, width: w, height: h, sigma: 3)
+        var m0 = [Float](repeating: 0, count: w * h)
+        for i in m0.indices {
+            m0[i] = govBg[i] > 0 ? min(max(2 * blurred[i] - 1, 0), 1) : 0
+        }
+        // Full-res weight for one frame's regions: the smoothed cell grid
+        // carries the 1-2 cell (8-16 px) feather at membership and
+        // map-transition seams; the frames partition the governed area, so
+        // the weights sum to ≤ 1 everywhere by construction.
+        func frameWeight(for fr: Int) -> [Float] {
+            var cw = [Float](repeating: 0, count: cells)
+            for i in 0..<cells where assign[i] == Int32(fr) { cw[i] = 1 }
+            cw = boxSmooth3(cw, width: gw, height: gh)
+            var wp = Filters.resizePlaneBilinear(cw, width: gw, height: gh,
+                                                 toWidth: w, toHeight: h)
+            for i in wp.indices { wp[i] *= m0[i] }
+            return wp
+        }
+        // Composite in IMAGE space — the way DMap renders everything, which
+        // is the design's stated model. At weight 1 this is identical to
+        // substituting the frame's pyramid at every level (the collapse of a
+        // frame's own pyramid IS the frame); in the feather it is a convex
+        // per-pixel blend, so the result is bounded by its sources — no
+        // pixel can undershoot the frame floor (C4) or exceed every source
+        // (C2). Blending BAND COEFFICIENTS per level was measured worse
+        // twice: transition widths that differ per level in image space
+        // reproduce the coarse-only prototype's incoherent mix around every
+        // seam, and band-space mixing of slightly misaligned content rings
+        // below both sources (0.23% of a flat backdrop under the C4 floor;
+        // image-space compositing cannot do that).
+        var wtot = [Float](repeating: 0, count: w * h)
+        for fr in dominant {
+            let wp = frameWeight(for: fr)
+            for i in wp.indices { wtot[i] += wp[i] }
+        }
+        DMapFusion.dumpPlane(wtot, env: "HYPERFOCAL_DUMP_GOV_W0")
+        DMapFusion.dumpPlane(assign.map { Float($0) }, env: "HYPERFOCAL_DUMP_GOV_ASSIGN")
+        out.pixels.withUnsafeMutableBufferPointer { opBuf in
+            let op = opBuf.baseAddress!
+            for i in 0..<(w * h) where wtot[i] > 0 {
+                hfStoreRGBA(op, i * 4, hfLoadRGBA(op, i * 4) * max(1 - wtot[i], 0))
+            }
+        }
+        // Selective second pass: re-decode each dominant frame (the closure
+        // is still available after streaming, and it carries the per-frame
+        // gains exactly as the streaming pass did), land it on the canvas,
+        // and accumulate it into its governed regions.
+        for fr in dominant {
+            try cancellation?.checkCancelled()
+            let img = try frame(fr)
+            installFrame(img, at: fr, warp: warp, ws: ws)
+            let wp = frameWeight(for: fr)
+            out.pixels.withUnsafeMutableBufferPointer { opBuf in
+                let op = opBuf.baseAddress!
+                ws.gauss[0].withUnsafeBufferPointer { gpBuf in
+                    let gp = gpBuf.baseAddress!
+                    wp.withUnsafeBufferPointer { wpp in
+                        DispatchQueue.concurrentPerform(iterations: h) { y in
+                            for x in 0..<w {
+                                let i = y * w + x
+                                guard wpp[i] > 0 else { continue }
+                                let pi = i * 4
+                                hfStoreRGBA(op, pi, hfLoadRGBA(op, pi)
+                                                + hfLoadRGBA(gp, pi) * wpp[i])
+                            }
+                        }
+                    }
+                }
+            }
+            log?("pmax gov: governed render from frame \(fr + 1)/\(frameCount)")
+        }
     }
 
     static func downsample(_ img: ImageBuffer) -> ImageBuffer {
@@ -895,13 +1454,27 @@ public enum PyramidFusion {
         /// win standalone; kept for the follow-up that adds an entropy term to
         /// the winner statistic. Enabling forces the CPU engine.
         public var texturedBase: Bool
+        /// Hybrid background governance (design note
+        /// `2026-07-28-pmax-hybrid-background-renderer.md`): the frame map's
+        /// nearest-confident-cell propagation bound, in sharpness-grid cells
+        /// (`DMapFusion.sharpnessDownsample` px each, so 6 ≈ the prototype's
+        /// 48 px). 0 = off, shipped behavior — one value is both the off
+        /// switch and the reach dial, matching the `coarseLevels` pattern.
+        /// Experimental and default-off: until the ship-on decision there is
+        /// deliberately no CLI @Option or app control (the dual-UI surface
+        /// lands with ship-on); candidates run via the
+        /// `HYPERFOCAL_PMAX_GOV_RADIUS` env override. Requires the focus gate
+        /// (`isEnabled`); enabling it routes the fuse to the CPU engine.
+        public var backgroundGovernanceRadius: Int
         public var isEnabled: Bool { coarseLevels > 0 }
         public init(coarseLevels: Int = 5, threshold: Float = 0.07,
-                    smoothedSelection: Bool = true, texturedBase: Bool = false) {
+                    smoothedSelection: Bool = true, texturedBase: Bool = false,
+                    backgroundGovernanceRadius: Int = 0) {
             self.coarseLevels = coarseLevels
             self.threshold = threshold
             self.smoothedSelection = smoothedSelection
             self.texturedBase = texturedBase
+            self.backgroundGovernanceRadius = backgroundGovernanceRadius
         }
     }
 
@@ -1038,7 +1611,21 @@ public enum PyramidFusion {
         if prepareDespill { log?("pmax: despill inputs requested — CPU engine") }
         if texBase { log?("pmax: textured base on — CPU engine") }
         if smoothSq { log?("pmax: squared-luma energy ablation — CPU engine") }
+        // Background governance (see Options.backgroundGovernanceRadius): the
+        // env override is the experimental surface while there is no UI —
+        // same precedent as HYPERFOCAL_PMAX_NEARBLACK_OFF, so the dual-UI
+        // invariant isn't tripped before the ship-on decision. CPU-only the
+        // same way despill inputs are (its second pass touches ≤ 8 frames;
+        // the GPU story is measure-first, per the design note's parity
+        // section).
+        let govRadius = Int(env["HYPERFOCAL_PMAX_GOV_RADIUS"] ?? "")
+            ?? options.backgroundGovernanceRadius
+        let governance = govRadius > 0 && focusGateEnabled
+        if governance {
+            log?("pmax: background governance on (radius \(govRadius) cells) — CPU engine")
+        }
         let preferGPU = preferGPU && !prepareDespill && !texBase && !smoothSq
+            && !governance
         let gpuSelect = GPUSelect(smoothed: smoothSel, burt: expand5,
                                   clamp: envClamp, veto: texVeto)
         #if canImport(Metal)
@@ -1120,6 +1707,17 @@ public enum PyramidFusion {
         // max/min ratio is the texture veto's sweep statistic.
         var envMax = [[Float]](repeating: [], count: envClampOctaves)
         var env0Min: [Float] = []
+        // Governance frame-map inputs: per-cell extrema of the box-pooled
+        // level-0 focus (cell = the sharpness grid,
+        // `DMapFusion.sharpnessDownsample` px), plus the per-block per-frame
+        // energy table the block commitment reads — blocks × frames is tiny
+        // (a few MB at 45 MP × 80 frames), so the frame decision is a direct
+        // measurement over ALL frames, not an inference from argmax votes.
+        var govCellMax: [Float] = []
+        var govCellMin: [Float] = []
+        var govBlockEnergy: [Float] = []
+        var govGw = 0, govBw = 0
+        let govBlockCells = max(Int(env["HYPERFOCAL_PMAX_GOV_BLOCK"] ?? "") ?? 8, 1)
         // Despill inputs (only when asked): per-frame grid luminance for the
         // dark floor, and the running per-cell max of this frame's fine-scale
         // focus — the "did any frame ever resolve detail here" confidence proxy
@@ -1256,29 +1854,21 @@ public enum PyramidFusion {
                     lumMin0 = [Float](repeating: .infinity, count: ws.sizes[0].w * ws.sizes[0].h)
                     lumMax0 = [Float](repeating: 0, count: ws.sizes[0].w * ws.sizes[0].h)
                 }
+                if governance {
+                    let f = DMapFusion.sharpnessDownsample
+                    govGw = (w + f - 1) / f
+                    let gh = (h + f - 1) / f
+                    govCellMax = [Float](repeating: -1, count: govGw * gh)
+                    govCellMin = [Float](repeating: .infinity, count: govGw * gh)
+                    govBw = (govGw + govBlockCells - 1) / govBlockCells
+                    let bh = (gh + govBlockCells - 1) / govBlockCells
+                    govBlockEnergy = [Float](repeating: 0, count: govBw * bh * frameCount)
+                }
             }
             let ws = workspace!
             let (cw, ch) = ws.sizes[0]
             t0 = now()
-            // Identity transform on an uncropped canvas needs no warp — the
-            // same fast path `PyramidWarp.apply` / the GPU paths take. Warped
-            // frames resample directly into the workspace's level 0.
-            let needsWarp = warp.map {
-                !($0.transforms[fi] == matrix_identity_float3x3
-                    && cw == img.width && ch == img.height)
-            } ?? false
-            if needsWarp {
-                Warp.applyLanczos3(img, outputToSource: warp!.transforms[fi].inverse,
-                                   outWidth: cw, outHeight: ch, into: &ws.gauss[0])
-            } else {
-                precondition(img.width == cw && img.height == ch,
-                             "frame size mismatch: \(img.width)x\(img.height)")
-                img.pixels.withUnsafeBufferPointer { src in
-                    ws.gauss[0].withUnsafeMutableBufferPointer { dst in
-                        dst.baseAddress!.update(from: src.baseAddress!, count: src.count)
-                    }
-                }
-            }
+            installFrame(img, at: fi, warp: warp, ws: ws)
             tWarp += now() - t0
             t0 = now()
             if focusGate {
@@ -1327,6 +1917,22 @@ public enum PyramidFusion {
                             }
                         }
                     }
+                }
+            }
+            if governance {
+                // Per-cell extrema of this frame's box-pooled level-0 focus
+                // (max − min is the baseline-subtracted vote: a noise-floor
+                // cell whose energy never moves with the sweep contributes
+                // exactly nothing), and the block × frame energy table the
+                // regional frame decision reads.
+                let grid = DMapFusion.boxDownsample(ws.energy, width: cw, height: ch,
+                                                    factor: DMapFusion.sharpnessDownsample)
+                for i in grid.indices {
+                    if grid[i] > govCellMax[i] { govCellMax[i] = grid[i] }
+                    if grid[i] < govCellMin[i] { govCellMin[i] = grid[i] }
+                    let b = (i / govGw / govBlockCells) * govBw
+                        + (i % govGw) / govBlockCells
+                    govBlockEnergy[b * frameCount + fi] += grid[i]
                 }
             }
             if prepareDespill || onSharpness != nil {
@@ -1604,6 +2210,19 @@ public enum PyramidFusion {
         log?(String(format: "pyramid phases (cpu): decode %.2fs, warp %.2fs, "
                     + "build %.2fs, select %.2fs, collapse %.2fs",
                     tDecode, tWarp, tBuild, tSelect, now() - t0))
+        // Governance composites AFTER the clamp: it replaces governed regions
+        // with honest single-frame content (which needs no clamping), while
+        // the ungoverned remainder keeps the clamp's protection.
+        if governance, focusGate, let ws = workspace {
+            try governBackground(ws: ws, out: &out, frameCount: frameCount,
+                                 lumMin0: lumMin0, lumMax0: lumMax0,
+                                 focusMax0: focusMax0, focusMin0: focusMin0,
+                                 cellMax: govCellMax, cellMin: govCellMin,
+                                 blockEnergy: govBlockEnergy,
+                                 blockCells: govBlockCells, radius: govRadius,
+                                 warp: warp, env: env, log: log,
+                                 cancellation: cancellation, frame: frame)
+        }
         return out
     }
 

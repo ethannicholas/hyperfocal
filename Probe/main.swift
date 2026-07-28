@@ -817,6 +817,16 @@ Task { @MainActor in
             print("probe: PMAX SMOOTHED SELECTION DEFAULTS TO OFF")
             exit(1)
         }
+        // Background governance ships OFF while experimental (env-gated via
+        // HYPERFOCAL_PMAX_GOV_RADIUS; no UI surface yet — the dual-UI control
+        // lands with the ship-on decision, at which point this flips). The
+        // pipeline config must carry the engine's default, whatever it is.
+        guard enginePMax.backgroundGovernanceRadius == 0,
+              config.pmax.backgroundGovernanceRadius
+                  == enginePMax.backgroundGovernanceRadius else {
+            print("probe: PMAX BACKGROUND GOVERNANCE DEFAULT CHANGED WITHOUT UI SURFACE")
+            exit(1)
+        }
     }
     print("probe: fusion defaults shared app↔engine OK")
 
