@@ -134,11 +134,14 @@ number that moves when depth selection fails.
     stay max-of-N mixes inconsistent selections and does not pay; the doc's
     final section records what to keep and what not to retry. The real fix is
     frame-governed selection at EVERY level in background regions — rendering
-    the background the way DMap renders everything, from a depth decision,
-    while PMax's per-coefficient selection keeps the subject. Depth could come
-    from the DMap peer the app already computes for every PMax fuse (the CLI
-    would need it too — an app/CLI-parity question). Start with a design
-    note, not a patch.
+    the background the way DMap renders everything, from a regional frame
+    decision, while PMax's per-coefficient selection keeps the subject.
+    Designed 2026-07-28:
+    `Docs/research/2026-07-28-pmax-hybrid-background-renderer.md` — the
+    decision goes engine-internal (the prototype's frame map, NOT the app's
+    DMap peer, for app/CLI parity), governance is all-levels-or-nothing, and
+    acceptance criteria are now six (adds a both-sided source-envelope check
+    and engine parity). Implementation starts from that note's criteria.
   - **Textured defocused backgrounds are excluded on purpose.** The
     clean-field mechanism deadens bokeh/out-of-focus mottle (measured
     0.3–0.7× the liveliest source frame), so the flatness gate scopes it
@@ -162,13 +165,35 @@ number that moves when depth selection fails.
 - **Close the remaining DMap gaps.** Against the commercial DMap we are at
   parity on the small stacks (contrast-normalized, within ±5% either way) and
   well ahead on the high-resolution raw ones — though that margin plausibly
-  includes raw *decode* differences, not just fusion, so do not bank it. Two
-  stacks are genuinely behind: one by a margin wide enough to be a distinct bug
-  rather than tuning, one on the tile floor only. Diagnose from the depth map
-  (`fuse --depth-map`), not the score. Per-stack numbers and the priority order
-  are in the corpus README — and re-derive them there rather than trusting this
-  paragraph, because an earlier version of it named a third stack that turned
-  out to be an artifact of a mis-calibrated tile mask.
+  includes raw *decode* differences, not just fusion, so do not bank it. The
+  stack that looked behind "by a margin wide enough to be a distinct bug" was
+  diagnosed 2026-07-28 and is **not a bug**: the commercial tool renders at the
+  *last* frame's geometry while we render at the mid frame's, and the corpus
+  metric's unregistered reference holds each region's detail at whichever
+  geometry the resolving frame had — so on a hard-breathing stack every
+  late-resolving edge region scored us against detail our correct registration
+  deliberately moved (verified on a second stack; details and the corrected
+  method in the corpus README). What survived the diagnosis, in order:
+  - **Defocused-background texture flattening — the real lead.** Where no
+    frame ever focuses, our depth plane is noise, and blending 2-3 frames of
+    decorrelated bokeh mottle averages real scene texture away (measured
+    0.36× the liveliest registered source frame, vs the reference render's
+    honest 0.95×). Not tuning: peak-concentration, noise-floor, guided/median
+    radius, blend radius, and despill sweeps all move it ≤1 point. The fix is
+    regional frame *commitment* in no-confidence regions — the same
+    frame-governed-background direction as the PMax hybrid renderer
+    (`Docs/research/2026-07-28-pmax-hybrid-background-renderer.md`), which is
+    why the two should be designed together.
+  - **A fully-defocused end frame can register as a scale outlier** (7% step
+    against its neighbor where every other step is ≤3%; nothing sharp to lock
+    onto) without `--auto-exclude` noticing. It shrinks the common-coverage
+    canvas ~2% and lets front-depth regions render from a misplaced frame.
+    No visible artifact tied to it yet — treat as a registration-robustness
+    lead, and a candidate new check for auto-exclude (adjacent-step scale
+    continuity).
+  - The remaining "behind" stack is behind on the tile floor only, and its
+    deficit is suspect for the same geometry artifact — re-derive against a
+    registered reference (corpus README, priority list) before diagnosing.
 - **Verify the regularization radii above the reference resolution.**
   `DMapFusion.regularizationScale` scales `medianRadius`/`guidedRadius` by the
   frame diagonal against a 9780 px reference but is **clamped to 1**: it only
