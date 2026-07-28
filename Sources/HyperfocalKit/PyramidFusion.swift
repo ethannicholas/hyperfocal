@@ -42,6 +42,24 @@ public enum PyramidFusion {
 
     static let downKernel: [Float] = [1, 4, 6, 4, 1].map { $0 / 16 }
 
+    /// Full-res footprint of one source-envelope cell (see the envelope
+    /// clamp in `fuse`). Regional on purpose: per-pixel energy policing
+    /// would flatten noise pixel by pixel — the deadening failure — while a
+    /// 32 px cell only asks that a neighborhood carry no more focus energy
+    /// than the liveliest single frame does there.
+    static let envCell = 32
+    /// Octaves the output clamp bounds. One, deliberately: the octave sweep
+    /// was measured, and every scale added past the finest trades
+    /// fabrication for deadening (defocused-foliage stack, envelope tiles
+    /// high/low: 1 octave 23/0, 3 octaves 23/10 — and pre-collapse
+    /// per-level bounding, the extreme of the same idea, 24/37). The
+    /// engine-side band measure and an output-quality measure only track
+    /// each other loosely per region, so scalar energy accounting beyond
+    /// the finest octave corrects noise it cannot see the structure of;
+    /// the residual structured fabrication is regional-commitment
+    /// territory (the hybrid-background renderer), not a clamping problem.
+    static let envClampOctaves = 1
+
     /// Debloom membership for each gated band level: where the focus-gated
     /// tracks (A/B) are trusted over the plain max-energy selection (track C).
     /// **Shared by the CPU and GPU merges** — the gate is thresholds, a
@@ -116,6 +134,7 @@ public enum PyramidFusion {
                              frameCount: Int, width: Int, height: Int,
                              sizes: [(w: Int, h: Int)], levels: Int,
                              darkCoarse: Int,
+                             nearBlackVeto: [Float]? = nil,
                              env: [String: String] = ProcessInfo.processInfo.environment)
         -> (masks: [[Float]], bgMasks: [[Float]], clean: [[Float]],
             scale: Float, mean: Float, bgFraction: Float) {
@@ -138,6 +157,13 @@ public enum PyramidFusion {
         var bgFraction: Float = 0
         if !off {
             for i in m0.indices { m0[i] = 1 - Despill.smoothstep(lo, hi, lumMin0[i]) }
+            // Texture veto (see `nearBlackTextureVeto`): where the darkest
+            // rendition provably isn't the true background — live defocused
+            // texture — the cell leaves the membership and falls to the
+            // plain track, which the envelope clamp bounds.
+            if let veto = nearBlackVeto, veto.count == m0.count {
+                for i in m0.indices where veto[i] > 0 { m0[i] *= 1 - veto[i] }
+            }
             if env["HYPERFOCAL_PMAX_BG_OFF"] == nil,
                let open = openBackground(focusMax0: focusMax0, focusMin0: focusMin0,
                                          lumMin0: lumMin0, lumMax0: lumMax0,
@@ -183,6 +209,339 @@ public enum PyramidFusion {
         return (masks, bgMasks, clean, scale, mean, bgFraction)
     }
 
+    /// Never-focuses cutoff for per-pixel focus max/min ratios: max/min of
+    /// pure noise grows with the frame count (extreme order statistics), so
+    /// the cutoff does too — measured 1.9 at N=6, 8.3 at N=63 for
+    /// never-focused backdrops. Shared by the open-background membership
+    /// (component median vs the cut) and the envelope clamp (per-pixel ramp
+    /// cut..3·cut): per-pixel ratio scales are stack-dependent (a small
+    /// JPEG stack's sharpest pixels top out near 84 where a deep 45 MP
+    /// sweep's run past 5000), so only an N-anchored cut transfers.
+    static func neverFocusRatioCut(frameCount: Int) -> Float {
+        min(max(3 * log2(Float(max(frameCount, 2))), 6), 32)
+    }
+
+    /// Near-black texture veto: cells where the near-black keep-darkest
+    /// track's scene model — a FLAT dark backdrop whose darkest rendition is
+    /// its true value — provably does not hold, because the cell's level-0
+    /// band energy BREATHES with the sweep. Defocused live texture (bokeh
+    /// mottle, out-of-focus foliage) breathes 4-30x across a sweep as the
+    /// bokeh scale changes; a flat backdrop's noise floor breathes 1.2-1.5x
+    /// (pooled over 32 px cells). Keep-darkest in breathing cells keeps the
+    /// flattest rendition and deadens texture the scene really has (measured:
+    /// a dark defocused garden at 0.31-0.68x the liveliest source frame,
+    /// 33 of 60 background tiles outside the source envelope). Vetoed cells
+    /// fall to the plain selection track, which the envelope clamp then
+    /// bounds — the veto without the clamp would trade deadening for
+    /// max-of-N fabrication, so they engage together (`smoothedSelection`).
+    ///
+    /// Same discipline as the clean-field flatness gate: a scene statistic
+    /// decides where the mechanism's model holds, with a margin against
+    /// engine drift, and everything else keeps shipped behavior — including
+    /// every cell within one cell of sharp structure (the silhouette hug
+    /// band is debloom's territory, and bloom itself breathes with the
+    /// sweep, so the statistic cannot be trusted beside the subject).
+    /// Returns nil when no cell qualifies. Full-res, bilinear across cell
+    /// boundaries so the track handoff cannot band.
+    static func nearBlackTextureVeto(envMax0: [Float], env0Min: [Float],
+                                     focusMax0: [Float], frameCount: Int,
+                                     width: Int, height: Int,
+                                     env: [String: String]) -> [Float]? {
+        let f = envCell
+        let gw = (width + f - 1) / f, gh = (height + f - 1) / f
+        guard envMax0.count == gw * gh, env0Min.count == gw * gh,
+              focusMax0.count == width * height else { return nil }
+        // The sweep-ratio cut scales with the frame count: a flat backdrop's
+        // pooled noise ratio is an extreme-order statistic, measured to
+        // follow 1 + c·√(2·ln N) (train N=6: p50 1.27; bug N=13: p50 1.34 —
+        // both give c ≈ 0.15; per-cell p99 tails give c ≈ 0.37). The cut's
+        // ramp sits above the noise tail and below the mottle population
+        // (a defocused garden at N=11 measures p50 2.2).
+        let spread = (2 * log(Float(max(frameCount, 2)))).squareRoot()
+        let texLo = Float(env["HYPERFOCAL_PMAX_TEX_LO"] ?? "") ?? (1 + 0.25 * spread)
+        let texHi = Float(env["HYPERFOCAL_PMAX_TEX_HI"] ?? "") ?? (1 + 0.45 * spread)
+        let alpha = Float(env["HYPERFOCAL_PMAX_BG_ALPHA"] ?? "") ?? 0.15
+        let t = alpha * max(Despill.percentileLow(focusMax0, 0.99), 1e-6)
+        let focusPool = maxPool(focusMax0, width: width, height: height, factor: f)
+        // Energy floor on the MIN rendition: the ratio is meaningless where
+        // the darkest rendition's energy is quantization junk (a
+        // crushed-black JPEG backdrop pools band energy at f16 zero in some
+        // frames, and noise/zero read as ratios of 10^5 on a stack whose
+        // backdrop is genuinely flat — the corpus README's low-signal
+        // lesson, hit here on the dark-backdrop acceptance stack). Real
+        // breathing texture keeps its min well above zero (a mottled garden
+        // at ratio 2-28 still has min ≥ ~4% of the population's upper end).
+        // Judged against the eligible population's own p90, so it needs no
+        // absolute unit.
+        var eligible: [(i: Int, ratio: Float)] = []
+        var maxes: [Float] = []
+        for gy in 0..<gh {
+            for gx in 0..<gw {
+                var nearSharp = false
+                for ny in max(gy - 1, 0)...min(gy + 1, gh - 1) {
+                    for nx in max(gx - 1, 0)...min(gx + 1, gw - 1) {
+                        if focusPool[ny * gw + nx] > t { nearSharp = true }
+                    }
+                }
+                if nearSharp { continue }
+                let i = gy * gw + gx
+                // √ because the pooled energies are squared — the ratio and
+                // its measured populations are in amplitude units.
+                eligible.append((i, (envMax0[i] / max(env0Min[i], 1e-12)).squareRoot()))
+                maxes.append(envMax0[i])
+            }
+        }
+        guard !eligible.isEmpty else { return nil }
+        let sortedMax = maxes.sorted()
+        let q = { (a: [Float], p: Float) -> Float in
+            a[min(Int(Float(a.count - 1) * p), a.count - 1)]
+        }
+        let floorLo = Float(env["HYPERFOCAL_PMAX_TEX_FLOOR"] ?? "") ?? 0.01
+        let floor = floorLo * q(sortedMax, 0.9)
+        // Visibility floor on the max rendition, in absolute units — the
+        // engine's planes are [0, 1] luminance, so this is scene-anchored,
+        // not a magic number: a cell whose LIVELIEST rendition pools less
+        // squared band energy than a ~0.6/255 mean amplitude carries no
+        // texture worth releasing keep-darkest for, and at those levels the
+        // whole ratio population is quantization noise (measured: a black
+        // backdrop's cells sit at p90 2.0e-6 with ratios into the hundreds;
+        // real dark-garden mottle starts at p10 1.5e-5 — the cut is the
+        // geometric middle of that gap).
+        let visFloor = Float(env["HYPERFOCAL_PMAX_TEX_VIS"] ?? "") ?? 5.5e-6
+        var grid = [Float](repeating: 0, count: gw * gh)
+        var nVeto = 0
+        for (i, ratio) in eligible
+            where env0Min[i] > floor && envMax0[i] > visFloor {
+            let w = Despill.smoothstep(texLo, texHi, ratio)
+            if w > 0 {
+                grid[i] = w
+                nVeto += 1
+            }
+        }
+        if env["HYPERFOCAL_PMAX_ENV_DEBUG"] != nil {
+            let s = eligible.map { $0.ratio }.sorted()
+            FileHandle.standardError.write(String(
+                format: "pmax tex veto: %d/%d cells, ratio p10 %.2f p50 %.2f "
+                    + "p90 %.2f p99 %.2f (cut %.2f..%.2f), envMax0 p10 %.2e "
+                    + "p50 %.2e p90 %.2e (floor %.2e)\n",
+                nVeto, s.count, q(s, 0.1), q(s, 0.5), q(s, 0.9), q(s, 0.99),
+                texLo, texHi, q(sortedMax, 0.1), q(sortedMax, 0.5),
+                q(sortedMax, 0.9), floor).data(using: .utf8)!)
+        }
+        guard nVeto > 0 else { return nil }
+        return Filters.resizePlaneBilinear(grid, width: gw, height: gh,
+                                           toWidth: width, toHeight: height)
+    }
+
+    /// Source-envelope clamp, applied to the COLLAPSED image: in
+    /// never-focused cells, the output may not carry more fine-scale band
+    /// energy than the liveliest single source frame carries there.
+    /// Max-of-N selection over N decorrelated defocused renditions is an
+    /// extreme order statistic: it fabricates focus energy the sources
+    /// don't contain (measured: defocused foliage at up to 2.9x the best
+    /// registered frame, 43 of 77 background tiles above the envelope; the
+    /// exact Burt expand made it worse by reconstructing the selected noise
+    /// faithfully).
+    ///
+    /// Output space is load-bearing, not a convenience. A per-level clamp
+    /// (each fused band bounded to the per-level liveliest frame) was built
+    /// first and measurably fails BOTH ways: a mosaic's bands come from
+    /// different frames and partially cancel on reconstruction, so
+    /// per-level parity collapses to 0.5-0.8x in the output (37 of 77
+    /// tiles pushed below the envelope's low side) — while spatial
+    /// cherry-picking (each cell's bound is ITS liveliest frame) still
+    /// summed above any single frame per tile (24 tiles left high). The
+    /// collapsed image's own band, measured against the frames' same-
+    /// operator bands, is the quantity the envelope constrains — coherence
+    /// losses and cross-frame mosaicking are already inside it.
+    ///
+    /// Where a frame really resolves detail the clamp stands down; it only
+    /// ever scales fine detail DOWN to the envelope, so it cannot deaden
+    /// below the liveliest frame. Cell scales are bilinearly upsampled so
+    /// the transition cannot band.
+    ///
+    /// "Never focused" is the per-pixel FOCUS SWEEP RATIO
+    /// (focusMax0 / focusMin0) against the shared N-anchored cutoff
+    /// (`neverFocusRatioCut`, ramp cut..3·cut), not an absolute energy
+    /// test: energetic defocused foliage sits above any absolute cut (an
+    /// absolute membership left 25 foliage tiles unclamped at up to 2.8x),
+    /// while an in-focus low-energy background — real texture whose
+    /// absolute energy overlaps a backdrop's noise floor, the regime the
+    /// open-background never-focuses clause exists for — must NOT be
+    /// clamped, because fused output legitimately exceeds the best single
+    /// frame there (fusion gain, measured 1.3-1.8x on real subjects).
+    /// Pixels whose min-focus is degenerate (zero-coverage warp borders
+    /// render constant black, so the min is ~0 and the ratio reads as fake
+    /// "focus") fall back to the absolute test.
+    static func applyEnvelopeClamp(out: inout ImageBuffer,
+                                   envMax: [[Float]], focusMax0: [Float],
+                                   focusMin0: [Float], frameCount: Int,
+                                   burtExpand: Bool, env: [String: String],
+                                   log: ((String) -> Void)?) {
+        let alpha = Float(env["HYPERFOCAL_PMAX_BG_ALPHA"] ?? "") ?? 0.15
+        let t = alpha * max(Despill.percentileLow(focusMax0, 0.99), 1e-6)
+        let (w0, h0) = (out.width, out.height)
+        guard focusMin0.count == focusMax0.count,
+              focusMax0.count == w0 * h0 else { return }
+        // The membership is judged per PIXEL and pooled as a fraction —
+        // pooling max/min planes first compresses the ratio so badly that
+        // subject cells read like background (measured: cell-mean ratios
+        // p50 3.1 on a stack whose per-pixel focusing content runs into the
+        // thousands, which engaged the clamp on 98% of cells, subject
+        // included — and the subject's fusion gain, fused fine energy at
+        // 1.3-1.8x any single frame, is legitimate and must never clamp).
+        let rC = neverFocusRatioCut(frameCount: frameCount)
+        let rLo = Float(env["HYPERFOCAL_PMAX_ENV_RLO"] ?? "") ?? rC
+        let rHi = Float(env["HYPERFOCAL_PMAX_ENV_RHI"] ?? "") ?? 3 * rC
+        let minValid = 1e-3 * t
+        var wPix = [Float](repeating: 0, count: w0 * h0)
+        wPix.withUnsafeMutableBufferPointer { wp in
+            focusMax0.withUnsafeBufferPointer { fx in
+                focusMin0.withUnsafeBufferPointer { fn in
+                    DispatchQueue.concurrentPerform(iterations: h0) { y in
+                        for i in (y * w0)..<((y + 1) * w0) {
+                            wp[i] = fn[i] > minValid
+                                ? 1 - Despill.smoothstep(rLo, rHi, fx[i] / fn[i])
+                                : 1 - Despill.smoothstep(0.5 * t, t, fx[i])
+                        }
+                    }
+                }
+            }
+        }
+        // The output's own Gaussian pyramid over the clamped octaves, with
+        // the pipeline's operators, so each octave band is the same measure
+        // the per-frame envelope was pooled in. Bands are scaled per cell
+        // and the pyramid reassembled — exact telescoping, so untouched
+        // cells reconstruct bit-identically up to f16 storage.
+        let octaves = min(envClampOctaves, envMax.count)
+        var gauss: [ImageBuffer] = [out]
+        for _ in 0..<octaves { gauss.append(downsample(gauss.last!)) }
+        func expandTo(_ img: ImageBuffer, w: Int, h: Int) -> ImageBuffer {
+            burtExpand ? expandBurt(img, toWidth: w, toHeight: h)
+                       : Filters.resizeBilinear(img, toWidth: w, toHeight: h)
+        }
+        var totalClamped = 0
+        var minScale: Float = 1
+        var bands: [ImageBuffer] = []
+        var scales: [[Float]] = []
+        for l in 0..<octaves {
+            let (wl, hl) = (gauss[l].width, gauss[l].height)
+            let f = max(1, envCell >> l)
+            let gw = (wl + f - 1) / f, gh = (hl + f - 1) / f
+            guard envMax[l].count == gw * gh else { return }
+            var band = expandTo(gauss[l + 1], w: wl, h: hl)
+            band.pixels.withUnsafeMutableBufferPointer { bp in
+                let b = bp.baseAddress!
+                gauss[l].pixels.withUnsafeBufferPointer { gp in
+                    let g = gp.baseAddress!
+                    DispatchQueue.concurrentPerform(iterations: hl) { y in
+                        for i in stride(from: y * wl * 4, to: (y + 1) * wl * 4,
+                                        by: 4) {
+                            hfStoreRGBA(b, i, hfLoadRGBA(g, i) - hfLoadRGBA(b, i))
+                        }
+                    }
+                }
+            }
+            let outPool = CPUWorkspace.poolBandEnergy(band.pixels, width: wl,
+                                                      height: hl, factor: f)
+            let nfCell = CPUWorkspace.poolScalarMean(wPix, width: w0, height: h0,
+                                                     factor: f << l)
+            let nfw = (w0 + (f << l) - 1) / (f << l)
+            let nfh = (h0 + (f << l) - 1) / (f << l)
+            var scale = [Float](repeating: 1, count: gw * gh)
+            var clamped = 0
+            for gy in 0..<gh {
+                for gx in 0..<gw {
+                    let i = gy * gw + gx
+                    let ni = min(gy, nfh - 1) * nfw + min(gx, nfw - 1)
+                    // Sharpened at cell level: a mixed cell (subject edge)
+                    // leans protected, a solidly never-focused cell engages.
+                    let wNf = Despill.smoothstep(0.3, 0.7, nfCell[ni])
+                    guard wNf > 0 else { continue }
+                    let fe = outPool[i], ee = envMax[l][i]
+                    guard ee > 0, fe > ee, fe > 1e-12 else { continue }
+                    // Energies are squared, so detail scales by √ratio; the
+                    // ramp keeps cells just past the envelope continuous
+                    // with untouched neighbours (full correction from 1.4x).
+                    let r = fe / ee
+                    let w = Despill.smoothstep(1.0, 1.4, r) * wNf
+                    guard w > 0 else { continue }
+                    scale[i] = 1 + ((1 / r).squareRoot() - 1) * w
+                    minScale = min(minScale, scale[i])
+                    clamped += 1
+                }
+            }
+            totalClamped += clamped
+            bands.append(band)
+            scales.append(scale)
+            if env["HYPERFOCAL_PMAX_ENV_DEBUG"] != nil {
+                FileHandle.standardError.write(String(
+                    format: "pmax env clamp: octave %d, %d/%d cells scaled\n",
+                    l, clamped, gw * gh).data(using: .utf8)!)
+            }
+        }
+        guard totalClamped > 0 else { return }
+        // Accumulate the CORRECTION (s−1)·band per octave, expanded up the
+        // pyramid, and add it once — mathematically the same as scaling the
+        // bands and reassembling, but exact zeros propagate through the
+        // linear expand, so pixels outside every clamped cell (the whole
+        // subject) stay bit-identical instead of paying an f16 roundtrip.
+        var corr: ImageBuffer? = nil
+        for l in stride(from: octaves - 1, through: 0, by: -1) {
+            let (wl, hl) = (gauss[l].width, gauss[l].height)
+            var c = corr.map { expandTo($0, w: wl, h: hl) }
+                ?? ImageBuffer(width: wl, height: hl)
+            let f = max(1, envCell >> l)
+            let gw = (wl + f - 1) / f, gh = (hl + f - 1) / f
+            let sPlane = Filters.resizePlaneBilinear(scales[l], width: gw,
+                                                     height: gh,
+                                                     toWidth: wl, toHeight: hl)
+            c.pixels.withUnsafeMutableBufferPointer { cb in
+                let cp = cb.baseAddress!
+                bands[l].pixels.withUnsafeBufferPointer { bp in
+                    let b = bp.baseAddress!
+                    sPlane.withUnsafeBufferPointer { sp in
+                        DispatchQueue.concurrentPerform(iterations: hl) { y in
+                            for x in 0..<wl {
+                                let i = y * wl + x
+                                let s = min(sp[i], 1)
+                                if s < 1 {
+                                    let pi = i * 4
+                                    hfStoreRGBA(cp, pi, hfLoadRGBA(cp, pi)
+                                        + hfLoadRGBA(b, pi) * (s - 1))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            corr = c
+        }
+        if let corr {
+            out.pixels.withUnsafeMutableBufferPointer { op in
+                let o = op.baseAddress!
+                corr.pixels.withUnsafeBufferPointer { cb in
+                    let cp = cb.baseAddress!
+                    DispatchQueue.concurrentPerform(iterations: h0) { y in
+                        for i in stride(from: y * w0 * 4, to: (y + 1) * w0 * 4,
+                                        by: 4) {
+                            let d = hfLoadRGBA(cp, i)
+                            if d != SIMD4<Float>() {
+                                hfStoreRGBA(o, i, hfLoadRGBA(o, i) + d)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if env["HYPERFOCAL_PMAX_ENV_DEBUG"] != nil {
+            FileHandle.standardError.write(String(
+                format: "pmax env clamp: min scale %.3f\n",
+                minScale).data(using: .utf8)!)
+        }
+        log?("pmax: envelope clamp engaged (\(totalClamped) cells)")
+    }
+
     /// The open-background membership — true where the pixel belongs to a
     /// connected never-sharp field that reaches the frame border and whose
     /// focus energy never moves with the sweep (see `debloomMasks`) — plus
@@ -218,10 +577,8 @@ public enum PyramidFusion {
         // a log2 histogram of the focus max/min ratio for the median.
         let comps = Morphology.components(open: subject.map { !$0 },
                                           width: width, height: height)
-        // Never-focuses cutoff: max/min of pure noise grows with the frame
-        // count (extreme order statistics), so the cutoff does too.
         let ratioCut = Float(env["HYPERFOCAL_PMAX_BG_RATIO"] ?? "")
-            ?? min(max(3 * log2(Float(max(frameCount, 2))), 6), 32)
+            ?? neverFocusRatioCut(frameCount: frameCount)
         let logCut = log2(ratioCut)
         let minSize = 1000
         let bins = 64
@@ -507,8 +864,8 @@ public enum PyramidFusion {
         /// is exactly what the app's single "Debloom levels" slider drives.
         public var coarseLevels: Int
         public var threshold: Float
-        /// EXPERIMENT (CPU-only, default off): smooth the selection energy at
-        /// every band level, not just level 0. The level-0 grit blur exists
+        /// Smooth the selection energy at every band level, not just level 0
+        /// (default ON, shipped 2026-07-28). The level-0 grit blur exists
         /// because the max-selector can't tell focused detail from isolated
         /// noise; the same failure repeats at coarse levels with bloom in the
         /// noise role — a defocused bright feature's smooth gradient wins
@@ -521,9 +878,11 @@ public enum PyramidFusion {
         /// same mechanism grit suppression uses at level 0. Found via the
         /// train stack's blown-text veil: +33 p99 luminance over the sharp
         /// source frame at baseline, +25 with this alone, +19.5 combined with
-        /// the Burt expand (`HYPERFOCAL_PMAX_EXPAND5`) — the sharp frame
-        /// itself is the ground truth, and the research doc carries the full
-        /// measurements. Enabling this forces the CPU engine until the GPU
+        /// the Burt expand — the sharp frame itself is the ground truth, and
+        /// the research doc carries the full measurements. Enabling brings
+        /// the source-envelope discipline with it (the output clamp and the
+        /// near-black texture veto — see `applyEnvelopeClamp` /
+        /// `nearBlackTextureVeto`), and forces the CPU engine until the GPU
         /// ports land.
         public var smoothedSelection: Bool
         /// EXPERIMENT (CPU-only, default off): base level from the frame with
@@ -538,7 +897,7 @@ public enum PyramidFusion {
         public var texturedBase: Bool
         public var isEnabled: Bool { coarseLevels > 0 }
         public init(coarseLevels: Int = 5, threshold: Float = 0.07,
-                    smoothedSelection: Bool = false, texturedBase: Bool = false) {
+                    smoothedSelection: Bool = true, texturedBase: Bool = false) {
             self.coarseLevels = coarseLevels
             self.threshold = threshold
             self.smoothedSelection = smoothedSelection
@@ -626,18 +985,34 @@ public enum PyramidFusion {
         // Focus-gate config for the GPU paths (nil = standard PMax).
         let gpuFocusGate = focusGateEnabled
             ? GPUFocusGate(coarseLevels: fgCoarse, threshold: fgThreshold) : nil
-        // Smoothed selection / textured base (see Options): experiments under
-        // validation, env-overridable both ways ("0"/"1") like the gate above.
+        // Smoothed selection (shipped ON — see Options) / textured base
+        // (experiment, off): env-overridable both ways ("0"/"1") like the
+        // gate above.
         let smoothSel = (env["HYPERFOCAL_PMAX_SMOOTH_SEL"].map { $0 != "0" })
             ?? options.smoothedSelection
         // Energy-metric variant for the smoothed path only (see
         // levelBandEnergy): squared band luminance instead of abs-sum RGB.
         let smoothSq = env["HYPERFOCAL_PMAX_SMOOTH_SQ"].map { $0 != "0" } ?? false
         // Burt expand instead of bilinear for band computation AND collapse
-        // (see upsampleBurtAt — they must switch together).
-        let expand5 = env["HYPERFOCAL_PMAX_EXPAND5"].map { $0 != "0" } ?? false
+        // (see upsampleBurtAt — they must switch together). Always on: this
+        // is operator correctness (the bilinear expand was leakier than the
+        // proper reconstruction low-pass AND mismatched with the
+        // corner-aligned decimation grid), not a preference — the env var is
+        // the ablation switch, not a configuration surface.
+        let expand5 = env["HYPERFOCAL_PMAX_EXPAND5"].map { $0 != "0" } ?? true
         let texBase = (env["HYPERFOCAL_PMAX_TEX_BASE"].map { $0 != "0" })
             ?? options.texturedBase
+        // Source-envelope discipline, part of smoothed selection rather than
+        // its own option (they are one shippable behavior: smoothing removes
+        // unsupported wins, the clamp bounds what selection may fabricate in
+        // never-focused cells, and the texture veto keeps keep-darkest out of
+        // live texture — the veto without the clamp would trade deadening for
+        // fabrication). Env kill-switches are for ablation only. Both need
+        // the focus gate's full-res planes, so they stand down with it.
+        let envClamp = smoothSel && focusGateEnabled
+            && (env["HYPERFOCAL_PMAX_ENV_CLAMP"].map { $0 != "0" } ?? true)
+        let texVeto = envClamp
+            && (env["HYPERFOCAL_PMAX_NB_TEX_VETO"].map { $0 != "0" } ?? true)
         // Despill needs the per-frame grid luminance and focus planes, which only
         // the CPU loop retains today — stay on the CPU when it is requested. The
         // GPU port is a follow-up, exactly as the focus gate's was. The two
@@ -719,6 +1094,12 @@ public enum PyramidFusion {
         var lumMax0: [Float] = []
         var focusMax0: [Float] = []
         var focusMin0: [Float] = []
+        // Source-envelope grids: per-cell max over frames of pooled band
+        // energy for the octaves the output clamp bounds (the liveliest
+        // single frame's energy per octave), plus the level-0 min, whose
+        // max/min ratio is the texture veto's sweep statistic.
+        var envMax = [[Float]](repeating: [], count: envClampOctaves)
+        var env0Min: [Float] = []
         // Despill inputs (only when asked): per-frame grid luminance for the
         // dark floor, and the running per-cell max of this frame's fine-scale
         // focus — the "did any frame ever resolve detail here" confidence proxy
@@ -757,6 +1138,15 @@ public enum PyramidFusion {
                 let ws = CPUWorkspace(width: w, height: h, levels: levels)
                 ws.burtExpand = expand5
                 workspace = ws
+                if envClamp {
+                    // −1 / ∞ so the first frame installs unconditionally.
+                    for l in 0..<Self.envClampOctaves {
+                        let g = ws.envGridSize(level: l)
+                        envMax[l] = [Float](repeating: -1, count: g.gw * g.gh)
+                    }
+                    let g0 = ws.envGridSize(level: 0)
+                    env0Min = [Float](repeating: .infinity, count: g0.gw * g0.gh)
+                }
                 // bestEnergy = −1: the first frame's bands install
                 // unconditionally (energies are ≥ 0) — same convention as
                 // the GPU paths' bestE fill.
@@ -892,6 +1282,17 @@ public enum PyramidFusion {
             }
             for l in 0..<levels { ws.fusedDownsample(level: l) }
             ws.level0BandEnergy()
+            if envClamp {
+                // Envelope statistics from the RAW level-0 band (`band` is
+                // still this frame's — see the pooling note in `CPUWorkspace`).
+                let g0 = ws.envGridSize(level: 0)
+                let p = CPUWorkspace.poolBandEnergy(ws.band, width: cw, height: ch,
+                                                    factor: g0.f)
+                for i in p.indices {
+                    if p[i] > envMax[0][i] { envMax[0][i] = p[i] }
+                    if p[i] < env0Min[i] { env0Min[i] = p[i] }
+                }
+            }
             if focusGate {
                 // Running full-res max of the grit-blurred level-0 focus
                 // energy — the focus membership's input.
@@ -953,6 +1354,18 @@ public enum PyramidFusion {
                 // energy first (level 0 always works this way); the *Smoothed
                 // variants then read them instead of recomputing raw energy.
                 if smoothSel { ws.levelBandEnergy(level: l, squaredLuma: smoothSq) }
+                if envClamp, l < Self.envClampOctaves {
+                    // This frame's octave-l envelope contribution, from the
+                    // band `levelBandEnergy` just materialized.
+                    let g = ws.envGridSize(level: l)
+                    let p = CPUWorkspace.poolBandEnergy(ws.bandL,
+                                                        width: ws.sizes[l].w,
+                                                        height: ws.sizes[l].h,
+                                                        factor: g.f)
+                    for i in p.indices where p[i] > envMax[l][i] {
+                        envMax[l][i] = p[i]
+                    }
+                }
                 if focusGate && l >= levels - darkCoarse {
                     let focus = ws.focusDownsampled(toLevel: l)
                     if smoothSel {
@@ -1065,12 +1478,20 @@ public enum PyramidFusion {
         // the ungated merge.
         if focusGate {
             let (w0, h0) = workspace!.sizes[0]
+            let veto = texVeto
+                ? Self.nearBlackTextureVeto(envMax0: envMax[0], env0Min: env0Min,
+                                            focusMax0: focusMax0,
+                                            frameCount: frameCount,
+                                            width: w0, height: h0, env: env)
+                : nil
+            if veto != nil { log?("pmax: near-black texture veto engaged") }
             let gate = Self.debloomMasks(lumMin0: lumMin0, lumMax0: lumMax0,
                                          focusMax0: focusMax0,
                                          focusMin0: focusMin0, frameCount: frameCount,
                                          width: w0, height: h0,
                                          sizes: workspace!.sizes, levels: levels,
-                                         darkCoarse: darkCoarse, env: env)
+                                         darkCoarse: darkCoarse,
+                                         nearBlackVeto: veto, env: env)
             DMapFusion.dumpPlane(focusMax0, env: "HYPERFOCAL_DUMP_FOCUSMAX0")
             DMapFusion.dumpPlane(focusMin0, env: "HYPERFOCAL_DUMP_FOCUSMIN0")
             DMapFusion.dumpPlane(lumMax0, env: "HYPERFOCAL_DUMP_LUMMAX0")
@@ -1150,7 +1571,16 @@ public enum PyramidFusion {
                                        planes: sharpnessPlanes))
         }
         let t0 = now()
-        let out = collapse(fused!, burtExpand: expand5)
+        var out = collapse(fused!, burtExpand: expand5)
+        // The clamp bounds the COLLAPSED image (see applyEnvelopeClamp for
+        // why per-level bounding fails both ways), after every selection and
+        // merge decision and before the pipeline's downstream passes.
+        if envClamp {
+            Self.applyEnvelopeClamp(out: &out, envMax: envMax,
+                                    focusMax0: focusMax0, focusMin0: focusMin0,
+                                    frameCount: frameCount,
+                                    burtExpand: expand5, env: env, log: log)
+        }
         log?(String(format: "pyramid phases (cpu): decode %.2fs, warp %.2fs, "
                     + "build %.2fs, select %.2fs, collapse %.2fs",
                     tDecode, tWarp, tBuild, tSelect, now() - t0))
@@ -1273,8 +1703,8 @@ public enum PyramidFusion {
         /// decimation grid — so bands computed against it keep more residual
         /// low-frequency, which is extra bloom for max-selection to pick up.
         /// Collapse and band computation must switch together (either operator
-        /// reconstructs exactly when used for both). Under evaluation via
-        /// `HYPERFOCAL_PMAX_EXPAND5`.
+        /// reconstructs exactly when used for both). Shipped default
+        /// (2026-07-28); `HYPERFOCAL_PMAX_EXPAND5=0` is the ablation switch.
         /// Operator dispatch for band computation — Burt expand when the
         /// experiment is on, the shipped bilinear otherwise.
         @inline(__always)
@@ -1758,6 +2188,79 @@ public enum PyramidFusion {
                 }
               }
             }
+        }
+
+        /// Envelope-grid geometry for a level: cells cover `envCell` full-res
+        /// pixels at every level a full-res cell can hold (`f = envCell >> l`,
+        /// so `f · 2^l = envCell` through the level where `f` reaches 1),
+        /// coarser beyond. A level-independent footprint is what lets the
+        /// full-res focus-membership grid map onto every level's clamp grid.
+        func envGridSize(level l: Int) -> (gw: Int, gh: Int, f: Int) {
+            let f = max(1, PyramidFusion.envCell >> l)
+            let (w, h) = sizes[l]
+            return ((w + f - 1) / f, (h + f - 1) / f, f)
+        }
+
+        /// Mean SQUARED band energy (|R|²+|G|²+|B|²) of an RGBA plane per
+        /// envelope cell. Squared, not |·|: the clamp must hold in the same
+        /// units quality is measured in (squared-Laplacian family). A
+        /// max-of-N mosaic has a different L1:L2 ratio than a coherent
+        /// frame — matching mean |band| over-clamps it ~25% in energy
+        /// (measured: 40 of 77 background tiles pushed BELOW the envelope's
+        /// low side on the defocused-foliage stack).
+        static func poolBandEnergy(_ pixels: [Float16], width: Int, height: Int,
+                                   factor: Int) -> [Float] {
+            let gw = (width + factor - 1) / factor
+            let gh = (height + factor - 1) / factor
+            var out = [Float](repeating: 0, count: gw * gh)
+            out.withUnsafeMutableBufferPointer { op in
+                pixels.withUnsafeBufferPointer { sp in
+                    let s = sp.baseAddress!
+                    DispatchQueue.concurrentPerform(iterations: gh) { gy in
+                        for gx in 0..<gw {
+                            var acc: Float = 0
+                            var n = 0
+                            for y in (gy * factor)..<min((gy + 1) * factor, height) {
+                                let row = y * width
+                                for x in (gx * factor)..<min((gx + 1) * factor, width) {
+                                    let b = hfLoadRGBA(s, (row + x) * 4)
+                                    acc += b.x * b.x + b.y * b.y + b.z * b.z
+                                    n += 1
+                                }
+                            }
+                            op[gy * gw + gx] = n > 0 ? acc / Float(n) : 0
+                        }
+                    }
+                }
+            }
+            return out
+        }
+
+        /// Mean of a scalar plane per envelope cell.
+        static func poolScalarMean(_ plane: [Float], width: Int, height: Int,
+                                   factor: Int) -> [Float] {
+            let gw = (width + factor - 1) / factor
+            let gh = (height + factor - 1) / factor
+            var out = [Float](repeating: 0, count: gw * gh)
+            out.withUnsafeMutableBufferPointer { op in
+                plane.withUnsafeBufferPointer { sp in
+                    DispatchQueue.concurrentPerform(iterations: gh) { gy in
+                        for gx in 0..<gw {
+                            var acc: Float = 0
+                            var n = 0
+                            for y in (gy * factor)..<min((gy + 1) * factor, height) {
+                                let row = y * width
+                                for x in (gx * factor)..<min((gx + 1) * factor, width) {
+                                    acc += sp[row + x]
+                                    n += 1
+                                }
+                            }
+                            op[gy * gw + gx] = n > 0 ? acc / Float(n) : 0
+                        }
+                    }
+                }
+            }
+            return out
         }
 
         /// Textured-base winner update: keep this frame's base RGB where its

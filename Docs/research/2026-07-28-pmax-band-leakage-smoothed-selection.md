@@ -1,10 +1,17 @@
 # PMax bloom: band leakage + unsupported selection wins (validated CPU candidates)
 
-**Status (2026-07-28):** two CPU-only mechanisms implemented, measured, and
-visually validated; defaults bit-identical to HEAD (verified 0.0 max diff);
-`retouch-probe` ALL PASS. Not yet shipped: acceptance criteria C2/C5 need the
-work recorded below before the defaults can flip. This doc is the handoff for
-that work.
+**Status (2026-07-28, second session — SHIPPED):** C2 re-anchored and
+PASSING on the candidate; C5's attribution corrected by measurement (most of
+it was never these mechanisms — see the addendum); a source-envelope
+discipline landed that leaves the candidate better than or equal to baseline
+on every C5 side; C1–C4 PASS; `retouch-probe` ALL PASS. After render review
+the **defaults were flipped** (smoothed selection + envelope discipline on,
+Burt expand always-on) — pre-flip defaults were re-verified bit-identical to
+the be6585d snapshot (0.0 max diff), and the flipped defaults reproduce the
+reviewed candidate renders bit-exactly. C5's absolute PASS remains open and
+belongs to the hybrid-background renderer (regional commitment) — the
+addendum records why no per-coefficient gating can reach it. Earlier
+sections are kept as written; read them with the addendum's corrections.
 
 ## The defect
 
@@ -136,3 +143,121 @@ HYPERFOCAL_PMAX_EXPAND5=1 HF_FUSE_ARGS="--pmax-smooth-selection" \
 Veil metric, comparison renders, and per-stack numbers live beside the
 private corpus (train folder notes), not in this repo, per the corpus
 README's scoping rules.
+
+## Addendum (2026-07-28, second session): C2 re-anchored, C5 re-attributed, envelope discipline landed
+
+### C2: re-anchored, candidate PASSES, and the old anchor's failure is proven
+
+The harness's C2 now judges against the registered sources with two one-sided
+anchors (full-sweep `debug-register`, exposure-normalized to the frame
+population, matched smoothing; anchors cached per canvas): **overshoot** of
+the render's own top-1% vs the per-pixel ceiling's (max over ALL frames), and
+**dimming** per pixel at the sharp-source anchor's own top-1% pixels (the
+max-focus frame's rendition — the ground truth). Verdicts:
+
+| | train | bottlebrush | fluorite |
+|---|---|---|---|
+| baseline (defaults) | **FAIL +2.23% over ceiling** | PASS | PASS |
+| candidate | PASS +0.65% | PASS | PASS |
+
+The baseline's train FAIL is the veil itself — fabricated highlight energy
+the snapshot anchor scored as "+0.00%". The candidate's earlier "nominal
+FAIL" dissolves exactly as predicted. Three instrument traps cost a wrong
+reading each and are recorded in the harness docstring: exposure-normalizing
+frames *to the render* imports the render's black-point offset into the
+highlight comparison (+16% phantom overshoot on a dark stack); an
+unnormalized ceiling rides a long sweep's exposure drift (7.3% across 82
+frames); and judging dimming by own-top-slice aggregates penalizes debloom
+for *shrinking the area* of its top slice (read −3.0% where the per-pixel
+median moved −0.6% and crops showed crisp glints replacing bloomed blobs —
+the sparkle crop evidence is beside the corpus).
+
+### C5: the attribution in this doc was wrong
+
+Per-mechanism decomposition on the harness's own tiles (high = >1.1×,
+low = <0.7× the liveliest registered frame):
+
+| config | pink_flower_2 hi/lo | bug hi/lo |
+|---|---|---|
+| baseline (defaults) | 5 / 33 | 43 / 0 |
+| smoothed selection only | 6 / 31 | **35** / 0 |
+| Burt expand only | 8 / 30 | **58** / 0 |
+| both | 8 / 30 | 48 / 0 |
+
+The C5 failures are ~90% **baseline** defects: pink_flower_2's deadening is
+the near-black keep-darkest family (largely luminance — the dark garden
+renders dark, so its texture measures dark), and bug's fabrication is plain
+max-of-N. Smoothed selection *improves* bug's high side; the one real
+mechanism regression is the Burt expand's faithful reconstruction of
+selected noise (+15 tiles). "Gate the mechanisms" therefore cannot flip C5 —
+its genuine fix is regional commitment (the hybrid-background renderer),
+exactly as this doc's diagnostic decomposition already hinted.
+
+### What landed: source-envelope discipline (CPU, part of smoothed selection)
+
+Three pieces, engaged together with `smoothedSelection` (env kill-switches
+`HYPERFOCAL_PMAX_ENV_CLAMP` / `HYPERFOCAL_PMAX_NB_TEX_VETO` for ablation):
+
+- **Output-space envelope clamp** (`applyEnvelopeClamp`): in never-focused
+  cells, the collapsed image's own finest-octave band energy (32 px cells)
+  may not exceed the liveliest single source frame's. Output space is
+  load-bearing: pre-collapse per-level bounding fails BOTH ways (mosaic
+  bands from different frames partially cancel on reconstruction, so
+  per-level parity collapses to 0.5–0.8× — 37/77 tiles pushed below the
+  envelope — while per-cell bounds still sum above any single frame per
+  tile). The octave sweep was measured: 1 octave 23 hi/0 lo, 3 octaves
+  23 hi/10 lo — every scale past the finest trades fabrication for
+  deadening, so it stays at one.
+- **Per-pixel never-focused membership**: focus sweep ratio
+  (focusMax0/focusMin0) against the N-anchored cut shared with the
+  open-background clause (`neverFocusRatioCut`), judged per pixel and pooled
+  as a fraction. Cell-pooled ratios compress until subjects read as
+  background (measured p50 3.1 on a stack whose per-pixel focusing content
+  runs into the thousands); absolute-energy membership misses energetic
+  defocused foliage and would clamp in-focus low-energy backgrounds whose
+  fusion gain (1.3–1.8×) is legitimate.
+- **Near-black texture veto** (`nearBlackTextureVeto`): cells whose level-0
+  band energy breathes with the sweep (amplitude ratio above an N-scaled
+  cut; flat-backdrop noise 1.2–1.5×, live mottle 2.2–28×) leave the
+  keep-darkest membership and fall to the clamped plain track. Two energy
+  floors guard it: the min rendition must be above quantization junk (a
+  crushed-black JPEG backdrop reads ratios of 10^5 on energies of 10^-6),
+  and the max rendition must clear an absolute visibility floor (~0.6/255
+  mean band amplitude — geometric middle of the measured black-backdrop /
+  dark-garden gap).
+
+**Result** (candidate = both mechanisms + discipline): bug **43/0 → 23/0**,
+pink_flower_2 **5/33 → 6/30**; C1 PASS (now matching the sharp frame's
+transition shape at every distance), C2 PASS ×3, C3/C4 PASS; the train veil
+win is fully preserved (re-derived region metric: baseline +11.7, candidate
++1.0 with and without the discipline); sharpest-1% focus energy retained at
+99.4%/98.8% vs the pre-clamp candidate (the mechanisms had gained 2–4%);
+defaults bit-identical; probe ALL PASS. Visual crops (beside the corpus):
+released garden mottle looks natural, clamped foliage softens gently toward
+the sources, no mosaic artifacts.
+
+### What C5 still needs — and it is the hybrid renderer's scope
+
+- bug's remaining 23 high tiles are structured defocused foliage: bounding
+  them further requires cross-frame coherence, not energy accounting (the
+  measured dead ends above). Some may be C5 instrument conservatism — the
+  (7,11) crop shows plausibly real multi-depth assembly of partially
+  focusing fuzz at sweep 4.9×, well under C5's never-focused cut of 30 —
+  worth revisiting when the hybrid work recalibrates the tile classifier.
+- pink_flower_2's 30 low tiles are luminance-deadening (darkest base +
+  keep-darkest family): only committing regions to a real frame's rendition
+  fixes them honestly.
+
+### Ship path, revised
+
+The candidate is now better than or equal to baseline on every measured
+axis (veil, C1–C4, both C5 sides on bug, C5-low on pink_flower_2; C5-high
+there is 6 vs 5 tiles, the residual being the Burt expand on two mottle
+tiles). **Decision taken 2026-07-28 after render review: the defaults are
+flipped** — `Options.smoothedSelection` defaults true (the envelope
+discipline rides with it) and the Burt expand is always-on
+(`HYPERFOCAL_PMAX_EXPAND5=0` remains as the ablation switch); C5's absolute
+PASS is carried as the hybrid renderer's acceptance bar. Remaining:
+Metal/wgpu ports of the mechanisms + envelope discipline, ≥90 dB parity,
+then the corpus snapshot regen ceremony — deliberately after the ports, so
+it happens once on the shipping engine.

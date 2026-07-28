@@ -321,11 +321,12 @@ struct Fuse: ParsableCommand {
     var pmaxFocusThreshold: Float = PyramidFusion.Options().threshold
 
     @Flag(name: .customLong("pmax-smooth-selection"), inversion: .prefixedNo,
-          help: ArgumentHelp("PMax experiment: smooth the selection energy at every band "
-              + "level, not just the finest (grit suppression at every scale) — "
-              + "suppresses veiling from defocused bright features over lit surfaces, "
-              + "where debloom's near-black gate correctly stands down. Forces the CPU "
-              + "engine until the GPU ports land."))
+          help: ArgumentHelp("PMax: smooth the selection energy at every band level, not "
+              + "just the finest (grit suppression at every scale) — suppresses veiling "
+              + "from defocused bright features over lit surfaces, where debloom's "
+              + "near-black gate correctly stands down, and brings the source-envelope "
+              + "discipline for never-focused backgrounds with it. Default on; forces "
+              + "the CPU engine until the GPU ports land."))
     var pmaxSmoothSelection: Bool = PyramidFusion.Options().smoothedSelection
 
     @Flag(name: .customLong("pmax-textured-base"), inversion: .prefixedNo,

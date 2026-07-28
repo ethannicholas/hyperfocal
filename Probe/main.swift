@@ -811,6 +811,12 @@ Task { @MainActor in
             print("probe: PMAX DEBLOOM DEFAULTS TO OFF")
             exit(1)
         }
+        // Smoothed selection (and the envelope discipline it carries)
+        // shipped ON 2026-07-28; a default-constructed pipeline must have it.
+        guard enginePMax.smoothedSelection, config.pmax.smoothedSelection else {
+            print("probe: PMAX SMOOTHED SELECTION DEFAULTS TO OFF")
+            exit(1)
+        }
     }
     print("probe: fusion defaults shared app↔engine OK")
 
