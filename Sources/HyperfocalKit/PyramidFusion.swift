@@ -435,11 +435,13 @@ public enum PyramidFusion {
         return pyramid
     }
 
-    static func collapse(_ pyramid: [ImageBuffer]) -> ImageBuffer {
+    static func collapse(_ pyramid: [ImageBuffer], burtExpand: Bool = false) -> ImageBuffer {
         var current = pyramid[pyramid.count - 1]
         for l in stride(from: pyramid.count - 2, through: 0, by: -1) {
             let band = pyramid[l]
-            var up = Filters.resizeBilinear(current, toWidth: band.width, toHeight: band.height)
+            var up = burtExpand
+                ? expandBurt(current, toWidth: band.width, toHeight: band.height)
+                : Filters.resizeBilinear(current, toWidth: band.width, toHeight: band.height)
             up.pixels.withUnsafeMutableBufferPointer { uBuf in
                 let u = uBuf.baseAddress!
                 band.pixels.withUnsafeBufferPointer { bBuf in
@@ -452,6 +454,26 @@ public enum PyramidFusion {
             current = up
         }
         return current
+    }
+
+    /// Full-image Burt expand (see `CPUWorkspace.upsampleBurtAt`), the
+    /// collapse-side counterpart of the band computation's operator.
+    static func expandBurt(_ img: ImageBuffer, toWidth w: Int, toHeight h: Int) -> ImageBuffer {
+        var out = ImageBuffer(width: w, height: h)
+        img.pixels.withUnsafeBufferPointer { srcBuf in
+            let src = srcBuf.baseAddress!
+            out.pixels.withUnsafeMutableBufferPointer { dstBuf in
+                let dst = dstBuf.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: h) { y in
+                    for x in 0..<w {
+                        let v = CPUWorkspace.upsampleBurtAt(src, sw: img.width, sh: img.height,
+                                                            x: x, y: y)
+                        hfStoreRGBA(dst, (y * w + x) * 4, v)
+                    }
+                }
+            }
+        }
+        return out
     }
 
     /// Reduces PMax highlight bloom: a defocused bright feature spreads a
@@ -485,10 +507,42 @@ public enum PyramidFusion {
         /// is exactly what the app's single "Debloom levels" slider drives.
         public var coarseLevels: Int
         public var threshold: Float
+        /// EXPERIMENT (CPU-only, default off): smooth the selection energy at
+        /// every band level, not just level 0. The level-0 grit blur exists
+        /// because the max-selector can't tell focused detail from isolated
+        /// noise; the same failure repeats at coarse levels with bloom in the
+        /// noise role — a defocused bright feature's smooth gradient wins
+        /// scattered coarse cells against a sharp frame whose energy is dense
+        /// but locally lower, and the winners reconstruct as a milky veil over
+        /// lit surfaces (where the near-black debloom gate correctly stands
+        /// down). Smoothing the energy (never the coefficients) at each
+        /// level's own scale makes selection favor spatially supported
+        /// structure at every scale, which starves those isolated wins by the
+        /// same mechanism grit suppression uses at level 0. Found via the
+        /// train stack's blown-text veil: +33 p99 luminance over the sharp
+        /// source frame at baseline, +25 with this alone, +19.5 combined with
+        /// the Burt expand (`HYPERFOCAL_PMAX_EXPAND5`) — the sharp frame
+        /// itself is the ground truth, and the research doc carries the full
+        /// measurements. Enabling this forces the CPU engine until the GPU
+        /// ports land.
+        public var smoothedSelection: Bool
+        /// EXPERIMENT (CPU-only, default off): base level from the frame with
+        /// the highest local deviation per cell, instead of the darkest frame.
+        /// Darkest-base is bloom-motivated (the least-luminous frame is the
+        /// least-bloomed) but on bright scenes it can only darken; a
+        /// texture-winner picks the in-focus frame's low-pass on any backdrop
+        /// polarity. Measured on the train stack: fixes darkest-base's global
+        /// −2.8 luminance dim but worsens peak veil (+36 vs +33 p99) — not a
+        /// win standalone; kept for the follow-up that adds an entropy term to
+        /// the winner statistic. Enabling forces the CPU engine.
+        public var texturedBase: Bool
         public var isEnabled: Bool { coarseLevels > 0 }
-        public init(coarseLevels: Int = 5, threshold: Float = 0.07) {
+        public init(coarseLevels: Int = 5, threshold: Float = 0.07,
+                    smoothedSelection: Bool = false, texturedBase: Bool = false) {
             self.coarseLevels = coarseLevels
             self.threshold = threshold
+            self.smoothedSelection = smoothedSelection
+            self.texturedBase = texturedBase
         }
     }
 
@@ -572,11 +626,28 @@ public enum PyramidFusion {
         // Focus-gate config for the GPU paths (nil = standard PMax).
         let gpuFocusGate = focusGateEnabled
             ? GPUFocusGate(coarseLevels: fgCoarse, threshold: fgThreshold) : nil
+        // Smoothed selection / textured base (see Options): experiments under
+        // validation, env-overridable both ways ("0"/"1") like the gate above.
+        let smoothSel = (env["HYPERFOCAL_PMAX_SMOOTH_SEL"].map { $0 != "0" })
+            ?? options.smoothedSelection
+        // Energy-metric variant for the smoothed path only (see
+        // levelBandEnergy): squared band luminance instead of abs-sum RGB.
+        let smoothSq = env["HYPERFOCAL_PMAX_SMOOTH_SQ"].map { $0 != "0" } ?? false
+        // Burt expand instead of bilinear for band computation AND collapse
+        // (see upsampleBurtAt — they must switch together).
+        let expand5 = env["HYPERFOCAL_PMAX_EXPAND5"].map { $0 != "0" } ?? false
+        let texBase = (env["HYPERFOCAL_PMAX_TEX_BASE"].map { $0 != "0" })
+            ?? options.texturedBase
         // Despill needs the per-frame grid luminance and focus planes, which only
         // the CPU loop retains today — stay on the CPU when it is requested. The
-        // GPU port is a follow-up, exactly as the focus gate's was.
+        // GPU port is a follow-up, exactly as the focus gate's was. The two
+        // selection experiments force the CPU the same way — silently taking a
+        // GPU path that ignores them would measure the wrong configuration.
         if prepareDespill { log?("pmax: despill inputs requested — CPU engine") }
-        let preferGPU = preferGPU && !prepareDespill
+        if smoothSel { log?("pmax: smoothed selection on — CPU engine") }
+        if texBase { log?("pmax: textured base on — CPU engine") }
+        if expand5 { log?("pmax: Burt expand on — CPU engine") }
+        let preferGPU = preferGPU && !prepareDespill && !smoothSel && !texBase && !expand5
         #if canImport(Metal)
         if preferGPU, MetalEngine.shared != nil {
             do {
@@ -629,8 +700,11 @@ public enum PyramidFusion {
         let darkCoarse = fgCoarse
         let focusGate = focusGateEnabled
         let focusThresh = fgThreshold
-        let useDarkBase = env["HYPERFOCAL_PMAX_DARKBASE"] != nil || focusGate
+        let useDarkBase = (env["HYPERFOCAL_PMAX_DARKBASE"] != nil || focusGate) && !texBase
         var baseBestLum: [Float] = []
+        // Textured-base winner: highest local deviation of the base Gaussian
+        // per cell (−1 so the first frame installs unconditionally).
+        var baseBestDev: [Float] = []
         // f32 sum of every frame's coarsest Gaussian, for the averaged base.
         // See the accumulation site for why this one buffer resists f16.
         var baseAccum: [Float] = []
@@ -681,6 +755,7 @@ public enum PyramidFusion {
                 let h = warp?.outputHeight ?? img.height
                 levels = max(3, Int(log2(Double(min(w, h)) / 16.0)))
                 let ws = CPUWorkspace(width: w, height: h, levels: levels)
+                ws.burtExpand = expand5
                 workspace = ws
                 // bestEnergy = −1: the first frame's bands install
                 // unconditionally (energies are ≥ 0) — same convention as
@@ -689,7 +764,10 @@ public enum PyramidFusion {
                 bestEnergy = ws.sizes.dropLast().map {
                     [Float](repeating: -1, count: $0.w * $0.h)
                 }
-                if useDarkBase {
+                if texBase {
+                    baseBestDev = [Float](repeating: -1,
+                                          count: ws.sizes[levels].w * ws.sizes[levels].h)
+                } else if useDarkBase {
                     baseBestLum = [Float](repeating: .infinity,
                                           count: ws.sizes[levels].w * ws.sizes[levels].h)
                 } else {
@@ -871,22 +949,49 @@ public enum PyramidFusion {
             t0 = now()
             ws.select0(fused: &fused![0], best: &bestEnergy[0])
             for l in 1..<levels {
+                // Smoothed selection materializes the level's band + blurred
+                // energy first (level 0 always works this way); the *Smoothed
+                // variants then read them instead of recomputing raw energy.
+                if smoothSel { ws.levelBandEnergy(level: l, squaredLuma: smoothSq) }
                 if focusGate && l >= levels - darkCoarse {
                     let focus = ws.focusDownsampled(toLevel: l)
-                    ws.selectStreamingFocusGated(level: l, focus: focus, threshold: focusThresh,
-                                                 fused: &fused![l], bestE: &bestEnergy[l],
-                                                 trackB: &trackB[l], bestDarkLum: &bandBestLum[l],
-                                                 trackBright: &trackBright[l],
-                                                 bestBrightLum: &bandBrightLum[l],
-                                                 hasFocus: &hasFocus[l],
-                                                 plainC: &plainC[l], plainBestE: &plainBestE[l])
+                    if smoothSel {
+                        ws.selectSmoothedFocusGated(level: l, focus: focus,
+                                                    threshold: focusThresh,
+                                                    fused: &fused![l], bestE: &bestEnergy[l],
+                                                    trackB: &trackB[l],
+                                                    bestDarkLum: &bandBestLum[l],
+                                                    trackBright: &trackBright[l],
+                                                    bestBrightLum: &bandBrightLum[l],
+                                                    hasFocus: &hasFocus[l],
+                                                    plainC: &plainC[l],
+                                                    plainBestE: &plainBestE[l])
+                    } else {
+                        ws.selectStreamingFocusGated(level: l, focus: focus,
+                                                     threshold: focusThresh,
+                                                     fused: &fused![l], bestE: &bestEnergy[l],
+                                                     trackB: &trackB[l],
+                                                     bestDarkLum: &bandBestLum[l],
+                                                     trackBright: &trackBright[l],
+                                                     bestBrightLum: &bandBrightLum[l],
+                                                     hasFocus: &hasFocus[l],
+                                                     plainC: &plainC[l],
+                                                     plainBestE: &plainBestE[l])
+                    }
                 } else if darkCoarse > 0 && l >= levels - darkCoarse {
                     ws.selectStreamingDark(level: l, fused: &fused![l], bestLum: &bandBestLum[l])
+                } else if smoothSel {
+                    ws.selectSmoothed(level: l, fused: &fused![l], best: &bestEnergy[l])
                 } else {
                     ws.selectStreaming(level: l, fused: &fused![l], best: &bestEnergy[l])
                 }
             }
-            if useDarkBase {
+            if texBase {
+                // Keep the base RGB of the frame with the highest local
+                // deviation at each cell — the in-focus frame's low-pass,
+                // whatever the backdrop polarity (see Options.texturedBase).
+                ws.updateTexturedBase(fused: &fused![levels], bestDev: &baseBestDev)
+            } else if useDarkBase {
                 // Keep the least-luminous frame's base RGB at each cell.
                 // Storage-to-storage once the winner is decided.
                 fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
@@ -925,9 +1030,10 @@ public enum PyramidFusion {
             progress?(Double(fi + 1) / Double(frameCount), fi, nil)
         }
 
-        // Average the accumulated base level (unless darkest-base kept a winner)
-        // and narrow the f32 accumulator into the band pyramid.
-        if !useDarkBase {
+        // Average the accumulated base level (unless darkest-base or the
+        // textured base kept a winner) and narrow the f32 accumulator into the
+        // band pyramid.
+        if !useDarkBase && !texBase {
             let n = Float(frameCount)
             fused![levels].pixels.withUnsafeMutableBufferPointer { fp in
                 baseAccum.withUnsafeBufferPointer { ap in
@@ -1044,7 +1150,7 @@ public enum PyramidFusion {
                                        planes: sharpnessPlanes))
         }
         let t0 = now()
-        let out = collapse(fused!)
+        let out = collapse(fused!, burtExpand: expand5)
         log?(String(format: "pyramid phases (cpu): decode %.2fs, warp %.2fs, "
                     + "build %.2fs, select %.2fs, collapse %.2fs",
                     tDecode, tWarp, tBuild, tSelect, now() - t0))
@@ -1078,6 +1184,17 @@ public enum PyramidFusion {
         var band: [Float16]       // level-0 band, RGBA (kept for post-blur select)
         var energy: [Float]       // level-0 selection energy plane
         var energyTmp: [Float]    // blur scratch
+        // Smoothed-selection scratch (levels ≥ 1; sized for level 1, reused by
+        // every coarser level). Allocated on first use so the default
+        // configuration pays nothing. Separate from `band`/`energy` because
+        // `focusDownsampled` reads the level-0 energy plane inside the level
+        // loop — overwriting it per level would corrupt the focus gate.
+        var bandL: [Float16] = []
+        var energyL: [Float] = []
+        var energyLTmp: [Float] = []
+        // Burt expand for band computation (see upsampleBurtAt); the caller
+        // must collapse with the same operator.
+        var burtExpand = false
         let gritWeights: [Float]
 
         init(width: Int, height: Int, levels: Int) {
@@ -1146,6 +1263,57 @@ public enum PyramidFusion {
             }
         }
 
+        /// Burt–Adelson expand of the corner-aligned pyramid grid
+        /// (`coarse[m] ↔ fine[2m]`, the decimation `fusedDownsample` applies):
+        /// zero-stuff + 5-tap `downKernel`, folded to per-parity taps — even
+        /// fine samples read coarse m−1/m/m+1 at (1/8, 6/8, 1/8), odd read
+        /// m/m+1 at (1/2, 1/2); exact unity gain because the kernel's odd taps
+        /// are exactly 1/4. The bilinear `upsampleAt` below is both a leakier
+        /// reconstruction low-pass and *center*-aligned — mismatched with the
+        /// decimation grid — so bands computed against it keep more residual
+        /// low-frequency, which is extra bloom for max-selection to pick up.
+        /// Collapse and band computation must switch together (either operator
+        /// reconstructs exactly when used for both). Under evaluation via
+        /// `HYPERFOCAL_PMAX_EXPAND5`.
+        /// Operator dispatch for band computation — Burt expand when the
+        /// experiment is on, the shipped bilinear otherwise.
+        @inline(__always)
+        func upsample(_ coarse: UnsafePointer<Float16>, nw: Int, nh: Int,
+                      x: Int, y: Int, sx: Float, sy: Float) -> SIMD4<Float> {
+            burtExpand
+                ? Self.upsampleBurtAt(coarse, sw: nw, sh: nh, x: x, y: y)
+                : Self.upsampleAt(coarse, sw: nw, sh: nh, x: x, y: y,
+                                  scaleX: sx, scaleY: sy)
+        }
+
+        @inline(__always)
+        static func upsampleBurtAt(_ src: UnsafePointer<Float16>,
+                                   sw: Int, sh: Int,
+                                   x: Int, y: Int) -> SIMD4<Float> {
+            func taps(_ c: Int, _ limit: Int) -> ((Int, Float), (Int, Float), (Int, Float)) {
+                let m = c >> 1
+                if c & 1 == 0 {
+                    return ((min(max(m - 1, 0), limit - 1), 0.125),
+                            (min(m, limit - 1), 0.75),
+                            (min(m + 1, limit - 1), 0.125))
+                }
+                return ((min(m, limit - 1), 0.5),
+                        (min(m + 1, limit - 1), 0.5),
+                        (min(m, limit - 1), 0))
+            }
+            let (ty0, ty1, ty2) = taps(y, sh)
+            let (tx0, tx1, tx2) = taps(x, sw)
+            var acc = SIMD4<Float>()
+            for (yy, wy) in [ty0, ty1, ty2] where wy != 0 {
+                var row = SIMD4<Float>()
+                for (xx, wx) in [tx0, tx1, tx2] where wx != 0 {
+                    row += hfLoadRGBA(src, (yy * sw + xx) * 4) * wx
+                }
+                acc += row * wy
+            }
+            return acc
+        }
+
         /// Bilinear sample of `gauss[l+1]` at the position `resizeBilinear`
         /// maps output pixel (x, y) to — replicated exactly (incl. the
         /// (x+0.5)·scale−0.5 mapping and edge clamps).
@@ -1185,8 +1353,8 @@ public enum PyramidFusion {
                         energy.withUnsafeMutableBufferPointer { ep in
                             DispatchQueue.concurrentPerform(iterations: h) { y in
                                 for x in 0..<w {
-                                    let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
-                                                             x: x, y: y, scaleX: sx, scaleY: sy)
+                                    let up = upsample(coarse, nw: nw, nh: nh,
+                                                      x: x, y: y, sx: sx, sy: sy)
                                     let i = (y * w + x) * 4
                                     let b = hfLoadRGBA(fine, i) - up
                                     hfStoreRGBA(bp, i, b)
@@ -1203,10 +1371,14 @@ public enum PyramidFusion {
         /// Separable grit blur of the energy plane, in workspace buffers —
         /// same taps and clamps as `Filters.blurPlane`.
         private func blurEnergy() {
-            let (w, h) = sizes[0]
+            blurPlane(&energy, tmp: &energyTmp, width: sizes[0].w, height: sizes[0].h)
+        }
+
+        private func blurPlane(_ plane: inout [Float], tmp: inout [Float],
+                               width w: Int, height h: Int) {
             let r = gritWeights.count / 2
-            energy.withUnsafeBufferPointer { s in
-                energyTmp.withUnsafeMutableBufferPointer { t in
+            plane.withUnsafeBufferPointer { s in
+                tmp.withUnsafeMutableBufferPointer { t in
                     gritWeights.withUnsafeBufferPointer { kp in
                         DispatchQueue.concurrentPerform(iterations: h) { y in
                             let row = y * w
@@ -1222,8 +1394,8 @@ public enum PyramidFusion {
                     }
                 }
             }
-            energyTmp.withUnsafeBufferPointer { t in
-                energy.withUnsafeMutableBufferPointer { o in
+            tmp.withUnsafeBufferPointer { t in
+                plane.withUnsafeMutableBufferPointer { o in
                     gritWeights.withUnsafeBufferPointer { kp in
                         DispatchQueue.concurrentPerform(iterations: h) { y in
                             for x in 0..<w {
@@ -1324,8 +1496,8 @@ public enum PyramidFusion {
                               for x in 0..<w {
                                 let i = y * w + x
                                 let pi = i * 4
-                                let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
-                                                         x: x, y: y, scaleX: sx, scaleY: sy)
+                                let up = upsample(coarse, nw: nw, nh: nh,
+                                                  x: x, y: y, sx: sx, sy: sy)
                                 let f4 = hfLoadRGBA(fine, pi)
                                 let b = f4 - up
                                 // Track C runs for every frame, independent of
@@ -1392,8 +1564,8 @@ public enum PyramidFusion {
                                     let lum = 0.2126 * f4.x + 0.7152 * f4.y + 0.0722 * f4.z
                                     if lum < bl[i] {
                                         bl[i] = lum
-                                        let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
-                                                                 x: x, y: y, scaleX: sx, scaleY: sy)
+                                        let up = upsample(coarse, nw: nw, nh: nh,
+                                                          x: x, y: y, sx: sx, sy: sy)
                                         hfStoreRGBA(fp, pi, f4 - up)
                                     }
                                 }
@@ -1419,8 +1591,8 @@ public enum PyramidFusion {
                         best.withUnsafeMutableBufferPointer { be in
                             DispatchQueue.concurrentPerform(iterations: h) { y in
                                 for x in 0..<w {
-                                    let up = Self.upsampleAt(coarse, sw: nw, sh: nh,
-                                                             x: x, y: y, scaleX: sx, scaleY: sy)
+                                    let up = upsample(coarse, nw: nw, nh: nh,
+                                                      x: x, y: y, sx: sx, sy: sy)
                                     let i = y * w + x
                                     let pi = i * 4
                                     let b = hfLoadRGBA(fine, pi) - up
@@ -1428,6 +1600,207 @@ public enum PyramidFusion {
                                     if e > be[i] {
                                         be[i] = e
                                         hfStoreRGBA(fp, pi, b)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Smoothed selection (levels ≥ 1): materialize level `l`'s band into
+        /// `bandL` and its grit-blurred energy into `energyL` — level 0's
+        /// band/energy/blur/select shape, applied at this level's own scale.
+        /// The `selectSmoothed*` variants below then read these instead of
+        /// recomputing raw energy inline. See `Options.smoothedSelection`.
+        /// `squaredLuma` swaps the energy for squared band luminance before
+        /// the blur (L2 pooling): after smoothing, dense strong structure
+        /// outweighs diffuse spread far more than under abs-sum. Measured a
+        /// marginal further veil gain over abs-sum (train p99 +23 vs +25);
+        /// kept as an env ablation, not the recommended configuration.
+        func levelBandEnergy(level l: Int, squaredLuma: Bool) {
+            let (w, h) = sizes[l]
+            let (nw, nh) = sizes[l + 1]
+            if bandL.isEmpty {
+                bandL = [Float16](repeating: 0, count: sizes[1].w * sizes[1].h * 4)
+                energyL = [Float](repeating: 0, count: sizes[1].w * sizes[1].h)
+                energyLTmp = energyL
+            }
+            let sx = Float(nw) / Float(w), sy = Float(nh) / Float(h)
+            gauss[l].withUnsafeBufferPointer { fineBuf in
+                let fine = fineBuf.baseAddress!
+                gauss[l + 1].withUnsafeBufferPointer { coarseBuf in
+                    let coarse = coarseBuf.baseAddress!
+                    bandL.withUnsafeMutableBufferPointer { bpBuf in
+                        let bp = bpBuf.baseAddress!
+                        energyL.withUnsafeMutableBufferPointer { ep in
+                            DispatchQueue.concurrentPerform(iterations: h) { y in
+                                for x in 0..<w {
+                                    let up = upsample(coarse, nw: nw, nh: nh,
+                                                      x: x, y: y, sx: sx, sy: sy)
+                                    let i = (y * w + x) * 4
+                                    let b = hfLoadRGBA(fine, i) - up
+                                    hfStoreRGBA(bp, i, b)
+                                    if squaredLuma {
+                                        let luma = 0.2126 * b.x + 0.7152 * b.y + 0.0722 * b.z
+                                        ep[y * w + x] = luma * luma
+                                    } else {
+                                        ep[y * w + x] = abs(b.x) + abs(b.y) + abs(b.z)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            blurPlane(&energyL, tmp: &energyLTmp, width: w, height: h)
+        }
+
+        /// `selectStreaming` against the materialized band + smoothed energy.
+        func selectSmoothed(level l: Int, fused: inout ImageBuffer, best: inout [Float]) {
+            let (w, h) = sizes[l]
+            bandL.withUnsafeBufferPointer { bp in
+                energyL.withUnsafeBufferPointer { ep in
+                    fused.pixels.withUnsafeMutableBufferPointer { fp in
+                        best.withUnsafeMutableBufferPointer { be in
+                            DispatchQueue.concurrentPerform(iterations: h) { y in
+                                for i in (y * w)..<((y + 1) * w) {
+                                    if ep[i] > be[i] {
+                                        be[i] = ep[i]
+                                        let pi = i * 4
+                                        fp[pi] = bp[pi]
+                                        fp[pi + 1] = bp[pi + 1]
+                                        fp[pi + 2] = bp[pi + 2]
+                                        fp[pi + 3] = bp[pi + 3]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// `selectStreamingFocusGated` against the materialized band + smoothed
+        /// energy: identical tracks and winner rules, with both track A's and
+        /// track C's energies read from `energyL` (tracks B/bright pick by
+        /// Gaussian luminance, which no smoothing touches).
+        func selectSmoothedFocusGated(level l: Int, focus: [Float], threshold: Float,
+                                      fused: inout ImageBuffer, bestE: inout [Float],
+                                      trackB: inout ImageBuffer, bestDarkLum: inout [Float],
+                                      trackBright: inout ImageBuffer,
+                                      bestBrightLum: inout [Float],
+                                      hasFocus: inout [Float],
+                                      plainC: inout ImageBuffer, plainBestE: inout [Float]) {
+            let (w, h) = sizes[l]
+            gauss[l].withUnsafeBufferPointer { fineBuf in
+              let fine = fineBuf.baseAddress!
+              bandL.withUnsafeBufferPointer { blBuf in
+                let bl = blBuf.baseAddress!
+                energyL.withUnsafeBufferPointer { el in
+                  fused.pixels.withUnsafeMutableBufferPointer { apBuf in
+                    let ap = apBuf.baseAddress!
+                    trackB.pixels.withUnsafeMutableBufferPointer { bpBuf in
+                      let bp = bpBuf.baseAddress!
+                      trackBright.pixels.withUnsafeMutableBufferPointer { qpBuf in
+                       let qp = qpBuf.baseAddress!
+                       bestE.withUnsafeMutableBufferPointer { be in
+                        bestDarkLum.withUnsafeMutableBufferPointer { bd in
+                         bestBrightLum.withUnsafeMutableBufferPointer { bb in
+                          hasFocus.withUnsafeMutableBufferPointer { hf in
+                            focus.withUnsafeBufferPointer { fo in
+                             plainC.pixels.withUnsafeMutableBufferPointer { cpBuf in
+                              let cp = cpBuf.baseAddress!
+                              plainBestE.withUnsafeMutableBufferPointer { pe in
+                              DispatchQueue.concurrentPerform(iterations: h) { y in
+                                for x in 0..<w {
+                                    let i = y * w + x
+                                    let pi = i * 4
+                                    let b = hfLoadRGBA(bl, pi)
+                                    let e = el[i]
+                                    // Track C runs for every frame, independent
+                                    // of the focus gate.
+                                    if e > pe[i] {
+                                        pe[i] = e
+                                        hfStoreRGBA(cp, pi, b)
+                                    }
+                                    if fo[i] > threshold {
+                                        if e > be[i] {
+                                            be[i] = e; hf[i] = 1
+                                            hfStoreRGBA(ap, pi, b)
+                                        }
+                                    } else {
+                                        let f4 = hfLoadRGBA(fine, pi)
+                                        let lum = 0.2126 * f4.x + 0.7152 * f4.y
+                                            + 0.0722 * f4.z
+                                        if lum < bd[i] {
+                                            bd[i] = lum
+                                            hfStoreRGBA(bp, pi, b)
+                                        }
+                                        if lum > bb[i] {
+                                            bb[i] = lum
+                                            hfStoreRGBA(qp, pi, b)
+                                        }
+                                    }
+                                }
+                              }
+                              }
+                             }
+                            }
+                          }
+                         }
+                        }
+                       }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        }
+
+        /// Textured-base winner update: keep this frame's base RGB where its
+        /// local (5×5, edge-clamped) luminance deviation beats every previous
+        /// frame's. The base plane is tiny (≤ 1/2^levels per side), so the
+        /// windowed pass is noise-level cost. See `Options.texturedBase`.
+        func updateTexturedBase(fused: inout ImageBuffer, bestDev: inout [Float]) {
+            let (w, h) = sizes[levels]
+            var lum = [Float](repeating: 0, count: w * h)
+            gauss[levels].withUnsafeBufferPointer { gpBuf in
+                let gp = gpBuf.baseAddress!
+                lum.withUnsafeMutableBufferPointer { lp in
+                    for i in 0..<(w * h) {
+                        let g = hfLoadRGBA(gp, i * 4)
+                        lp[i] = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z
+                    }
+                }
+            }
+            fused.pixels.withUnsafeMutableBufferPointer { fp in
+                gauss[levels].withUnsafeBufferPointer { gpBuf in
+                    bestDev.withUnsafeMutableBufferPointer { bv in
+                        lum.withUnsafeBufferPointer { lp in
+                            for y in 0..<h {
+                                for x in 0..<w {
+                                    var sum: Float = 0, sumSq: Float = 0
+                                    for wy in -2...2 {
+                                        let yy = min(max(y + wy, 0), h - 1)
+                                        for wx in -2...2 {
+                                            let xx = min(max(x + wx, 0), w - 1)
+                                            let v = lp[yy * w + xx]
+                                            sum += v; sumSq += v * v
+                                        }
+                                    }
+                                    let mean = sum / 25
+                                    let dev = sumSq / 25 - mean * mean
+                                    let i = y * w + x
+                                    if dev > bv[i] {
+                                        bv[i] = dev
+                                        let pi = i * 4
+                                        fp[pi] = gpBuf[pi]
+                                        fp[pi + 1] = gpBuf[pi + 1]
+                                        fp[pi + 2] = gpBuf[pi + 2]
+                                        fp[pi + 3] = gpBuf[pi + 3]
                                     }
                                 }
                             }

@@ -320,11 +320,27 @@ struct Fuse: ParsableCommand {
             help: "PMax debloom: fine-scale focus threshold for the two-track select.")
     var pmaxFocusThreshold: Float = PyramidFusion.Options().threshold
 
+    @Flag(name: .customLong("pmax-smooth-selection"), inversion: .prefixedNo,
+          help: ArgumentHelp("PMax experiment: smooth the selection energy at every band "
+              + "level, not just the finest (grit suppression at every scale) — "
+              + "suppresses veiling from defocused bright features over lit surfaces, "
+              + "where debloom's near-black gate correctly stands down. Forces the CPU "
+              + "engine until the GPU ports land."))
+    var pmaxSmoothSelection: Bool = PyramidFusion.Options().smoothedSelection
+
+    @Flag(name: .customLong("pmax-textured-base"), inversion: .prefixedNo,
+          help: ArgumentHelp("PMax experiment: base level from the frame with the highest "
+              + "local deviation per cell (the in-focus frame's low-pass) instead of the "
+              + "darkest frame. Forces the CPU engine until the GPU ports land."))
+    var pmaxTexturedBase: Bool = PyramidFusion.Options().texturedBase
+
     /// PMax settings, built the same way `FusionOptions.dmapOptions` is — no
     /// on/off flag, because `coarseLevels == 0` is off (Options.isEnabled).
     var pmaxOptions: PyramidFusion.Options {
         PyramidFusion.Options(coarseLevels: pmaxCoarseLevels,
-                              threshold: pmaxFocusThreshold)
+                              threshold: pmaxFocusThreshold,
+                              smoothedSelection: pmaxSmoothSelection,
+                              texturedBase: pmaxTexturedBase)
     }
 
     @Flag(name: .shortAndLong, help: "Print progress.")

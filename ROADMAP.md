@@ -126,6 +126,25 @@ number that moves when depth selection fails.
   gap to the reference — matching it at 6 px, with zero source-frame-floor
   violations and top-1% within 0.03% — and every other corpus stack stays
   bit-identical. Open, in order:
+  - **Ship the band-leakage fix + smoothed selection (validated, CPU-only,
+    flags off).** Two mechanisms, measured on the train stack's blown-text
+    veil (p99 luminance over the sharp source frame): the pyramid's bilinear
+    upsample was both leakier than a proper Burt expand and grid-mismatched
+    with the corner-aligned decimation, feeding defocused glow into every
+    band level (`HYPERFOCAL_PMAX_EXPAND5=1`; +33 → +24 alone); and selection
+    energy smoothed at every level, not just level 0's grit blur
+    (`--pmax-smooth-selection`; +33 → +25 alone, sharpness up). Combined:
+    **+19.5**, top-1% luminance exactly at the source-frame ceiling, no
+    visible sharpness cost (one region's lapvar drop is removed ringing).
+    Manual review judged the combined render best-in-set on every problem
+    region. Blocked on: C2 re-anchor (the snapshot anchor defends fabricated
+    overshoot — per-pixel evidence in the doc), C5 engagement gating
+    (smoothing deadens live mottle on one stack; the Burt collapse amplifies
+    selected coarse noise on another), then defaults flip + Metal/wgpu ports
+    + parity + snapshot regen. Full measurements, harness results, and the
+    ship-path checklist:
+    `Docs/research/2026-07-28-pmax-band-leakage-smoothed-selection.md`.
+    Comparison artifacts live beside the private corpus (train folder).
   - **The rest of the silhouette transition (10–30 px).** The reference
     matches the subject-sharp source frame's own edge tail there. A coarse-
     levels-only frame-consistency mechanism (regularized frame map + selective
