@@ -210,6 +210,21 @@ that closed on CPU planes and opened on GPU planes cost a day).
 
 ## Acceptance criteria — now six
 
+**Wired (2026-07-28, later):** criteria 1–5 are now one runnable harness
+beside the private corpus (`pmax-acceptance.py` — see the corpus README for
+the baseline table and the instrument calibration notes). At current HEAD the
+baseline reads: C1–C4 PASS, C5 FAIL on both textured-background stacks —
+quantifying the open item this design exists to fix (fabrication up to 2.8×
+the best registered frame on defocused foliage; fabrication *and* deadening
+on a dark garden via the near-black track). A candidate flips C5 to PASS
+without moving C1–C4 or C6. Two instrument findings worth carrying: the
+harness's self-anchored silhouette profile shows shipped already *matching
+the subject-sharp frame's transition shape*, with the commercial reference
+overshooting it — so criterion 1's remaining value is guarding against
+regression and manufactured edges, and the 10–30 px "remaining gap" of the
+fixed-anchor instrument should be re-examined under both instruments before
+any silhouette work is scoped from it.
+
 The four from the debloom doc, plus one the mottle measurements force, plus
 parity. A candidate must clear ALL of them; each exists because some metric
 approved a defect:
