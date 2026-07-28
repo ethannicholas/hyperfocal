@@ -181,6 +181,50 @@ the source envelope; top-1% moved −0.6%. Every other corpus stack is
 bit-identical or within engine noise; Azurite acceptance profiles unchanged
 and monotonic; probe and wgpu parity green.
 
+## 2026-07-27, still later: the clean-field track B, and where its validity ends
+
+The follow-up landed the same day. Track B in open-background cells is now
+**sign-aware**: the streaming select keeps BOTH unfocused extremes (darkest
+and brightest band per cell), and the merge picks whichever luminance lands
+closer to a **clean-field plane** — push-pull reconstructed from the open
+field's uncontaminated pixels (per-pixel min/max agreeing), the luminance
+analog of despill's backdrop reconstruction. The choice is scoped to
+open-background cells; near-black-only cells keep plain darkest, so every
+dark-backdrop behavior is verbatim.
+
+Measured on the bright-blue-backdrop stack: the silhouette profile moves
+about half way from shipped to the reference (matching it at 6 px), with
+**zero** source-frame-floor violations and top-1% at −0.03% — crisper *and*
+photometrically honest, unlike keep-darkest. Ground truth vindicates the
+reference here: its profile matches the subject-sharp source frame's own
+transition almost exactly, tail included.
+
+Three boundaries found and measured, each now enforced or documented:
+
+- **Per-cell selection cannot reproduce the sharp frame's full transition.**
+  The remaining profile gap (10–30 px) is the sharp frame's genuine edge
+  tail, which a smooth clean field cannot represent and per-cell/per-level
+  independent choices cannot render consistently — a peak-focus variant
+  reached it only by violating the frame floor again (19.9%). The full fix
+  is DMap-style regional frame consistency; that is the remaining open item.
+- **The mechanism deadens textured defocused backgrounds.** On a stack with
+  a lively out-of-focus garden, nearest-to-clean picked the flattest
+  rendition per cell and visibly flattened mottle the scene really has
+  (background tiles at 0.3–0.7× the liveliest source frame; the reference
+  keeps the mottle, and soft petal shading was flattened too). Hence the
+  **flatness gate**: a component opens only if its clean anchors, gradient
+  removed, sit at their noise floor (σ < 0.0035; measured flat backdrops
+  0.001–0.003 vs textured 0.005–0.08). This deliberately scopes the whole
+  open-background mechanism to flat backdrops — exactly where the clean
+  field is a faithful model — and returns every textured-background stack
+  to shipped behavior bit-for-bit.
+- **Thresholds near a population must clear it on every engine.** A first
+  flatness cut of 0.0045 sat a hair under one stack's 0.0046 — which closed
+  on the CPU's planes and opened on the GPU's slightly different ones:
+  engine-dependent output. The cut lives at the geometric middle of the
+  measured gap, and `HYPERFOCAL_PMAX_BG_DEBUG=1` prints each component's
+  flatness so the margin can be re-checked when new stacks join the corpus.
+
 ## Status when this was written
 
 PMax trails the commercial reference on nearly every stack where both tools

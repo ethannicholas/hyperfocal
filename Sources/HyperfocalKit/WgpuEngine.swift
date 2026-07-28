@@ -1120,12 +1120,16 @@ public final class WgpuEngine {
     @group(0) @binding(4) var<storage, read_write> pfg_bestE: array<f32>;
     @group(0) @binding(5) var<storage, read_write> pfg_trackB: array<vec4f>;
     @group(0) @binding(6) var<storage, read_write> pfg_bestDarkLum: array<f32>;
-    @group(0) @binding(7) var<storage, read_write> pfg_hasFocus: array<f32>;
-    @group(0) @binding(8) var<uniform> pfg_p: PyrFocusParams;
+    @group(0) @binding(7) var<storage, read_write> pfg_trackBright: array<vec4f>;
+    @group(0) @binding(8) var<storage, read_write> pfg_bestBrightLum: array<f32>;
+    @group(0) @binding(9) var<storage, read_write> pfg_hasFocus: array<f32>;
+    @group(0) @binding(10) var<uniform> pfg_p: PyrFocusParams;
 
     // Two-track select: track A (max |RGB| energy) where the focus map exceeds
-    // the threshold, track B (darkest Gaussian luminance) elsewhere. bestE
-    // starts at -1, bestDarkLum at +inf.
+    // the threshold; track B keeps BOTH unfocused extremes (darkest and
+    // brightest Gaussian luminance) so the merge can pick per cell whichever
+    // lands closer to the clean field. bestE starts at -1, bestDarkLum at
+    // +inf, bestBrightLum at -1.
     @compute @workgroup_size(256)
     fn pyr_select_focus_gated(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= pfg_p.count) { return; }
@@ -1143,6 +1147,10 @@ public final class WgpuEngine {
             if (lum < pfg_bestDarkLum[gid.x]) {
                 pfg_bestDarkLum[gid.x] = lum;
                 pfg_trackB[gid.x] = band;
+            }
+            if (lum > pfg_bestBrightLum[gid.x]) {
+                pfg_bestBrightLum[gid.x] = lum;
+                pfg_trackBright[gid.x] = band;
             }
         }
     }
@@ -1214,19 +1222,33 @@ public final class WgpuEngine {
 
     @group(0) @binding(0) var<storage, read_write> pmg_fused: array<vec4f>;
     @group(0) @binding(1) var<storage, read> pmg_trackB: array<vec4f>;
-    @group(0) @binding(2) var<storage, read> pmg_hasFocus: array<f32>;
-    @group(0) @binding(3) var<storage, read> pmg_plainC: array<vec4f>;
-    @group(0) @binding(4) var<storage, read> pmg_mask: array<f32>;
-    @group(0) @binding(5) var<uniform> pmg_p: Count1;
+    @group(0) @binding(2) var<storage, read> pmg_bestDarkLum: array<f32>;
+    @group(0) @binding(3) var<storage, read> pmg_trackBright: array<vec4f>;
+    @group(0) @binding(4) var<storage, read> pmg_bestBrightLum: array<f32>;
+    @group(0) @binding(5) var<storage, read> pmg_hasFocus: array<f32>;
+    @group(0) @binding(6) var<storage, read> pmg_plainC: array<vec4f>;
+    @group(0) @binding(7) var<storage, read> pmg_mask: array<f32>;
+    @group(0) @binding(8) var<storage, read> pmg_bgMask: array<f32>;
+    @group(0) @binding(9) var<storage, read> pmg_clean: array<f32>;
+    @group(0) @binding(10) var<uniform> pmg_p: Count1;
 
-    // Near-black-gated focus merge: blend the debloom answer (track A where a
-    // frame was in focus, else track B) toward the plain max-energy selection
-    // by the near-black membership. Same blend as the CPU merge.
+    // Membership-gated focus merge: blend the debloom answer (track A where a
+    // frame was in focus; else the unfocused rendition nearest the clean
+    // field in open-background cells, the darkest elsewhere) toward the plain
+    // max-energy selection by the membership. Same choice as the CPU merge.
     @compute @workgroup_size(256)
     fn pyr_merge_focus_gated(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= pmg_p.count) { return; }
         var d = pmg_fused[gid.x];
-        if (pmg_hasFocus[gid.x] < 0.5) { d = pmg_trackB[gid.x]; }
+        if (pmg_hasFocus[gid.x] < 0.5) {
+            if (pmg_bgMask[gid.x] > 0.5
+                && abs(pmg_bestBrightLum[gid.x] - pmg_clean[gid.x])
+                    < abs(pmg_bestDarkLum[gid.x] - pmg_clean[gid.x])) {
+                d = pmg_trackBright[gid.x];
+            } else {
+                d = pmg_trackB[gid.x];
+            }
+        }
         let c = pmg_plainC[gid.x];
         pmg_fused[gid.x] = c + (d - c) * pmg_mask[gid.x];
     }

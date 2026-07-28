@@ -827,7 +827,9 @@ public final class MetalEngine {
 
     // Two-track select. `up` is the already-upsampled coarser Gaussian (as for
     // pyr_select); `focus` is this frame's focus map at this level. bestE
-    // starts at -1 (track A) and bestDarkLum at +inf (track B).
+    // starts at -1 (track A), bestDarkLum at +inf and bestBrightLum at -1
+    // (track B keeps BOTH unfocused extremes; the merge picks per cell
+    // whichever luminance lands closer to the clean field).
     kernel void pyr_select_focus_gated(device const half4* fine [[buffer(0)]],
                                        device const float4* up [[buffer(1)]],
                                        device const float* focus [[buffer(2)]],
@@ -835,8 +837,10 @@ public final class MetalEngine {
                                        device float* bestE [[buffer(4)]],
                                        device half4* trackB [[buffer(5)]],
                                        device float* bestDarkLum [[buffer(6)]],
-                                       device float* hasFocus [[buffer(7)]],
-                                       constant PyrFocusParams& p [[buffer(8)]],
+                                       device half4* trackBright [[buffer(7)]],
+                                       device float* bestBrightLum [[buffer(8)]],
+                                       device float* hasFocus [[buffer(9)]],
+                                       constant PyrFocusParams& p [[buffer(10)]],
                                        uint gid [[thread_position_in_grid]]) {
         if (gid >= p.count) return;
         float4 f = float4(fine[gid]);
@@ -853,6 +857,10 @@ public final class MetalEngine {
             if (lum < bestDarkLum[gid]) {
                 bestDarkLum[gid] = lum;
                 trackB[gid] = half4(band);
+            }
+            if (lum > bestBrightLum[gid]) {
+                bestBrightLum[gid] = lum;
+                trackBright[gid] = half4(band);
             }
         }
     }
@@ -917,19 +925,36 @@ public final class MetalEngine {
         dstMax[gid] = max(dstMax[gid], e);
     }
 
-    // Near-black-gated focus merge. `fused` holds track A, `trackB` the darkest
-    // track, `plainC` the ordinary max-energy winner over every frame; `mask` is
-    // the near-black membership for this level (1 = background, use debloom;
-    // 0 = lit surface, use the plain selection). Same blend as the CPU merge.
+    // Membership-gated focus merge. `fused` holds track A, `trackB`/`trackBright`
+    // the darkest/brightest unfocused renditions, `plainC` the ordinary
+    // max-energy winner over every frame; `mask` is the debloom membership for
+    // this level (1 = background, use debloom; 0 = lit surface, use the plain
+    // selection). In open-background cells (`bgMask`) the unfocused pick is the
+    // rendition whose luminance lands closer to the clean field; elsewhere the
+    // darkest, as before. Same blend and choice as the CPU merge.
     kernel void pyr_merge_focus_gated(device half4* fused [[buffer(0)]],
                                       device const half4* trackB [[buffer(1)]],
-                                      device const float* hasFocus [[buffer(2)]],
-                                      device const half4* plainC [[buffer(3)]],
-                                      device const float* mask [[buffer(4)]],
-                                      constant uint& count [[buffer(5)]],
+                                      device const float* bestDarkLum [[buffer(2)]],
+                                      device const half4* trackBright [[buffer(3)]],
+                                      device const float* bestBrightLum [[buffer(4)]],
+                                      device const float* hasFocus [[buffer(5)]],
+                                      device const half4* plainC [[buffer(6)]],
+                                      device const float* mask [[buffer(7)]],
+                                      device const float* bgMask [[buffer(8)]],
+                                      device const float* clean [[buffer(9)]],
+                                      constant uint& count [[buffer(10)]],
                                       uint gid [[thread_position_in_grid]]) {
         if (gid >= count) return;
-        float4 d = float4(hasFocus[gid] < 0.5 ? trackB[gid] : fused[gid]);
+        float4 d;
+        if (hasFocus[gid] >= 0.5) {
+            d = float4(fused[gid]);
+        } else if (bgMask[gid] > 0.5
+                   && fabs(bestBrightLum[gid] - clean[gid])
+                       < fabs(bestDarkLum[gid] - clean[gid])) {
+            d = float4(trackBright[gid]);
+        } else {
+            d = float4(trackB[gid]);
+        }
         float4 c = float4(plainC[gid]);
         fused[gid] = half4(c + (d - c) * mask[gid]);
     }

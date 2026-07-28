@@ -85,8 +85,10 @@ enum GPUPyramid {
         // the box-downsampled level-0 energy at the current gated level;
         // baseDarkLum tracks the darkest base Gaussian.
         var trackB: [MTLBuffer?] = []
+        var trackBright: [MTLBuffer?] = []
         var hasFocus: [MTLBuffer?] = []
         var bestDarkLum: [MTLBuffer?] = []
+        var bestBrightLum: [MTLBuffer?] = []
         var focusScratch: MTLBuffer! = nil
         var baseDarkLum: MTLBuffer! = nil
         var plainC: [MTLBuffer?] = []
@@ -227,8 +229,10 @@ enum GPUPyramid {
                     // focusScratch is level-0-sized (≥ any gated level).
                     for l in 0..<levels {
                         trackB.append(gated(l) ? try engine.makeBuffer(halves: sizes[l].w * sizes[l].h * 4) : nil)
+                        trackBright.append(gated(l) ? try engine.makeBuffer(halves: sizes[l].w * sizes[l].h * 4) : nil)
                         hasFocus.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         bestDarkLum.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
+                        bestBrightLum.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                     }
                     focusScratch = try engine.makeBuffer(floats: width * height)
                     baseDarkLum = try engine.makeBuffer(floats: sizes[levels].w * sizes[levels].h)
@@ -316,6 +320,7 @@ enum GPUPyramid {
                         let count = sizes[l].w * sizes[l].h
                         fillBuf(hasFocus[l]!, 0, count)
                         fillBuf(bestDarkLum[l]!, .infinity, count)
+                        fillBuf(bestBrightLum[l]!, -1, count)
                         fillBuf(plainBestE[l]!, -1, count)
                     }
                     fillBuf(baseDarkLum, .infinity, sizes[levels].w * sizes[levels].h)
@@ -417,8 +422,10 @@ enum GPUPyramid {
                     enc.setBuffer(bestE[l], offset: 0, index: 4)
                     enc.setBuffer(trackB[l]!, offset: 0, index: 5)
                     enc.setBuffer(bestDarkLum[l]!, offset: 0, index: 6)
-                    enc.setBuffer(hasFocus[l]!, offset: 0, index: 7)
-                    enc.setBytes(&fp, length: MemoryLayout<FocusParams>.size, index: 8)
+                    enc.setBuffer(trackBright[l]!, offset: 0, index: 7)
+                    enc.setBuffer(bestBrightLum[l]!, offset: 0, index: 8)
+                    enc.setBuffer(hasFocus[l]!, offset: 0, index: 9)
+                    enc.setBytes(&fp, length: MemoryLayout<FocusParams>.size, index: 10)
                     engine.dispatch1D(enc, selectFocusGated!, count: w * h)
 
                     // Track C: the ordinary max-energy selection over every
@@ -561,13 +568,25 @@ enum GPUPyramid {
                 // Metal copies the mask into its own allocation. (Writing it
                 // by hand into a preallocated buffer's `contents()` corrupted
                 // the heap here — see git history.)
+                let n = sizes[l].w * sizes[l].h
                 let mask = try engine.makeBuffer(gate.masks[l])
+                let bgMask = try engine.makeBuffer(
+                    gate.bgMasks[l].isEmpty ? [Float](repeating: 0, count: n)
+                                            : gate.bgMasks[l])
+                let clean = try engine.makeBuffer(
+                    gate.clean[l].isEmpty ? [Float](repeating: 0, count: n)
+                                          : gate.clean[l])
                 enc.setBuffer(fused[l], offset: 0, index: 0)
                 enc.setBuffer(trackB[l]!, offset: 0, index: 1)
-                enc.setBuffer(hasFocus[l]!, offset: 0, index: 2)
-                enc.setBuffer(plainC[l]!, offset: 0, index: 3)
-                enc.setBuffer(mask, offset: 0, index: 4)
-                enc.setBytes(&count, length: 4, index: 5)
+                enc.setBuffer(bestDarkLum[l]!, offset: 0, index: 2)
+                enc.setBuffer(trackBright[l]!, offset: 0, index: 3)
+                enc.setBuffer(bestBrightLum[l]!, offset: 0, index: 4)
+                enc.setBuffer(hasFocus[l]!, offset: 0, index: 5)
+                enc.setBuffer(plainC[l]!, offset: 0, index: 6)
+                enc.setBuffer(mask, offset: 0, index: 7)
+                enc.setBuffer(bgMask, offset: 0, index: 8)
+                enc.setBuffer(clean, offset: 0, index: 9)
+                enc.setBytes(&count, length: 4, index: 10)
                 engine.dispatch1D(enc, mergeFocusGated!, count: Int(count))
             }
             enc.endEncoding()

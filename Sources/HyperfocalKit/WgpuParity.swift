@@ -662,6 +662,8 @@ public enum WgpuParity {
             var cpuBestE = [Float](repeating: -1, count: n)
             var cpuTrackB = [Float](repeating: 0, count: n * 4)
             var cpuBestDark = [Float](repeating: .infinity, count: n)
+            var cpuTrackBr = [Float](repeating: 0, count: n * 4)
+            var cpuBestBright = [Float](repeating: -1, count: n)
             var cpuHasFocus = [Float](repeating: 0, count: n)
             for (fine, up, focus) in frames {
                 for i in 0..<n {
@@ -681,6 +683,11 @@ public enum WgpuParity {
                             cpuTrackB[i * 4] = bx; cpuTrackB[i * 4 + 1] = by
                             cpuTrackB[i * 4 + 2] = bz; cpuTrackB[i * 4 + 3] = bw
                         }
+                        if lum > cpuBestBright[i] {
+                            cpuBestBright[i] = lum
+                            cpuTrackBr[i * 4] = bx; cpuTrackBr[i * 4 + 1] = by
+                            cpuTrackBr[i * 4 + 2] = bz; cpuTrackBr[i * 4 + 3] = bw
+                        }
                     }
                 }
             }
@@ -688,18 +695,23 @@ public enum WgpuParity {
             let gBestE = try c.buf([Float](repeating: -1, count: n))
             let gTrackB = try c.buf([Float](repeating: 0, count: n * 4))
             let gBestDark = try c.buf([Float](repeating: .infinity, count: n))
+            let gTrackBr = try c.buf([Float](repeating: 0, count: n * 4))
+            let gBestBright = try c.buf([Float](repeating: -1, count: n))
             let gHasFocus = try c.buf([Float](repeating: 0, count: n))
             for (fine, up, focus) in frames {
                 let p = PyrFocusParams(count: UInt32(n), threshold: threshold)
                 try engine.run("pyr_select_focus_gated",
                                buffers: [try c.buf(fine), try c.buf(up), try c.buf(focus),
-                                         gFused, gBestE, gTrackB, gBestDark, gHasFocus],
+                                         gFused, gBestE, gTrackB, gBestDark,
+                                         gTrackBr, gBestBright, gHasFocus],
                                uniforms: bytes(of: p), gridW: n)
             }
             c.report("pyr_select_focus_gated",
-                     cpuFused + cpuBestE + cpuTrackB + san(cpuBestDark) + cpuHasFocus,
+                     cpuFused + cpuBestE + cpuTrackB + san(cpuBestDark)
+                         + cpuTrackBr + san(cpuBestBright) + cpuHasFocus,
                      try c.read(gFused, n * 4) + c.read(gBestE, n) + c.read(gTrackB, n * 4)
-                         + san(c.read(gBestDark, n)) + c.read(gHasFocus, n))
+                         + san(c.read(gBestDark, n)) + c.read(gTrackBr, n * 4)
+                         + san(c.read(gBestBright, n)) + c.read(gHasFocus, n))
 
             // pyr_base_darkest: keep the least-luminous Gaussian per cell.
             let gaussFrames = [c.rand(n * 4), c.rand(n * 4)]
@@ -777,24 +789,36 @@ public enum WgpuParity {
             c.report("pyr_focus_minmax", san(cpuFMin) + san(cpuFMax),
                      san(try c.read(gfMin, n)) + san(try c.read(gfMax, n)))
 
-            // pyr_merge_focus_gated: blend the debloom answer toward the plain
-            // max-energy selection by the near-black mask.
-            let nbFusedIn = c.rand(n * 4), nbTrackB = c.rand(n * 4), nbPlain = c.rand(n * 4)
+            // pyr_merge_focus_gated: blend the debloom answer (sign-aware
+            // track-B choice in open-background cells) toward the plain
+            // max-energy selection by the membership.
+            let nbFusedIn = c.rand(n * 4), nbTrackB = c.rand(n * 4)
+            let nbTrackBr = c.rand(n * 4), nbPlain = c.rand(n * 4)
+            let nbDark = c.rand(n), nbBright = c.rand(n), nbClean = c.rand(n)
             var nbHas = c.rand(n)
             for i in stride(from: 0, to: n, by: 3) { nbHas[i] = 0 }
+            var nbBg = c.rand(n)
+            for i in stride(from: 0, to: n, by: 2) { nbBg[i] = 0 }
             let nbMask = c.rand(n)
             var nbCPU = [Float](repeating: 0, count: n * 4)
             for i in 0..<n {
+                let useBright = nbBg[i] > 0.5
+                    && abs(nbBright[i] - nbClean[i]) < abs(nbDark[i] - nbClean[i])
                 for ch in 0..<4 {
-                    let d = nbHas[i] < 0.5 ? nbTrackB[i * 4 + ch] : nbFusedIn[i * 4 + ch]
+                    let d = nbHas[i] < 0.5
+                        ? (useBright ? nbTrackBr[i * 4 + ch] : nbTrackB[i * 4 + ch])
+                        : nbFusedIn[i * 4 + ch]
                     let cc = nbPlain[i * 4 + ch]
                     nbCPU[i * 4 + ch] = cc + (d - cc) * nbMask[i]
                 }
             }
             let nbgFused = try c.buf(nbFusedIn)
             try engine.run("pyr_merge_focus_gated",
-                           buffers: [nbgFused, try c.buf(nbTrackB), try c.buf(nbHas),
-                                     try c.buf(nbPlain), try c.buf(nbMask)],
+                           buffers: [nbgFused, try c.buf(nbTrackB), try c.buf(nbDark),
+                                     try c.buf(nbTrackBr), try c.buf(nbBright),
+                                     try c.buf(nbHas), try c.buf(nbPlain),
+                                     try c.buf(nbMask), try c.buf(nbBg),
+                                     try c.buf(nbClean)],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             c.report("pyr_merge_focus_gated", nbCPU, try c.read(nbgFused, n * 4))
         }

@@ -84,23 +84,24 @@ public enum PyramidFusion {
     ///      component median cannot be swayed by. The cutoff scales with
     ///      log2(frame count): max/min of pure noise grows with N (measured
     ///      1.9 at N=6, 8.3 at N=63 for never-focused backdrops).
-    ///    - The additive-dominance clause exists because track B's premise is
-    ///      keep-darkest = least contaminated, which inverts when a *dark*
-    ///      subject spreads into a brighter background. Measured on a
-    ///      dark-specimens-on-white stack: with the sign test off, the band
-    ///      beside every silhouette rendered *below the darkest source
-    ///      frame's own rendition* (0.759 vs a frame floor of 0.785) — a dark
-    ///      halo painted from light no frame contains. The commercial
-    ///      reference never goes below the frame floor there. The sign is
-    ///      decided against the component's far-field level (median midrange
-    ///      of its uncontaminated pixels): contamination is additive where
-    ///      the darkest rendition is the one that matches the far field.
-    ///      Note the bright-backdrop model-train silhouette fails this test
-    ///      too (its roofline is dark-on-bright) — keep-darkest crisped it at
-    ///      the cost of the same undershoot, so that case correctly stays
-    ///      gated OFF and remains open work: fixing it needs a track B that
-    ///      keeps the frame *closest to the local clean level*, not an
-    ///      extreme order statistic.
+    ///
+    /// In open-background cells, track B is additionally *sign-aware*: the
+    /// merge chooses per cell between the darkest and the brightest
+    /// unfocused rendition — whichever luminance lands closer to the
+    /// **clean-field plane** this function reconstructs (push-pull from the
+    /// component's uncontaminated pixels, the luminance analog of despill's
+    /// backdrop reconstruction). Keep-darkest alone is only "least
+    /// contaminated" when the contamination is additive; where a *dark*
+    /// subject spreads into a brighter background the sign inverts, and
+    /// keep-darkest paints the band beside the silhouette *below the darkest
+    /// source frame's own rendition* (measured 0.759 vs a frame floor of
+    /// 0.785 on a dark-specimens-on-white stack; the commercial reference
+    /// never goes below the floor). The clean rendition is always the extreme
+    /// on the uncontaminated side, so choosing between the two extremes
+    /// against the clean field is exact wherever contamination is one-sided
+    /// per cell. The choice is scoped to open-background cells (near-black
+    /// crevices inside a subject keep plain darkest — the clean field is
+    /// extrapolated there and must not flip them toward bright).
     ///
     /// Env: `HYPERFOCAL_PMAX_NEARBLACK_LO` / `_HI` (default 0.15 / 0.35, as a
     /// fraction of `_PCT`, default the 99th percentile of the min-luminance);
@@ -116,7 +117,8 @@ public enum PyramidFusion {
                              sizes: [(w: Int, h: Int)], levels: Int,
                              darkCoarse: Int,
                              env: [String: String] = ProcessInfo.processInfo.environment)
-        -> (masks: [[Float]], scale: Float, mean: Float, bgFraction: Float) {
+        -> (masks: [[Float]], bgMasks: [[Float]], clean: [[Float]],
+            scale: Float, mean: Float, bgFraction: Float) {
         let off = env["HYPERFOCAL_PMAX_NEARBLACK_OFF"] != nil
         let lo0 = Float(env["HYPERFOCAL_PMAX_NEARBLACK_LO"] ?? "") ?? 0.15
         let hi0 = max(Float(env["HYPERFOCAL_PMAX_NEARBLACK_HI"] ?? "") ?? 0.35, lo0 + 1e-6)
@@ -131,20 +133,28 @@ public enum PyramidFusion {
         let scale = max(Despill.percentileLow(lumMin0, pct), 1e-6)
         let lo = lo0 * scale, hi = hi0 * scale
         var m0 = [Float](repeating: 1, count: lumMin0.count)
+        var bg0: [Float] = []
+        var cleanGrid: (plane: [Float], gw: Int, gh: Int)? = nil
         var bgFraction: Float = 0
         if !off {
             for i in m0.indices { m0[i] = 1 - Despill.smoothstep(lo, hi, lumMin0[i]) }
             if env["HYPERFOCAL_PMAX_BG_OFF"] == nil,
-               let bg = openBackground(focusMax0: focusMax0, focusMin0: focusMin0,
-                                       lumMin0: lumMin0, lumMax0: lumMax0,
-                                       frameCount: frameCount,
-                                       width: width, height: height, env: env) {
+               let open = openBackground(focusMax0: focusMax0, focusMin0: focusMin0,
+                                         lumMin0: lumMin0, lumMax0: lumMax0,
+                                         frameCount: frameCount,
+                                         width: width, height: height, env: env) {
+                bg0 = [Float](repeating: 0, count: m0.count)
                 var n = 0
-                for i in m0.indices where bg[i] {
+                for i in m0.indices where open.bg[i] {
+                    // bg0 drives the open-background track choice; keep it off
+                    // where the near-black membership already claims the pixel
+                    // so every shipped dark-backdrop behavior stays verbatim.
+                    if m0[i] < 0.5 { bg0[i] = 1 }
                     m0[i] = 1
                     n += 1
                 }
                 bgFraction = Float(n) / Float(max(m0.count, 1))
+                cleanGrid = (open.cleanGrid, open.gw, open.gh)
             }
         }
         // Double accumulator: a Float sum saturates near 2^24, and a 45 MP
@@ -152,25 +162,39 @@ public enum PyramidFusion {
         // regardless of the mask until this was widened.
         let mean = Float(m0.reduce(0.0) { $0 + Double($1) } / Double(max(m0.count, 1)))
         var masks = [[Float]](repeating: [], count: levels)
+        var bgMasks = [[Float]](repeating: [], count: levels)
+        var clean = [[Float]](repeating: [], count: levels)
         for l in 1..<levels where l >= levels - darkCoarse {
             masks[l] = off
                 ? [Float](repeating: 1, count: sizes[l].w * sizes[l].h)
                 : maxPool(m0, width: width, height: height, factor: 1 << l)
+            if let cg = cleanGrid, !bg0.isEmpty {
+                bgMasks[l] = maxPool(bg0, width: width, height: height, factor: 1 << l)
+                clean[l] = Filters.resizePlaneBilinear(cg.plane, width: cg.gw, height: cg.gh,
+                                                       toWidth: sizes[l].w,
+                                                       toHeight: sizes[l].h)
+            }
         }
         DMapFusion.dumpPlane(lumMin0, env: "HYPERFOCAL_DUMP_LUMMIN0")
         DMapFusion.dumpPlane(m0, env: "HYPERFOCAL_DUMP_NEARBLACK")
-        return (masks, scale, mean, bgFraction)
+        if let cg = cleanGrid {
+            DMapFusion.dumpPlane(cg.plane, env: "HYPERFOCAL_DUMP_PMAX_CLEAN")
+        }
+        return (masks, bgMasks, clean, scale, mean, bgFraction)
     }
 
-    /// The open-background membership: true where the pixel belongs to a
-    /// connected never-sharp field that reaches the frame border, whose focus
-    /// energy never moves with the sweep, and whose contamination is
-    /// *additive-dominant* (see `debloomMasks`). Nil when the planes are
-    /// unavailable (a backend not yet accumulating them).
+    /// The open-background membership — true where the pixel belongs to a
+    /// connected never-sharp field that reaches the frame border and whose
+    /// focus energy never moves with the sweep (see `debloomMasks`) — plus
+    /// the clean-field luminance grid reconstructed from the open field's
+    /// uncontaminated pixels, which the merge's sign-aware track-B choice
+    /// compares renditions against. Nil when the planes are unavailable (a
+    /// backend not yet accumulating them) or no component qualifies.
     static func openBackground(focusMax0: [Float], focusMin0: [Float],
                                lumMin0: [Float], lumMax0: [Float],
                                frameCount: Int, width: Int, height: Int,
-                               env: [String: String]) -> [Bool]? {
+                               env: [String: String])
+        -> (bg: [Bool], cleanGrid: [Float], gw: Int, gh: Int)? {
         guard focusMax0.count == width * height,
               focusMin0.count == width * height,
               lumMin0.count == width * height,
@@ -178,10 +202,9 @@ public enum PyramidFusion {
         let alpha = Float(env["HYPERFOCAL_PMAX_BG_ALPHA"] ?? "") ?? 0.15
         let closeFrac = Float(env["HYPERFOCAL_PMAX_BG_CLOSE"] ?? "") ?? 0.0031
         // Contamination-range thresholds: a pixel is "clean" below rLo (its
-        // renditions agree across frames) and "contaminated" above rHi.
+        // renditions agree across frames) and fully contaminated above rHi.
         let rLo = Float(env["HYPERFOCAL_PMAX_BG_RLO"] ?? "") ?? 0.02
         let rHi = Float(env["HYPERFOCAL_PMAX_BG_RHI"] ?? "") ?? 0.04
-        let voteCut = Float(env["HYPERFOCAL_PMAX_BG_VOTES"] ?? "") ?? 0.7
         let t = alpha * max(Despill.percentileLow(focusMax0, 0.99), 1e-6)
         let r = max(4, Int((closeFrac * Float(min(width, height))).rounded()))
         var sharp = [Bool](repeating: false, count: width * height)
@@ -204,50 +227,22 @@ public enum PyramidFusion {
         let bins = 64
         let binScale: Float = 4  // bin = log2(ratio) * 4, clamped to [0, 63]
         var ratioHist = [Int](repeating: 0, count: comps.count * bins)
-        // Clean-level histogram: midrange luminance over clean (low-range)
-        // pixels, 256 bins over [0, 1] — its median is the component's
-        // far-field level, the anchor the sign test compares extremes to.
-        let farBins = 256
-        var farHist = [Int](repeating: 0, count: comps.count * farBins)
-        var farCount = [Int](repeating: 0, count: comps.count)
+        var cleanCount = [Int](repeating: 0, count: comps.count)
         for i in 0..<(width * height) where comps.labels[i] > 0 {
             let c = Int(comps.labels[i]) - 1
             let ratio = focusMax0[i] / max(focusMin0[i], 1e-6)
             let b = min(max(Int(log2(max(ratio, 1)) * binScale), 0), bins - 1)
             ratioHist[c * bins + b] += 1
-            if lumMax0[i] - lumMin0[i] <= rLo {
-                let mid = (lumMin0[i] + lumMax0[i]) * 0.5
-                let fb = min(max(Int(mid * Float(farBins)), 0), farBins - 1)
-                farHist[c * farBins + fb] += 1
-                farCount[c] += 1
-            }
+            if lumMax0[i] - lumMin0[i] <= rLo { cleanCount[c] += 1 }
         }
-        var far = [Float](repeating: .nan, count: comps.count)
-        for c in 0..<comps.count where farCount[c] >= 100 {
-            var seen = 0
-            for b in 0..<farBins {
-                seen += farHist[c * farBins + b]
-                if seen * 2 >= farCount[c] {
-                    far[c] = (Float(b) + 0.5) / Float(farBins)
-                    break
-                }
-            }
-        }
-        // Contamination-sign votes over contaminated pixels: additive when the
-        // darkest rendition is the one matching the clean level (bloom only
-        // ever added light there), subtractive when the brightest is.
-        var addVotes = [Int](repeating: 0, count: comps.count)
-        var hiRCount = [Int](repeating: 0, count: comps.count)
-        for i in 0..<(width * height) where comps.labels[i] > 0 {
-            let c = Int(comps.labels[i]) - 1
-            guard lumMax0[i] - lumMin0[i] >= rHi, !far[c].isNaN else { continue }
-            hiRCount[c] += 1
-            if abs(lumMin0[i] - far[c]) < abs(lumMax0[i] - far[c]) { addVotes[c] += 1 }
-        }
-        var keep = [Bool](repeating: false, count: comps.count)
+        var candidate = [Bool](repeating: false, count: comps.count)
+        var anyCandidate = false
         for c in 0..<comps.count {
+            // The clean-anchor floor matters: a component too small to carry
+            // uncontaminated pixels is mostly band (it hugs a silhouette),
+            // and there is nothing to anchor its clean field to.
             guard comps.sizes[c] >= minSize, comps.touchesBorder[c],
-                  !far[c].isNaN else { continue }
+                  cleanCount[c] >= 100 else { continue }
             var seen = 0
             var medianBin = bins - 1
             for b in 0..<bins {
@@ -255,27 +250,107 @@ public enum PyramidFusion {
                 if seen * 2 >= comps.sizes[c] { medianBin = b; break }
             }
             guard Float(medianBin) / binScale < logCut else { continue }
-            // Require enough contaminated pixels to judge the sign, and the
-            // additive premise to dominate them. A component too small to
-            // judge stays closed: "no evidence" turned out to mean "the
-            // evidence didn't reach the count floor", and such components
-            // beside a silhouette are mostly band — opening them is where a
-            // residual dark halo came from.
-            keep[c] = hiRCount[c] >= 100
-                && Float(addVotes[c]) >= voteCut * Float(hiRCount[c])
+            candidate[c] = true
+            anyCandidate = true
         }
+        guard anyCandidate else { return nil }
+        // Clean-anchor accumulation on the sharpness grid: midrange of the
+        // per-pixel min/max — where the renditions agree, that IS the clean
+        // value — with weight fading as contamination grows. Anchoring
+        // instead of filtering is what keeps the subject from dragging the
+        // estimate — the same reason despill reconstructs its backdrop.
+        let f = DMapFusion.sharpnessDownsample
+        let gw = (width + f - 1) / f, gh = (height + f - 1) / f
+        var vw = [Float](repeating: 0, count: gw * gh)
+        var wt = [Float](repeating: 0, count: gw * gh)
+        var cellLabel = [Int32](repeating: 0, count: gw * gh)
+        for y in 0..<height {
+            let gy = y / f
+            for x in 0..<width {
+                let i = y * width + x
+                guard comps.labels[i] > 0,
+                      candidate[Int(comps.labels[i]) - 1] else { continue }
+                let r = lumMax0[i] - lumMin0[i]
+                let w = 1 - Despill.smoothstep(rLo, rHi, r)
+                guard w > 0 else { continue }
+                let gi = gy * gw + x / f
+                vw[gi] += (lumMin0[i] + lumMax0[i]) * 0.5 * w
+                wt[gi] += w
+                cellLabel[gi] = comps.labels[i]
+            }
+        }
+        // Flatness gate, per component: the merge's nearest-to-clean choice
+        // (and the push-pull field itself) is only a faithful model of a FLAT
+        // background. On a lively defocused background — bokeh mottle,
+        // out-of-focus foliage — "closest to a smooth field" systematically
+        // picks the flattest rendition per cell and visibly deadens texture
+        // the scene really has (measured: background tiles at 0.3-0.7x the
+        // liveliest source frame, beside a reference that keeps the mottle).
+        // Flatness is judged on the clean anchors with the large-scale
+        // gradient removed: sigma of the anchor-cell mean minus its 9x9-cell
+        // box mean. Measured: flat backdrops sit at 0.001-0.003 (their noise
+        // floor), textured ones at 0.005-0.04. The cut sits at the geometric
+        // middle of that gap so a borderline component cannot flip open on
+        // one engine and closed on another (a cut of 0.0045 did exactly
+        // that: a 0.0046-sigma component closed on the CPU's planes and
+        // opened on the GPU's).
+        let flatCut = Float(env["HYPERFOCAL_PMAX_BG_FLAT"] ?? "") ?? 0.0035
+        let minW: Float = 8
+        let smoothR = 4
+        var cellSum = [Double](repeating: 0, count: comps.count)
+        var cellSq = [Double](repeating: 0, count: comps.count)
+        var cellN = [Int](repeating: 0, count: comps.count)
+        for gy in 0..<gh {
+            for gx in 0..<gw {
+                let gi = gy * gw + gx
+                guard wt[gi] >= minW, cellLabel[gi] > 0 else { continue }
+                var sv: Float = 0, sw: Float = 0
+                for ny in max(gy - smoothR, 0)...min(gy + smoothR, gh - 1) {
+                    for nx in max(gx - smoothR, 0)...min(gx + smoothR, gw - 1) {
+                        let ni = ny * gw + nx
+                        sv += vw[ni]; sw += wt[ni]
+                    }
+                }
+                guard sw >= minW else { continue }
+                let hp = Double(vw[gi] / wt[gi] - sv / sw)
+                let c = Int(cellLabel[gi]) - 1
+                cellSum[c] += hp
+                cellSq[c] += hp * hp
+                cellN[c] += 1
+            }
+        }
+        var keep = [Bool](repeating: false, count: comps.count)
+        var any = false
+        let debug = env["HYPERFOCAL_PMAX_BG_DEBUG"] != nil
+        for c in 0..<comps.count where candidate[c] {
+            guard cellN[c] >= 30 else { continue }
+            let mean = cellSum[c] / Double(cellN[c])
+            let sigma = (max(cellSq[c] / Double(cellN[c]) - mean * mean, 0)).squareRoot()
+            if debug {
+                FileHandle.standardError.write(String(
+                    format: "pmax bg comp: %d px, %d cells, flatness %.5f (cut %.5f)\n",
+                    comps.sizes[c], cellN[c], sigma, flatCut).data(using: .utf8)!)
+            }
+            if Float(sigma) < flatCut {
+                keep[c] = true
+                any = true
+            }
+        }
+        guard any else { return nil }
         var bg = [Bool](repeating: false, count: width * height)
         for i in bg.indices where comps.labels[i] > 0 {
-            let c = Int(comps.labels[i]) - 1
-            guard keep[c] else { continue }
-            // Per-pixel veto: a clearly subtractive pixel (its brightest
-            // rendition is the clean one) keeps the plain selection even
-            // inside an additive-dominant component.
-            if lumMax0[i] - lumMin0[i] >= rHi,
-               abs(lumMax0[i] - far[c]) + 0.01 < abs(lumMin0[i] - far[c]) { continue }
-            bg[i] = true
+            bg[i] = keep[Int(comps.labels[i]) - 1]
         }
-        return bg
+        // Drop the anchors of rejected components, then push-pull across the
+        // holes (the contaminated bands beside silhouettes).
+        for gi in 0..<(gw * gh) {
+            if cellLabel[gi] == 0 || !keep[Int(cellLabel[gi]) - 1] {
+                vw[gi] = 0; wt[gi] = 0
+            }
+        }
+        let cleanGrid = DepthRegularize.pushPull(valueWeight: vw, weight: wt,
+                                                 width: gw, height: gh)
+        return (bg, cleanGrid, gw, gh)
     }
 
     /// Max-pooled reduction, for carrying the near-black membership down to the
@@ -560,7 +635,9 @@ public enum PyramidFusion {
         // See the accumulation site for why this one buffer resists f16.
         var baseAccum: [Float] = []
         var bandBestLum: [[Float]] = []
+        var bandBrightLum: [[Float]] = []
         var trackB: [ImageBuffer] = []
+        var trackBright: [ImageBuffer] = []
         var hasFocus: [[Float]] = []
         var plainC: [ImageBuffer] = []
         var plainBestE: [[Float]] = []
@@ -629,6 +706,19 @@ public enum PyramidFusion {
                         (l >= levels - darkCoarse)
                             ? ImageBuffer(width: ws.sizes[l].w, height: ws.sizes[l].h)
                             : ImageBuffer(width: 0, height: 0)
+                    }
+                    // The brightest unfocused rendition, kept alongside the
+                    // darkest so the merge can pick per cell whichever lands
+                    // closer to the clean field (sign-aware track B).
+                    trackBright = (0..<levels).map { l in
+                        (l >= levels - darkCoarse)
+                            ? ImageBuffer(width: ws.sizes[l].w, height: ws.sizes[l].h)
+                            : ImageBuffer(width: 0, height: 0)
+                    }
+                    bandBrightLum = (0..<levels).map { l in
+                        (l >= levels - darkCoarse)
+                            ? [Float](repeating: -1, count: ws.sizes[l].w * ws.sizes[l].h)
+                            : []
                     }
                     hasFocus = (0..<levels).map { l in
                         (l >= levels - darkCoarse)
@@ -786,6 +876,8 @@ public enum PyramidFusion {
                     ws.selectStreamingFocusGated(level: l, focus: focus, threshold: focusThresh,
                                                  fused: &fused![l], bestE: &bestEnergy[l],
                                                  trackB: &trackB[l], bestDarkLum: &bandBestLum[l],
+                                                 trackBright: &trackBright[l],
+                                                 bestBrightLum: &bandBrightLum[l],
                                                  hasFocus: &hasFocus[l],
                                                  plainC: &plainC[l], plainBestE: &plainBestE[l])
                 } else if darkCoarse > 0 && l >= levels - darkCoarse {
@@ -881,22 +973,47 @@ public enum PyramidFusion {
             for l in 1..<levels where l >= levels - darkCoarse {
                 let hf = hasFocus[l]
                 let mask = gate.masks[l]
+                let bgMask = gate.bgMasks[l]
+                let clean = gate.clean[l]
+                let darkLum = bandBestLum[l]
+                let brightLum = bandBrightLum[l]
+                let signAware = !bgMask.isEmpty && !clean.isEmpty
                 fused![l].pixels.withUnsafeMutableBufferPointer { apBuf in
                     let ap = apBuf.baseAddress!
                     trackB[l].pixels.withUnsafeBufferPointer { bpBuf in
                         let bp = bpBuf.baseAddress!
-                        plainC[l].pixels.withUnsafeBufferPointer { cpBuf in
-                            let cp = cpBuf.baseAddress!
-                            for i in 0..<hf.count {
-                                let pi = i * 4
-                                // Debloom's own answer for this cell.
-                                let d = hf[i] < 0.5 ? hfLoadRGBA(bp, pi) : hfLoadRGBA(ap, pi)
-                                // Near-black membership: 1 where the cell is
-                                // never bright (background), 0 where it is a lit
-                                // surface. Smoothstepped so the transition can't
-                                // band along the falloff.
-                                let c = hfLoadRGBA(cp, pi)
-                                hfStoreRGBA(ap, pi, c + (d - c) * mask[i])
+                        trackBright[l].pixels.withUnsafeBufferPointer { qpBuf in
+                            let qp = qpBuf.baseAddress!
+                            plainC[l].pixels.withUnsafeBufferPointer { cpBuf in
+                                let cp = cpBuf.baseAddress!
+                                for i in 0..<hf.count {
+                                    let pi = i * 4
+                                    // Debloom's own answer for this cell. In
+                                    // open-background cells: the peak-focus
+                                    // frame's band where any frame was in focus
+                                    // (max-energy would hand the cell back to a
+                                    // defocused frame's bloom gradient), else
+                                    // the unfocused rendition nearest the clean
+                                    // field. Near-black-only cells keep the
+                                    // shipped behavior (max-energy A, darkest
+                                    // B) — their clean field is extrapolated.
+                                    var d: SIMD4<Float>
+                                    if hf[i] >= 0.5 {
+                                        d = hfLoadRGBA(ap, pi)
+                                    } else if signAware, bgMask[i] > 0.5,
+                                              abs(brightLum[i] - clean[i])
+                                                  < abs(darkLum[i] - clean[i]) {
+                                        d = hfLoadRGBA(qp, pi)
+                                    } else {
+                                        d = hfLoadRGBA(bp, pi)
+                                    }
+                                    // Membership: 1 where the cell is provably
+                                    // background, 0 where it is a lit surface.
+                                    // Smoothstepped so the transition can't band
+                                    // along the falloff.
+                                    let c = hfLoadRGBA(cp, pi)
+                                    hfStoreRGBA(ap, pi, c + (d - c) * mask[i])
+                                }
                             }
                         }
                     }
@@ -1178,6 +1295,8 @@ public enum PyramidFusion {
         func selectStreamingFocusGated(level l: Int, focus: [Float], threshold: Float,
                                        fused: inout ImageBuffer, bestE: inout [Float],
                                        trackB: inout ImageBuffer, bestDarkLum: inout [Float],
+                                       trackBright: inout ImageBuffer,
+                                       bestBrightLum: inout [Float],
                                        hasFocus: inout [Float],
                                        plainC: inout ImageBuffer, plainBestE: inout [Float]) {
             let (w, h) = sizes[l]
@@ -1191,8 +1310,11 @@ public enum PyramidFusion {
                   let ap = apBuf.baseAddress!
                   trackB.pixels.withUnsafeMutableBufferPointer { bpBuf in
                     let bp = bpBuf.baseAddress!
-                    bestE.withUnsafeMutableBufferPointer { be in
+                    trackBright.pixels.withUnsafeMutableBufferPointer { qpBuf in
+                     let qp = qpBuf.baseAddress!
+                     bestE.withUnsafeMutableBufferPointer { be in
                       bestDarkLum.withUnsafeMutableBufferPointer { bd in
+                       bestBrightLum.withUnsafeMutableBufferPointer { bb in
                         hasFocus.withUnsafeMutableBufferPointer { hf in
                           focus.withUnsafeBufferPointer { fo in
                            plainC.pixels.withUnsafeMutableBufferPointer { cpBuf in
@@ -1225,6 +1347,10 @@ public enum PyramidFusion {
                                         bd[i] = lum
                                         hfStoreRGBA(bp, pi, b)
                                     }
+                                    if lum > bb[i] {
+                                        bb[i] = lum
+                                        hfStoreRGBA(qp, pi, b)
+                                    }
                                 }
                               }
                             }
@@ -1232,7 +1358,9 @@ public enum PyramidFusion {
                            }
                           }
                         }
+                       }
                       }
+                     }
                     }
                   }
                 }

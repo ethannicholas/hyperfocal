@@ -93,12 +93,16 @@ enum WgpuPyramid {
         // Focus-gate state (nil entries for the non-gated levels), mirroring
         // the Metal path.
         var trackB: [WgpuEngine.Buffer?] = []
+        var trackBright: [WgpuEngine.Buffer?] = []
         var hasFocus: [WgpuEngine.Buffer?] = []
         var bestDarkLum: [WgpuEngine.Buffer?] = []
+        var bestBrightLum: [WgpuEngine.Buffer?] = []
         var focusScratch: WgpuEngine.Buffer! = nil
         var plainC: [WgpuEngine.Buffer?] = []
         var plainBestE: [WgpuEngine.Buffer?] = []
         var maskBuf: [WgpuEngine.Buffer?] = []
+        var bgMaskBuf: [WgpuEngine.Buffer?] = []
+        var cleanBuf: [WgpuEngine.Buffer?] = []
         var lumMin0Buf: WgpuEngine.Buffer! = nil
         var lumMax0Buf: WgpuEngine.Buffer! = nil
         var focusMin0Buf: WgpuEngine.Buffer! = nil
@@ -226,8 +230,10 @@ enum WgpuPyramid {
                 if focusGate != nil {
                     for l in 0..<levels {
                         trackB.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
+                        trackBright.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
                         hasFocus.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         bestDarkLum.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
+                        bestBrightLum.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                     }
                     focusScratch = try engine.makeBuffer(floats: width * height)
                     baseDarkLum = try engine.makeBuffer(floats: sizes[levels].w * sizes[levels].h)
@@ -237,6 +243,8 @@ enum WgpuPyramid {
                         plainC.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
                         plainBestE.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         maskBuf.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
+                        bgMaskBuf.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
+                        cleanBuf.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                     }
                     lumMin0Buf = try engine.makeBuffer(floats: width * height)
                     lumMax0Buf = try engine.makeBuffer(floats: width * height)
@@ -290,6 +298,7 @@ enum WgpuPyramid {
                         let count = sizes[l].w * sizes[l].h
                         try fill(hasFocus[l]!, 0, count)
                         try fill(bestDarkLum[l]!, .infinity, count)
+                        try fill(bestBrightLum[l]!, -1, count)
                         try fill(plainBestE[l]!, -1, count)
                     }
                     try fill(baseDarkLum, .infinity, sizes[levels].w * sizes[levels].h)
@@ -372,7 +381,8 @@ enum WgpuPyramid {
                     try batch.dispatch("pyr_select_focus_gated",
                                        buffers: [gauss[l], scratchA, focusScratch,
                                                  fused[l], bestE[l], trackB[l]!,
-                                                 bestDarkLum[l]!, hasFocus[l]!],
+                                                 bestDarkLum[l]!, trackBright[l]!,
+                                                 bestBrightLum[l]!, hasFocus[l]!],
                                        uniforms: bytes(of: fp), gridW: w * h)
                     // Track C: `pyr_select` pointed at its own buffers.
                     try batch.dispatch("pyr_select",
@@ -489,9 +499,22 @@ enum WgpuPyramid {
                 gate.masks[l].withUnsafeBytes {
                     engine.upload($0.baseAddress!, byteCount: $0.count, to: maskBuf[l]!)
                 }
+                let n = sizes[l].w * sizes[l].h
+                let bgm = gate.bgMasks[l].isEmpty
+                    ? [Float](repeating: 0, count: n) : gate.bgMasks[l]
+                bgm.withUnsafeBytes {
+                    engine.upload($0.baseAddress!, byteCount: $0.count, to: bgMaskBuf[l]!)
+                }
+                let cln = gate.clean[l].isEmpty
+                    ? [Float](repeating: 0, count: n) : gate.clean[l]
+                cln.withUnsafeBytes {
+                    engine.upload($0.baseAddress!, byteCount: $0.count, to: cleanBuf[l]!)
+                }
                 try mergeBatch.dispatch("pyr_merge_focus_gated",
-                                        buffers: [fused[l], trackB[l]!, hasFocus[l]!,
-                                                  plainC[l]!, maskBuf[l]!],
+                                        buffers: [fused[l], trackB[l]!, bestDarkLum[l]!,
+                                                  trackBright[l]!, bestBrightLum[l]!,
+                                                  hasFocus[l]!, plainC[l]!, maskBuf[l]!,
+                                                  bgMaskBuf[l]!, cleanBuf[l]!],
                                         uniforms: bytes(of: Count1(count: UInt32(count))),
                                         gridW: count)
             }

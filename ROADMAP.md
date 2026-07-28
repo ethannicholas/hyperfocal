@@ -118,19 +118,31 @@ number that moves when depth selection fails.
   it carries the acceptance criteria (now four, including the source-frame
   floor added 2026-07-27) and the measured dead ends. State of the diagnosed
   piece: the debloom membership is no longer dark-backdrop-only (`debloomMasks`
-  unions the near-black proof with an open-background proof: border-connected
-  never-focusing smooth field, additive contamination only), which cleaned
-  PMax's noise-amplified defocused backgrounds without touching anything else.
-  The remaining, still-open defect is the **soft silhouette where a subject
-  meets a bright out-of-focus background**: measured per-pixel, that band is
-  *subtractively* contaminated (dark subject spreading into bright backdrop),
-  and no per-cell extreme order statistic can fix it — keep-darkest paints
-  darkness below the darkest source frame (a halo the top-1% check cannot see;
-  the frame-floor check exists because of it), keep-brightest keeps the glow,
-  and track A never engages (no fine focus in the band). The candidate design:
-  a track B that keeps the frame *closest to the local clean background
-  level*, which needs a local clean-field luminance estimate — the analog of
-  despill's backdrop reconstruction. Second thread, now diagnosed: the widest
+  unions the near-black proof with an open-background proof: border-connected,
+  never-focusing, and FLAT — see the doc's flatness-gate section), and track B
+  in open-background cells is sign-aware: the merge picks the darkest or
+  brightest unfocused extreme per cell, whichever lands closer to a push-pull
+  clean field. On the bright-backdrop silhouette that closes about half the
+  gap to the reference — matching it at 6 px, with zero source-frame-floor
+  violations and top-1% within 0.03% — and every other corpus stack stays
+  bit-identical. Open, in order:
+  - **The rest of the silhouette transition (10–30 px).** The reference
+    matches the subject-sharp source frame's own edge tail there; rendering
+    that needs regionally frame-consistent selection (what DMap's depth map
+    provides), which per-cell/per-level independent picks cannot deliver —
+    the doc records two measured failures (keep-darkest, peak-focus) that
+    bought the tail only by painting darkness below the source frames.
+  - **Textured defocused backgrounds are excluded on purpose.** The
+    clean-field mechanism deadens bokeh/out-of-focus mottle (measured
+    0.3–0.7× the liveliest source frame), so the flatness gate scopes it
+    to flat backdrops. Lifting that needs a track B that preserves
+    single-frame coherent texture — likely the same regional-consistency
+    machinery.
+  - PMax also noise-amplifies defocused backgrounds (max-of-N selection,
+    measured 2–4× above every registered source frame on one stack); a
+    keep-darkest variant cleaned it but was scoped out along with the
+    texture problem, and the same machinery would fix both honestly.
+  Second thread, now diagnosed: the widest
   per-stack PMax deficit (≈ −13% normalized, both registration directions)
   turned out to be mostly the reference's output sharpening — its render
   exceeds the best *registered source frame* on two-thirds of tiles (energy
