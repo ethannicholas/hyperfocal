@@ -159,11 +159,17 @@ number that moves when depth selection fails.
     convex composite, scoped to the flatness gate's textured complement.
     At radius 6 the harness reads C1–C4 exactly unmoved and C5 improved
     both-sided on both stacks (fabrication 25→11 high on defocused foliage,
-    deadening 27→6 low on the dark garden) but NOT flipped — the remaining
-    tile classes (partial-weight boundary deadening, seams around a
-    misregistered frame, thin-coverage border references) and this round's
-    do-not-retry additions are mapped in the doc. Ship-on still needs the
-    C5 flip, the dual-UI surface, and the GPU story.
+    deadening 27→6 low on the dark garden) but NOT flipped — and **manual
+    review failed the candidate outright** (backgrounds brighten above the
+    reference: governed low frequencies replace the darkest-base photometry;
+    subject-adjacent blur patches from the widened membership; sharp
+    sub-content erased inside median-passed components — all four invisible
+    to the six criteria; see the doc's final section). The machinery stands,
+    the calibration does not. Next attempt: govern fine texture over shipped
+    low frequencies, conservative subject mask, per-cell focusing veto — and
+    the harness needs a background-luminance criterion and a sub-tile blur
+    instrument first. Ship-on still needs all of that, the dual-UI surface,
+    and the GPU story.
   - **Textured defocused backgrounds are excluded on purpose.** The
     clean-field mechanism deadens bokeh/out-of-focus mottle (measured
     0.3–0.7× the liveliest source frame), so the flatness gate scopes it

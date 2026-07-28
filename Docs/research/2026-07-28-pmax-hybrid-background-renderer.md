@@ -355,3 +355,46 @@ on the old engine that confound alone produced a +2.25% top-1% "regression"
 that was really CPU-shipped vs GPU-shipped. Judge candidates against a
 same-engine baseline (the smoothed-selection ports have since brought the
 engines close enough that the residual is ~0.3% of pixels).
+
+## 2026-07-28, latest: manual review verdict — the radius-6 candidate FAILS
+## by eye, and the criteria missed all four reasons
+
+Side-by-side review of defaults vs the radius-6 candidate on the full
+corpus found the candidate roughly strictly worse where it engages, despite
+C1–C4 unmoved and C5 improved by tile count. Four observations, each a
+criterion gap as much as a mechanism defect:
+
+- **Backgrounds brighten well above the reference** (defocused-foliage and
+  specimen stacks). Governed regions composite a single frame's FULL
+  rendition, low frequencies included; shipped PMax builds background low
+  frequencies from the darkest-base/debloom machinery, and replacing that
+  lifts the whole field. No criterion watches background luminance LEVEL —
+  C2 only bounds the top 1%. The all-levels-or-nothing lesson is about
+  detail coherence; the BASE must keep shipped photometry (govern texture
+  over the shipped low frequencies, not the image wholesale).
+- **Blur patches on the subject and smears extending off petal edges.**
+  The governance-widened subject test plus the opening melt thin subject
+  structure (defocused petal edges) into the membership, and blocks there
+  commit to background-lively frames that render the subject content
+  blurred. The "a thin structure losing its exclusion is approximately
+  safe" assumption is refuted by eye — the subject mask must stay
+  conservative, full stop.
+- **Sharp sub-content replaced by blur.** The never-focuses test is a
+  component MEDIAN; regions that mostly defocus but contain genuinely
+  focusing sub-content pass it, and commitment erases real sharpness. C5
+  cannot see this — its filter drops exactly those tiles. Eligibility
+  needs a per-cell focusing veto, not just a component-level one.
+- **Visible background detail loss beyond what C5 flags.** The 0.7× floor
+  over ~130 px tile means is far more lenient than the eye; the committed
+  frame being "the liveliest available" at block scale does not survive
+  sub-block inspection.
+
+Verdict: the machinery (streaming block-energy table, measured block
+commitment, image-space compositing, flatness-complement scoping) stands;
+the current calibration does not. It stays default-off. The next attempt
+should (a) govern fine texture only, compositing over shipped low
+frequencies; (b) drop the subject-mask widening entirely; (c) add a
+per-cell focusing veto inside governed components; and the harness needs a
+background-luminance-level criterion plus a sub-tile blur instrument
+before any candidate is trusted again — the eye caught four defects six
+criteria approved.
