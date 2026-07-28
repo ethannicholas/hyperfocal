@@ -87,6 +87,7 @@ public enum WgpuParity {
     struct FillParams { var v: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     struct MinMaxParams { var count: UInt32; var gain: Float; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
     struct PyrFocusParams { var count: UInt32; var threshold: Float; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
+    struct PyrEnvParams { var srcW: UInt32; var srcH: UInt32; var cell: UInt32; var gw: UInt32; var gh: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
 
     static func luma(_ p: [Float], _ i: Int) -> Float {
         0.2126 * p[i * 4] + 0.7152 * p[i * 4 + 1] + 0.0722 * p[i * 4 + 2]
@@ -575,6 +576,67 @@ public enum WgpuParity {
                            uniforms: bytes(of: up), gridW: w, gridH: h)
             c.report("pyr_upsample_add", cpuUpAdd, try c.read(oua, n * 4))
 
+            // Burt expand + collapse step, against the REAL CPU operator
+            // (CPUWorkspace.upsampleBurtAt), on f16-quantized input so both
+            // sides read identical values (the CPU operator consumes f16
+            // pyramid storage).
+            let smallQ16 = small.map { Float16($0) }
+            let smallQ = smallQ16.map { Float($0) }
+            var cpuBurt = [Float](repeating: 0, count: n * 4)
+            smallQ16.withUnsafeBufferPointer { sp in
+                for y in 0..<h {
+                    for x in 0..<w {
+                        let v = PyramidFusion.CPUWorkspace.upsampleBurtAt(
+                            sp.baseAddress!, sw: hw, sh: hh, x: x, y: y)
+                        let o = (y * w + x) * 4
+                        cpuBurt[o] = v.x; cpuBurt[o + 1] = v.y
+                        cpuBurt[o + 2] = v.z; cpuBurt[o + 3] = v.w
+                    }
+                }
+            }
+            let sbq = try c.buf(smallQ)
+            let ob = try engine.makeBuffer(floats: n * 4)
+            try engine.run("pyr_upsample_burt", buffers: [sbq, ob],
+                           uniforms: bytes(of: up), gridW: w, gridH: h)
+            c.report("pyr_upsample_burt", cpuBurt, try c.read(ob, n * 4))
+
+            let cpuBurtAdd = (0..<(n * 4)).map { band[$0] + cpuBurt[$0] }
+            let oba = try engine.makeBuffer(floats: n * 4)
+            try engine.run("pyr_upsample_add_burt", buffers: [sbq, try c.buf(band), oba],
+                           uniforms: bytes(of: up), gridW: w, gridH: h)
+            c.report("pyr_upsample_add_burt", cpuBurtAdd, try c.read(oba, n * 4))
+
+            // Envelope pooling, against the REAL CPU pooling
+            // (CPUWorkspace.poolBandEnergy) on an f16-quantized band with a
+            // zero upsample plane, so both sides square identical values (the
+            // subtraction itself is pyr_band_energy's case).
+            do {
+                let cell = PyramidFusion.envCell
+                let gw = (w + cell - 1) / cell, gh = (h + cell - 1) / cell
+                let bandQ16 = band.map { Float16($0) }
+                let bandQ = bandQ16.map { Float($0) }
+                let pooled = PyramidFusion.CPUWorkspace.poolBandEnergy(
+                    bandQ16, width: w, height: h, factor: cell)
+                var cpuMax = c.rand(gw * gh, scale: 0.5)
+                var cpuMin = cpuMax.map { $0 + 0.5 }
+                let gpuMax = try c.buf(cpuMax)
+                let gpuMin = try c.buf(cpuMin)
+                for i in 0..<(gw * gh) {
+                    cpuMax[i] = max(cpuMax[i], pooled[i])
+                    cpuMin[i] = min(cpuMin[i], pooled[i])
+                }
+                let zeros = [Float](repeating: 0, count: n * 4)
+                let ep = PyrEnvParams(srcW: UInt32(w), srcH: UInt32(h),
+                                      cell: UInt32(cell),
+                                      gw: UInt32(gw), gh: UInt32(gh))
+                try engine.run("pyr_env_pool",
+                               buffers: [try c.buf(bandQ), try c.buf(zeros),
+                                         gpuMax, gpuMin],
+                               uniforms: bytes(of: ep), gridW: gw, gridH: gh)
+                c.report("pyr_env_pool", cpuMax + cpuMin,
+                         try c.read(gpuMax, gw * gh) + c.read(gpuMin, gw * gh))
+            }
+
             // select / band_energy / select_smoothed
             let fine = c.rand(n * 4), upBuf = c.rand(n * 4)
             var cpuFused = c.rand(n * 4)
@@ -712,6 +774,64 @@ public enum WgpuParity {
                      try c.read(gFused, n * 4) + c.read(gBestE, n) + c.read(gTrackB, n * 4)
                          + san(c.read(gBestDark, n)) + c.read(gTrackBr, n * 4)
                          + san(c.read(gBestBright, n)) + c.read(gHasFocus, n))
+
+            // The smoothed variant: track A's energy from a plane instead of
+            // computed inline; tracks B/bright identical.
+            let sFrames = frames.map { ($0.0, $0.1, $0.2, c.rand(n, scale: 0.4)) }
+            var sFused = [Float](repeating: 0, count: n * 4)
+            var sBestE = [Float](repeating: -1, count: n)
+            var sTrackB = [Float](repeating: 0, count: n * 4)
+            var sBestDark = [Float](repeating: .infinity, count: n)
+            var sTrackBr = [Float](repeating: 0, count: n * 4)
+            var sBestBright = [Float](repeating: -1, count: n)
+            var sHasFocus = [Float](repeating: 0, count: n)
+            for (fine, up, focus, energy) in sFrames {
+                for i in 0..<n {
+                    let bx = fine[i * 4] - up[i * 4], by = fine[i * 4 + 1] - up[i * 4 + 1]
+                    let bz = fine[i * 4 + 2] - up[i * 4 + 2], bw = fine[i * 4 + 3] - up[i * 4 + 3]
+                    if focus[i] > threshold {
+                        if energy[i] > sBestE[i] {
+                            sBestE[i] = energy[i]; sHasFocus[i] = 1
+                            sFused[i * 4] = bx; sFused[i * 4 + 1] = by
+                            sFused[i * 4 + 2] = bz; sFused[i * 4 + 3] = bw
+                        }
+                    } else {
+                        let lum = 0.2126 * fine[i * 4] + 0.7152 * fine[i * 4 + 1] + 0.0722 * fine[i * 4 + 2]
+                        if lum < sBestDark[i] {
+                            sBestDark[i] = lum
+                            sTrackB[i * 4] = bx; sTrackB[i * 4 + 1] = by
+                            sTrackB[i * 4 + 2] = bz; sTrackB[i * 4 + 3] = bw
+                        }
+                        if lum > sBestBright[i] {
+                            sBestBright[i] = lum
+                            sTrackBr[i * 4] = bx; sTrackBr[i * 4 + 1] = by
+                            sTrackBr[i * 4 + 2] = bz; sTrackBr[i * 4 + 3] = bw
+                        }
+                    }
+                }
+            }
+            let gsFused = try c.buf([Float](repeating: 0, count: n * 4))
+            let gsBestE = try c.buf([Float](repeating: -1, count: n))
+            let gsTrackB = try c.buf([Float](repeating: 0, count: n * 4))
+            let gsBestDark = try c.buf([Float](repeating: .infinity, count: n))
+            let gsTrackBr = try c.buf([Float](repeating: 0, count: n * 4))
+            let gsBestBright = try c.buf([Float](repeating: -1, count: n))
+            let gsHasFocus = try c.buf([Float](repeating: 0, count: n))
+            for (fine, up, focus, energy) in sFrames {
+                let p = PyrFocusParams(count: UInt32(n), threshold: threshold)
+                try engine.run("pyr_select_focus_gated_smoothed",
+                               buffers: [try c.buf(fine), try c.buf(up), try c.buf(focus),
+                                         gsFused, gsBestE, gsTrackB, gsBestDark,
+                                         gsTrackBr, gsBestBright, gsHasFocus,
+                                         try c.buf(energy)],
+                               uniforms: bytes(of: p), gridW: n)
+            }
+            c.report("pyr_select_focus_gated_smoothed",
+                     sFused + sBestE + sTrackB + san(sBestDark)
+                         + sTrackBr + san(sBestBright) + sHasFocus,
+                     try c.read(gsFused, n * 4) + c.read(gsBestE, n) + c.read(gsTrackB, n * 4)
+                         + san(c.read(gsBestDark, n)) + c.read(gsTrackBr, n * 4)
+                         + san(c.read(gsBestBright, n)) + c.read(gsHasFocus, n))
 
             // pyr_base_darkest: keep the least-luminous Gaussian per cell.
             let gaussFrames = [c.rand(n * 4), c.rand(n * 4)]
@@ -909,18 +1029,25 @@ public enum WgpuParity {
             minPSNR = min(minPSNR, psnr)
         }
 
+        // Every case runs the SHIPPED expand operator (Burt — always on since
+        // 2026-07-28; the bilinear kernels remain for env ablation only, and
+        // gating an ablation path here would test a configuration nothing
+        // ships). The CPU side resolves the same operator from the same env.
+        let burtOnly = PyramidFusion.GPUSelect(smoothed: false, burt: true,
+                                               clamp: false, veto: false)
+
         // Plain mode: the upload lands directly in the pyramid's level 0.
+        // Debloom and smoothing explicitly OFF: this case checks the plain
+        // select kernels; the shipped defaults are covered by the
+        // focus-gated case below.
         var previews = 0
         var lastPreview: ImageBuffer? = nil
         let gpuPlain = try WgpuPyramid.fuse(frameCount: frameCount,
                                             progress: { _, _, img in
                                                 if let img { previews += 1; lastPreview = img }
-                                            }) { frames[$0] }
-        // Debloom explicitly OFF: these cases check the *plain* pyramid against
-        // WgpuPyramid's ungated path. `Options()` now defaults debloom ON (it
-        // matches the app), so relying on the default here would silently start
-        // comparing a gated CPU result against an ungated GPU one.
-        let plain = PyramidFusion.Options(coarseLevels: 0)
+                                            },
+                                            select: burtOnly) { frames[$0] }
+        let plain = PyramidFusion.Options(coarseLevels: 0, smoothedSelection: false)
         let cpuPlain = try PyramidFusion.fuse(frameCount: frameCount,
                                               preferGPU: false,
                                               options: plain) { frames[$0] }
@@ -932,24 +1059,41 @@ public enum WgpuParity {
         // same dispatches over the same finished pyramid.
         check("pyramid_preview", lastPreview, gpuPlain, margin: 0)
 
+        // Smoothed selection at every level, ungated (coarseLevels 0 keeps
+        // the focus-gate machinery out so this isolates the smoothed select).
+        let gpuSmoothed = try WgpuPyramid.fuse(
+            frameCount: frameCount,
+            select: PyramidFusion.GPUSelect(smoothed: true, burt: true,
+                                            clamp: false, veto: false)) { frames[$0] }
+        let cpuSmoothed = try PyramidFusion.fuse(
+            frameCount: frameCount, preferGPU: false,
+            options: PyramidFusion.Options(coarseLevels: 0,
+                                           smoothedSelection: true)) { frames[$0] }
+        check("pyramid_smoothed", cpuSmoothed, gpuSmoothed, margin: 8)
+
         // Warp mode: small similarities applied on-device, the middle frame
         // identity (device-side copy instead of a warp dispatch).
         let warp = PyramidWarp(transforms: synthTransforms(width: w, height: h,
                                                            frameCount: frameCount))
-        let gpuWarp = try WgpuPyramid.fuse(frameCount: frameCount, warp: warp) { frames[$0] }
+        let gpuWarp = try WgpuPyramid.fuse(frameCount: frameCount, warp: warp,
+                                           select: burtOnly) { frames[$0] }
         let cpuWarp = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
                                              warp: warp, options: plain) { frames[$0] }
         check("pyramid_warp", cpuWarp, gpuWarp, margin: 16)
 
-        // Focus-gated mode (--pmax-debloom): the coarsest band levels run the
-        // two-track select + darkest base + merge on-device. Same fusion bar
-        // (both tracks amplify fast-math ties into flips at coefficient
-        // near-equality, so agreement is tie-bounded, not precision-bounded).
+        // The SHIPPED configuration end-to-end: debloom + smoothed selection
+        // + Burt expand + the envelope discipline (clamp + texture veto).
+        // Same fusion bar (all tracks amplify fast-math ties into flips at
+        // coefficient near-equality, so agreement is tie-bounded, not
+        // precision-bounded).
         let fg = PyramidFusion.Options()
         let gpuGated = try WgpuPyramid.fuse(
             frameCount: frameCount,
             focusGate: PyramidFusion.GPUFocusGate(coarseLevels: fg.coarseLevels,
-                                                  threshold: fg.threshold)) { frames[$0] }
+                                                  threshold: fg.threshold),
+            select: PyramidFusion.GPUSelect(smoothed: fg.smoothedSelection,
+                                            burt: true, clamp: true,
+                                            veto: true)) { frames[$0] }
         let nbCPU = try PyramidFusion.fuse(frameCount: frameCount, preferGPU: false,
                                               options: fg) { frames[$0] }
         check("pyramid_focus_gated", nbCPU, gpuGated, margin: 8)

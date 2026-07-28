@@ -39,6 +39,7 @@ enum WgpuPyramid {
     private struct FillParams { var v: Float; var count: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
     private struct BoxDownParams { var srcW: UInt32; var srcH: UInt32; var dstW: UInt32; var dstH: UInt32; var factor: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
     private struct FocusParams { var count: UInt32; var threshold: Float; var pad0: UInt32 = 0; var pad1: UInt32 = 0 }
+    private struct PyrEnvParams { var srcW: UInt32; var srcH: UInt32; var cell: UInt32; var gw: UInt32; var gh: UInt32; var pad0: UInt32 = 0; var pad1: UInt32 = 0; var pad2: UInt32 = 0 }
 
     private static func bytes<T>(of value: T) -> [UInt8] {
         withUnsafeBytes(of: value) { Array($0) }
@@ -55,23 +56,34 @@ enum WgpuPyramid {
                      decodeWorkers: Int? = nil,
                      decodeLookahead: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
+                     select selOpts: PyramidFusion.GPUSelect = .plain,
                      onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = WgpuEngine.shared else {
             throw StackError.metal("no wgpu adapter available")
         }
+        // The envelope discipline needs the focus gate's full-res planes,
+        // exactly as on the CPU path.
+        let envelope = selOpts.clamp && focusGate != nil
+        // Band computation and collapse switch expand operators TOGETHER
+        // (see upsampleBurtAt) — both kernel names derive from one flag.
+        let upsampleName = selOpts.burt ? "pyr_upsample_burt" : "pyr_upsample"
+        let upsampleAddName = selOpts.burt ? "pyr_upsample_add_burt" : "pyr_upsample_add"
+        let gatedSelectName = selOpts.smoothed
+            ? "pyr_select_focus_gated_smoothed" : "pyr_select_focus_gated"
         // Resolve every kernel up front so a missing entry point fails loudly
         // before any decode work starts.
-        for name in ["pyr_blur5_h", "pyr_blur5_v", "pyr_decimate", "pyr_upsample",
-                     "pyr_upsample_add", "pyr_select", "pyr_select_smoothed",
+        for name in ["pyr_blur5_h", "pyr_blur5_v", "pyr_decimate", upsampleName,
+                     upsampleAddName, "pyr_select", "pyr_select_smoothed",
                      "pyr_band_energy", "pyr_add4", "pyr_scale4", "pyr_fill",
                      "blur_h", "blur_v"]
                     + (warp == nil ? [] : ["warp_lanczos3"])
                     + (focusGate == nil && onSharpness == nil ? [] : ["box_downsample"])
-                    + (focusGate == nil ? [] : ["pyr_select_focus_gated",
+                    + (focusGate == nil ? [] : [gatedSelectName,
                                                 "pyr_base_darkest", "pyr_merge_focus",
                                                 "pyr_lum_minmax", "pyr_focus_minmax",
-                                                "pyr_merge_focus_gated"]) {
+                                                "pyr_merge_focus_gated"])
+                    + (envelope ? ["pyr_env_pool"] : []) {
             _ = try engine.pipeline(name)
         }
         let gritWeights = Filters.gaussianKernel(sigma: PyramidFusion.gritSigma)
@@ -108,6 +120,14 @@ enum WgpuPyramid {
         var focusMin0Buf: WgpuEngine.Buffer! = nil
         var focusMax0Buf: WgpuEngine.Buffer! = nil
         var baseDarkLum: WgpuEngine.Buffer! = nil
+        // Smoothed selection scratch (levels ≥ 1; sized for level 1, reused
+        // by every coarser level — the CPU workspace's energyL/energyLTmp).
+        var energyLA: WgpuEngine.Buffer! = nil
+        var energyLB: WgpuEngine.Buffer! = nil
+        // Source-envelope grids (see PyramidFusion.applyEnvelopeClamp).
+        var envMaxBuf: WgpuEngine.Buffer! = nil
+        var env0MinBuf: WgpuEngine.Buffer! = nil
+        var envGrid = (gw: 0, gh: 0)
         func gated(_ l: Int) -> Bool {
             guard let fg = focusGate else { return false }
             return l >= 1 && l >= levels - fg.coarseLevels
@@ -251,6 +271,16 @@ enum WgpuPyramid {
                     focusMin0Buf = try engine.makeBuffer(floats: width * height)
                     focusMax0Buf = try engine.makeBuffer(floats: width * height)
                 }
+                if selOpts.smoothed {
+                    energyLA = try engine.makeBuffer(floats: sizes[1].w * sizes[1].h)
+                    energyLB = try engine.makeBuffer(floats: sizes[1].w * sizes[1].h)
+                }
+                if envelope {
+                    let f = PyramidFusion.envCell
+                    envGrid = ((width + f - 1) / f, (height + f - 1) / f)
+                    envMaxBuf = try engine.makeBuffer(floats: envGrid.gw * envGrid.gh)
+                    env0MinBuf = try engine.makeBuffer(floats: envGrid.gw * envGrid.gh)
+                }
             }
             precondition(img.width == srcWidth && img.height == srcHeight,
                          "frame \(fi) size mismatch: \(img.width)x\(img.height) vs \(srcWidth)x\(srcHeight)")
@@ -306,6 +336,11 @@ enum WgpuPyramid {
                     try fill(lumMax0Buf, 0, width * height)
                     try fill(focusMin0Buf, .infinity, width * height)
                     try fill(focusMax0Buf, 0, width * height)
+                    if envelope {
+                        // −1 / ∞ so the first frame installs unconditionally.
+                        try fill(envMaxBuf, -1, envGrid.gw * envGrid.gh)
+                        try fill(env0MinBuf, .infinity, envGrid.gw * envGrid.gh)
+                    }
                 }
             }
             if warp != nil && !needsWarp {
@@ -349,7 +384,7 @@ enum WgpuPyramid {
                 // … upsample it back and select the band winners.
                 let up = ResizeParams(srcW: UInt32(nw), srcH: UInt32(nh),
                                       dstW: UInt32(w), dstH: UInt32(h))
-                try batch.dispatch("pyr_upsample", buffers: [gauss[l + 1], scratchA],
+                try batch.dispatch(upsampleName, buffers: [gauss[l + 1], scratchA],
                                    uniforms: bytes(of: up), gridW: w, gridH: h)
                 let count = Count1(count: UInt32(w * h))
                 if l == 0 {
@@ -368,6 +403,59 @@ enum WgpuPyramid {
                     try batch.dispatch("pyr_select_smoothed",
                                        buffers: [gauss[0], scratchA, fused[0], bestE[0], gritA],
                                        uniforms: bytes(of: count), gridW: w * h)
+                    if envelope {
+                        // scratchA still holds the level-0 upsampled coarser —
+                        // pool this frame's band into the envelope grids.
+                        let ep = PyrEnvParams(srcW: UInt32(w), srcH: UInt32(h),
+                                              cell: UInt32(PyramidFusion.envCell),
+                                              gw: UInt32(envGrid.gw),
+                                              gh: UInt32(envGrid.gh))
+                        try batch.dispatch("pyr_env_pool",
+                                           buffers: [gauss[0], scratchA,
+                                                     envMaxBuf, env0MinBuf],
+                                           uniforms: bytes(of: ep),
+                                           gridW: envGrid.gw, gridH: envGrid.gh)
+                    }
+                } else if selOpts.smoothed {
+                    // Smoothed selection at this level's own scale: the level's
+                    // energy is materialized and blurred with the level-0 grit
+                    // kernel, then every selecting track reads it
+                    // (levelBandEnergy + selectSmoothed* on the CPU).
+                    try batch.dispatch("pyr_band_energy",
+                                       buffers: [gauss[l], scratchA, energyLA],
+                                       uniforms: bytes(of: count), gridW: w * h)
+                    let blurParams = BlurParams(width: UInt32(w), height: UInt32(h),
+                                                radius: Int32(gritWeights.count / 2))
+                    try batch.dispatch("blur_h", buffers: [energyLA, energyLB, gritWeightsBuf],
+                                       uniforms: bytes(of: blurParams), gridW: w, gridH: h)
+                    try batch.dispatch("blur_v", buffers: [energyLB, energyLA, gritWeightsBuf],
+                                       uniforms: bytes(of: blurParams), gridW: w, gridH: h)
+                    if gated(l) {
+                        let box = BoxDownParams(srcW: UInt32(sizes[0].w), srcH: UInt32(sizes[0].h),
+                                                dstW: UInt32(w), dstH: UInt32(h),
+                                                factor: UInt32(1 << l))
+                        try batch.dispatch("box_downsample", buffers: [gritA, focusScratch],
+                                           uniforms: bytes(of: box), gridW: w, gridH: h)
+                        let fp = FocusParams(count: UInt32(w * h), threshold: focusGate!.threshold)
+                        try batch.dispatch("pyr_select_focus_gated_smoothed",
+                                           buffers: [gauss[l], scratchA, focusScratch,
+                                                     fused[l], bestE[l], trackB[l]!,
+                                                     bestDarkLum[l]!, trackBright[l]!,
+                                                     bestBrightLum[l]!, hasFocus[l]!,
+                                                     energyLA],
+                                           uniforms: bytes(of: fp), gridW: w * h)
+                        // Track C, smoothed: pyr_select_smoothed pointed at its
+                        // own buffers over the same energy plane.
+                        try batch.dispatch("pyr_select_smoothed",
+                                           buffers: [gauss[l], scratchA, plainC[l]!,
+                                                     plainBestE[l]!, energyLA],
+                                           uniforms: bytes(of: count), gridW: w * h)
+                    } else {
+                        try batch.dispatch("pyr_select_smoothed",
+                                           buffers: [gauss[l], scratchA, fused[l],
+                                                     bestE[l], energyLA],
+                                           uniforms: bytes(of: count), gridW: w * h)
+                    }
                 } else if gated(l) {
                     // Focus-gated two-track select. The focus map is the
                     // level-0 grit energy (in gritA after level 0) box-
@@ -427,7 +515,8 @@ enum WgpuPyramid {
                         batch: batch, fused: fused, sizes: sizes,
                         levels: levels, toLevel: previewLevel,
                         baseScale: baseScale(fi + 1), baseTmp: baseTmp,
-                        scratchA: scratchA, scratchB: scratchB)
+                        scratchA: scratchA, scratchB: scratchB,
+                        upsampleAddName: upsampleAddName)
                 }
             }
             var sharpBuf: WgpuEngine.Buffer? = nil
@@ -457,6 +546,13 @@ enum WgpuPyramid {
 
         // Focus-gate merge: where no frame was in focus at a gated level, take
         // track B (darkest, bloom-free), then collapse the merged pyramid.
+        // The focus planes and envelope grids outlive the merge: the veto
+        // feeds the masks here, and the clamp runs on the collapsed image at
+        // the end — all through the SHARED CPU helpers, so the three engines
+        // cannot drift.
+        var fmaxArr: [Float] = []
+        var fminArr: [Float] = []
+        var envMaxArr: [Float] = []
         if focusGate != nil {
             // Near-black membership from the level-0 min luminance, built by the
             // SHARED CPU helper so this merge and the CPU one cannot drift.
@@ -476,13 +572,36 @@ enum WgpuPyramid {
             try fmax.withUnsafeMutableBytes {
                 try engine.download(focusMax0Buf, into: $0.baseAddress!, byteCount: $0.count)
             }
+            fmaxArr = fmax
+            fminArr = fmin
+            var veto: [Float]? = nil
+            if envelope {
+                let cells = envGrid.gw * envGrid.gh
+                var envMax = [Float](repeating: 0, count: cells)
+                try envMax.withUnsafeMutableBytes {
+                    try engine.download(envMaxBuf, into: $0.baseAddress!, byteCount: $0.count)
+                }
+                envMaxArr = envMax
+                if selOpts.veto {
+                    var envMin = [Float](repeating: 0, count: cells)
+                    try envMin.withUnsafeMutableBytes {
+                        try engine.download(env0MinBuf, into: $0.baseAddress!, byteCount: $0.count)
+                    }
+                    veto = PyramidFusion.nearBlackTextureVeto(
+                        envMax0: envMaxArr, env0Min: envMin, focusMax0: fmaxArr,
+                        frameCount: frameCount, width: width, height: height,
+                        env: ProcessInfo.processInfo.environment)
+                    if veto != nil { log?("pmax: near-black texture veto engaged (wgpu)") }
+                }
+            }
             let gate = PyramidFusion.debloomMasks(lumMin0: lm, lumMax0: lx,
                                                   focusMax0: fmax,
                                                   focusMin0: fmin,
                                                   frameCount: frameCount,
                                                   width: width, height: height,
                                                   sizes: sizes, levels: levels,
-                                                  darkCoarse: focusGate!.coarseLevels)
+                                                  darkCoarse: focusGate!.coarseLevels,
+                                                  nearBlackVeto: veto)
             log?(String(format: "pmax debloom gate: scale=%.4f, mean mask %.3f, open-bg %.3f (wgpu)",
                         gate.scale, gate.mean, gate.bgFraction))
             let mergeBatch = try engine.makeBatch()
@@ -530,14 +649,26 @@ enum WgpuPyramid {
                                         levels: levels, toLevel: 0,
                                         baseScale: baseScale(frameCount),
                                         baseTmp: baseTmp,
-                                        scratchA: scratchA, scratchB: scratchB)
+                                        scratchA: scratchA, scratchB: scratchB,
+                                        upsampleAddName: upsampleAddName)
         batch.submit()
         var tmp = [Float](repeating: 0, count: width * height * 4)
         try tmp.withUnsafeMutableBufferPointer {
             try engine.download(result, into: $0.baseAddress!,
                                 byteCount: width * height * 16)
         }
-        return ImageBuffer(width: width, height: height, floatPixels: tmp)
+        var out = ImageBuffer(width: width, height: height, floatPixels: tmp)
+        // Envelope clamp on the collapsed image, via the shared CPU helper —
+        // a small full-res pass, same for every engine.
+        if envelope, !envMaxArr.isEmpty {
+            PyramidFusion.applyEnvelopeClamp(out: &out, envMax: [envMaxArr],
+                                             focusMax0: fmaxArr, focusMin0: fminArr,
+                                             frameCount: frameCount,
+                                             burtExpand: selOpts.burt,
+                                             env: ProcessInfo.processInfo.environment,
+                                             log: log)
+        }
+        return out
     }
 
     /// Encodes (onto `batch`, after whatever is already there) a collapse of
@@ -553,7 +684,8 @@ enum WgpuPyramid {
                                        toLevel: Int, baseScale: Float,
                                        baseTmp: WgpuEngine.Buffer,
                                        scratchA: WgpuEngine.Buffer,
-                                       scratchB: WgpuEngine.Buffer) throws -> WgpuEngine.Buffer {
+                                       scratchB: WgpuEngine.Buffer,
+                                       upsampleAddName: String) throws -> WgpuEngine.Buffer {
         let (bw, bh) = sizes[levels]
         batch.copy(from: fused[levels], to: baseTmp, byteCount: bw * bh * 16)
         try batch.dispatch("pyr_scale4", buffers: [baseTmp],
@@ -566,7 +698,7 @@ enum WgpuPyramid {
             let dst = current === scratchA ? scratchB : scratchA
             let params = ResizeParams(srcW: UInt32(currentSize.w), srcH: UInt32(currentSize.h),
                                       dstW: UInt32(sizes[l].w), dstH: UInt32(sizes[l].h))
-            try batch.dispatch("pyr_upsample_add", buffers: [current, fused[l], dst],
+            try batch.dispatch(upsampleAddName, buffers: [current, fused[l], dst],
                                uniforms: bytes(of: params),
                                gridW: sizes[l].w, gridH: sizes[l].h)
             current = dst

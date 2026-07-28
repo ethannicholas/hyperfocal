@@ -732,6 +732,65 @@ public final class MetalEngine {
                        + pyr_bilinear(src, int(p.srcW), int(p.srcH), gid, p.dstW, p.dstH));
     }
 
+    // Burt–Adelson expand of the corner-aligned pyramid grid — the exact
+    // reconstruction low-pass matched to pyr_decimate's grid, mirroring
+    // CPUWorkspace.upsampleBurtAt: even fine samples read coarse m−1/m/m+1
+    // at (1/8, 6/8, 1/8), odd read m/m+1 at (1/2, 1/2). Band computation
+    // and collapse must switch operators together.
+    inline float4 pyr_burt(device const half4* src, int sw, int sh, uint2 gid) {
+        int mx = int(gid.x) >> 1;
+        int my = int(gid.y) >> 1;
+        int x0, x1, x2; float wx0, wx1, wx2;
+        if ((gid.x & 1u) == 0u) {
+            x0 = clamp(mx - 1, 0, sw - 1); wx0 = 0.125f;
+            x1 = clamp(mx,     0, sw - 1); wx1 = 0.75f;
+            x2 = clamp(mx + 1, 0, sw - 1); wx2 = 0.125f;
+        } else {
+            x0 = clamp(mx,     0, sw - 1); wx0 = 0.5f;
+            x1 = clamp(mx + 1, 0, sw - 1); wx1 = 0.5f;
+            x2 = x0;                       wx2 = 0.0f;
+        }
+        int y0, y1, y2; float wy0, wy1, wy2;
+        if ((gid.y & 1u) == 0u) {
+            y0 = clamp(my - 1, 0, sh - 1); wy0 = 0.125f;
+            y1 = clamp(my,     0, sh - 1); wy1 = 0.75f;
+            y2 = clamp(my + 1, 0, sh - 1); wy2 = 0.125f;
+        } else {
+            y0 = clamp(my,     0, sh - 1); wy0 = 0.5f;
+            y1 = clamp(my + 1, 0, sh - 1); wy1 = 0.5f;
+            y2 = y0;                       wy2 = 0.0f;
+        }
+        float4 r0 = float4(src[y0 * sw + x0]) * wx0
+                  + float4(src[y0 * sw + x1]) * wx1
+                  + float4(src[y0 * sw + x2]) * wx2;
+        float4 r1 = float4(src[y1 * sw + x0]) * wx0
+                  + float4(src[y1 * sw + x1]) * wx1
+                  + float4(src[y1 * sw + x2]) * wx2;
+        float4 r2 = float4(src[y2 * sw + x0]) * wx0
+                  + float4(src[y2 * sw + x1]) * wx1
+                  + float4(src[y2 * sw + x2]) * wx2;
+        return r0 * wy0 + r1 * wy1 + r2 * wy2;
+    }
+
+    kernel void pyr_upsample_burt(device const half4* src [[buffer(0)]],
+                                  device float4* dst [[buffer(1)]],
+                                  constant PyrResizeParams& p [[buffer(2)]],
+                                  uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= p.dstW || gid.y >= p.dstH) return;
+        dst[gid.y * p.dstW + gid.x] = pyr_burt(src, int(p.srcW), int(p.srcH), gid);
+    }
+
+    kernel void pyr_upsample_add_burt(device const half4* src [[buffer(0)]],
+                                      device const half4* band [[buffer(1)]],
+                                      device half4* dst [[buffer(2)]],
+                                      constant PyrResizeParams& p [[buffer(3)]],
+                                      uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= p.dstW || gid.y >= p.dstH) return;
+        uint i = gid.y * p.dstW + gid.x;
+        dst[i] = half4(float4(band[i])
+                       + pyr_burt(src, int(p.srcW), int(p.srcH), gid));
+    }
+
     // Max-energy coefficient select: band = fine − upsampled coarser; keep it
     // wherever its |RGB| energy beats the best so far. bestE starts at −1 so
     // the first frame installs everywhere.
@@ -863,6 +922,81 @@ public final class MetalEngine {
                 trackBright[gid] = half4(band);
             }
         }
+    }
+
+    // pyr_select_focus_gated with track A's energy read from a pre-smoothed
+    // plane instead of computed inline (the smoothed-selection port of
+    // selectSmoothedFocusGated). Tracks B/bright pick by Gaussian luminance,
+    // which no smoothing touches; track C runs separately via
+    // pyr_select_smoothed over the same energy plane.
+    kernel void pyr_select_focus_gated_smoothed(
+        device const half4* fine [[buffer(0)]],
+        device const float4* up [[buffer(1)]],
+        device const float* focus [[buffer(2)]],
+        device half4* fused [[buffer(3)]],
+        device float* bestE [[buffer(4)]],
+        device half4* trackB [[buffer(5)]],
+        device float* bestDarkLum [[buffer(6)]],
+        device half4* trackBright [[buffer(7)]],
+        device float* bestBrightLum [[buffer(8)]],
+        device float* hasFocus [[buffer(9)]],
+        device const float* energy [[buffer(10)]],
+        constant PyrFocusParams& p [[buffer(11)]],
+        uint gid [[thread_position_in_grid]]) {
+        if (gid >= p.count) return;
+        float4 f = float4(fine[gid]);
+        float4 band = f - up[gid];
+        if (focus[gid] > p.threshold) {
+            float e = energy[gid];
+            if (e > bestE[gid]) {
+                bestE[gid] = e;
+                hasFocus[gid] = 1.0;
+                fused[gid] = half4(band);
+            }
+        } else {
+            float lum = 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z;
+            if (lum < bestDarkLum[gid]) {
+                bestDarkLum[gid] = lum;
+                trackB[gid] = half4(band);
+            }
+            if (lum > bestBrightLum[gid]) {
+                bestBrightLum[gid] = lum;
+                trackBright[gid] = half4(band);
+            }
+        }
+    }
+
+    // Source-envelope accumulation (see PyramidFusion.applyEnvelopeClamp):
+    // per envelope cell, the mean SQUARED band energy of this frame's level-0
+    // band, folded into the running per-cell max (the liveliest single
+    // frame's fine energy — the clamp's bound) and min (the texture veto's
+    // sweep statistic). One thread per cell; edge cells average their actual
+    // pixel count, mirroring CPUWorkspace.poolBandEnergy.
+    struct PyrEnvParams { uint srcW, srcH, cell, gw, gh; };
+
+    kernel void pyr_env_pool(device const half4* fine [[buffer(0)]],
+                             device const float4* up [[buffer(1)]],
+                             device float* envMax [[buffer(2)]],
+                             device float* envMin [[buffer(3)]],
+                             constant PyrEnvParams& p [[buffer(4)]],
+                             uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= p.gw || gid.y >= p.gh) return;
+        uint x0 = gid.x * p.cell, y0 = gid.y * p.cell;
+        uint x1 = min(x0 + p.cell, p.srcW), y1 = min(y0 + p.cell, p.srcH);
+        float acc = 0.0;
+        uint n = 0;
+        for (uint y = y0; y < y1; y++) {
+            for (uint x = x0; x < x1; x++) {
+                uint i = y * p.srcW + x;
+                float4 b = float4(fine[i]) - up[i];
+                acc += b.x * b.x + b.y * b.y + b.z * b.z;
+                n += 1;
+            }
+        }
+        float mean = n > 0 ? acc / float(n) : 0.0;
+        uint c = gid.y * p.gw + gid.x;
+        envMax[c] = max(envMax[c], mean);
+        envMin[c] = min(envMin[c], mean);
     }
 
     // Base level: keep the least-luminous (least-bloomed) frame's Gaussian at

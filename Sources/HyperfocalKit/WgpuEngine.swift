@@ -1000,6 +1000,43 @@ public final class WgpuEngine {
             pyr_bilinear_at(i32(pr_p.srcW), i32(pr_p.srcH), gid, pr_p.dstW, pr_p.dstH);
     }
 
+    // Burt-Adelson expand of the corner-aligned pyramid grid — the exact
+    // reconstruction low-pass matched to pyr_decimate's grid, mirroring
+    // CPUWorkspace.upsampleBurtAt and the MSL kernel of the same name: even
+    // fine samples read coarse m-1/m/m+1 at (1/8, 6/8, 1/8), odd read m/m+1
+    // at (1/2, 1/2). Band computation and collapse switch together.
+    fn pyr_burt_taps(c: u32, limit: i32) -> vec3i {
+        let m = i32(c >> 1u);
+        if ((c & 1u) == 0u) {
+            return vec3i(clamp(m - 1, 0, limit - 1), clamp(m, 0, limit - 1),
+                         clamp(m + 1, 0, limit - 1));
+        }
+        return vec3i(clamp(m, 0, limit - 1), clamp(m + 1, 0, limit - 1), 0);
+    }
+
+    fn pyr_burt_at(sw: i32, sh: i32, gid: vec3u) -> vec4f {
+        let tx = pyr_burt_taps(gid.x, sw);
+        let ty = pyr_burt_taps(gid.y, sh);
+        var wx = vec3f(0.125, 0.75, 0.125);
+        if ((gid.x & 1u) != 0u) { wx = vec3f(0.5, 0.5, 0.0); }
+        var wy = vec3f(0.125, 0.75, 0.125);
+        if ((gid.y & 1u) != 0u) { wy = vec3f(0.5, 0.5, 0.0); }
+        let r0 = pr_src[ty.x * sw + tx.x] * wx.x + pr_src[ty.x * sw + tx.y] * wx.y
+               + pr_src[ty.x * sw + tx.z] * wx.z;
+        let r1 = pr_src[ty.y * sw + tx.x] * wx.x + pr_src[ty.y * sw + tx.y] * wx.y
+               + pr_src[ty.y * sw + tx.z] * wx.z;
+        let r2 = pr_src[ty.z * sw + tx.x] * wx.x + pr_src[ty.z * sw + tx.y] * wx.y
+               + pr_src[ty.z * sw + tx.z] * wx.z;
+        return r0 * wy.x + r1 * wy.y + r2 * wy.z;
+    }
+
+    @compute @workgroup_size(16, 16)
+    fn pyr_upsample_burt(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pr_p.dstW || gid.y >= pr_p.dstH) { return; }
+        pr_dst[gid.y * pr_p.dstW + gid.x] =
+            pyr_burt_at(i32(pr_p.srcW), i32(pr_p.srcH), gid);
+    }
+
     @group(0) @binding(0) var<storage, read> pu_src: array<vec4f>;
     @group(0) @binding(1) var<storage, read> pu_band: array<vec4f>;
     @group(0) @binding(2) var<storage, read_write> pu_dst: array<vec4f>;
@@ -1027,6 +1064,30 @@ public final class WgpuEngine {
         let i = gid.y * pu_p.dstW + gid.x;
         pu_dst[i] = pu_band[i]
             + pu_bilinear_at(i32(pu_p.srcW), i32(pu_p.srcH), gid, pu_p.dstW, pu_p.dstH);
+    }
+
+    fn pu_burt_at(sw: i32, sh: i32, gid: vec3u) -> vec4f {
+        let tx = pyr_burt_taps(gid.x, sw);
+        let ty = pyr_burt_taps(gid.y, sh);
+        var wx = vec3f(0.125, 0.75, 0.125);
+        if ((gid.x & 1u) != 0u) { wx = vec3f(0.5, 0.5, 0.0); }
+        var wy = vec3f(0.125, 0.75, 0.125);
+        if ((gid.y & 1u) != 0u) { wy = vec3f(0.5, 0.5, 0.0); }
+        let r0 = pu_src[ty.x * sw + tx.x] * wx.x + pu_src[ty.x * sw + tx.y] * wx.y
+               + pu_src[ty.x * sw + tx.z] * wx.z;
+        let r1 = pu_src[ty.y * sw + tx.x] * wx.x + pu_src[ty.y * sw + tx.y] * wx.y
+               + pu_src[ty.y * sw + tx.z] * wx.z;
+        let r2 = pu_src[ty.z * sw + tx.x] * wx.x + pu_src[ty.z * sw + tx.y] * wx.y
+               + pu_src[ty.z * sw + tx.z] * wx.z;
+        return r0 * wy.x + r1 * wy.y + r2 * wy.z;
+    }
+
+    @compute @workgroup_size(16, 16)
+    fn pyr_upsample_add_burt(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pu_p.dstW || gid.y >= pu_p.dstH) { return; }
+        let i = gid.y * pu_p.dstW + gid.x;
+        pu_dst[i] = pu_band[i]
+            + pu_burt_at(i32(pu_p.srcW), i32(pu_p.srcH), gid);
     }
 
     @group(0) @binding(0) var<storage, read> ps_fine: array<vec4f>;
@@ -1153,6 +1214,85 @@ public final class WgpuEngine {
                 pfg_trackBright[gid.x] = band;
             }
         }
+    }
+
+    @group(0) @binding(0) var<storage, read> pfs_fine: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pfs_up: array<vec4f>;
+    @group(0) @binding(2) var<storage, read> pfs_focus: array<f32>;
+    @group(0) @binding(3) var<storage, read_write> pfs_fused: array<vec4f>;
+    @group(0) @binding(4) var<storage, read_write> pfs_bestE: array<f32>;
+    @group(0) @binding(5) var<storage, read_write> pfs_trackB: array<vec4f>;
+    @group(0) @binding(6) var<storage, read_write> pfs_bestDarkLum: array<f32>;
+    @group(0) @binding(7) var<storage, read_write> pfs_trackBright: array<vec4f>;
+    @group(0) @binding(8) var<storage, read_write> pfs_bestBrightLum: array<f32>;
+    @group(0) @binding(9) var<storage, read_write> pfs_hasFocus: array<f32>;
+    @group(0) @binding(10) var<storage, read> pfs_energy: array<f32>;
+    @group(0) @binding(11) var<uniform> pfs_p: PyrFocusParams;
+
+    // pyr_select_focus_gated with track A's energy read from a pre-smoothed
+    // plane (the smoothed-selection port of selectSmoothedFocusGated).
+    // Tracks B/bright pick by Gaussian luminance, which no smoothing
+    // touches; track C runs separately via pyr_select_smoothed.
+    @compute @workgroup_size(256)
+    fn pyr_select_focus_gated_smoothed(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pfs_p.count) { return; }
+        let f = pfs_fine[gid.x];
+        let band = f - pfs_up[gid.x];
+        if (pfs_focus[gid.x] > pfs_p.threshold) {
+            let e = pfs_energy[gid.x];
+            if (e > pfs_bestE[gid.x]) {
+                pfs_bestE[gid.x] = e;
+                pfs_hasFocus[gid.x] = 1.0;
+                pfs_fused[gid.x] = band;
+            }
+        } else {
+            let lum = 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z;
+            if (lum < pfs_bestDarkLum[gid.x]) {
+                pfs_bestDarkLum[gid.x] = lum;
+                pfs_trackB[gid.x] = band;
+            }
+            if (lum > pfs_bestBrightLum[gid.x]) {
+                pfs_bestBrightLum[gid.x] = lum;
+                pfs_trackBright[gid.x] = band;
+            }
+        }
+    }
+
+    struct PyrEnvParams { srcW: u32, srcH: u32, cell: u32, gw: u32, gh: u32, pad0: u32, pad1: u32, pad2: u32 }
+
+    @group(0) @binding(0) var<storage, read> pep_fine: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pep_up: array<vec4f>;
+    @group(0) @binding(2) var<storage, read_write> pep_envMax: array<f32>;
+    @group(0) @binding(3) var<storage, read_write> pep_envMin: array<f32>;
+    @group(0) @binding(4) var<uniform> pep_p: PyrEnvParams;
+
+    // Source-envelope accumulation (see PyramidFusion.applyEnvelopeClamp):
+    // per envelope cell, the mean SQUARED band energy of this frame's level-0
+    // band, folded into the running per-cell max (the clamp's bound) and min
+    // (the texture veto's sweep statistic). One thread per cell; edge cells
+    // average their actual pixel count, mirroring poolBandEnergy.
+    @compute @workgroup_size(16, 16)
+    fn pyr_env_pool(@builtin(global_invocation_id) gid: vec3u) {
+        if (gid.x >= pep_p.gw || gid.y >= pep_p.gh) { return; }
+        let x0 = gid.x * pep_p.cell;
+        let y0 = gid.y * pep_p.cell;
+        let x1 = min(x0 + pep_p.cell, pep_p.srcW);
+        let y1 = min(y0 + pep_p.cell, pep_p.srcH);
+        var acc = 0.0;
+        var n = 0u;
+        for (var y = y0; y < y1; y++) {
+            for (var x = x0; x < x1; x++) {
+                let i = y * pep_p.srcW + x;
+                let b = pep_fine[i] - pep_up[i];
+                acc += b.x * b.x + b.y * b.y + b.z * b.z;
+                n += 1u;
+            }
+        }
+        var mean = 0.0;
+        if (n > 0u) { mean = acc / f32(n); }
+        let c = gid.y * pep_p.gw + gid.x;
+        pep_envMax[c] = max(pep_envMax[c], mean);
+        pep_envMin[c] = min(pep_envMin[c], mean);
     }
 
     @group(0) @binding(0) var<storage, read_write> pbd_fused: array<vec4f>;

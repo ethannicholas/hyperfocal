@@ -257,7 +257,19 @@ tiles). **Decision taken 2026-07-28 after render review: the defaults are
 flipped** — `Options.smoothedSelection` defaults true (the envelope
 discipline rides with it) and the Burt expand is always-on
 (`HYPERFOCAL_PMAX_EXPAND5=0` remains as the ablation switch); C5's absolute
-PASS is carried as the hybrid renderer's acceptance bar. Remaining:
-Metal/wgpu ports of the mechanisms + envelope discipline, ≥90 dB parity,
-then the corpus snapshot regen ceremony — deliberately after the ports, so
-it happens once on the shipping engine.
+PASS is carried as the hybrid renderer's acceptance bar.
+
+**Ports landed the same day.** All three engines carry the full
+configuration: smoothed selection at every level (the gated variant reads
+the blurred energy plane; track C shares it), the Burt expand for bands and
+collapse together, envelope accumulation on-device, and the veto + clamp
+through the SHARED CPU helpers on the readback planes (the debloomMasks
+pattern — one implementation, three callers). Parity: wgpu kernel minimum
+104 dB (new kernels 118–inf), fusion minimum 69.6 dB against the 60 dB
+pyramid bar with the shipped configuration at 72.5 dB; Metal 60.1 dB on the
+train stack — 17 pixels above 0.05 across 16 scattered cells, the
+documented selection tie-flip regime, no cell-block threshold flips. The
+acceptance harness at bare defaults through Metal reproduces the CPU
+verdicts (C1–C4 PASS, C2 deltas within 0.01%, C5 counts within one
+borderline tile). Corpus snapshots regenerated after the port commit, per
+the ceremony.

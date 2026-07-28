@@ -16,6 +16,10 @@ enum GPUPyramid {
 
     private struct FocusParams { var count: UInt32; var threshold: Float }
 
+    private struct PyrEnvParams {
+        var srcW: UInt32, srcH: UInt32, cell: UInt32, gw: UInt32, gh: UInt32
+    }
+
     /// With `warp`, `frame` returns unwarped frames and the homographies
     /// apply on-device (`warp_lanczos3` into the level-0 buffer) — the CPU
     /// Lanczos warp otherwise dominates fusion wall-clock on big stacks.
@@ -31,18 +35,24 @@ enum GPUPyramid {
                      decodeWorkers: Int? = nil,
                      decodeLookahead: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
+                     select selOpts: PyramidFusion.GPUSelect = .plain,
                      onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = MetalEngine.shared else {
             throw StackError.metal("no Metal device available")
         }
+        // The envelope discipline needs the focus gate's full-res planes,
+        // exactly as on the CPU path.
+        let envelope = selOpts.clamp && focusGate != nil
         let warpPipeline = warp == nil ? nil : try engine.pipeline("warp_lanczos3")
         // Focus-gate kernels: box_downsample builds the per-level focus map,
         // the two-track select replaces pyr_select, darkest-base replaces
         // pyr_add4, and the merge folds track B in after the last frame.
         let boxDownsample = (focusGate == nil && onSharpness == nil)
             ? nil : try engine.pipeline("box_downsample")
-        let selectFocusGated = focusGate == nil ? nil : try engine.pipeline("pyr_select_focus_gated")
+        let selectFocusGated = focusGate == nil ? nil
+            : try engine.pipeline(selOpts.smoothed
+                ? "pyr_select_focus_gated_smoothed" : "pyr_select_focus_gated")
         let baseDarkest = focusGate == nil ? nil : try engine.pipeline("pyr_base_darkest")
         let mergeFocus = focusGate == nil ? nil : try engine.pipeline("pyr_merge_focus")
         let lumMinMax = focusGate == nil ? nil : try engine.pipeline("pyr_lum_minmax")
@@ -51,14 +61,19 @@ enum GPUPyramid {
             : try engine.pipeline("pyr_merge_focus_gated")
         let bandEnergyPipeline = try engine.pipeline("pyr_band_energy")
         let selectSmoothed = try engine.pipeline("pyr_select_smoothed")
+        let envPool = envelope ? try engine.pipeline("pyr_env_pool") : nil
         let scalarBlurH = try engine.pipeline("blur_h")
         let scalarBlurV = try engine.pipeline("blur_v")
         let gritWeights = Filters.gaussianKernel(sigma: PyramidFusion.gritSigma)
         let blurH = try engine.pipeline("pyr_blur5_h")
         let blurV = try engine.pipeline("pyr_blur5_v")
         let decimate = try engine.pipeline("pyr_decimate")
-        let upsample = try engine.pipeline("pyr_upsample")
-        let upsampleAdd = try engine.pipeline("pyr_upsample_add")
+        // Band computation and collapse switch expand operators TOGETHER
+        // (see upsampleBurtAt) — both pipelines derive from one flag.
+        let upsample = try engine.pipeline(selOpts.burt ? "pyr_upsample_burt"
+                                                        : "pyr_upsample")
+        let upsampleAdd = try engine.pipeline(selOpts.burt ? "pyr_upsample_add_burt"
+                                                           : "pyr_upsample_add")
         let select = try engine.pipeline("pyr_select")
         let add4 = try engine.pipeline("pyr_add4")
         let scale4 = try engine.pipeline("pyr_scale4")
@@ -97,6 +112,14 @@ enum GPUPyramid {
         var lumMax0: MTLBuffer! = nil
         var focusMin0: MTLBuffer! = nil
         var focusMax0: MTLBuffer! = nil
+        // Smoothed selection scratch (levels ≥ 1; sized for level 1, reused
+        // by every coarser level — the CPU workspace's energyL/energyLTmp).
+        var energyLA: MTLBuffer! = nil
+        var energyLB: MTLBuffer! = nil
+        // Source-envelope grids (see PyramidFusion.applyEnvelopeClamp).
+        var envMaxBuf: MTLBuffer! = nil
+        var env0MinBuf: MTLBuffer! = nil
+        var envGrid = (gw: 0, gh: 0)
         // Coarsest band levels are focus-gated: l in [max(1, levels−coarse), levels).
         func gated(_ l: Int) -> Bool {
             guard let fg = focusGate else { return false }
@@ -247,6 +270,16 @@ enum GPUPyramid {
                     focusMin0 = try engine.makeBuffer(floats: width * height)
                     focusMax0 = try engine.makeBuffer(floats: width * height)
                 }
+                if selOpts.smoothed {
+                    energyLA = try engine.makeBuffer(floats: sizes[1].w * sizes[1].h)
+                    energyLB = try engine.makeBuffer(floats: sizes[1].w * sizes[1].h)
+                }
+                if envelope {
+                    let f = PyramidFusion.envCell
+                    envGrid = ((width + f - 1) / f, (height + f - 1) / f)
+                    envMaxBuf = try engine.makeBuffer(floats: envGrid.gw * envGrid.gh)
+                    env0MinBuf = try engine.makeBuffer(floats: envGrid.gw * envGrid.gh)
+                }
             }
             precondition(img.width == srcWidth && img.height == srcHeight,
                          "frame \(fi) size mismatch: \(img.width)x\(img.height) vs \(srcWidth)x\(srcHeight)")
@@ -328,6 +361,11 @@ enum GPUPyramid {
                     fillBuf(lumMax0, 0, width * height)
                     fillBuf(focusMin0, .infinity, width * height)
                     fillBuf(focusMax0, 0, width * height)
+                    if envelope {
+                        // −1 / ∞ so the first frame installs unconditionally.
+                        fillBuf(envMaxBuf, -1, envGrid.gw * envGrid.gh)
+                        fillBuf(env0MinBuf, .infinity, envGrid.gw * envGrid.gh)
+                    }
                 }
             }
             if focusGate != nil {
@@ -401,6 +439,88 @@ enum GPUPyramid {
                     enc.setBuffer(gritA, offset: 0, index: 4)
                     enc.setBytes(&count, length: 4, index: 5)
                     engine.dispatch1D(enc, selectSmoothed, count: w * h)
+                    if envelope {
+                        // scratchA still holds the level-0 upsampled coarser —
+                        // pool this frame's band into the envelope grids.
+                        var ep = PyrEnvParams(srcW: UInt32(w), srcH: UInt32(h),
+                                              cell: UInt32(PyramidFusion.envCell),
+                                              gw: UInt32(envGrid.gw),
+                                              gh: UInt32(envGrid.gh))
+                        enc.setBuffer(gauss[0], offset: 0, index: 0)
+                        enc.setBuffer(scratchA, offset: 0, index: 1)
+                        enc.setBuffer(envMaxBuf, offset: 0, index: 2)
+                        enc.setBuffer(env0MinBuf, offset: 0, index: 3)
+                        enc.setBytes(&ep, length: MemoryLayout<PyrEnvParams>.size, index: 4)
+                        engine.dispatch2D(enc, envPool!, width: envGrid.gw,
+                                          height: envGrid.gh)
+                    }
+                } else if selOpts.smoothed {
+                    // Smoothed selection at this level's own scale: the level's
+                    // energy is materialized and blurred with the level-0 grit
+                    // kernel, then every selecting track reads it
+                    // (levelBandEnergy + selectSmoothed* on the CPU).
+                    enc.setBuffer(gauss[l], offset: 0, index: 0)
+                    enc.setBuffer(scratchA, offset: 0, index: 1)
+                    enc.setBuffer(energyLA, offset: 0, index: 2)
+                    enc.setBytes(&count, length: 4, index: 3)
+                    engine.dispatch1D(enc, bandEnergyPipeline, count: w * h)
+                    var blurParams = GPUDMap.BlurParams(width: UInt32(w), height: UInt32(h),
+                                                        radius: Int32(gritWeights.count / 2))
+                    gritWeights.withUnsafeBufferPointer { wp in
+                        enc.setBuffer(energyLA, offset: 0, index: 0)
+                        enc.setBuffer(energyLB, offset: 0, index: 1)
+                        enc.setBytes(wp.baseAddress!, length: wp.count * 4, index: 2)
+                        enc.setBytes(&blurParams, length: MemoryLayout<GPUDMap.BlurParams>.size, index: 3)
+                        engine.dispatch2D(enc, scalarBlurH, width: w, height: h)
+                        enc.setBuffer(energyLB, offset: 0, index: 0)
+                        enc.setBuffer(energyLA, offset: 0, index: 1)
+                        enc.setBytes(wp.baseAddress!, length: wp.count * 4, index: 2)
+                        enc.setBytes(&blurParams, length: MemoryLayout<GPUDMap.BlurParams>.size, index: 3)
+                        engine.dispatch2D(enc, scalarBlurV, width: w, height: h)
+                    }
+                    if gated(l) {
+                        var box = GPUDMap.BoxDownParams(srcW: UInt32(sizes[0].w),
+                                                        srcH: UInt32(sizes[0].h),
+                                                        dstW: UInt32(w), dstH: UInt32(h),
+                                                        factor: UInt32(1 << l))
+                        enc.setBuffer(gritA, offset: 0, index: 0)
+                        enc.setBuffer(focusScratch, offset: 0, index: 1)
+                        enc.setBytes(&box, length: MemoryLayout<GPUDMap.BoxDownParams>.size, index: 2)
+                        engine.dispatch2D(enc, boxDownsample!, width: w, height: h)
+
+                        var fp = FocusParams(count: count, threshold: focusGate!.threshold)
+                        enc.setBuffer(gauss[l], offset: 0, index: 0)
+                        enc.setBuffer(scratchA, offset: 0, index: 1)
+                        enc.setBuffer(focusScratch, offset: 0, index: 2)
+                        enc.setBuffer(fused[l], offset: 0, index: 3)
+                        enc.setBuffer(bestE[l], offset: 0, index: 4)
+                        enc.setBuffer(trackB[l]!, offset: 0, index: 5)
+                        enc.setBuffer(bestDarkLum[l]!, offset: 0, index: 6)
+                        enc.setBuffer(trackBright[l]!, offset: 0, index: 7)
+                        enc.setBuffer(bestBrightLum[l]!, offset: 0, index: 8)
+                        enc.setBuffer(hasFocus[l]!, offset: 0, index: 9)
+                        enc.setBuffer(energyLA, offset: 0, index: 10)
+                        enc.setBytes(&fp, length: MemoryLayout<FocusParams>.size, index: 11)
+                        engine.dispatch1D(enc, selectFocusGated!, count: w * h)
+
+                        // Track C, smoothed: pyr_select_smoothed pointed at its
+                        // own buffers over the same energy plane.
+                        enc.setBuffer(gauss[l], offset: 0, index: 0)
+                        enc.setBuffer(scratchA, offset: 0, index: 1)
+                        enc.setBuffer(plainC[l]!, offset: 0, index: 2)
+                        enc.setBuffer(plainBestE[l]!, offset: 0, index: 3)
+                        enc.setBuffer(energyLA, offset: 0, index: 4)
+                        enc.setBytes(&count, length: 4, index: 5)
+                        engine.dispatch1D(enc, selectSmoothed, count: w * h)
+                    } else {
+                        enc.setBuffer(gauss[l], offset: 0, index: 0)
+                        enc.setBuffer(scratchA, offset: 0, index: 1)
+                        enc.setBuffer(fused[l], offset: 0, index: 2)
+                        enc.setBuffer(bestE[l], offset: 0, index: 3)
+                        enc.setBuffer(energyLA, offset: 0, index: 4)
+                        enc.setBytes(&count, length: 4, index: 5)
+                        engine.dispatch1D(enc, selectSmoothed, count: w * h)
+                    }
                 } else if gated(l) {
                     // Focus-gated two-track select. The focus map is the
                     // level-0 grit energy (in gritA after level 0) box-
@@ -520,6 +640,13 @@ enum GPUPyramid {
         // Focus-gate merge: where no frame was in focus at a gated level, take
         // track B (darkest, bloom-free). One command buffer over all gated
         // levels, then the running fused pyramid is ready to collapse.
+        // The focus planes and envelope grids outlive the merge: the veto
+        // feeds the masks here, and the clamp runs on the collapsed image at
+        // the end — all through the SHARED CPU helpers, so the three engines
+        // cannot drift.
+        var fmaxArr: [Float] = []
+        var fminArr: [Float] = []
+        var envMaxArr: [Float] = []
         if focusGate != nil {
             guard let cmd = engine.queue.makeCommandBuffer(),
                   let enc = cmd.makeComputeCommandEncoder() else {
@@ -543,14 +670,34 @@ enum GPUPyramid {
             let fmax = UnsafeBufferPointer(start: focusMax0.contents()
                                             .assumingMemoryBound(to: Float.self),
                                            count: width * height)
+            fmaxArr = Array(fmax)
+            fminArr = Array(fmin)
+            var veto: [Float]? = nil
+            if envelope {
+                let cells = envGrid.gw * envGrid.gh
+                envMaxArr = Array(UnsafeBufferPointer(
+                    start: envMaxBuf.contents().assumingMemoryBound(to: Float.self),
+                    count: cells))
+                if selOpts.veto {
+                    let envMin = Array(UnsafeBufferPointer(
+                        start: env0MinBuf.contents().assumingMemoryBound(to: Float.self),
+                        count: cells))
+                    veto = PyramidFusion.nearBlackTextureVeto(
+                        envMax0: envMaxArr, env0Min: envMin, focusMax0: fmaxArr,
+                        frameCount: frameCount, width: width, height: height,
+                        env: ProcessInfo.processInfo.environment)
+                    if veto != nil { log?("pmax: near-black texture veto engaged (GPU)") }
+                }
+            }
             let gate = PyramidFusion.debloomMasks(lumMin0: Array(lm),
                                                   lumMax0: Array(lx),
-                                                  focusMax0: Array(fmax),
-                                                  focusMin0: Array(fmin),
+                                                  focusMax0: fmaxArr,
+                                                  focusMin0: fminArr,
                                                   frameCount: frameCount,
                                                   width: width, height: height,
                                                   sizes: sizes, levels: levels,
-                                                  darkCoarse: focusGate!.coarseLevels)
+                                                  darkCoarse: focusGate!.coarseLevels,
+                                                  nearBlackVeto: veto)
             log?(String(format: "pmax debloom gate: scale=%.4f, mean mask %.3f, open-bg %.3f (GPU)",
                         gate.scale, gate.mean, gate.bgFraction))
             for l in 0..<levels where gated(l) {
@@ -597,11 +744,22 @@ enum GPUPyramid {
         // Collapse all the way down. Works on a copy of the base (like previews
         // do), so the running base stays intact. baseScale averages the summed
         // base (standard) or leaves the darkest base untouched (focus gate).
-        return try collapse(engine: engine, fused: fused, sizes: sizes,
-                            levels: levels, toLevel: 0,
-                            baseScale: baseScale(frameCount), baseTmp: baseTmp,
-                            scratchA: scratchA, scratchB: scratchB,
-                            scale4: scale4, upsampleAdd: upsampleAdd)
+        var out = try collapse(engine: engine, fused: fused, sizes: sizes,
+                               levels: levels, toLevel: 0,
+                               baseScale: baseScale(frameCount), baseTmp: baseTmp,
+                               scratchA: scratchA, scratchB: scratchB,
+                               scale4: scale4, upsampleAdd: upsampleAdd)
+        // Envelope clamp on the collapsed image, via the shared CPU helper —
+        // a small full-res pass, same for every engine.
+        if envelope, !envMaxArr.isEmpty {
+            PyramidFusion.applyEnvelopeClamp(out: &out, envMax: [envMaxArr],
+                                             focusMax0: fmaxArr, focusMin0: fminArr,
+                                             frameCount: frameCount,
+                                             burtExpand: selOpts.burt,
+                                             env: ProcessInfo.processInfo.environment,
+                                             log: log)
+        }
+        return out
     }
 
     /// Encodes (onto `cmd`, after whatever is already there) a collapse of

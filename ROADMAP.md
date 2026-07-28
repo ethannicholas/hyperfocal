@@ -126,36 +126,16 @@ number that moves when depth selection fails.
   gap to the reference — matching it at 6 px, with zero source-frame-floor
   violations and top-1% within 0.03% — and every other corpus stack stays
   bit-identical. Open, in order:
-  - **Ship the band-leakage fix + smoothed selection (validated, CPU-only,
-    flags off).** Two mechanisms, measured on the train stack's blown-text
-    veil (p99 luminance over the sharp source frame): the pyramid's bilinear
-    upsample was both leakier than a proper Burt expand and grid-mismatched
-    with the corner-aligned decimation, feeding defocused glow into every
-    band level (`HYPERFOCAL_PMAX_EXPAND5=1`; +33 → +24 alone); and selection
-    energy smoothed at every level, not just level 0's grit blur
-    (`--pmax-smooth-selection`; +33 → +25 alone, sharpness up). Combined:
-    **+19.5**, top-1% luminance exactly at the source-frame ceiling, no
-    visible sharpness cost (one region's lapvar drop is removed ringing).
-    Manual review judged the combined render best-in-set on every problem
-    region. State (2026-07-28, second session): C2 re-anchored to the
-    registered sources (candidate PASSES; the old snapshot anchor scored the
-    baseline's fabricated veil as +0.00%, and the re-anchored instrument now
-    FAILS the baseline on it); C5's failures re-attributed by measurement —
-    ~90% were baseline defects, not the mechanisms — and a source-envelope
-    discipline landed with smoothed selection (output-space clamp +
-    per-pixel never-focused membership + near-black texture veto) that
-    leaves the candidate better than or equal to baseline on every measured
-    axis. C5's absolute PASS is out of reach for per-coefficient selection
-    (per-level and multi-octave bounding both measured failing — see the
-    doc's addendum) and belongs to the hybrid renderer below. **Defaults
-    flipped 2026-07-28 after render review** (`smoothedSelection` true, Burt
-    expand always-on; PMax now forces the CPU engine). Remaining: Metal/wgpu
-    ports of the mechanisms + envelope discipline, ≥90 dB parity, then the
-    corpus snapshot regen ceremony (after the ports, so it happens once on
-    the shipping engine — until then score-stacks correctly reports the
-    saved snapshots as divergent). Full measurements:
-    `Docs/research/2026-07-28-pmax-band-leakage-smoothed-selection.md`.
-    Comparison artifacts live beside the private corpus (train folder).
+  Shipped 2026-07-28 (see
+  `Docs/research/2026-07-28-pmax-band-leakage-smoothed-selection.md` and the
+  commits around it): smoothed selection at every band level + the exact
+  Burt expand, with a source-envelope discipline (output-space clamp,
+  per-pixel never-focused membership, near-black texture veto) — the
+  blown-text veil closed from +33 to +19.5 p99 over the sharp source frame,
+  C1–C4 + re-anchored C2 all PASS, and all three engines carry the full
+  configuration (wgpu kernel parity ≥ 104 dB, fusion 69.6 dB vs the 60 dB
+  bar; Metal 60.1 dB on a real stack — tie-flip bounded as documented).
+  What remains here, in order:
   - **The rest of the silhouette transition (10–30 px).** The reference
     matches the subject-sharp source frame's own edge tail there. A coarse-
     levels-only frame-consistency mechanism (regularized frame map + selective

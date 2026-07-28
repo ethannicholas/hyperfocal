@@ -913,6 +913,20 @@ public enum PyramidFusion {
         let threshold: Float
     }
 
+    /// Selection configuration for the GPU paths, resolved from `Options` +
+    /// env by `fuse` exactly once — the GPU paths receive it and never
+    /// re-derive it (re-deriving per backend is how paths drift). `clamp`
+    /// and `veto` (the source-envelope discipline) additionally require the
+    /// focus gate's planes, matching the CPU path's condition.
+    struct GPUSelect {
+        let smoothed: Bool
+        let burt: Bool
+        let clamp: Bool
+        let veto: Bool
+        static let plain = GPUSelect(smoothed: false, burt: false,
+                                     clamp: false, veto: false)
+    }
+
     /// Fuses a StackSource: frames decode (prefetched) without warping, and
     /// alignment applies on the GPU when one is available. Prefer this over
     /// the closure form for aligned sources — `source.frame` warps on the
@@ -1015,14 +1029,18 @@ public enum PyramidFusion {
             && (env["HYPERFOCAL_PMAX_NB_TEX_VETO"].map { $0 != "0" } ?? true)
         // Despill needs the per-frame grid luminance and focus planes, which only
         // the CPU loop retains today — stay on the CPU when it is requested. The
-        // GPU port is a follow-up, exactly as the focus gate's was. The two
-        // selection experiments force the CPU the same way — silently taking a
-        // GPU path that ignores them would measure the wrong configuration.
+        // GPU port is a follow-up, exactly as the focus gate's was. The textured
+        // base and the squared-luma energy ablation force the CPU the same way —
+        // silently taking a GPU path that ignores them would measure the wrong
+        // configuration. Smoothed selection, the Burt expand and the envelope
+        // discipline run on every engine (ported 2026-07-28), configured once
+        // here via GPUSelect.
         if prepareDespill { log?("pmax: despill inputs requested — CPU engine") }
-        if smoothSel { log?("pmax: smoothed selection on — CPU engine") }
         if texBase { log?("pmax: textured base on — CPU engine") }
-        if expand5 { log?("pmax: Burt expand on — CPU engine") }
-        let preferGPU = preferGPU && !prepareDespill && !smoothSel && !texBase && !expand5
+        if smoothSq { log?("pmax: squared-luma energy ablation — CPU engine") }
+        let preferGPU = preferGPU && !prepareDespill && !texBase && !smoothSq
+        let gpuSelect = GPUSelect(smoothed: smoothSel, burt: expand5,
+                                  clamp: envClamp, veto: texVeto)
         #if canImport(Metal)
         if preferGPU, MetalEngine.shared != nil {
             do {
@@ -1032,6 +1050,7 @@ public enum PyramidFusion {
                                            decodeWorkers: decodeWorkers,
                                            decodeLookahead: decodeLookahead,
                                            focusGate: gpuFocusGate,
+                                           select: gpuSelect,
                                            onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
                 log?("GPU pyramid failed (\(error)); falling back to CPU")
@@ -1047,6 +1066,7 @@ public enum PyramidFusion {
                                             decodeWorkers: decodeWorkers,
                                             decodeLookahead: decodeLookahead,
                                             focusGate: gpuFocusGate,
+                                            select: gpuSelect,
                                             onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
                 log?("wgpu pyramid failed (\(error)); falling back to CPU")
