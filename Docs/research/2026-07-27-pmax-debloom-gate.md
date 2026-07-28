@@ -279,6 +279,14 @@ where overlapping structures are the reason PMax exists. That is a design
 with app/CLI-parity and performance implications; it should start as a
 design note, not a patch.
 
+(2026-07-28: the design note exists —
+`2026-07-28-pmax-hybrid-background-renderer.md`. It reverses one sentence
+above on measured grounds: the decision should be the prototype's
+engine-internal frame map, not the app's DMap peer — the peer's depth is
+noise exactly where governance needs an answer, and consuming an app-only
+input would recreate the app/CLI divergence this doc's shipped section
+exists to prevent.)
+
 ## Status when this was written
 
 PMax trails the commercial reference on nearly every stack where both tools
