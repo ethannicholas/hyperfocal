@@ -129,4 +129,15 @@ public final class Stack: Identifiable {
     }
 
     var isFused: Bool { dmapResult != nil || pmaxResult != nil }
+
+    /// The displayed/exported image — `resultMethod` picks between the peer
+    /// results, falling back to whichever exists (a background pass may not
+    /// have finished, and `pmaxResult` doesn't survive project reload).
+    /// Mirror of `AppModel.primaryResult` for non-selected stacks.
+    var primaryResult: ImageBuffer? {
+        switch resultMethod {
+        case .pmax: return pmaxResult ?? dmapResult
+        case .dmap, nil: return dmapResult ?? pmaxResult
+        }
+    }
 }

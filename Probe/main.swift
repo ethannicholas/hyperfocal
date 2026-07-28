@@ -6,6 +6,19 @@ import AppKit
 import HyperfocalKit
 import simd
 
+// The probe gets its own throwaway settings suite, cleared per run — the
+// same isolation the UI tests have. Without it every AppModel here reads
+// AND WRITES the user's real app settings: a persisted `fusionMethod` of
+// PMax from a real session flips the main model's primary and the
+// noise-floor preview check waits on a DMap result that hasn't landed
+// (found 2026-07-27, machine-dependent probe failure) — and the probe's
+// own setting writes (noiseFloor, exportFormat, …) polluted the user's
+// app state in return. Must precede the first AppModel touch: the suite
+// is read once into a static.
+setenv("HYPERFOCAL_SETTINGS_SUITE", "org.hyperfocal.probe-settings", 1)
+UserDefaults(suiteName: "org.hyperfocal.probe-settings")?
+    .removePersistentDomain(forName: "org.hyperfocal.probe-settings")
+
 // Headless integration tests for the app layer: retouch session loading,
 // session serialization round-trip, and model-level project save/restore.
 
@@ -1040,6 +1053,60 @@ Task { @MainActor in
     }
     try? FileManager.default.removeItem(at: sabotageDir)
     print("probe: bad-frame model flow OK")
+
+    // 5c. Export honors the PRIMARY result. With a PMax primary, the DMap
+    // peer still lands in the background as the depth/retouch source — the
+    // export must not grab it (shipped bug 2026-07-27: fresh project, PMax
+    // fuse, export wrote the DMap image until retouching happened to install
+    // the PMax buffer as the working image).
+    let exportModel = AppModel()
+    exportModel.ingest(urls: urls)
+    ticks = 0
+    while !exportModel.canFuse && ticks < 100 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    exportModel.fusionMethod = .pmax
+    exportModel.fuse()
+    ticks = 0
+    while exportModel.phase != .done && ticks < 600 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard exportModel.phase == .done, exportModel.resultMethod == .pmax else {
+        print("probe: PMAX PRIMARY FUSE FAILED (\(exportModel.phase), \(String(describing: exportModel.resultMethod)))")
+        exit(1)
+    }
+    // The check is vacuous until the background DMap secondary exists — wait
+    // for it, so an export that prefers the wrong peer has one to grab.
+    ticks = 0
+    while exportModel.dmapResult == nil && ticks < 600 {
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        ticks += 1
+    }
+    guard let pmaxPrimary = exportModel.pmaxResult, let dmapSecondary = exportModel.dmapResult else {
+        print("probe: PMAX PRIMARY / DMAP SECONDARY MISSING"); exit(1)
+    }
+    exportModel.exportFormat = .tiff
+    exportModel.exportColorSpace = .displayP3   // working space: export values unchanged
+    let exportURL = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("probe-pmax-export.tif")
+    guard exportModel.writeExport(to: exportURL), let pmaxExported = try? ImageFile.load(url: exportURL) else {
+        print("probe: PMAX EXPORT WRITE FAILED"); exit(1)
+    }
+    try? FileManager.default.removeItem(at: exportURL)
+    let vsPmax = Metrics.psnr(pmaxExported, pmaxPrimary)
+    let vsDmap = Metrics.psnr(pmaxExported, dmapSecondary)
+    guard vsPmax >= 45, vsPmax >= vsDmap + 6 else {
+        print(String(format: "probe: EXPORT IS NOT THE PRIMARY RESULT "
+                     + "(vs pmax %.1f dB, vs dmap %.1f dB)", vsPmax, vsDmap))
+        exit(1)
+    }
+    print(String(format: "probe: pmax-primary export OK (vs pmax %.1f dB, vs dmap %.1f dB)",
+                 vsPmax, vsDmap))
+    // fusionMethod persists via the settings suite — put the default back so
+    // later sections' models fuse DMap-primary as they assume.
+    exportModel.fusionMethod = .dmap
 
     // 5c. Immediate cancel: cancelFusion returns the model to idle in the
     // same turn (no "Cancelling…" limbo), actions taken while the orphaned

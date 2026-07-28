@@ -1585,6 +1585,17 @@ public final class AppModel: ObservableObject {
     }
     var canExport: Bool { primaryResult != nil && !phase.isRunning }
 
+    /// The image every image output starts from: live retouch edits, then
+    /// restored retouch edits, then the primary (displayed) result. Retouch
+    /// edits, once made, ARE the result — whichever algorithm they started
+    /// from. The last step must be `primaryResult`, not `dmapResult`: with a
+    /// PMax primary the DMap peer still exists as the depth/retouch source,
+    /// and exporting it instead of what the panes show is a bug (shipped as
+    /// one until 2026-07-27).
+    var exportBaseImage: ImageBuffer? {
+        retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? primaryResult)
+    }
+
     /// Crop-rectangle editing mode: the panes show the full canvas with the
     /// CropOverlay on the output pane; everywhere else they show only the
     /// crop.
@@ -2262,7 +2273,7 @@ public final class AppModel: ObservableObject {
         var lines = [String]()
         var count = 0
         for stack in stacks {
-            guard let uncropped = stack.savedWorking ?? stack.dmapResult else { continue }
+            guard let uncropped = stack.savedWorking ?? stack.primaryResult else { continue }
             let image = Self.cropped(uncropped, to: stack.cropRect,
                                      angle: stack.cropAngle)
             let dest = directory.appendingPathComponent("\(stack.name).\(ext)")
@@ -2402,7 +2413,7 @@ public final class AppModel: ObservableObject {
     /// Renders off-main; returns whether the file was written.
     public func writeAnimation(to url: URL) async -> Bool {
         mergeRetouchDepth()  // animate what the user retouched, depth included
-        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
+        let baseImage = exportBaseImage
         guard let uncropped = baseImage, !resultDepth.isEmpty else { return false }
         let image = Self.cropped(uncropped, to: cropRect, angle: cropAngle)
         let depth = Self.croppedDepth(resultDepth, width: uncropped.width,
@@ -3345,7 +3356,7 @@ public final class AppModel: ObservableObject {
 
     private func runExportPanel() {
         // Retouch edits, once made, are the result.
-        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
+        let baseImage = exportBaseImage
         guard (outputMode == .depth ? depthResultImage() : baseImage) != nil else { return }
         // Name after the stack's folder — stable and meaningful, unlike
         // whichever frame happens to be first or selected.
@@ -3465,7 +3476,7 @@ public final class AppModel: ObservableObject {
     @discardableResult
     public func writeExport(to url: URL) -> Bool {
         if outputMode == .depth { mergeRetouchDepth() }
-        let baseImage = retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? dmapResult)
+        let baseImage = exportBaseImage
         guard let raw = outputMode == .depth ? depthResultImage() : baseImage else { return false }
         let image = Self.cropped(raw, to: cropRect, angle: cropAngle)
         do {
