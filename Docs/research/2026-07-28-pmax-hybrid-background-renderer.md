@@ -398,3 +398,14 @@ per-cell focusing veto inside governed components; and the harness needs a
 background-luminance-level criterion plus a sub-tile blur instrument
 before any candidate is trusted again — the eye caught four defects six
 criteria approved.
+
+*(Postscript, same day: the two instruments above now exist in the private
+harness — C7, a background-luminance regression fence against a same-run
+defaults render, and C8, two-leg fine-detail retention at 32 px cells
+against both the registered sources and the same-run defaults. Calibrated
+so current defaults pass everywhere and the reviewed candidate fails on
+exactly the stacks and defect classes the review named. The calibration
+lessons — outlier-robust references for a breathing corpus, the sweep-10-30
+no-man's land between the never-focused and focusing sets, and why the
+level fence had to be defaults-relative — live in the harness docstrings
+and the corpus README.)*

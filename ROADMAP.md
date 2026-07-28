@@ -166,10 +166,14 @@ number that moves when depth selection fails.
     sub-content erased inside median-passed components — all four invisible
     to the six criteria; see the doc's final section). The machinery stands,
     the calibration does not. Next attempt: govern fine texture over shipped
-    low frequencies, conservative subject mask, per-cell focusing veto — and
-    the harness needs a background-luminance criterion and a sub-tile blur
-    instrument first. Ship-on still needs all of that, the dual-UI surface,
-    and the GPU story.
+    low frequencies, conservative subject mask, per-cell focusing veto. The
+    two harness instruments the review demanded now exist (C7
+    background-luminance regression fence, C8 two-leg fine-detail retention
+    at 32 px cells — private corpus, calibrated so defaults pass everywhere
+    and the eye-failed candidate fails on exactly the stacks and defects
+    the review named; instrument notes in the harness docstrings). Ship-on
+    still needs the C5 flip judged under all eight criteria, the dual-UI
+    surface, and the GPU story.
   - **Textured defocused backgrounds are excluded on purpose.** The
     clean-field mechanism deadens bokeh/out-of-focus mottle (measured
     0.3–0.7× the liveliest source frame), so the flatness gate scopes it
