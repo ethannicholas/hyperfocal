@@ -35,18 +35,41 @@ if (-not $env:SDKROOT) {
     }
 }
 
-if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-    if (Test-Path "$env:ProgramFiles\CMake\bin") {
-        $env:Path = "$env:ProgramFiles\CMake\bin;" + $env:Path
+# CMake and Ninja: winget is the documented install route (README "Building on
+# Windows"), and a *user-scope* winget install reaches the shell through none
+# of the obvious paths — the binaries land under WinGet\Packages\<id>\, the
+# shims under WinGet\Links, and the PATH entry is written to the user hive that
+# an already-running shell hasn't re-read. A machine-scope install or a manual
+# one uses Program Files instead. Check every one of them, per tool.
+$wingetLinks    = "$env:LocalAppData\Microsoft\WinGet\Links"
+$wingetPackages = "$env:LocalAppData\Microsoft\WinGet\Packages"
+
+function Add-BuildTool {
+    param([string]$Name, [string]$PackagePrefix, [string[]]$FallbackDirs = @())
+
+    if (Get-Command $Name -ErrorAction SilentlyContinue) { return }
+    foreach ($dir in $FallbackDirs) {
+        if ($dir -and (Test-Path (Join-Path $dir "$Name.exe"))) {
+            $env:Path = "$dir;" + $env:Path
+            return
+        }
     }
+    if (Test-Path (Join-Path $wingetLinks "$Name.exe")) {
+        $env:Path = "$wingetLinks;" + $env:Path
+        return
+    }
+    # Last resort: the package directory itself. Nested arbitrarily deep (CMake
+    # keeps its versioned zip layout, Ninja unpacks flat), hence the recursion.
+    $exe = Get-ChildItem $wingetPackages -Filter "$Name.exe" -Recurse `
+               -ErrorAction SilentlyContinue |
+           Where-Object { $_.FullName -like "*$PackagePrefix*" } |
+           Select-Object -First 1
+    if ($exe) { $env:Path = "$($exe.Directory.FullName);" + $env:Path }
 }
 
-if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
-    $ninjaDir = Get-ChildItem "$env:LocalAppData\Microsoft\WinGet\Packages" `
-        -Filter 'Ninja-build.Ninja*' -Directory -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($ninjaDir) { $env:Path = "$($ninjaDir.FullName);" + $env:Path }
-}
+Add-BuildTool -Name cmake -PackagePrefix 'Kitware.CMake' `
+              -FallbackDirs @("$env:ProgramFiles\CMake\bin")
+Add-BuildTool -Name ninja -PackagePrefix 'Ninja-build.Ninja'
 
 if (-not $env:VCPKG_ROOT) {
     # Conventional layout: vcpkg checked out beside this repo.
@@ -100,4 +123,5 @@ if ($env:VCPKG_ROOT) {
 Write-Host "swift : $((Get-Command swift -ErrorAction SilentlyContinue).Source)"
 Write-Host "cl    : $((Get-Command cl -ErrorAction SilentlyContinue).Source)"
 Write-Host "cmake : $((Get-Command cmake -ErrorAction SilentlyContinue).Source)"
+Write-Host "ninja : $((Get-Command ninja -ErrorAction SilentlyContinue).Source)"
 Write-Host "vcpkg : $env:VCPKG_ROOT ($env:VCPKG_TRIPLET)"

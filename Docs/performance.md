@@ -7,17 +7,34 @@ skimmable.
 
 ## Measurement environment
 
-Numbers below come from the 2-core / 8 GB ARM64 dev VM (details in the
-build-machine notes) and are **relative, not absolute** — perf targets are
-hardware-relative (the bar is commercial-stacker speed on the *same* machine),
-and real hardware will differ. The VM also drifts slower over a long session, so
-only interleaved A/Bs settle close calls.
+Two machines, and it matters which a number came from:
+
+- **ARM64 dev VM** — 2 cores / 8 GB. Everything in this document predates
+  2026-07-28 unless a section says otherwise. Numbers are **relative, not
+  absolute** — perf targets are hardware-relative (the bar is commercial-stacker
+  speed on the *same* machine). The VM also drifts slower over a long session,
+  so only interleaved A/Bs settle close calls.
+- **x64 desktop** — 8-core / 16-thread Zen 4, 32 GB, discrete NVIDIA GPU
+  (Windows 11). Added 2026-07-28; see the real-hardware section below.
 
 Sampling profilers can't run in the VM (the hypervisor doesn't virtualize the
 profiling interrupt — WPA/VS/Superluminal all need it); use instrumented
 decomposition (phase buckets + scratch benches). On real Windows hardware,
 `wpr` + WPA symbolize with `swift build -Xswiftc -debug-info-format=codeview
 -Xlinker /DEBUG`.
+
+**The VM had no real GPU**, and that invalidated more than it looks like. Its
+only wgpu adapter was the D3D12 WARP software rasterizer, which
+`usableForAutoSelection` deliberately skips — so on that machine the wgpu
+backend was reachable only by forcing `--engine gpu`, and every default-path
+measurement was the CPU engine. Two consequences worth keeping in mind when
+reading older entries: no pre-2026-07-28 number here describes wgpu on real
+hardware, and the backend's **1-D dispatch limit went unnoticed for its whole
+life** — WebGPU caps a dispatch at 65535 workgroups per dimension, so the flat
+1-D grid topped out near 16.8 M elements (~4 MP of RGBA) and aborted the process
+above it. Nothing caught it because the parity fixtures are 360×240 and the only
+adapter that ran real stacks was skipped by default. Fixed 2026-07-28 by tiling
+the grid into Y (`WgpuEngine.Batch.dispatch` + `flatten1D` in the WGSL).
 
 ## Throughput bar
 
@@ -53,6 +70,56 @@ rate; 4.9 GB peak on 8 GB), spill io ~48 s + render-src ~33 s (fp16), energy
 ~28 s, decode-blocked ~44 s (LibRaw full demosaic ×1 for fusion — prefetch can't
 fully hide ~11 s/frame on 2 cores), registration 30 s. **At this size,
 frames-at-once *memory* (not time) is the likelier next lever.**
+
+## Real-hardware reference (x64 desktop + discrete GPU, 2026-07-28)
+
+First measurements on the x64 desktop, and the first anywhere of the wgpu
+backend on a real GPU (adapter reports through wgpu's Vulkan backend). **Synth
+stacks, so these are not comparable to the DNG reference stacks above**: synth
+frames are TIFFs, and TIFF reads are far cheaper than a LibRaw demosaic. Read
+this section for the CPU↔GPU *split* and the phase shape, not as a speedup over
+the VM's end-to-end numbers.
+
+Wall clock, whole `fuse` process including registration and export. Best of 3
+(12 MP) / best of 2 (45 MP):
+
+| stack | dmap cpu | dmap gpu | pmax cpu | pmax gpu |
+|---|---|---|---|---|
+| 12 MP × 17 (4240×2832) | 21.8 s | 19.1 s | 23.9 s | **14.3 s** |
+| 45 MP × 10 (8192×5464) | 52.2 s | 44.6 s | 58.0 s | **33.7 s** |
+
+Both sizes clear the < 2 min throughput bar with room to spare. CPU↔GPU
+agreement on the *fused output* — a stronger end-to-end check than the
+kernel-level parity suite, which only sees small fixtures — is 80.1 dB (dmap)
+and 67.6 dB (pmax) at 12 MP, 82.2 / 68.2 at 45 MP: both sit in the band f16
+pixel storage imposes, consistent with the ROADMAP's floors.
+
+Phase split at 12 MP (`-v`), and the reason the GPU wins are smaller than the
+hardware suggests:
+
+| phase | dmap cpu | pmax cpu | pmax gpu |
+|---|---|---|---|
+| registration (CPU, before fuse) | 6.68 s | 6.73 s | 6.71 s |
+| decode | 1.84 s | 1.82 s | 2.01 s (wait) |
+| warp | 9.00 s | 8.86 s | — (on device) |
+| energy / build + select + collapse | 2.24 s | 5.31 s | — |
+| upload | — | — | 2.75 s |
+| **GPU compute** | — | — | **0.31 s** |
+| **fuse subtotal** | 13.82 s | 16.29 s | 6.30 s |
+
+**The GPU is idle almost the whole time it is "working": 0.31 s of compute
+behind 2.01 s of decode-wait and 2.75 s of upload.** Nothing in the fusion
+kernels is worth optimizing at this size — the cost is feeding them. That makes
+upload overlap (decode → upload pipelining, or persistent staging buffers) the
+only GPU-side lever that could pay, and even a perfect one saves ~2.7 s.
+
+**Registration is now the largest single phase** — ~6.7 s, roughly half the
+wall clock of the fastest configuration (pmax/gpu, 14.3 s total). It is pure
+CPU SIFT and identical in all four runs. The "cheaper feature detector" item was
+already flagged as the biggest remaining prize; on hardware where fusion
+actually runs on a GPU it is no longer one prize among several, it is *the*
+one. dmap gains least from the GPU (21.8 → 19.1 s) because its CPU-side warp
+and spill round-trip stay on the critical path.
 
 ## Measured dead ends (don't re-try without new hardware or evidence)
 

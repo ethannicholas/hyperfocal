@@ -29,7 +29,11 @@ are still f32 while storage is f16, so it alone warps in f32 and stores
 through half, and where its result straddles a rounding boundary the argmax
 flips a frame index. The bar should return to 90 when that port lands.
 Derivation, the evidence that it is quantization rather than drift, and a
-refuted one-seam fix: `WgpuParity.runDMap`.
+refuted one-seam fix: `WgpuParity.runDMap`. Re-measured 2026-07-28 on a
+discrete GPU through wgpu's Vulkan backend: **74.0 dB, unchanged to the
+decimal** from the software-rasterizer figure the floor was set against. The
+number is adapter-independent, which is the strongest evidence yet that it is
+f16 quantization rather than a driver or rasterizer artifact.
 
 Anything *below* these bars is drift, not quantization — and the
 usual cause is a buffer that should be f32 (an accumulator, or a separable

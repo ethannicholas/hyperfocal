@@ -248,6 +248,15 @@ public final class WgpuEngine {
         private var uniformBufs: [WGPUBuffer] = []
         private var submitted = false
 
+        // The 1-D dispatch shape. These are the Swift half of a contract with
+        // the WGSL: kWG1D / kTile1D in kernelSource must hold the same values,
+        // because `flatten1D` there reconstructs the linear element index from
+        // the tiled workgroup grid this produces.
+        fileprivate static let wg1D = 256
+        fileprivate static let tile1D = 32768
+        /// WebGPU's guaranteed `maxComputeWorkgroupsPerDimension`.
+        fileprivate static let maxPerDimension = 65535
+
         fileprivate init(engine: WgpuEngine) throws {
             guard let encoder = wgpuDeviceCreateCommandEncoder(engine.device, nil) else {
                 throw StackError.metal("cannot create wgpu command encoder")
@@ -323,8 +332,30 @@ public final class WgpuEngine {
                 wgpuComputePassEncoderDispatchWorkgroups(
                     pass, UInt32((gridW + 15) / 16), UInt32((gridH + 15) / 16), 1)
             } else {
-                wgpuComputePassEncoderDispatchWorkgroups(
-                    pass, UInt32((gridW + 255) / 256), 1, 1)
+                // WebGPU guarantees only 65535 workgroups per dimension, so a
+                // flat 1-D grid caps out at 65535*256 ≈ 16.8 M elements — under
+                // a 12 MP RGBA plane's ~48 M. Past one tile, wrap the grid into
+                // Y; `flatten1D` in the WGSL undoes it. Exceeding the limit is
+                // a validation error that aborts the process, not a soft
+                // failure, so this must stay in step with kTile1D.
+                let groups = (gridW + Self.wg1D - 1) / Self.wg1D
+                if groups <= Self.tile1D {
+                    wgpuComputePassEncoderDispatchWorkgroups(pass, UInt32(groups), 1, 1)
+                } else {
+                    let rows = (groups + Self.tile1D - 1) / Self.tile1D
+                    // Tiling buys ~5.5e11 elements, so this is unreachable for
+                    // any real image — but overrunning a WebGPU limit aborts
+                    // the process from Rust rather than returning an error, and
+                    // a stack trace through wgpu-native is a poor way to learn
+                    // you exceeded a documented cap. Fail as ourselves instead.
+                    guard rows <= Self.maxPerDimension else {
+                        throw StackError.metal(
+                            "wgpu 1-D dispatch too large: \(gridW) elements needs "
+                            + "\(rows) rows, limit \(Self.maxPerDimension)")
+                    }
+                    wgpuComputePassEncoderDispatchWorkgroups(
+                        pass, UInt32(Self.tile1D), UInt32(rows), 1)
+                }
             }
         }
 
@@ -386,6 +417,21 @@ public final class WgpuEngine {
     // order `run` binds them: storage buffers 0..n-1, uniforms last.
 
     static let kernelSource = """
+    // 1-D kernels are dispatched over a grid that may be tiled in Y, because
+    // WebGPU caps each dispatch dimension at 65535 workgroups
+    // (maxComputeWorkgroupsPerDimension) — at 256 elements per workgroup a flat
+    // 1-D grid tops out at ~16.8 M elements, which a 12 MP RGBA plane
+    // (~48 M components) blows straight past. `flatten1D` turns the possibly
+    // tiled workgroup grid back into the linear element index these kernels
+    // index by; kTile1D must match Batch.dispatch's tile width. When the grid
+    // fits in one row the Y term is zero, so the same expression serves both
+    // shapes. See Batch.dispatch.
+    const kWG1D: u32 = 256u;
+    const kTile1D: u32 = 32768u;
+    fn flatten1D(g: vec3u) -> vec3u {
+        return vec3u(g.y * (kTile1D * kWG1D) + g.x, 0u, 0u);
+    }
+
     struct WarpParams {
         r0: vec4f,
         r1: vec4f,
@@ -560,7 +606,8 @@ public final class WgpuEngine {
     @group(0) @binding(5) var<uniform> am_p: ArgmaxParams;
 
     @compute @workgroup_size(256)
-    fn argmax_update(@builtin(global_invocation_id) gid: vec3u) {
+    fn argmax_update(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= am_p.count) { return; }
         // energyGain is gain²: the measure is a squared Laplacian, so quadratic
         // in the frame's gain, while the guide luminance below is linear in it.
@@ -584,7 +631,8 @@ public final class WgpuEngine {
     @group(0) @binding(4) var<uniform> ta_p: TentParams;
 
     @compute @workgroup_size(256)
-    fn tent_accumulate(@builtin(global_invocation_id) gid: vec3u) {
+    fn tent_accumulate(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= ta_p.count) { return; }
         let s = ta_frame[gid.x];
         if (s.w <= 0.0) { return; }
@@ -669,7 +717,8 @@ public final class WgpuEngine {
     @group(0) @binding(2) var<uniform> lp_p: Count1;
 
     @compute @workgroup_size(256)
-    fn luma_plane(@builtin(global_invocation_id) gid: vec3u) {
+    fn luma_plane(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= lp_p.count) { return; }
         let p = lp_img[gid.x];
         lp_out[gid.x] = 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z;
@@ -689,7 +738,8 @@ public final class WgpuEngine {
     // the depth vote. Must match the CPU accumulation in
     // DMapFusion.fuseWithDepth and the Metal minmax_update.
     @compute @workgroup_size(256)
-    fn minmax_update(@builtin(global_invocation_id) gid: vec3u) {
+    fn minmax_update(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= mm_p.count) { return; }
         if (mm_img[gid.x].w <= 0.5) { return; }
         let l = mm_lum[gid.x] * mm_p.gain;
@@ -724,7 +774,8 @@ public final class WgpuEngine {
     @group(0) @binding(3) var<uniform> no_p: Count1;
 
     @compute @workgroup_size(256)
-    fn normalize_out(@builtin(global_invocation_id) gid: vec3u) {
+    fn normalize_out(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= no_p.count) { return; }
         let w = no_wsum[gid.x];
         var v = select(vec4f(0.0), no_accum[gid.x] / w, w > 1e-7);
@@ -743,7 +794,8 @@ public final class WgpuEngine {
     @group(0) @binding(3) var<uniform> cm_p: ConfidenceParams;
 
     @compute @workgroup_size(256)
-    fn confidence_map(@builtin(global_invocation_id) gid: vec3u) {
+    fn confidence_map(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= cm_p.count) { return; }
         let es = max(cm_energy[gid.x] - cm_p.halfFloor, 0.0);
         let e2 = es * es;
@@ -926,7 +978,8 @@ public final class WgpuEngine {
     @group(0) @binding(1) var<uniform> cp_p: ClampParams;
 
     @compute @workgroup_size(256)
-    fn clamp_plane(@builtin(global_invocation_id) gid: vec3u) {
+    fn clamp_plane(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= cp_p.count) { return; }
         cp_plane[gid.x] = clamp(cp_plane[gid.x], 0.0, cp_p.maxV);
     }
@@ -1097,7 +1150,8 @@ public final class WgpuEngine {
     @group(0) @binding(4) var<uniform> ps_p: Count1;
 
     @compute @workgroup_size(256)
-    fn pyr_select(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_select(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= ps_p.count) { return; }
         let band = ps_fine[gid.x] - ps_up[gid.x];
         let e = abs(band.x) + abs(band.y) + abs(band.z);
@@ -1113,7 +1167,8 @@ public final class WgpuEngine {
     @group(0) @binding(3) var<uniform> pe_p: Count1;
 
     @compute @workgroup_size(256)
-    fn pyr_band_energy(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_band_energy(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pe_p.count) { return; }
         let band = pe_fine[gid.x] - pe_up[gid.x];
         pe_e[gid.x] = abs(band.x) + abs(band.y) + abs(band.z);
@@ -1127,7 +1182,8 @@ public final class WgpuEngine {
     @group(0) @binding(5) var<uniform> pss_p: Count1;
 
     @compute @workgroup_size(256)
-    fn pyr_select_smoothed(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_select_smoothed(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pss_p.count) { return; }
         let e = pss_energy[gid.x];
         if (e > pss_bestE[gid.x]) {
@@ -1141,7 +1197,8 @@ public final class WgpuEngine {
     @group(0) @binding(2) var<uniform> pa_p: Count1;
 
     @compute @workgroup_size(256)
-    fn pyr_add4(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_add4(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pa_p.count) { return; }
         pa_dst[gid.x] += pa_src[gid.x];
     }
@@ -1152,7 +1209,8 @@ public final class WgpuEngine {
     @group(0) @binding(1) var<uniform> psc_p: ScaleParams;
 
     @compute @workgroup_size(256)
-    fn pyr_scale4(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_scale4(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= psc_p.count) { return; }
         psc_dst[gid.x] *= psc_p.s;
     }
@@ -1163,7 +1221,8 @@ public final class WgpuEngine {
     @group(0) @binding(1) var<uniform> pf_p: FillParams;
 
     @compute @workgroup_size(256)
-    fn pyr_fill(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_fill(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pf_p.count) { return; }
         pf_dst[gid.x] = pf_p.v;
     }
@@ -1192,7 +1251,8 @@ public final class WgpuEngine {
     // lands closer to the clean field. bestE starts at -1, bestDarkLum at
     // +inf, bestBrightLum at -1.
     @compute @workgroup_size(256)
-    fn pyr_select_focus_gated(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_select_focus_gated(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pfg_p.count) { return; }
         let f = pfg_fine[gid.x];
         let band = f - pfg_up[gid.x];
@@ -1234,7 +1294,8 @@ public final class WgpuEngine {
     // Tracks B/bright pick by Gaussian luminance, which no smoothing
     // touches; track C runs separately via pyr_select_smoothed.
     @compute @workgroup_size(256)
-    fn pyr_select_focus_gated_smoothed(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_select_focus_gated_smoothed(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pfs_p.count) { return; }
         let f = pfs_fine[gid.x];
         let band = f - pfs_up[gid.x];
@@ -1303,7 +1364,8 @@ public final class WgpuEngine {
     // Base level: keep the least-luminous (least-bloomed) frame's Gaussian.
     // bestLum starts at +inf.
     @compute @workgroup_size(256)
-    fn pyr_base_darkest(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_base_darkest(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pbd_p.count) { return; }
         let g = pbd_gauss[gid.x];
         let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
@@ -1320,7 +1382,8 @@ public final class WgpuEngine {
 
     // Focus-gate merge: where no frame was in focus, take track B.
     @compute @workgroup_size(256)
-    fn pyr_merge_focus(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_merge_focus(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pmf_p.count) { return; }
         if (pmf_hasFocus[gid.x] < 0.5) {
             pmf_fused[gid.x] = pmf_trackB[gid.x];
@@ -1336,7 +1399,8 @@ public final class WgpuEngine {
     // near-black gate reads the min, the contamination-sign test both.
     // Mirrors the CPU loop's lumMin0/lumMax0.
     @compute @workgroup_size(256)
-    fn pyr_lum_minmax(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_lum_minmax(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= plm_p.count) { return; }
         let g = plm_gauss[gid.x];
         let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
@@ -1353,7 +1417,8 @@ public final class WgpuEngine {
     // focus-movement planes the debloom membership reads. Mirrors the CPU
     // loop's focusMin0/focusMax0.
     @compute @workgroup_size(256)
-    fn pyr_focus_minmax(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_focus_minmax(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pfm_p.count) { return; }
         let e = pfm_src[gid.x];
         pfm_min[gid.x] = min(pfm_min[gid.x], e);
@@ -1377,7 +1442,8 @@ public final class WgpuEngine {
     // field in open-background cells, the darkest elsewhere) toward the plain
     // max-energy selection by the membership. Same choice as the CPU merge.
     @compute @workgroup_size(256)
-    fn pyr_merge_focus_gated(@builtin(global_invocation_id) gid: vec3u) {
+    fn pyr_merge_focus_gated(@builtin(global_invocation_id) gidRaw: vec3u) {
+        let gid = flatten1D(gidRaw);
         if (gid.x >= pmg_p.count) { return; }
         var d = pmg_fused[gid.x];
         if (pmg_hasFocus[gid.x] < 0.5) {

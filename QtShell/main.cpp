@@ -574,8 +574,28 @@ int main(int argc, char *argv[]) {
                "  <stack-dir>  directory of input frames to open and fuse\n"
                "  <out.tif>    export path; the run passes only if this lands\n"
                "  env: HFQT_STACK2, HFQT_AUTOCONFIRM, HFQT_EXPECT_DISPLAY,\n"
-               "       HFQT_EXPECT_EXCLUDED, HFQT_LANG";
+               "       HFQT_EXPECT_EXCLUDED, HFQT_LANG,\n"
+               "       HFQT_SELFTEST_TIMEOUT (seconds, 0 disables the watchdog)";
         return 2;
+    }
+    // Arity was never the only way to get a window instead of a test. A
+    // stack directory that is missing or empty passes the check above, then
+    // the run simply never reaches its export and app.exec() sits there with
+    // a window open — indistinguishable from a slow fuse, and it cost a
+    // debugging detour of its own. Validate the inputs here, beside the arity
+    // check and still before the QML engine exists.
+    if (selftest) {
+        const QDir dir(QString::fromLocal8Bit(argv[2]));
+        if (!dir.exists()) {
+            qCritical().noquote()
+                << "selftest: stack directory does not exist:" << dir.path();
+            return 2;
+        }
+        if (dir.entryList(QDir::Files | QDir::NoDotAndDotDot).isEmpty()) {
+            qCritical().noquote()
+                << "selftest: stack directory has no files:" << dir.path();
+            return 2;
+        }
     }
     if (!selftest && forcedLang != QStringLiteral("en")) {
         const QStringList tags = forcedLang.isEmpty()
@@ -608,6 +628,27 @@ int main(int argc, char *argv[]) {
         QTimer::singleShot(0, &engine, [&engine, &state] {
             runSelfTest(&engine, &state);
         });
+        // Nothing in a test gate may hang. A stall reads as "still working"
+        // rather than "broken", so it blocks CI (and a developer's terminal)
+        // until someone kills it by hand — which is how the empty-stack-dir
+        // case above was found. Bound the whole run: any failure mode that
+        // never reaches the export becomes a loud non-zero exit instead.
+        // HFQT_SELFTEST_TIMEOUT overrides the budget; 0 disables it, which is
+        // what you want when stepping through the run in a debugger.
+        int timeoutSec = 300;
+        if (qEnvironmentVariableIsSet("HFQT_SELFTEST_TIMEOUT")) {
+            bool ok = false;
+            const int v = qEnvironmentVariableIntValue("HFQT_SELFTEST_TIMEOUT", &ok);
+            if (ok) { timeoutSec = v; }
+        }
+        if (timeoutSec > 0) {
+            QTimer::singleShot(timeoutSec * 1000, &app, [timeoutSec] {
+                qCritical().noquote()
+                    << "selftest: no export after" << timeoutSec
+                    << "seconds - failing rather than hanging";
+                QCoreApplication::exit(3);
+            });
+        }
     }
     return app.exec();
 }

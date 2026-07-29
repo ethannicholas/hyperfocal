@@ -19,10 +19,25 @@ try {
     if ($LASTEXITCODE) { throw "bridge build failed" }
     $bridgeDir = Join-Path $root '.build\debug'
 
-    $qtKit = if ($env:QT_KIT) { $env:QT_KIT } else { 'C:\Qt\6.10.3\msvc2022_arm64' }
-    if (-not (Test-Path "$qtKit\lib\cmake\Qt6\qt.toolchain.cmake")) {
-        throw "Qt kit not found at $qtKit (set QT_KIT)"
+    # Qt kit: QT_KIT wins; otherwise take the newest 6.x kit under C:\Qt whose
+    # architecture matches this machine (aqt names them msvc2022_64 on x64,
+    # msvc2022_arm64 on ARM64). Hardcoding one of those was an artifact of the
+    # ARM64 dev VM and left x64 desktops unable to build without QT_KIT.
+    $qtKit = $env:QT_KIT
+    if (-not $qtKit) {
+        $kitArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'msvc2022_arm64' }
+                   else { 'msvc2022_64' }
+        $qtKit = Get-ChildItem 'C:\Qt' -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^6\.' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName $kitArch } |
+            Where-Object { Test-Path (Join-Path $_ 'lib\cmake\Qt6\qt.toolchain.cmake') } |
+            Select-Object -First 1
     }
+    if (-not $qtKit -or -not (Test-Path "$qtKit\lib\cmake\Qt6\qt.toolchain.cmake")) {
+        throw "Qt kit not found$(if ($qtKit) { " at $qtKit" }) (set QT_KIT)"
+    }
+    Write-Host "== Qt kit: $qtKit"
 
     Write-Host "== configuring + building Qt shell"
     # The shell builds Release: Qt's debug DLLs use the debug CRT, which the

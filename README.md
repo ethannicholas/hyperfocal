@@ -132,21 +132,25 @@ Prerequisites (installable via winget except vcpkg and Qt):
 - **CMake** and **Ninja**
 - **Qt 6** (qtbase, qtdeclarative, qtshadertools) for the desktop app —
   easiest via [aqtinstall](https://github.com/miurahr/aqtinstall):
-  `pip install aqtinstall`, then e.g.
-  `aqt install-qt windows desktop 6.10.3 win64_msvc2022_arm64_cross_compiled
-  --noarchives -m qtshadertools --outputdir C:\Qt` after the base
-  install of the same kit (use `win64_msvc2022_64` on Intel machines);
-  point `QT_KIT` at the kit directory if it isn't
-  `C:\Qt\6.10.3\msvc2022_arm64`
+  `pip install aqtinstall`, then
+
+  ```powershell
+  aqt install-qt windows desktop 6.10.3 win64_msvc2022_64 `
+      -m qtshadertools --outputdir C:\Qt
+  ```
+
+  On ARM64 use `win64_msvc2022_arm64_cross_compiled` instead.
+  `QtShell\build.ps1` finds the newest `C:\Qt\6.x` kit matching the
+  machine's architecture on its own; set `QT_KIT` to override.
 - **vcpkg**, checked out beside this repo (or point `VCPKG_ROOT` at it),
-  with the imaging libraries installed — use `x64-windows` on Intel
+  with the imaging libraries installed — use `arm64-windows` on ARM64
   machines:
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg.git ..\vcpkg
 ..\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 ..\vcpkg\vcpkg install zlib tiff libpng libjpeg-turbo lcms giflib `
-    "libraw[dng-lossy]" "opencv4[core,calib3d]" --triplet arm64-windows
+    "libraw[dng-lossy]" "opencv4[core,calib3d]" --triplet x64-windows
 ```
 
 Windows **Developer Mode** must be enabled (Settings → System → For
