@@ -16,12 +16,23 @@ import COpenCVRegister  // macOS Phase 1.5 A/B: OpenCV registration alongside Vi
 public enum AlignError: Error, CustomStringConvertible {
     case registrationFailed(Int)
     case tooFewGoodFrames(good: Int)
+    /// Two frames reached the registrar at different sizes. Data, not a
+    /// programmer error: a folder of mixed-resolution images is something a
+    /// user can hand us, and the registration-gray decode has its own scale
+    /// policy that must agree across frames. This used to be a `precondition`,
+    /// which took the whole app down with an illegal-instruction crash and no
+    /// message — on Windows that reads as the app simply vanishing. The sizes
+    /// ride along because they are the only clue to *why* they disagreed.
+    case frameSizeMismatch(fixed: (w: Int, h: Int), moving: (w: Int, h: Int))
 
     public var description: String {
         switch self {
         case .registrationFailed(let i): return "registration failed for frame pair at index \(i)"
         case .tooFewGoodFrames(let good):
             return "too few usable frames after excluding bad ones (\(good) left; need 2)"
+        case .frameSizeMismatch(let fixed, let moving):
+            return "frames differ in size (\(fixed.w)×\(fixed.h) vs \(moving.w)×\(moving.h)); "
+                 + "registration needs one resolution across the stack"
         }
     }
 }
@@ -671,8 +682,10 @@ public enum Aligner {
     /// downscale bound. OpenCV is already top-left / y-down, so no Vision-style
     /// vertical-flip conjugation.
     static func registerOpenCV(moving: GrayImage, fixed: GrayImage) throws -> simd_float3x3 {
-        precondition(moving.width == fixed.width && moving.height == fixed.height,
-                     "OpenCV registration expects same-sized gray frames")
+        guard moving.width == fixed.width, moving.height == fixed.height else {
+            throw AlignError.frameSizeMismatch(fixed: (fixed.width, fixed.height),
+                                               moving: (moving.width, moving.height))
+        }
         let longest = max(moving.width, moving.height)
         let maxSide = openCVRegisterMaxSide(longest: longest)
         let scale: Float = longest > maxSide
@@ -805,8 +818,10 @@ public enum Aligner {
     }
 
     static func register(moving: RegistrationFrame, fixed: RegistrationFrame) throws -> simd_float3x3 {
-        precondition(moving.width == fixed.width && moving.height == fixed.height,
-                     "OpenCV registration expects same-sized gray frames")
+        guard moving.width == fixed.width, moving.height == fixed.height else {
+            throw AlignError.frameSizeMismatch(fixed: (fixed.width, fixed.height),
+                                               moving: (moving.width, moving.height))
+        }
         var h = [Float](repeating: 0, count: 9)
         guard hf_sift_match(fixed.handle, moving.handle, &h) == hf_ok else {
             throw AlignError.registrationFailed(0)

@@ -948,10 +948,16 @@ extern "C" hf_status hf_raw_neutral_xy(const char* path, double* out_x, double* 
 // Dispatch by container magic
 // ---------------------------------------------------------------------------
 namespace {
-enum Container { C_TIFF, C_PNG, C_JPEG, C_UNKNOWN };
+// C_UNOPENABLE is deliberately distinct from C_UNKNOWN: callers that pick a
+// *decode scale* from the container type must not treat "I could not open the
+// file" as "this isn't a JPEG". hf_decode_gray8_scaled did exactly that — a
+// failed open sent it past the reduced JPEG path into the full-resolution
+// fallback, so one frame could come back at 1/1 while the rest of the stack
+// was at 1/4, and registration then met two different-sized frames.
+enum Container { C_TIFF, C_PNG, C_JPEG, C_UNKNOWN, C_UNOPENABLE };
 Container sniff(const char* path) {
     FILE* fp = std::fopen(path, "rb");
-    if (!fp) return C_UNKNOWN;
+    if (!fp) return C_UNOPENABLE;
     unsigned char m[8] = {0};
     size_t n = std::fread(m, 1, 8, fp);
     std::fclose(fp);
@@ -968,6 +974,7 @@ extern "C" hf_status hf_decode(const char* path, int* out_w, int* out_h, float**
         case C_TIFF: return decodeTIFF(path, out_w, out_h, out_rgba);
         case C_PNG:  return decodePNG(path, out_w, out_h, out_rgba);
         case C_JPEG: return decodeJPEG(path, out_w, out_h, out_rgba);
+        case C_UNOPENABLE: return hf_err_open;
         default:     return hf_err_format;
     }
 }
@@ -1116,10 +1123,19 @@ extern "C" hf_status hf_decode_gray8_scaled(const char* path, int is_raw,
                                             int* out_full_w, int* out_full_h,
                                             int* out_denom,
                                             int* out_w, int* out_h, uint8_t** out_gray) {
-    if (!is_raw && sniff(path) == C_JPEG)
-        return decodeJPEGGray8(path, min_longest, scale_floor_denom,
-                               out_full_w, out_full_h, out_denom,
-                               out_w, out_h, out_gray);
+    if (!is_raw) {
+        const Container c = sniff(path);
+        // Report an unopenable file rather than falling through: the fallback
+        // below decodes at full resolution (denom 1), and silently handing back
+        // a different scale than the rest of the stack got is worse than
+        // failing — it surfaces later as a size mismatch in registration,
+        // arbitrarily far from the file that could not be opened.
+        if (c == C_UNOPENABLE) return hf_err_open;
+        if (c == C_JPEG)
+            return decodeJPEGGray8(path, min_longest, scale_floor_denom,
+                                   out_full_w, out_full_h, out_denom,
+                                   out_w, out_h, out_gray);
+    }
     if (is_raw && min_longest > 0 && scale_floor_denom > 0) {
         hf_status s = decodeRAWGray8Half(path, min_longest,
                                          out_full_w, out_full_h, out_denom,
