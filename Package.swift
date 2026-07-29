@@ -323,6 +323,31 @@ extraTargets.append(
             // per-pixel decode/convert loops run in the dev loop (the Qt
             // shell uses the debug bridge) and are ~10x slower at -O0.
             .unsafeFlags(["-O2"], .when(configuration: .debug)),
+            // Warnings are errors here for the same reason they are for Swift
+            // on Windows and for the Qt shell's own sources: this target had
+            // accumulated 75 warnings nobody was reading, which is how a real
+            // one would have been missed. Enforced on Windows only — the
+            // toolchain this was verified clean against — matching how
+            // `warningsAsErrors` is scoped above; a Linux/macOS session should
+            // extend it after one clean local build rather than inherit
+            // another platform's flag. The two suppressions the clean build
+            // needed live at the top of cimaging.cpp, deliberately narrow
+            // (libtiff's own opt-out and the MSVC CRT's) rather than the
+            // blanket -Wno-deprecated-declarations the Linux/macOS targets
+            // still carry — that flag would also hide a genuine deprecation,
+            // and is worth revisiting from a Linux session now that the
+            // underlying cause is fixed in the source.
+            //
+            // Note this also holds the vendored easyexif reader in this target
+            // to the bar (it compiles clean today), which is a small deviation
+            // from "first-party only" — SwiftPM has no per-file settings, and
+            // splitting the target for it would cost more than it saves.
+            // -Wall as well as -Werror: clang's default-on set is narrow (the
+            // 75 were all -Wdeprecated-declarations, which is default-on), and
+            // -Werror over the default set alone would have let an unused
+            // variable through — verified by probe, which is the only way to
+            // know a warning gate actually bites.
+            .unsafeFlags(["-Wall", "-Werror"]),
         ],
         linkerSettings: [
             .unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]),

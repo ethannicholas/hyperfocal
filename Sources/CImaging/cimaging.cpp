@@ -2,6 +2,22 @@
 // contract. Kept dependency-symmetric with the Apple ImageFile path: RGBA
 // Float32, Display P3, straight alpha, row 0 = top.
 
+// MSVC's CRT marks the standard C functions this file uses — fopen, getenv,
+// sscanf, strncpy — deprecated in favour of its own _s variants. They are not
+// deprecated in standard C, and this file also builds on Linux and macOS, so
+// rewriting to fopen_s would trade 16 warnings for a portability fork. Take the
+// CRT's documented opt-out instead. No-op off MSVC; must precede any CRT header.
+#define _CRT_SECURE_NO_WARNINGS
+
+// libtiff typedefs the legacy names int8/16/32/64 (and the unsigned set) as
+// *deprecated* aliases at global scope. OpenCV's headers use bare `int64` and
+// `uint64` for their own purposes, so with tiffio.h in scope every one of those
+// uses warns — 59 warnings out of headers we do not own and cannot fix. This is
+// libtiff's own opt-out (tiff.h guards the typedefs on it); we spell integers
+// with the <cstdint> names and never use libtiff's, verified before enabling
+// it. Must precede tiffio.h.
+#define TIFF_DISABLE_DEPRECATED
+
 #include "cimaging.h"
 
 #include <algorithm>
