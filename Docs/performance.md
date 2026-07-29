@@ -7,25 +7,34 @@ skimmable.
 
 ## Measurement environment
 
-Several machines, and it matters which a number came from. **Tag new
-measurements with the machine** — the Apple entry below explains what it costs
-not to:
+**Every absolute number in this file must be tagged with the machine it was
+measured on and the date it was gathered.** Numbers go stale on both axes —
+the code changes underneath them, and the machines get replaced or upgraded —
+and an untagged number is unusable for exactly the reason the pre-2026-07-29
+Apple entries had to be retaken: nobody could say which of two far-apart
+machines produced them. Use the short names below; the roster carries the
+specs so individual entries don't have to.
 
-- **ARM64 dev VM** — 2 cores / 8 GB. Everything in this document predates
-  2026-07-28 unless a section says otherwise. Numbers are **relative, not
-  absolute** — perf targets are hardware-relative (the bar is commercial-stacker
-  speed on the *same* machine). The VM also drifts slower over a long session,
-  so only interleaved A/Bs settle close calls.
-- **x64 desktop** — 8-core / 16-thread Zen 4, 32 GB, discrete NVIDIA GPU
-  (Windows 11). Added 2026-07-28; see the real-hardware section below.
-- **Apple silicon — M1 family, specific model NOT recorded.** Every Apple
-  number in this file was taken on one of two machines: an M1 laptop or an M1
-  Max desktop. Which one is not written down anywhere, and the two are far
-  apart for this workload — roughly 4 performance cores and ~68 GB/s of memory
-  bandwidth against 8 and ~400 GB/s. So an Apple figure here bounds the
-  *family*, not a machine, and any cross-platform ratio computed against one is
-  soft by that margin. Treat Apple↔x64 comparisons below as indicative until a
-  measurement is retaken with the model named.
+- **Mac Studio** — Mac Studio (2022, Mac13,1): Apple M1 Max, 10-core CPU
+  (8 P + 2 E), 24-core GPU, 64 GB unified memory. macOS 26.5 as of
+  2026-07-29.
+- **MacBook Pro** — M1-family Apple laptop. *(Exact model/specs to be filled
+  in; older notes imply roughly 4 performance cores and ~68 GB/s of memory
+  bandwidth, i.e. a plain M1.)*
+- **Windows Desktop** — 8-core / 16-thread Zen 4, 32 GB, discrete NVIDIA GPU,
+  Windows 11. *(Exact CPU and GPU models to be filled in.)*
+- **ARM64 dev VM** — Windows-on-ARM VM, 2 cores / 8 GB, no real GPU (WARP
+  only). Numbers from it are **relative, not absolute** — perf targets are
+  hardware-relative (the bar is commercial-stacker speed on the *same*
+  machine). The VM also drifts slower over a long session, so only interleaved
+  A/Bs settle close calls. Retired for new measurements once the Windows
+  Desktop arrived (2026-07-28).
+
+Historical caveat: Apple numbers gathered **before 2026-07-29** never recorded
+which machine (MacBook Pro or Mac Studio) produced them, so they bound the M1
+*family*, not a machine. Where such a number survives below it is marked
+"machine unrecorded"; current Apple absolutes live in the Mac Studio reference
+section.
 
 Sampling profilers can't run in the VM (the hypervisor doesn't virtualize the
 profiling interrupt — WPA/VS/Superluminal all need it); use instrumented
@@ -51,7 +60,7 @@ the grid into Y (`WgpuEngine.Batch.dispatch` + `flatten1D` in the WGSL).
 **< 2 min end-to-end** on the reference stacks (measured against commercial
 stackers on the VM). pmax is close; dmap has further to go.
 
-### 11 MP reference — 82 × 11 MP JPEGs: dmap ~175 s, pmax ~132 s
+### 11 MP reference — 82 × 11 MP JPEGs: dmap ~175 s, pmax ~132 s (ARM64 dev VM, pre-2026-07-28)
 
 - **Registration 46–48 s** = SIFT detect ~32 s (DoG pyramid dominates — the
   2000-keypoint cap is *not* the wall) + match ~14 s + decode/gradient glue
@@ -67,7 +76,7 @@ stackers on the VM). pmax is close; dmap has further to go.
   render-src ~18 s reading it back.
 - **energy ~16 s**; select/regularize/render ~7 s.
 
-### 45 MP reference — 10 × 45 MP DNG (`~/Desktop/Fluorite`): dmap ~295 s
+### 45 MP reference — 10 × 45 MP DNG (`~/Desktop/Fluorite`): dmap ~295 s (ARM64 dev VM, pre-2026-07-28)
 
 Achieved after (a) registration gray decoding RAW at LibRaw half-size (124 → 30 s
 registration) and (b) a **proportional spill margin** `max(2 GB, spill/2)` — a
@@ -81,9 +90,9 @@ rate; 4.9 GB peak on 8 GB), spill io ~48 s + render-src ~33 s (fp16), energy
 fully hide ~11 s/frame on 2 cores), registration 30 s. **At this size,
 frames-at-once *memory* (not time) is the likelier next lever.**
 
-## Real-hardware reference (x64 desktop + discrete GPU, 2026-07-28)
+## Real-hardware reference (Windows Desktop, 2026-07-28)
 
-First measurements on the x64 desktop, and the first anywhere of the wgpu
+First measurements on the Windows Desktop, and the first anywhere of the wgpu
 backend on a real GPU (adapter reports through wgpu's Vulkan backend). **Synth
 stacks, so these are not comparable to the DNG reference stacks above**: synth
 frames are TIFFs, and TIFF reads are far cheaper than a LibRaw demosaic. Read
@@ -120,21 +129,22 @@ Phase split at 12 MP (`-v`), pre-ISA figures bracketed:
 | **GPU compute** | — | — | **0.59 s** *(0.31)* |
 | **fuse subtotal** | **7.88 s** *(13.82)* | **7.51 s** *(16.29)* | **5.45 s** *(6.30)* |
 
-**CPU fusion moved from far behind Apple silicon to the same order.** The
-M1-family entry under "CPU-path cost of f16 storage" below measures the same
-12 MP × 17 synth shape at 7.41 s (dmap/cpu) and 6.52 s (pmax/cpu); this desktop
-now does 7.88 and 7.51, against 13.82 and 16.29 before the ISA fix. Deliberately
-*not* called parity: the Apple model behind those numbers was never recorded
-(see Measurement environment), and "the desktop caught up with an M1 Max" is a
-much stronger claim than the same words about an M1 laptop. Retake it with the
-model named before quoting a ratio.
+**CPU fusion moved from far behind Apple silicon to the same order.** At the
+time this was written the comparison was against a machine-unrecorded M1-family
+entry (7.41 s dmap/cpu, 6.52 s pmax/cpu on the same 12 MP × 17 shape); the
+tagged retake (Mac Studio reference below, 2026-07-29) puts the Mac Studio's
+fuse subtotals at 3.79 s (dmap/cpu) and 3.50 s (pmax/cpu) against this
+desktop's 7.88 and 7.51 — so the desktop is at parity with what the old entry
+*probably* was (the MacBook Pro) and ~2.1× behind the M1 Max. Before the ISA
+fix it was 13.82 and 16.29.
 
-**On the GPU path Apple is still ahead**, and the cause is architectural rather
-than a missed optimization: the same entry measures 3.94 s (dmap/gpu) and
-3.35 s (pmax/gpu) against this desktop's ~8.1 s and 5.45 s. Subtract the 1.50 s
-upload a unified-memory machine never pays and pmax/gpu lands near 3.95 s — the
-upload is essentially the whole gap. dmap/gpu sits further back because its warp
-and spill round-trip stay on the CPU, so it barely uses the device at all.
+**On the GPU path Apple is further ahead**, and the cause is architectural
+rather than a missed optimization: the Mac Studio's pmax/gpu fuse subtotal is
+0.95 s against this desktop's 5.45 s, and the desktop's 1.50 s upload — which
+a unified-memory machine never pays (the Mac Studio's upload span is 0.07 s) —
+plus its 2.38 s decode-wait are most of that gap. dmap/gpu sits further back
+because its warp and spill round-trip stay on the CPU, so it barely uses the
+device at all.
 
 **The CPU path is compute-bound, not bandwidth-bound** — worth knowing before
 anyone attributes the remaining gap to memory. The warp bench under processor
@@ -201,6 +211,62 @@ Gotchas for anyone touching this:
   vcpkg libraries that already dispatch at runtime; raising their baseline is
   unmeasured and was left alone.
 
+## Apple reference (Mac Studio, 2026-07-29)
+
+The tagged retake of the Apple numbers, same synth shapes as the Windows
+Desktop section above so the two tables read against each other. Wall clock is
+the whole `fuse` process including registration and export; best of 3 (12 MP)
+/ best of 2 (45 MP); run-to-run spread was under 2 % everywhere. "gpu" is the
+Metal engine (the macOS default). One shape caveat: `synth` rounds an even
+`--frames` count up to odd (`SynthStack.Options`), so `--frames 10` produces
+**11** frames — the 45 MP row here fused 11, and the Windows section's "× 10"
+label was likely the same 11-frame stack (verify next Windows session).
+
+| stack | dmap cpu | dmap gpu | pmax cpu | pmax gpu |
+|---|---|---|---|---|
+| 12 MP × 17 (4240×2832 TIFF) | 5.99 s | 3.36 s | 5.56 s | **2.99 s** |
+| 45 MP × 11 (8192×5464 TIFF) | 14.33 s | 7.95 s | 13.19 s | **7.04 s** |
+
+Phase split at 12 MP (`-v`, best run):
+
+| phase | dmap cpu | pmax cpu | pmax gpu |
+|---|---|---|---|
+| registration (CPU, before fuse) | 1.69 s | 1.69 s | 1.70 s |
+| decode | 0.14 s | 0.14 s | 0.14 s wait |
+| warp | 1.71 s | 1.67 s | — (on device) |
+| energy / build + select + collapse | 0.96 s | 1.47 s | — |
+| upload | — | — | 0.07 s |
+| **GPU compute** | — | — | **0.43 s** |
+| **fuse subtotal** | **3.79 s** | **3.50 s** | **0.95 s** |
+
+(dmap cpu's remaining buckets — select, spill, regularize, render-src, render
+— total 0.91 s. dmap gpu fuse subtotal: 1.15 s. Peak memory at 12 MP:
+3.7–4.2 GB across all four configurations; at 45 MP: 12.9–13.3 GB.)
+
+What the table says, read against the Windows Desktop:
+
+- **Registration is ~4× cheaper here — 1.69 s against 6.7 s at 12 MP** — and
+  it is a different implementation, Vision on macOS versus OpenCV SIFT
+  elsewhere. It is still the dominant cost in the fastest configuration (57 %
+  of pmax/gpu's 2.99 s wall), so the "cheaper feature detector" prize stands
+  on both platforms, but the Windows side has the further-to-fall problem.
+- **CPU fusion: the M1 Max leads the Zen 4 desktop ~2.1×** (fuse subtotals
+  3.79/3.50 s against 7.88/7.51 s) — post-ISA-fix, so this is the honest
+  architectural gap, dominated by memory bandwidth and the native-f16 warp.
+- **GPU fusion: pmax/gpu fuse is 0.95 s against the desktop's 5.45 s.** The
+  desktop pays 2.38 s of decode-wait and 1.50 s of upload the unified-memory
+  machine doesn't (upload here spans 0.07 s); actual GPU compute is the same
+  order (0.43 s vs 0.59 s).
+- **CPU↔GPU fused-output agreement** (Metal vs CPU, same end-to-end check as
+  the Windows section): dmap 95.6 dB (12 MP) / 101.1 dB (45 MP), pmax
+  70.6 / 70.9 dB. pmax sits in the same f16-storage band as CPU↔wgpu on
+  Windows (67.6 / 68.2); dmap agrees far more closely here than there
+  (80.1 / 82.2) — consistent with the warped-variant wgpu parity notes below.
+
+Note the pmax numbers are the first on any Apple machine since smoothed
+selection + Burt expand shipped (2026-07-28), so they are not comparable to
+pre-2026-07-28 pmax entries.
+
 ## Measured dead ends (don't re-try without new hardware or evidence)
 
 - **Spill byte-reduction** (RGB + 8-bit-alpha slot layout, 13 B/px fp32 /
@@ -214,15 +280,18 @@ Gotchas for anyone touching this:
   measurements assumed, and the fp32/fp16 tier split — with its
   `HYPERFOCAL_SPILL_FP16` A/B tap — is gone.
 - **CPU-path cost of f16 storage**: the widen/narrow in the hot loops is real
-  but small on Apple silicon (**M1 family, model not recorded** — this is the
-  entry cross-platform comparisons keep quoting, so retake it with the machine
-  named before trusting a ratio) — 12 MP × 17 synth, best of 2: dmap/cpu 7.06 → 7.41 s
-  (+5 %), pmax/cpu 5.84 → 6.52 s (+12 %). The GPU paths, which are the default
-  engine, got *faster* on the same stack (dmap 5.36 → 3.94 s, pmax 4.02 → 3.35 s)
-  — half the bytes through every kernel. Peak footprint fell ~25 % across all
-  four combinations (e.g. dmap/gpu 2.45 → 1.83 GB); it is not 50 % because
-  decode buffers, the scalar f32 planes, and the Metal/OS baseline don't scale
-  with pixel storage.
+  but small on Apple silicon (**M1 family, machine unrecorded**, ~2026-07-26)
+  — 12 MP × 17 synth, best of 2: dmap/cpu 7.06 → 7.41 s (+5 %), pmax/cpu
+  5.84 → 6.52 s (+12 %). The GPU paths, which are the default engine, got
+  *faster* on the same stack (dmap 5.36 → 3.94 s, pmax 4.02 → 3.35 s) — half
+  the bytes through every kernel. Peak footprint fell ~25 % across all four
+  combinations (e.g. dmap/gpu 2.45 → 1.83 GB); it is not 50 % because decode
+  buffers, the scalar f32 planes, and the Metal/OS baseline don't scale with
+  pixel storage. The *relative* before/after deltas are the durable part —
+  the f32 path is gone, so they can't be retaken. The absolute numbers are
+  superseded by the Mac Studio reference (2026-07-29), whose figures land far
+  below these — evidence the machine behind this entry was probably the
+  MacBook Pro, though that is inference, not record.
 - **Quantizing the wgpu warp output to f16 on-device**, to make the wgpu backend
   carry byte-identical halves to the CPU (`pack2x16float`/`unpack2x16float`, core
   WGSL — no `shader-f16` feature needed). Motivated by CPU↔wgpu dmap parity
@@ -237,9 +306,12 @@ Gotchas for anyone touching this:
   f16 imposes near 1.0. Hence the warped variant carries its own 75 dB floor
   (`debug-wgpu --dmap-warp-floor`); a miss *below* that is drift and should be
   chased. Unwarped keeps 90 because both engines hold identical decoded halves
-  and round their weighted averages the same way. Worth re-measuring against
-  Metal's warped end-to-end dmap on a Mac — the ≥90 re-baselining was done on the
-  unwarped case only.
+  and round their weighted averages the same way. Measured since (Mac Studio,
+  2026-07-29): Metal's warped end-to-end dmap agreement with the CPU engine is
+  95.6 dB at 12 MP / 101.1 dB at 45 MP (aligned synth fuses, so the warp path
+  is exercised) — Metal does not show wgpu's warped-variant depression, which
+  localizes that 78 dB residual to the wgpu backend's resample/store ordering
+  rather than to warping per se.
 - **Metal 4, and "what does Apple-silicon-only unlock?"** — asked when Intel
   support was dropped (2026-07-26), audited, and the answer is *nothing worth
   doing*. Two separate points, often conflated:
@@ -249,9 +321,9 @@ Gotchas for anyone touching this:
     explicit command encoding with argument tables, tensor/ML encoders, faster
     shader compilation, placement sparse heaps — targets engines bottlenecked on
     encoding overhead or ML inference. Ours is neither: measured GPU *compute*
-    inside a 63-frame 42 MP fuse is 0.07–0.65 s (pmax) / ~1.2 s (dmap) out of a
-    33–52 s wall clock that is RAW decode and upload. There is no encoding
-    overhead to reclaim.
+    inside a 63-frame 42 MP fuse (M1 family, machine unrecorded, 2026-07-26)
+    is 0.07–0.65 s (pmax) / ~1.2 s (dmap) out of a 33–52 s wall clock that is
+    RAW decode and upload. There is no encoding overhead to reclaim.
   - **The engine was already written Apple-silicon-shaped**, so the strip was
     scripts, docs, and the site badge — no code. Audited and found clean: no
     `#if arch(...)` anywhere; every `MTLBuffer` is `.storageModeShared` with no
@@ -312,29 +384,47 @@ it without a click via the UI-test command channel's `enter-retouch` /
 `exit-retouch` actions, so a measurement is repeatable and doesn't fight the
 user for the screen.
 
-**Start Retouching, measured 2026-07-26** (Release arm64, M-series, 42 MP ×
-63-frame Azurite project reopened from disk, so the session is pre-warmed):
-**~280–380 ms cold, ~115 ms on re-entry.** The split, cold:
+**Start Retouching, measured 2026-07-29 on the Mac Studio** (Release arm64,
+45 MP × 63-frame Azurite project reopened from disk so the session is
+pre-warmed; driven headless over the UI-test command channel, window not
+frontmost): **~1.0–1.3 s cold** (one 0.2 s outlier across four launches),
+**~0.6 s on re-entry** (stable across five cycles). The split, cold:
 
 | step | cost |
 |---|---|
-| `prepareForPainting` (CoW-unique ~500 MB of working pixels + depth) | 60–170 ms |
-| SwiftUI update pass → `RetouchCanvas.makeNSView` | 10–22 ms |
-| `makeNSView` itself, including the CI colour cube | < 5 ms |
-| AppKit first layout of the swapped-in pane tree | 82–169 ms |
-| 8076×5237 → 575×764 pt `ctx.draw` | **< 1 ms** |
+| `prepareForPainting` (CoW-unique ~500 MB of working pixels + depth) | 13–27 ms |
+| SwiftUI update pass → `RetouchCanvas.makeNSView` | 33–62 ms |
+| `makeNSView` itself, including the CI colour cube | < 1 ms |
+| AppKit first layout of the swapped-in pane tree | **0.84–1.16 s** |
+| 8072×5312 → 779×839 pt `ctx.draw` | **< 1 ms** |
 
-Both suspects the roadmap had flagged are non-issues: drawing a 42 MP CGImage
-into a pane-sized rect costs under a millisecond (CoreGraphics' downsample is
-not on anyone's critical path), and building the 64³ colour cube costs 1–6 ms.
-The real cost is evenly split between the plane uniquing — which is
-deliberately on the click, because moving it to session build would keep
-~500 MB alive for every idle pre-warmed session — and AppKit laying out the
-replacement view tree. Neither has a cheap fix, and a few hundred
-milliseconds is below the duration where a progress spinner helps rather than
-flashes, so this is left alone. The brush-source pane is a separate,
-already-handled wait: its aligned frame decodes asynchronously (~2.5 s on a
-cold session) behind the existing "Loading source…" spinner.
+The 2026-07-26 record this replaces (~280–380 ms cold, ~115 ms re-entry;
+machine unrecorded) split the cost evenly between plane uniquing (60–170 ms)
+and first layout (82–169 ms). Two things moved, in opposite directions:
+
+- Plane uniquing collapsed to 13–27 ms — about what ~6× the memory bandwidth
+  predicts, so the old numbers were *probably* the MacBook Pro (inference, not
+  record; the machine-tagging rule exists because of entries like that one).
+- **AppKit first layout is now the entire interaction and it grew past the
+  spinner threshold** — 0.84–1.16 s cold, ~0.45 s on re-entry, on the *faster*
+  machine. Whether that is a code regression since 2026-07-26 (retouch depth
+  co-painting landed in between), a window-size/display difference, or the
+  old measurement's machine, is exactly what the untagged record can't answer.
+  Worth an A/B at commit `abc5928` on this machine before believing "left
+  alone" (the old entry's conclusion) still holds — a >1 s cold entry is no
+  longer below the duration where a progress spinner helps rather than
+  flashes.
+
+Still true and re-confirmed: drawing a 45 MP CGImage into a pane-sized rect
+costs under a millisecond, the colour cube is ~1 ms, and the plane uniquing
+stays deliberately on the click (moving it to session build would keep
+~500 MB alive for every idle pre-warmed session). The brush-source pane is a
+separate, already-handled wait: its aligned frame decodes asynchronously
+behind the existing "Loading source…" spinner.
+
+Fusion can now also be triggered over the command channel (`fuse` action,
+added for this measurement — building the reopened-project fixture headless
+needs a fuse no screen-consent AX press can supply).
 
 The Qt shell drives the same model, so the `model:` marks work there
 unchanged; its canvas has no marks of its own yet.

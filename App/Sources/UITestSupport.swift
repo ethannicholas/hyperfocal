@@ -231,6 +231,14 @@ enum UITestSupport {
             default: return finish(false, "unknown slider \(id)")
             }
             finish(true)
+        case "fuse":
+            // The Fuse button needs AX/TCC consent to press from a headless
+            // runner; measurement sessions (PerfLog against a real project)
+            // need the same trigger without a screen. Mirrors the button:
+            // canFuse gate, then the same entry point.
+            guard model.canFuse else { return finish(false, "not ready") }
+            model.fuse()
+            finish(true)
         case "enter-retouch":
             // Entering retouch swaps in two full-res panes; the latency of
             // that swap is measured with HYPERFOCAL_PERFLOG=1, which needs a
