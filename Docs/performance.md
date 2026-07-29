@@ -7,7 +7,9 @@ skimmable.
 
 ## Measurement environment
 
-Two machines, and it matters which a number came from:
+Several machines, and it matters which a number came from. **Tag new
+measurements with the machine** — the Apple entry below explains what it costs
+not to:
 
 - **ARM64 dev VM** — 2 cores / 8 GB. Everything in this document predates
   2026-07-28 unless a section says otherwise. Numbers are **relative, not
@@ -16,6 +18,14 @@ Two machines, and it matters which a number came from:
   so only interleaved A/Bs settle close calls.
 - **x64 desktop** — 8-core / 16-thread Zen 4, 32 GB, discrete NVIDIA GPU
   (Windows 11). Added 2026-07-28; see the real-hardware section below.
+- **Apple silicon — M1 family, specific model NOT recorded.** Every Apple
+  number in this file was taken on one of two machines: an M1 laptop or an M1
+  Max desktop. Which one is not written down anywhere, and the two are far
+  apart for this workload — roughly 4 performance cores and ~68 GB/s of memory
+  bandwidth against 8 and ~400 GB/s. So an Apple figure here bounds the
+  *family*, not a machine, and any cross-platform ratio computed against one is
+  soft by that margin. Treat Apple↔x64 comparisons below as indicative until a
+  measurement is retaken with the model named.
 
 Sampling profilers can't run in the VM (the hypervisor doesn't virtualize the
 profiling interrupt — WPA/VS/Superluminal all need it); use instrumented
@@ -110,11 +120,32 @@ Phase split at 12 MP (`-v`), pre-ISA figures bracketed:
 | **GPU compute** | — | — | **0.59 s** *(0.31)* |
 | **fuse subtotal** | **7.88 s** *(13.82)* | **7.51 s** *(16.29)* | **5.45 s** *(6.30)* |
 
-**Fusion is now at rough parity with Apple silicon.** The M-series entry under
-"CPU-path cost of f16 storage" below measures the same 12 MP × 17 synth shape at
-7.41 s (dmap/cpu) and 6.52 s (pmax/cpu); this desktop now does 7.88 and 7.51.
-Before the ISA fix it was 13.82 and 16.29 — i.e. a high-end desktop losing to a
-laptop by 2–2.5×, which is what prompted the investigation.
+**CPU fusion moved from far behind Apple silicon to the same order.** The
+M1-family entry under "CPU-path cost of f16 storage" below measures the same
+12 MP × 17 synth shape at 7.41 s (dmap/cpu) and 6.52 s (pmax/cpu); this desktop
+now does 7.88 and 7.51, against 13.82 and 16.29 before the ISA fix. Deliberately
+*not* called parity: the Apple model behind those numbers was never recorded
+(see Measurement environment), and "the desktop caught up with an M1 Max" is a
+much stronger claim than the same words about an M1 laptop. Retake it with the
+model named before quoting a ratio.
+
+**On the GPU path Apple is still ahead**, and the cause is architectural rather
+than a missed optimization: the same entry measures 3.94 s (dmap/gpu) and
+3.35 s (pmax/gpu) against this desktop's ~8.1 s and 5.45 s. Subtract the 1.50 s
+upload a unified-memory machine never pays and pmax/gpu lands near 3.95 s — the
+upload is essentially the whole gap. dmap/gpu sits further back because its warp
+and spill round-trip stay on the CPU, so it barely uses the device at all.
+
+**The CPU path is compute-bound, not bandwidth-bound** — worth knowing before
+anyone attributes the remaining gap to memory. The warp bench under processor
+affinity (`ProcessorAffinity` over alternating logical CPUs, so the counts are
+physical cores) scales 86.0 → 42.7 → 21.6 → 11.0 ns/px across 1/2/4/8 cores, a
+**7.82× speedup on 8 cores** (98 % efficiency), with SMT adding a further 26 %
+to 8.7 ns/px. DRAM bandwidth would have flattened that curve by 4 cores. The
+memory system *does* show up one level out, though: the same loop costs
+15.6 ns/px inside a production fuse (3.13 s / 200 Mpx) versus 8.7 ns/px
+isolated — 1.8× lost to decode and spill traffic competing with it, which is a
+phase-overlap problem rather than a starved kernel.
 
 **Registration is the dominant cost and did not move** — ~6.7 s, identical
 across every configuration and unchanged by the ISA switch, because it is
@@ -183,7 +214,9 @@ Gotchas for anyone touching this:
   measurements assumed, and the fp32/fp16 tier split — with its
   `HYPERFOCAL_SPILL_FP16` A/B tap — is gone.
 - **CPU-path cost of f16 storage**: the widen/narrow in the hot loops is real
-  but small on Apple Silicon — 12 MP × 17 synth, best of 2: dmap/cpu 7.06 → 7.41 s
+  but small on Apple silicon (**M1 family, model not recorded** — this is the
+  entry cross-platform comparisons keep quoting, so retake it with the machine
+  named before trusting a ratio) — 12 MP × 17 synth, best of 2: dmap/cpu 7.06 → 7.41 s
   (+5 %), pmax/cpu 5.84 → 6.52 s (+12 %). The GPU paths, which are the default
   engine, got *faster* on the same stack (dmap 5.36 → 3.94 s, pmax 4.02 → 3.35 s)
   — half the bytes through every kernel. Peak footprint fell ~25 % across all
