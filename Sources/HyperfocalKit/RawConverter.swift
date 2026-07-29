@@ -169,6 +169,22 @@ public final class RawConverter {
 
     // MARK: - Running the converter
 
+    /// A path spelled the way the *platform* spells it, for handing to a child
+    /// process.
+    ///
+    /// `URL.path` is not that on Windows: it yields forward slashes
+    /// (`C:/Users/…`). Adobe DNG Converter reads that as a POSIX path, discards
+    /// the drive, and reports `Failed to convert '/Users/…'` — while still
+    /// exiting 0 and writing nothing, so the only visible symptom is "the
+    /// converter could not convert this file". Same file, same flags, spelled
+    /// `C:\Users\…`, converts fine. `fileSystemRepresentation` is the native
+    /// spelling; the `.path` fallback only runs on platforms without one.
+    private func nativePath(_ url: URL) -> String {
+        url.withUnsafeFileSystemRepresentation { pointer in
+            pointer.map(String.init(cString:)) ?? url.path
+        }
+    }
+
     private func runConversion(exe: String, source: URL, into cachePath: URL) throws {
         let fm = FileManager.default
         // Convert into a unique temp dir, then move the single output into the
@@ -185,7 +201,7 @@ public final class RawConverter {
         // it exactly as it would a native raw.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: exe)
-        proc.arguments = ["-c", "-p0", "-d", tmp.path, source.path]
+        proc.arguments = ["-c", "-p0", "-d", nativePath(tmp), nativePath(source)]
         do {
             try proc.run()
         } catch {
