@@ -18,9 +18,11 @@ specs so individual entries don't have to.
 - **Mac Studio** — Mac Studio (2022, Mac13,1): Apple M1 Max, 10-core CPU
   (8 P + 2 E), 24-core GPU, 64 GB unified memory. macOS 26.5 as of
   2026-07-29.
-- **MacBook Pro** — M1-family Apple laptop. *(Exact model/specs to be filled
-  in; older notes imply roughly 4 performance cores and ~68 GB/s of memory
-  bandwidth, i.e. a plain M1.)*
+- **MacBook Pro** — MacBook Pro (14-inch, 2021, MacBookPro18,3): Apple M1
+  Pro, 8-core CPU (6 P + 2 E), 14-core GPU, 16 GB unified memory (~200 GB/s).
+  macOS 26.5 as of 2026-07-29. **Not** the plain M1 (~4 P cores, ~68 GB/s)
+  older notes had inferred — any bandwidth arithmetic done against that guess
+  is off by ~3×.
 - **Windows Desktop** — 8-core / 16-thread Zen 4, 32 GB, discrete NVIDIA GPU,
   Windows 11. *(Exact CPU and GPU models to be filled in.)*
 - **ARM64 dev VM** — Windows-on-ARM VM, 2 cores / 8 GB, no real GPU (WARP
@@ -33,8 +35,8 @@ specs so individual entries don't have to.
 Historical caveat: Apple numbers gathered **before 2026-07-29** never recorded
 which machine (MacBook Pro or Mac Studio) produced them, so they bound the M1
 *family*, not a machine. Where such a number survives below it is marked
-"machine unrecorded"; current Apple absolutes live in the Mac Studio reference
-section.
+"machine unrecorded"; current Apple absolutes live in the Mac Studio and
+MacBook Pro reference sections.
 
 Sampling profilers can't run in the VM (the hypervisor doesn't virtualize the
 profiling interrupt — WPA/VS/Superluminal all need it); use instrumented
@@ -76,7 +78,7 @@ stackers on the VM). pmax is close; dmap has further to go.
   render-src ~18 s reading it back.
 - **energy ~16 s**; select/regularize/render ~7 s.
 
-### 45 MP reference — 10 × 45 MP DNG (`~/Desktop/Fluorite`): dmap ~295 s (ARM64 dev VM, pre-2026-07-28)
+### 45 MP reference — 10 × 45 MP DNG stack: dmap ~295 s (ARM64 dev VM, pre-2026-07-28)
 
 Achieved after (a) registration gray decoding RAW at LibRaw half-size (124 → 30 s
 registration) and (b) a **proportional spill margin** `max(2 GB, spill/2)` — a
@@ -137,6 +139,16 @@ fuse subtotals at 3.79 s (dmap/cpu) and 3.50 s (pmax/cpu) against this
 desktop's 7.88 and 7.51 — so the desktop is at parity with what the old entry
 *probably* was (the MacBook Pro) and ~2.1× behind the M1 Max. Before the ISA
 fix it was 13.82 and 16.29.
+
+The MacBook Pro retake (reference section below, 2026-07-29) then resolved the
+attribution — but weakened the parity read. The old entry's figures line up
+with the MacBook Pro's *wall clocks* (7.16 s dmap/cpu, 6.54 s pmax/cpu; all
+four configurations land within 10 %, three within 4 %), not with any fuse
+subtotal, so
+"7.88 vs 7.41" compared this desktop's fuse subtotal against a number that
+included ~1.7 s of registration. Like for like, the M1 Pro's CPU fuse
+subtotals are 4.87/4.46 s against this desktop's 7.88/7.51 — the laptop leads
+~1.6–1.7×.
 
 **On the GPU path Apple is further ahead**, and the cause is architectural
 rather than a missed optimization: the Mac Studio's pmax/gpu fuse subtotal is
@@ -267,6 +279,73 @@ Note the pmax numbers are the first on any Apple machine since smoothed
 selection + Burt expand shipped (2026-07-28), so they are not comparable to
 pre-2026-07-28 pmax entries.
 
+## Apple reference (MacBook Pro, 2026-07-29)
+
+Same synth shapes, same day, same code as the Mac Studio section, taken so
+both development Macs have tagged absolutes. Wall clock is the whole `fuse`
+process including registration and export; best of 3 at both sizes. Two
+context caveats: the machine was on AC power with the user's normal desktop
+session running (not freshly quiet), and 16 GB of memory is close to the
+45 MP working set — 12 MP spread was ≤ 3 %, but 45 MP spread ran to ~25 %
+(dmap/gpu 12.10–16.41 s across three runs), so read the 45 MP row as
+indicative, not precise.
+
+| stack | dmap cpu | dmap gpu | pmax cpu | pmax gpu |
+|---|---|---|---|---|
+| 12 MP × 17 (4240×2832 TIFF) | 7.16 s | 3.56 s | 6.54 s | **3.23 s** |
+| 45 MP × 11 (8192×5464 TIFF) | 19.63 s | 12.10 s | 17.84 s | 12.39 s |
+
+(At 45 MP the two GPU configurations tie within the run-to-run spread.)
+
+Phase split at 12 MP (`-v`, best run):
+
+| phase | dmap cpu | pmax cpu | pmax gpu |
+|---|---|---|---|
+| registration (CPU, before fuse) | 1.72 s | 1.74 s | 1.76 s |
+| decode | 0.12 s | 0.12 s | 0.12 s wait |
+| warp | 2.32 s | 2.25 s | — (on device) |
+| energy / build + select + collapse | 1.20 s | 1.85 s | — |
+| upload | — | — | 0.07 s |
+| **GPU compute** | — | — | **0.60 s** |
+| **fuse subtotal** | **4.87 s** | **4.46 s** | **1.12 s** |
+
+(dmap cpu's remaining buckets total 1.14 s. dmap gpu fuse subtotal: 1.28 s.
+Peak memory at 12 MP: 3.3–3.9 GB; at 45 MP: 6.1–7.5 GB.)
+
+Read against the Mac Studio:
+
+- **Registration is identical — ~1.7 s at 12 MP on both machines.** The extra
+  performance cores and doubled bandwidth buy nothing here, so Vision's cost
+  is effectively serial per frame pair; it is 54 % of pmax/gpu's wall on this
+  machine. The "cheaper feature detector" prize is the same prize on every
+  machine in the roster.
+- **CPU fusion: the M1 Max leads the M1 Pro only ~1.25–1.3×** (fuse subtotals
+  3.79/3.50 s vs 4.87/4.46 s) despite 2× the memory bandwidth and 8 P cores
+  vs 6 — consistent with the Windows section's finding that the CPU path is
+  compute-bound, not bandwidth-bound. This laptop still leads the Zen 4
+  desktop ~1.6–1.7× like for like.
+- **GPU compute scales sublinearly with core count**: pmax GPU compute is
+  0.60 s here vs 0.43 s on the 24-core Mac Studio (14 cores, 1.4× time for
+  0.58× cores) — the kernels are too small at 12 MP to fill either device.
+  Upload is the same 0.07 s (unified memory on both).
+- **At 45 MP the gap widens to 1.35–1.8×** (19.63/12.10/17.84/12.39 s vs the
+  Studio's 14.33/7.95/13.19/7.04) and run-to-run spread grows an order of
+  magnitude. Peak memory reads 6.1–7.5 GB against the Studio's 12.9–13.3 GB
+  for identical work — consistent with the engine's memory-proportional
+  spill/batching sizing itself to the machine, so peak-memory figures in this
+  file are machine-relative, not workload constants.
+- **CPU↔GPU fused-output agreement is identical to the Mac Studio to the
+  tenth of a dB**: dmap 95.6 dB (12 MP) / 101.1 dB (45 MP), pmax 70.6 / 70.9.
+  Two different M1-family GPUs producing the same parity numbers says the
+  band is a property of the code and the architecture family, not the
+  individual machine.
+- **The machine-unrecorded M1-family entry is resolved: it was this laptop,
+  measuring wall clock.** Its post-f16 figures (7.41/6.52 s cpu, 3.94/3.35 s
+  gpu) land on today's MacBook Pro walls (7.16/6.54, 3.56/3.23) — three of
+  four within 4 %, dmap/gpu within 10 % (Metal-side work has shipped since)
+  — and match no fuse subtotal on either Mac. See the correction in the
+  Windows Desktop section.
+
 ## Measured dead ends (don't re-try without new hardware or evidence)
 
 - **Spill byte-reduction** (RGB + 8-bit-alpha slot layout, 13 B/px fp32 /
@@ -290,8 +369,11 @@ pre-2026-07-28 pmax entries.
   pixel storage. The *relative* before/after deltas are the durable part —
   the f32 path is gone, so they can't be retaken. The absolute numbers are
   superseded by the Mac Studio reference (2026-07-29), whose figures land far
-  below these — evidence the machine behind this entry was probably the
-  MacBook Pro, though that is inference, not record.
+  below these. The MacBook Pro retake (2026-07-29) settled the attribution:
+  today's MacBook Pro *wall clocks* land within a few percent of this entry's
+  post-change figures in all four configurations, so this entry was the
+  MacBook Pro, and its figures were wall clocks (registration included), not
+  fuse subtotals.
 - **Quantizing the wgpu warp output to f16 on-device**, to make the wgpu backend
   carry byte-identical halves to the CPU (`pack2x16float`/`unpack2x16float`, core
   WGSL — no `shader-f16` feature needed). Motivated by CPU↔wgpu dmap parity
@@ -385,7 +467,7 @@ it without a click via the UI-test command channel's `enter-retouch` /
 user for the screen.
 
 **Start Retouching, measured 2026-07-29 on the Mac Studio** (Release arm64,
-45 MP × 63-frame Azurite project reopened from disk so the session is
+a 45-megapixel, 63-frame stack's project reopened from disk so the session is
 pre-warmed; driven headless over the UI-test command channel, window not
 frontmost): **~1.0–1.3 s cold** (one 0.2 s outlier across four launches),
 **~0.6 s on re-entry** (stable across five cycles). The split, cold:
@@ -402,9 +484,15 @@ The 2026-07-26 record this replaces (~280–380 ms cold, ~115 ms re-entry;
 machine unrecorded) split the cost evenly between plane uniquing (60–170 ms)
 and first layout (82–169 ms). Two things moved, in opposite directions:
 
-- Plane uniquing collapsed to 13–27 ms — about what ~6× the memory bandwidth
-  predicts, so the old numbers were *probably* the MacBook Pro (inference, not
-  record; the machine-tagging rule exists because of entries like that one).
+- Plane uniquing collapsed to 13–27 ms. This was first read as "about what
+  ~6× the memory bandwidth predicts, so the old numbers were probably the
+  MacBook Pro" — but the roster now records that machine as an M1 Pro
+  (~200 GB/s, 2026-07-29), so bandwidth predicts only ~2× and the arithmetic
+  behind that attribution is gone. The laptop attribution itself is still
+  plausible (the fuse-matrix entries *were* traced to it — see the MacBook Pro
+  reference section), but for this measurement it stays inference until Start
+  Retouching is retaken on the MacBook Pro; the machine-tagging rule exists
+  because of entries like this one.
 - **AppKit first layout is now the entire interaction and it grew past the
   spinner threshold** — 0.84–1.16 s cold, ~0.45 s on re-entry, on the *faster*
   machine. Whether that is a code regression since 2026-07-26 (retouch depth
