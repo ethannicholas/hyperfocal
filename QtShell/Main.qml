@@ -63,6 +63,17 @@ ApplicationWindow {
         readonly property color cardBorder:
             dark ? Qt.rgba(1, 1, 1, 0.07) : Qt.rgba(0, 0, 0, 0.09)
         readonly property color headerBar: dark ? "#242424" : "#e4e4e4"
+        // Text on the overlay cards that float *over the image wells* — the
+        // progress HUD, the source-loading notice, the spinner badge. Those
+        // cards stay dark in both schemes on purpose: they sit over arbitrary
+        // photo content rather than over chrome, and a light card would wash
+        // out against a bright frame (same photo-tool convention as `well`).
+        // Their text therefore has to be pinned light instead of taken from
+        // textSecondary/textDim — in the light scheme those are #444444 and
+        // #6a6a6a, which on a #282828 card are all but invisible. That is
+        // exactly the bug this pair exists to prevent recurring.
+        readonly property color overlayText: "#e0e0e0"
+        readonly property color overlayTextDim: "#a8a8a8"
     }
 
     // The scheme as a real Controls palette so Fusion (Windows/Linux)
@@ -703,7 +714,7 @@ ApplicationWindow {
                     anchors.centerIn: parent
                     width: 20
                     height: 20
-                    color: "#e0e0e0"  // dark card regardless of scheme
+                    color: theme.overlayText  // dark card regardless of scheme
                 }
             }
         }
@@ -1647,7 +1658,7 @@ ApplicationWindow {
                             : Shell.retouchSourceStatus !== ""
                                 ? Shell.retouchSourceStatus
                                 : qsTr("Loading source…")
-                        color: theme.textSecondary
+                        color: theme.overlayText
                         font.pixelSize: 13
                         padding: 8
                         background: Rectangle { color: "#c0282828"; radius: 6 }
@@ -1748,7 +1759,7 @@ ApplicationWindow {
                                 spacing: 8
                                 Label {
                                     text: Shell.stageText
-                                    color: theme.textSecondary
+                                    color: theme.overlayText
                                     font.pixelSize: 12
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
@@ -1756,7 +1767,7 @@ ApplicationWindow {
                                 Label {
                                     text: Shell.stageEta
                                     visible: text !== ""
-                                    color: theme.textDim
+                                    color: theme.overlayTextDim
                                     font.pixelSize: 12
                                 }
                                 Button {
