@@ -43,6 +43,9 @@ class Shell : public QObject {
     Q_PROPERTY(bool hasInput READ hasInput NOTIFY changed)
     Q_PROPERTY(bool inputLoading READ inputLoading NOTIFY changed)
     Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
+    // Why the input pane is blank, when there is a reason worth showing.
+    // Shown in place of the "select a frame" hint — see hf_input_error.
+    Q_PROPERTY(QString inputError READ inputError NOTIFY changed)
     Q_PROPERTY(int selectedFrame READ selectedFrame NOTIFY framesChanged)
     // All selected frame indices, ascending — during a fuse this is the
     // in-flight working set (registration processes frames concurrently),
@@ -105,6 +108,7 @@ public:
     // shows the previous image (the title already names the new frame).
     bool inputLoading() const;
     QString inputTitle() const;
+    QString inputError() const;
     int selectedFrame() const;
     QList<int> selectedFrames() const;
     /// Bumps only when the tone curve's bytes actually change — the LUT

@@ -332,6 +332,12 @@ int hf_input_title(char *buf, int cap);             // returns bytes
 // serves the previous image even though hf_input_title already names the
 // new frame — wait for 0 before trusting input pixels.
 int hf_input_loading(void);
+// Why the selected frame shows no image ("Can't decode X", "X is missing",
+// or the DNG-Converter notice), empty when there is nothing to explain. The
+// shell shows this INSTEAD of its "select a frame" hint: without it a failed
+// decode is indistinguishable from no selection, which is what the Qt shell
+// used to show for a raw needing the Adobe DNG Converter.
+int hf_input_error(char *buf, int cap);             // returns bytes
 
 // Crop, in result-canvas pixels + degrees. hf_set_crop mirrors the
 // UITest set-crop command (w/h <= 0 clears). hf_display_crop /

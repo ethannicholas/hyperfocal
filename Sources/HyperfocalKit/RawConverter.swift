@@ -6,9 +6,16 @@ import Foundation
 /// so `AppModel` and the CLI can `catch` it uniformly and route the
 /// missing-converter case to a guided-install prompt.
 public enum RawConverterError: Error, CustomStringConvertible, LocalizedError {
-    /// The Adobe DNG Converter is not installed. `downloadURL` points at Adobe's
+    /// The Adobe DNG Converter is not installed. `file` is the raw file that
+    /// needed it (display name, not a path) and `downloadURL` points at Adobe's
     /// download page so the caller can guide the user there.
-    case converterMissing(downloadURL: String)
+    ///
+    /// The file travels with the error because the message names it. An earlier
+    /// wording blamed "this camera's raw files", which is wrong twice over: the
+    /// same camera can be set to emit raws LibRaw reads perfectly, so the fault
+    /// is the encoding of this particular file, and a stack can mix files that
+    /// do and don't need the converter.
+    case converterMissing(file: String, downloadURL: String)
     /// The converter was found and launched but produced no usable DNG.
     case conversionFailed(String)
 
@@ -17,10 +24,11 @@ public enum RawConverterError: Error, CustomStringConvertible, LocalizedError {
 
     public var description: String {
         switch self {
-        case .converterMissing(let url):
+        case .converterMissing(let file, let url):
             return String(format: localizedString(
-                "This camera's raw files need the free Adobe DNG Converter, which isn't installed. Download it from %@",
-                comment: "Shown when an undecodable raw is opened without the Adobe DNG Converter"), url)
+                "%1$@ requires the free Adobe DNG Converter to decode. Download it from %2$@",
+                comment: "Shown when an undecodable raw is opened without the Adobe DNG Converter; %1$@ is the file name, %2$@ the download URL"),
+                file, url)
         case .conversionFailed(let detail):
             return String(format: localizedString(
                 "Adobe DNG Converter could not convert this file: %@",
@@ -82,7 +90,8 @@ public final class RawConverter {
         if isUsable(cachePath) { return cachePath }
 
         guard let exe = locateConverter() else {
-            throw RawConverterError.converterMissing(downloadURL: adobeDNGConverterDownloadURL)
+            throw RawConverterError.converterMissing(file: url.lastPathComponent,
+                                                     downloadURL: adobeDNGConverterDownloadURL)
         }
 
         RawConverter.progressHandler?(String(format: localizedString(

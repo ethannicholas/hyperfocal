@@ -398,10 +398,16 @@ public final class AppModel: ObservableObject {
     /// `inputPreview` still shows the previous image (public: the bridge
     /// reports it so shells and journeys can wait out the swap).
     @Published public private(set) var inputPreviewLoading = false
-    /// Why the selected frame couldn't be shown (missing file, decode failure).
-    /// Without this the pane falls back to the "select a frame" hint, which is
-    /// misleading when a frame IS selected but its volume is unmounted.
-    @Published var inputPreviewError: String?
+    /// Why the selected frame couldn't be shown (missing file, decode failure,
+    /// a raw awaiting the Adobe DNG Converter). Without this the pane falls back
+    /// to the "select a frame" hint, which is misleading when a frame IS
+    /// selected but its volume is unmounted.
+    ///
+    /// Public because that is exactly what happened in the Qt shell: the native
+    /// pane read this from the start, the shell had no way to reach it, and so
+    /// showed "select a frame in the Stack list" over a selected, undecodable
+    /// frame. Surfaced as `hf_input_error` / `Shell.inputError`.
+    @Published public private(set) var inputPreviewError: String?
     /// True pixel dimensions of the input preview (the preview CGImage may be
     /// a reduced-resolution bitmap stretched to this size).
     @Published var inputPixelSize: CGSize?
@@ -2565,23 +2571,43 @@ public final class AppModel: ObservableObject {
         inputDecodeTask?.cancel()
         inputPreviewLoading = true
         inputDecodeTask = Task.detached(priority: .userInitiated) { [weak self] in
+            // The decode error is kept, not swallowed: a raw that merely needs
+            // the Adobe DNG Converter is a different state from a broken file,
+            // and `try?` erased the difference — the pane fell back to the
+            // generic "select a frame" hint as though nothing had been tried.
+            var decodeError: Error?
             let decoded: (image: PlatformImage, pixelSize: CGSize)? = {
-                let buffer: ImageBuffer?
-                if let alignedIndex {
-                    let source = StackPipeline.makeSource(urls: alignedURLs,
-                                                          transforms: transforms)
-                    buffer = try? source.frame(at: alignedIndex)
-                } else {
-                    buffer = try? ImageFile.load(url: url)
+                do {
+                    let buffer: ImageBuffer
+                    if let alignedIndex {
+                        let source = StackPipeline.makeSource(urls: alignedURLs,
+                                                              transforms: transforms)
+                        buffer = try source.frame(at: alignedIndex)
+                    } else {
+                        buffer = try ImageFile.load(url: url)
+                    }
+                    let cg = try Preview.image(from: buffer)
+                    return (cg, CGSize(width: buffer.width, height: buffer.height))
+                } catch {
+                    decodeError = error
+                    return nil
                 }
-                guard let buffer,
-                      let cg = try? Preview.image(from: buffer) else { return nil }
-                return (cg, CGSize(width: buffer.width, height: buffer.height))
+            }()
+            // Missing converter carries its own wording and its own offer: the
+            // preview is where this is met first, so waiting until Fuse to
+            // mention the converter makes the app look broken in between.
+            let converterMissing: (detail: String, url: String)? = {
+                guard let e = decodeError as? RawConverterError,
+                      case .converterMissing(_, let downloadURL) = e else { return nil }
+                return (detail: "\(e)", url: downloadURL)
             }()
             let error: String? = decoded != nil ? nil
-                : FileManager.default.fileExists(atPath: url.path)
-                    ? String(format: localizedString("Can't decode %@", comment: ""), url.lastPathComponent)
-                    : "\(url.lastPathComponent) is missing"
+                : converterMissing != nil
+                    ? localizedString("This image cannot be previewed",
+                                      comment: "Input pane hint when a raw needs the Adobe DNG Converter")
+                    : FileManager.default.fileExists(atPath: url.path)
+                        ? String(format: localizedString("Can't decode %@", comment: ""), url.lastPathComponent)
+                        : "\(url.lastPathComponent) is missing"
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, self.inputPreviewURL == url,
@@ -2590,6 +2616,10 @@ public final class AppModel: ObservableObject {
                 self.inputPreview = decoded?.image
                 self.inputPixelSize = decoded?.pixelSize
                 self.inputPreviewError = error
+                if let converterMissing {
+                    self.offerConverterDownload(downloadURL: converterMissing.url,
+                                                detail: converterMissing.detail)
+                }
                 if let decoded {
                     let entry = (decoded.image, decoded.pixelSize, aligned)
                     if self.inputCache.updateValue(entry, forKey: url) == nil {
@@ -2897,7 +2927,7 @@ public final class AppModel: ObservableObject {
                     if error is CancellationError {
                         self.phase = self.frames.isEmpty ? .empty : .loaded
                     } else if let e = error as? RawConverterError,
-                              case .converterMissing(let url) = e {
+                              case .converterMissing(_, let url) = e {
                         self.reportConverterMissing(downloadURL: url, detail: "\(e)")
                     } else {
                         self.reportFuseFailure("\(error)")
@@ -3000,9 +3030,14 @@ public final class AppModel: ObservableObject {
     }
 
     /// The fuse failed only because the Adobe DNG Converter — needed to decode
-    /// this camera's raw files — isn't installed. Instead of the generic "Fuse
+    /// one of the raw files — isn't installed. Instead of the generic "Fuse
     /// failed" notice, guide the user to Adobe's download page. Same batch/probe
     /// gating as `reportFuseFailure`.
+    ///
+    /// The title names the problem, not the camera: the same body can be set to
+    /// emit raws LibRaw decodes without help, so "this camera's raw files" both
+    /// misattributes the fault and implies the hardware is unsupported. `detail`
+    /// carries the file name (see `RawConverterError.converterMissing`).
     func reportConverterMissing(downloadURL: String, detail: String) {
         phase = .failed(detail)
         guard !batchMode else { return }
@@ -3011,7 +3046,31 @@ public final class AppModel: ObservableObject {
             return
         }
         dialogs?.openDownloadPage(
-            message: localizedString("Can’t open this camera’s raw files", comment: ""),
+            message: localizedString("Cannot decode raw file", comment: ""),
+            informative: detail, url: downloadURL)
+    }
+
+    /// Same offer, raised from the *preview* rather than from a fuse, so the
+    /// converter can be installed at the point the problem is first visible.
+    ///
+    /// One-shot per session, which is the whole difference from
+    /// `reportConverterMissing`: previews load on every selection change, so
+    /// arrowing through a stack of High-Efficiency NEFs would otherwise throw a
+    /// modal per keystroke. The flag is deliberately never reset — once the
+    /// offer has been declined, repeating it on the next selection is nagging,
+    /// and Fuse still reports it if the user gets that far. Nothing here
+    /// touches `phase`: a preview that can't decode is not a failed fuse.
+    private var converterPromptShown = false
+
+    func offerConverterDownload(downloadURL: String, detail: String) {
+        guard !batchMode, !converterPromptShown else { return }
+        converterPromptShown = true
+        if let fuseFailureAlertOverride {
+            fuseFailureAlertOverride(detail)
+            return
+        }
+        dialogs?.openDownloadPage(
+            message: localizedString("Cannot decode raw file", comment: ""),
             informative: detail, url: downloadURL)
     }
 

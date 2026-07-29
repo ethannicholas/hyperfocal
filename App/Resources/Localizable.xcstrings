@@ -66,67 +66,67 @@
         }
       }
     },
-    "Can’t open this camera’s raw files": {
-      "comment": "Alert headline when an undecodable raw needs the Adobe DNG Converter (Windows raw fallback).",
+    "Cannot decode raw file": {
+      "comment": "Alert headline when a raw file needs the Adobe DNG Converter to be decoded (Windows raw fallback). Names the problem, not the camera — the same body can be set to emit raws that decode without help.",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Rohdateien dieser Kamera können nicht geöffnet werden"
+            "value": "Rohdatei kann nicht dekodiert werden"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "No se pueden abrir los archivos raw de esta cámara"
+            "value": "No se puede decodificar el archivo raw"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Impossible d’ouvrir les fichiers raw de cet appareil photo"
+            "value": "Impossible de décoder le fichier raw"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Impossibile aprire i file raw di questa fotocamera"
+            "value": "Impossibile decodificare il file raw"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このカメラの RAW ファイルを開けません"
+            "value": "RAW ファイルをデコードできません"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이 카메라의 RAW 파일을 열 수 없습니다"
+            "value": "RAW 파일을 디코딩할 수 없습니다"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Kan de raw-bestanden van deze camera niet openen"
+            "value": "Kan raw-bestand niet decoderen"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Não é possível abrir os arquivos raw desta câmera"
+            "value": "Não é possível decodificar o arquivo raw"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Не удаётся открыть raw-файлы этой камеры"
+            "value": "Не удалось декодировать raw-файл"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "无法打开此相机的 raw 文件"
+            "value": "无法解码 RAW 文件"
           }
         }
       }
@@ -261,67 +261,67 @@
         }
       }
     },
-    "This camera's raw files need the free Adobe DNG Converter, which isn't installed. Download it from %@": {
-      "comment": "Shown when an undecodable raw is opened without the Adobe DNG Converter installed (Windows raw fallback).",
+    "This image cannot be previewed": {
+      "comment": "Input pane hint when the selected frame is a raw awaiting the Adobe DNG Converter — shown in place of the \"select a frame\" hint, which would imply nothing is selected.",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Für die Rohdateien dieser Kamera wird der kostenlose Adobe DNG Converter benötigt, der nicht installiert ist. Lade ihn hier herunter: %@"
+            "value": "Dieses Bild kann nicht in der Vorschau angezeigt werden"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Los archivos raw de esta cámara necesitan el Adobe DNG Converter gratuito, que no está instalado. Descárgalo desde %@"
+            "value": "Esta imagen no se puede previsualizar"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les fichiers raw de cet appareil photo nécessitent Adobe DNG Converter (gratuit), qui n’est pas installé. Téléchargez-le depuis %@"
+            "value": "Cette image ne peut pas être prévisualisée"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "I file raw di questa fotocamera richiedono Adobe DNG Converter (gratuito), che non è installato. Scaricalo da %@"
+            "value": "Impossibile visualizzare l’anteprima di questa immagine"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このカメラの RAW ファイルには無料の Adobe DNG Converter が必要ですが、インストールされていません。%@ からダウンロードしてください"
+            "value": "この画像はプレビューできません"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이 카메라의 RAW 파일에는 무료 Adobe DNG Converter가 필요하지만 설치되어 있지 않습니다. %@에서 다운로드하십시오"
+            "value": "이 이미지는 미리 볼 수 없습니다"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "De raw-bestanden van deze camera vereisen de gratis Adobe DNG Converter, die niet is geïnstalleerd. Download deze via %@"
+            "value": "Kan geen voorbeeld van deze afbeelding tonen"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Os arquivos raw desta câmera exigem o Adobe DNG Converter gratuito, que não está instalado. Baixe-o em %@"
+            "value": "Não é possível pré-visualizar esta imagem"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Для raw-файлов этой камеры нужен бесплатный Adobe DNG Converter, но он не установлен. Загрузите его: %@"
+            "value": "Предварительный просмотр этого изображения недоступен"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "此相机的 raw 文件需要免费的 Adobe DNG Converter，但尚未安装。请从 %@ 下载"
+            "value": "无法预览此图像"
           }
         }
       }
@@ -706,6 +706,71 @@
           "stringUnit": {
             "state": "translated",
             "value": "比堆栈暗 %.1f 倍"
+          }
+        }
+      }
+    },
+    "%1$@ requires the free Adobe DNG Converter to decode. Download it from %2$@": {
+      "comment": "Shown when a raw file needs the Adobe DNG Converter (Windows raw fallback). %1$@ is the file name — blame the file, not the camera — and %2$@ the download URL.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ benötigt zum Dekodieren den kostenlosen Adobe DNG Converter. Lade ihn hier herunter: %2$@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ necesita el Adobe DNG Converter gratuito para decodificarse. Descárgalo desde %2$@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ nécessite Adobe DNG Converter (gratuit) pour être décodé. Téléchargez-le depuis %2$@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ richiede Adobe DNG Converter (gratuito) per essere decodificato. Scaricalo da %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ のデコードには無料の Adobe DNG Converter が必要です。%2$@ からダウンロードしてください"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@을(를) 디코딩하려면 무료 Adobe DNG Converter가 필요합니다. %2$@에서 다운로드하십시오"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ vereist de gratis Adobe DNG Converter om te decoderen. Download deze via %2$@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ exige o Adobe DNG Converter gratuito para ser decodificado. Baixe-o em %2$@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для декодирования %1$@ нужен бесплатный Adobe DNG Converter. Загрузите его: %2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 需要免费的 Adobe DNG Converter 才能解码。请从 %2$@ 下载"
           }
         }
       }

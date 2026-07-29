@@ -132,24 +132,34 @@ def bare_literals(paths, cpp):
     return out
 
 
+def scan_keys(used, path, pattern):
+    """Collect translation keys from one file, matching across line breaks.
+
+    Whole-file rather than line-by-line, and that is the whole point: these
+    calls wrap as soon as the `comment:` argument is added, putting the literal
+    on the line *after* `localizedString(` / `qsTr(`. Tested one line at a time
+    the pattern then matched nothing, so every wrapped call was invisible to
+    this gate — it could only ever have caught the strings that happened to fit
+    on one line. Line numbers still come from the match offset so the report
+    points at the literal.
+    """
+    text = '\n'.join(read(path))
+    for m in pattern.finditer(text):
+        line = text.count('\n', 0, m.start()) + 1
+        used.setdefault(unescape(m.group(1)), []).append('%s:%d' % (path, line))
+
+
 def keys_used():
     used = {}
     for path in QT_QML + QT_CPP:
         if not os.path.exists(os.path.join(ROOT, path)):
             continue
-        for i, line in enumerate(read(path), 1):
-            for m in KEY_CALL.finditer(line):
-                used.setdefault(unescape(m.group(1)), []).append(
-                    '%s:%d' % (path, i))
+        scan_keys(used, path, KEY_CALL)
     for d in SWIFT_DIRS:
         for name in sorted(os.listdir(os.path.join(ROOT, d))):
             if not name.endswith('.swift'):
                 continue
-            path = os.path.join(d, name)
-            for i, line in enumerate(read(path), 1):
-                for m in SWIFT_KEY.finditer(line):
-                    used.setdefault(unescape(m.group(1)), []).append(
-                        '%s:%d' % (path, i))
+            scan_keys(used, os.path.join(d, name), SWIFT_KEY)
     return used
 
 

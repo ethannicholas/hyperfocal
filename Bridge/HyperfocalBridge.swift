@@ -2033,6 +2033,20 @@ public func hf_input_loading() -> Int32 {
     }
 }
 
+/// Why the selected frame shows no image, empty when there is nothing to
+/// explain. The native pane has read `inputPreviewError` since it existed; the
+/// shell had no way to reach it, so a raw needing the Adobe DNG Converter
+/// rendered as the generic "select a frame in the Stack list" hint — the app
+/// looking idle at precisely the moment it had something to say.
+@_cdecl("hf_input_error")
+public func hf_input_error(_ buffer: UnsafeMutablePointer<CChar>?,
+                           _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let message = Bridge.model?.inputPreviewError else { return 0 }
+        return fillUTF8(message, buffer, cap)
+    }
+}
+
 /// The display's NOMINAL canvas size — the coordinate space the pane's
 /// viewport lives in. Differs from hf_display_size only mid-fuse, when
 /// progressive previews render smaller than the final canvas: mapping

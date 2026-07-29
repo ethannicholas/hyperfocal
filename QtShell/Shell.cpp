@@ -355,6 +355,14 @@ QString Shell::inputTitle() const {
     return QString::fromUtf8(buffer, n);
 }
 
+QString Shell::inputError() const {
+    // Roomier than inputTitle's: this carries the DNG-Converter notice, which
+    // is a sentence plus a URL rather than a file name.
+    char buffer[1024];
+    const int n = hf_input_error(buffer, sizeof buffer);
+    return QString::fromUtf8(buffer, n);
+}
+
 int Shell::selectedFrame() const { return hf_selected_frame(); }
 
 // Two-call sizing against the bridge: count first, then fill. Ascending.

@@ -4,6 +4,9 @@
 # .build-wgpu was the first, compiler-flag experiments add more.
 .build-*
 dist
+# Python bytecode: Scripts/*.py are run directly, but importing one (to reuse
+# its regexes from a probe) leaves a cache dir behind.
+__pycache__/
 xcuserdata
 Hyperfocal.xcodeproj
 .DS_Store

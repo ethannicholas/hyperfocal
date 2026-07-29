@@ -1620,7 +1620,11 @@ ApplicationWindow {
                           .arg(Shell.retouchSourceName)
                         : Shell.inputTitle !== "" ? Shell.inputTitle
                                                   : qsTr("Input")
+                    // A decode that failed outranks both hints: without this the
+                    // pane claims nothing is selected while a frame plainly is.
+                    // Matches the native pane, which reads the same model value.
                     hint: Shell.hasInput ? ""
+                        : Shell.inputError !== "" ? Shell.inputError
                         : Shell.frames.length === 0
                             ? qsTr("Open a stack to begin")
                             : qsTr("Select a frame in the Stack list")
