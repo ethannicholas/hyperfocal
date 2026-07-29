@@ -63,17 +63,17 @@ ApplicationWindow {
         readonly property color cardBorder:
             dark ? Qt.rgba(1, 1, 1, 0.07) : Qt.rgba(0, 0, 0, 0.09)
         readonly property color headerBar: dark ? "#242424" : "#e4e4e4"
-        // Text on the overlay cards that float *over the image wells* — the
-        // progress HUD, the source-loading notice, the spinner badge. Those
-        // cards stay dark in both schemes on purpose: they sit over arbitrary
-        // photo content rather than over chrome, and a light card would wash
-        // out against a bright frame (same photo-tool convention as `well`).
-        // Their text therefore has to be pinned light instead of taken from
-        // textSecondary/textDim — in the light scheme those are #444444 and
-        // #6a6a6a, which on a #282828 card are all but invisible. That is
-        // exactly the bug this pair exists to prevent recurring.
-        readonly property color overlayText: "#e0e0e0"
-        readonly property color overlayTextDim: "#a8a8a8"
+        // The cards that float over the image wells: the progress HUD, the
+        // source-loading notice, the spinner badge. They follow the scheme
+        // like every other surface here — light card in the light scheme,
+        // dark in dark — which is what lets the ordinary text tokens above
+        // read correctly on them. Pinning them dark in both schemes was a
+        // bug, not a photo-tool convention: it left textSecondary (#444444
+        // in the light scheme) sitting on #282828 at about 1.3:1. The alpha
+        // keeps the frame underneath faintly visible, the way the Mac side's
+        // .regularMaterial does.
+        readonly property color overlayCard: dark ? "#e0282828" : "#e6f2f2f2"
+        readonly property color overlayCardSoft: dark ? "#c0282828" : "#ccf2f2f2"
     }
 
     // The scheme as a real Controls palette so Fusion (Windows/Linux)
@@ -708,13 +708,13 @@ ApplicationWindow {
                 width: badge.width + 20
                 height: badge.height + 16
                 radius: 8
-                color: "#c0282828"
+                color: theme.overlayCardSoft
                 Spinner {
                     id: badge
                     anchors.centerIn: parent
                     width: 20
                     height: 20
-                    color: theme.overlayText  // dark card regardless of scheme
+                    color: theme.textSecondary
                 }
             }
         }
@@ -1658,10 +1658,13 @@ ApplicationWindow {
                             : Shell.retouchSourceStatus !== ""
                                 ? Shell.retouchSourceStatus
                                 : qsTr("Loading source…")
-                        color: theme.overlayText
+                        color: theme.textSecondary
                         font.pixelSize: 13
                         padding: 8
-                        background: Rectangle { color: "#c0282828"; radius: 6 }
+                        background: Rectangle {
+                            color: theme.overlayCardSoft
+                            radius: 6
+                        }
                     }
                 }
                 TonedPane {
@@ -1744,7 +1747,7 @@ ApplicationWindow {
                         width: parent.width - 24
                         height: progressColumn.implicitHeight + 20
                         radius: 8
-                        color: "#e0282828"
+                        color: theme.overlayCard
                         ColumnLayout {
                             id: progressColumn
                             anchors.fill: parent
@@ -1759,7 +1762,7 @@ ApplicationWindow {
                                 spacing: 8
                                 Label {
                                     text: Shell.stageText
-                                    color: theme.overlayText
+                                    color: theme.textSecondary
                                     font.pixelSize: 12
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
@@ -1767,7 +1770,7 @@ ApplicationWindow {
                                 Label {
                                     text: Shell.stageEta
                                     visible: text !== ""
-                                    color: theme.overlayTextDim
+                                    color: theme.textDim
                                     font.pixelSize: 12
                                 }
                                 Button {
