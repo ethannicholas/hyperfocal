@@ -81,45 +81,94 @@ this section for the CPU↔GPU *split* and the phase shape, not as a speedup ove
 the VM's end-to-end numbers.
 
 Wall clock, whole `fuse` process including registration and export. Best of 3
-(12 MP) / best of 2 (45 MP):
+(12 MP) / best of 2 (45 MP). The bracketed figures are the same runs *before*
+the x86-64 ISA baseline below — the single largest engine speedup measured on
+this platform, and the reason to read the older entries in this file with the
+target architecture in mind:
 
 | stack | dmap cpu | dmap gpu | pmax cpu | pmax gpu |
 |---|---|---|---|---|
-| 12 MP × 17 (4240×2832) | 21.8 s | 19.1 s | 23.9 s | **14.3 s** |
-| 45 MP × 10 (8192×5464) | 52.2 s | 44.6 s | 58.0 s | **33.7 s** |
+| 12 MP × 17 (4240×2832) | 15.6 s *(21.8)* | 14.8 s *(19.1)* | 15.1 s *(23.9)* | **13.1 s** *(14.3)* |
+| 45 MP × 10 (8192×5464) | 37.8 s *(52.2)* | 35.7 s *(44.6)* | 35.8 s *(58.0)* | **30.0 s** *(33.7)* |
 
 Both sizes clear the < 2 min throughput bar with room to spare. CPU↔GPU
 agreement on the *fused output* — a stronger end-to-end check than the
 kernel-level parity suite, which only sees small fixtures — is 80.1 dB (dmap)
-and 67.6 dB (pmax) at 12 MP, 82.2 / 68.2 at 45 MP: both sit in the band f16
-pixel storage imposes, consistent with the ROADMAP's floors.
+and 67.6 dB (pmax) at 12 MP, 82.2 / 68.2 at 45 MP, **unchanged by the ISA
+switch**: both sit in the band f16 pixel storage imposes, consistent with the
+ROADMAP's floors.
 
-Phase split at 12 MP (`-v`), and the reason the GPU wins are smaller than the
-hardware suggests:
+Phase split at 12 MP (`-v`), pre-ISA figures bracketed:
 
 | phase | dmap cpu | pmax cpu | pmax gpu |
 |---|---|---|---|
-| registration (CPU, before fuse) | 6.68 s | 6.73 s | 6.71 s |
-| decode | 1.84 s | 1.82 s | 2.01 s (wait) |
-| warp | 9.00 s | 8.86 s | — (on device) |
-| energy / build + select + collapse | 2.24 s | 5.31 s | — |
-| upload | — | — | 2.75 s |
-| **GPU compute** | — | — | **0.31 s** |
-| **fuse subtotal** | 13.82 s | 16.29 s | 6.30 s |
+| registration (CPU, before fuse) | 6.67 s *(6.68)* | 6.73 s *(6.73)* | 6.69 s *(6.71)* |
+| decode | 1.76 s *(1.84)* | 1.83 s *(1.82)* | 2.38 s wait *(2.01)* |
+| warp | 3.13 s *(9.00)* | 3.22 s *(8.86)* | — (on device) |
+| energy / build + select + collapse | 2.29 s *(2.24)* | 2.19 s *(5.31)* | — |
+| upload | — | — | 1.50 s *(2.75)* |
+| **GPU compute** | — | — | **0.59 s** *(0.31)* |
+| **fuse subtotal** | **7.88 s** *(13.82)* | **7.51 s** *(16.29)* | **5.45 s** *(6.30)* |
 
-**The GPU is idle almost the whole time it is "working": 0.31 s of compute
-behind 2.01 s of decode-wait and 2.75 s of upload.** Nothing in the fusion
-kernels is worth optimizing at this size — the cost is feeding them. That makes
-upload overlap (decode → upload pipelining, or persistent staging buffers) the
-only GPU-side lever that could pay, and even a perfect one saves ~2.7 s.
+**Fusion is now at rough parity with Apple silicon.** The M-series entry under
+"CPU-path cost of f16 storage" below measures the same 12 MP × 17 synth shape at
+7.41 s (dmap/cpu) and 6.52 s (pmax/cpu); this desktop now does 7.88 and 7.51.
+Before the ISA fix it was 13.82 and 16.29 — i.e. a high-end desktop losing to a
+laptop by 2–2.5×, which is what prompted the investigation.
 
-**Registration is now the largest single phase** — ~6.7 s, roughly half the
-wall clock of the fastest configuration (pmax/gpu, 14.3 s total). It is pure
-CPU SIFT and identical in all four runs. The "cheaper feature detector" item was
-already flagged as the biggest remaining prize; on hardware where fusion
-actually runs on a GPU it is no longer one prize among several, it is *the*
-one. dmap gains least from the GPU (21.8 → 19.1 s) because its CPU-side warp
-and spill round-trip stay on the critical path.
+**Registration is the dominant cost and did not move** — ~6.7 s, identical
+across every configuration and unchanged by the ISA switch, because it is
+OpenCV SIFT and OpenCV already dispatches SIMD at runtime. It is now **51 % of
+the fastest configuration's wall clock** (pmax/gpu, 13.1 s total). The "cheaper
+feature detector" item was already flagged as the biggest remaining prize; it is
+now the only one of consequence on this platform.
+
+**The GPU remains idle almost the whole time it is "working": 0.59 s of compute
+behind 2.38 s of decode-wait and 1.50 s of upload.** Nothing in the fusion
+kernels is worth optimizing at this size — the cost is feeding them. Upload
+overlap (decode → upload pipelining, or persistent staging buffers) is the only
+GPU-side lever that could pay, and a perfect one now saves ~1.5 s. Note the CPU
+paths gained so much that the GPU's *margin* shrank: pmax/gpu was 1.68× faster
+than pmax/cpu before, and is 1.15× now.
+
+### The x86-64 ISA baseline (the big one)
+
+Swift defaults to the generic `x86-64` target: SSE2, no AVX, and **no F16C**.
+Pixel storage is `Float16` and every per-pixel loop crosses that boundary, which
+on Apple silicon is one native `fcvtl`/`fcvtn` but compiled here to a
+compiler-rt **software call**. Evidence, before the fix: `__truncsfhf2`
+referenced by 18 of HyperfocalKit's object files, and **zero AVX instructions in
+the entire engine** (`llvm-objdump -d`, counting `ymm`). After
+`-target-cpu haswell`: 1474 AVX instructions, zero software-f16 references.
+
+So the f16 storage decision — a win on Apple silicon and on the GPU, recorded
+below — was silently a *tax* on x86. Isolated effect on the warp loop
+(`debug-bench warp`, 11 MP): **34.9 → 8.7 ns/px, 4.0×**.
+
+Two things this did NOT turn out to be, both measured before the ISA was
+suspected, and worth not re-testing: it is not a threading problem (the warp
+bench runs at **13.8× parallelism** on 16 threads — the cores were fully busy
+running bad code), and it is not the per-file specialization trap the contract
+in `PortableSIMD.swift` warns about (release builds already whole-module).
+
+Gotchas for anyone touching this:
+
+- Swift's `-target-cpu` does **not** accept the `x86-64-v3` alias that Clang's
+  `-march` does — its list ends at `x86-64, geode`. `haswell` is the portable
+  spelling of that feature level (AVX2 + FMA + F16C + BMI). Passing an
+  unaccepted name fails with `clang importer creation failed`, which does not
+  obviously mean "bad CPU name".
+- `-Xllvm -mcpu=…` is silently **ignored** — it does not reach Swift's IRGen.
+  The first attempt with it built cleanly and changed nothing; always verify a
+  codegen flag landed by checking the objects, not by trusting the build.
+- Results shift slightly (FMA contraction, different rounding order):
+  baseline↔AVX2 fused output is 72.1 dB (dmap) / 67.8 dB (pmax). Quality against
+  synth truth is unmoved (51.42 → 51.41, 50.45 → 50.46), the CI gate PSNRs are
+  identical, and `debug-wgpu` parity is **bit-identical** (112.9 / 74.0 / 69.6).
+  Re-run both gates after touching the baseline anyway.
+- Applied to the Swift targets only. The C/C++ targets are thin wrappers over
+  vcpkg libraries that already dispatch at runtime; raising their baseline is
+  unmeasured and was left alone.
 
 ## Measured dead ends (don't re-try without new hardware or evidence)
 

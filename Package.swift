@@ -108,8 +108,43 @@ let warningsAsErrors: [SwiftSetting] = [.unsafeFlags(["-warnings-as-errors"])]
 let warningsAsErrors: [SwiftSetting] = []
 #endif
 
+// x86-64 ISA baseline (measured 2026-07-29 on a Zen 4 desktop). Swift defaults
+// to the generic `x86-64` target: SSE2 only, no AVX, and — the expensive part —
+// **no F16C**. Pixel storage is Float16 (`ImageBuffer.pixels`) and every
+// per-pixel loop crosses that boundary, which on Apple silicon is a single
+// native `fcvtl`/`fcvtn` but here compiled to a compiler-rt *software call*:
+// `__truncsfhf2` was referenced by 18 of HyperfocalKit's object files, and the
+// entire engine contained zero AVX instructions. So the f16 storage decision —
+// a win on Apple silicon and on the GPU — was silently a tax on x86.
+//
+// Effect, same machine, best-of runs: the Lanczos warp loop 34.9 → 8.7 ns/px
+// (4.0×); a 12 MP × 17 dmap fuse 21.8 → 15.9 s and pmax 24.0 → 15.1 s
+// (end-to-end gains are smaller because registration and decode don't move).
+// Quality is unmoved: 51.42 → 51.41 dB (dmap) and 50.45 → 50.46 dB (pmax)
+// against synth truth. Results do shift slightly — baseline↔AVX2 output is
+// 72.1 dB (dmap) / 67.8 dB (pmax), the same band f16 rounding already imposes
+// on CPU↔GPU — so re-check `debug-wgpu` after touching this.
+//
+// `haswell` IS the x86-64-v3 feature level (AVX2 + FMA + F16C + BMI). Swift's
+// `-target-cpu` does not accept the `x86-64-v3` alias that Clang's `-march`
+// does, so the CPU name is the only portable spelling available here. The floor
+// it sets is Intel Haswell (2013) / AMD Zen (2017); Windows 11's own CPU
+// requirements are already above that, so no supported Windows machine is
+// excluded. Applied to the Swift targets only — the C/C++ targets are thin
+// wrappers over vcpkg libraries that already do their own runtime dispatch, and
+// raising their baseline is unmeasured.
+//
+// Manifests evaluate on the HOST, so this keys off the host architecture. That
+// is correct for the native builds this project does and would need revisiting
+// for a cross-compile.
+#if arch(x86_64) && !os(macOS)
+let isaBaseline: [SwiftSetting] = [.unsafeFlags(["-target-cpu", "haswell"])]
+#else
+let isaBaseline: [SwiftSetting] = []
+#endif
+
 // HyperfocalKit's own build settings, extended per-platform below.
-var kitSwiftSettings: [SwiftSetting] = warningsAsErrors + [
+var kitSwiftSettings: [SwiftSetting] = warningsAsErrors + isaBaseline + [
     // The engine's per-pixel loops are ~30-50x slower at -Onone — a 45MP depth
     // regularization goes from ~30s to tens of minutes. Keep the engine
     // optimized even in Debug builds; the app layer stays debuggable.
@@ -145,7 +180,8 @@ appCoreDeps.append(.product(name: "OpenCombine", package: "OpenCombine",
 appCoreDeps.append("CZlib")
 extraTargets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
 #endif
-var appCoreSwiftSettings: [SwiftSetting] = warningsAsErrors + [.unsafeFlags(["-enable-testing"])]
+var appCoreSwiftSettings: [SwiftSetting] =
+    warningsAsErrors + isaBaseline + [.unsafeFlags(["-enable-testing"])]
 #if os(Windows)
 // CZlib's <zlib.h> and the link path both come from vcpkg.
 appCoreSwiftSettings.append(.unsafeFlags(
@@ -169,7 +205,7 @@ extraTargets.append(
         name: "HyperfocalBridge",
         dependencies: ["AppCore", "HyperfocalKit"],
         path: "Bridge",
-        swiftSettings: warningsAsErrors + wgpuXcc
+        swiftSettings: warningsAsErrors + isaBaseline + wgpuXcc
     )
 )
 extraProducts.append(
@@ -306,7 +342,7 @@ dngLinkerSettings.insert(.unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]), at: 0)
 #endif
 
 var kitLinkerSettings: [LinkerSetting] = []
-var cliSwiftSettings: [SwiftSetting] = warningsAsErrors
+var cliSwiftSettings: [SwiftSetting] = warningsAsErrors + isaBaseline
 var cliLinkerSettings: [LinkerSetting] = []
 #if os(Windows)
 // UTF-8 active code page for the process (Windows residual 1): the C

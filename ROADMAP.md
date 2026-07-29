@@ -405,7 +405,13 @@ stack before quoting a new ledger.
   on the 2-core reference (currently ~175 s dmap / ~132 s pmax at 11 MP; ~295 s
   dmap at 45 MP). The biggest remaining prize is a **cheaper feature detector**
   (SIFT's DoG pyramid dominates registration). Breakdown + what's been tried:
-  `Docs/performance.md`.
+  `Docs/performance.md`. On x64 desktop hardware the bar is already met with
+  room to spare, which promotes the detector from "biggest remaining prize" to
+  the **only** one of consequence there: the x86-64 ISA baseline (2026-07-29)
+  cut fusion to 5.5–7.9 s at 12 MP while registration stayed put at ~6.7 s, so
+  registration is now **51 % of the fastest configuration's wall clock**. It is
+  the one phase the ISA change could not help — OpenCV already dispatches SIMD
+  at runtime — so nothing short of a different detector moves it.
 - **Metal GPUDMap: zero-copy frame upload (Mac)** — blocked on a Swift toolchain
   miscompile (filed swiftlang/swift#90874). Re-test each new toolchain with the
   seconds-fast CLI repro in `Docs/research/2026-07-21-pixelstorage-toolchain-bug.md`.

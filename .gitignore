@@ -1,5 +1,8 @@
 .build
-.build-wgpu
+# Alternate SwiftPM scratch paths (swift build --scratch-path .build-<tag>):
+# A/B builds keep their own object trees so the primary one stays intact —
+# .build-wgpu was the first, compiler-flag experiments add more.
+.build-*
 dist
 xcuserdata
 Hyperfocal.xcodeproj
