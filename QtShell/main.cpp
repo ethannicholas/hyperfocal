@@ -24,6 +24,29 @@
 // the same functional journeys) — no AX/screen driving involved.
 namespace {
 
+// How many polls (200 ms each — see `poll->start`) a stage may wait on an async
+// *decode* before giving up.
+//
+// The retouch source is the worst case in the journey: cycling to a neighbour
+// frame decodes a full-resolution frame, and for a 45 MP raw that means an
+// Adobe DNG Converter round-trip plus a LibRaw demosaic. Measured at **41
+// polls (~8.2 s)** on a fast desktop with a warm DNG cache — exactly one past
+// the old budget of 40, which is why raw stacks failed this one stage while
+// every other assertion passed and the export landed.
+//
+// Sized for headroom rather than trimmed to that measurement, because the
+// budget costs nothing when the test is healthy: the poll returns the moment
+// the source is ready, so a larger number only bounds how long a genuine
+// failure takes to report. Slower machines and bigger frames both push the real
+// figure up, and a budget that fails by one tick is worse than no budget.
+//
+// Display-settle waits (zoom, noise-floor preview) keep their own smaller
+// budgets — they are not decode-bound. The project reload/replace waits *are*
+// decode-bound and still sit at 40; they passed on the same 45 MP raw stack, so
+// they are left alone, but their margin was not measured and this is the
+// constant to reach for if they start flaking.
+constexpr int kDecodeWaitTicks = 150;   // 150 × 200 ms = 30 s
+
 struct SelfTest {
     QString stackDir;
     QString stack2Dir;    // HFQT_STACK2: batch journey (two stacks)
@@ -366,12 +389,22 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 return;
             }
             case 6: {   // retouch source decodes, then a stroke round-trip
-                if (!shell->retouchCanPaint() && ++state->stageTicks < 40) {
+                if (!shell->retouchCanPaint()
+                    && ++state->stageTicks < kDecodeWaitTicks) {
                     // hover keeps the auto-pick target current while the
                     // decode lands
                     shell->retouchHover(shell->displayWidth() / 2.0,
                                         shell->displayHeight() / 2.0);
                     return;
+                }
+                // Say so rather than failing mutely: this stage timing out used
+                // to surface only as a bare exit 18, which reads as "retouch is
+                // broken" when the truth was "the decode needed one more poll".
+                if (!shell->retouchCanPaint()) {
+                    qWarning() << "selftest retouch: source not paintable after"
+                               << state->stageTicks << "polls"
+                               << (state->cycledSource ? "(after cycling source)"
+                                                       : "(initial source)");
                 }
                 // Paint from a NEIGHBOR frame, not the default pick:
                 // at the image center the fused result can be exactly the
