@@ -951,7 +951,10 @@ public final class AppModel: ObservableObject {
     }
 
     public func setStackEnabled(_ id: UUID, to value: Bool) {
-        guard let stack = stacks.first(where: { $0.id == id }) else { return }
+        // See setIncluded: enabled-ness decides batch queue membership, so
+        // it must not move under a running fuse.
+        guard !phase.isRunning,
+              let stack = stacks.first(where: { $0.id == id }) else { return }
         objectWillChange.send()
         stack.enabled = value
     }
@@ -2463,7 +2466,14 @@ public final class AppModel: ObservableObject {
     /// Checkbox semantics: toggling a row that's part of a multi-selection
     /// applies the row's new state to every selected row. Frames of
     /// non-selected stacks toggle directly on their Stack.
+    ///
+    /// Inert while a fuse runs (as are `includeAll` and `setStackEnabled`):
+    /// the running fuse uses the frame list it started with, and a batch run
+    /// reads each stack's checkboxes as it reaches it — a mid-run toggle
+    /// would silently change what the queue fuses. Both shells also disable
+    /// the checkboxes; the guard is what makes the invariant hold.
     public func setIncluded(_ url: URL, to value: Bool) {
+        guard !phase.isRunning else { return }
         if !frames.contains(url),
            let owner = stacks.first(where: { $0.frames.contains(url) }) {
             objectWillChange.send()
@@ -2505,6 +2515,7 @@ public final class AppModel: ObservableObject {
     }
 
     func includeAll(_ value: Bool) {
+        guard !phase.isRunning else { return }
         let before = included
         included = value ? Set(frames) : []
         if included != before {

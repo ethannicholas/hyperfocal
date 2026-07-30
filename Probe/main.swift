@@ -725,6 +725,26 @@ Task { @MainActor in
         print("probe: FRAME CHANGE DID NOT RE-ENABLE FUSE"); exit(1)
     }
     model.setIncluded(urls[0], to: true)
+    // Inclusion and stack enablement are inert while a fuse runs: the run
+    // uses the frame list it started with, and the batch queue reads
+    // checkboxes as it reaches each stack — a mid-run toggle would silently
+    // change what gets fused. Both shells disable the controls; the model
+    // guard is what the probe can hold.
+    model.phase = .running
+    model.setIncluded(urls[0], to: false)
+    guard model.included.contains(urls[0]) else {
+        print("probe: setIncluded NOT INERT WHILE RUNNING"); exit(1)
+    }
+    model.includeAll(false)
+    guard model.included.count == urls.count else {
+        print("probe: includeAll NOT INERT WHILE RUNNING"); exit(1)
+    }
+    model.setStackEnabled(model.stacks[0].id, to: false)
+    guard model.stacks[0].enabled else {
+        print("probe: setStackEnabled NOT INERT WHILE RUNNING"); exit(1)
+    }
+    model.phase = .done
+    print("probe: inclusion inert while fusing OK")
     // The GPU toggle counts as dirty too — it exists for when the GPU path
     // misbehaves, so switching engines must offer a re-fuse.
     if MetalEngine.shared != nil {

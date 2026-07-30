@@ -82,9 +82,11 @@ struct ContentView: View {
                     if !model.isCollapsed(.stack) {
                         Button("All") { model.includeAll(true) }
                             .controlSize(.small)
+                            .disabled(model.phase.isRunning)
                             .accessibilityIdentifier("stack.include-all")
                         Button("None") { model.includeAll(false) }
                             .controlSize(.small)
+                            .disabled(model.phase.isRunning)
                             .accessibilityIdentifier("stack.include-none")
                     }
                 }
@@ -139,6 +141,7 @@ struct ContentView: View {
                                              isSelected: stack.id == model.selectedStackID,
                                              status: model.status(of: stack),
                                              thumbnail: model.stackThumbnails[stack.id],
+                                             isRunning: model.phase.isRunning,
                                              setEnabled: { model.setStackEnabled(stack.id, to: $0) },
                                              select: { model.selectStack(stack.id) })
                                         .onAppear { model.requestStackThumbnail(for: stack.id) }
@@ -207,7 +210,10 @@ struct ContentView: View {
                      issue: model.frameIssue(url, in: stack),
                      setIncluded: { model.setIncluded(url, to: $0) })
                 .opacity(enabled ? 1 : 0.4)
-                .disabled(!enabled)
+                // Checkboxes lock during a fuse (the model ignores them
+                // anyway — the run and the batch queue must not shift under
+                // a running fuse); dimming stays tied to stack enablement.
+                .disabled(!enabled || model.phase.isRunning)
         }
     }
 
@@ -889,6 +895,10 @@ struct StackRow: View {
     /// The stack's middle-frame thumbnail (AppModel.stackThumbnails) —
     /// replaces the generic stack glyph once it has decoded.
     let thumbnail: CGImage?
+    /// Locks the enable checkbox during a fuse — enabled-ness decides batch
+    /// queue membership, so it must not move under a running fuse (the model
+    /// ignores the toggle then; this greys the control to say so).
+    let isRunning: Bool
     let setEnabled: (Bool) -> Void
     let select: () -> Void
 
@@ -900,6 +910,7 @@ struct StackRow: View {
                    isOn: Binding(get: { stack.enabled }, set: { setEnabled($0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
+                .disabled(isRunning)
                 .help("Include this stack in Fuse Enabled Stacks. Doesn't change its per-frame checkboxes.")
                 .accessibilityIdentifier("stack.row.\(stack.name).enabled")
             if let warning = stack.orderWarning {
