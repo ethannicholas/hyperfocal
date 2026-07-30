@@ -43,6 +43,10 @@ matrix.
 
 ---
 
+## Bugs
+
+- The error message for a failed fuse is terrible: "registration failed for frame pair at index 2". It's not capitalized and certainly not written for an end user's consumption.
+
 ## Cross-platform port (Windows/Linux)
 
 The engine, CLI, and Qt/QML shell are **landed at feature parity** on macOS,
