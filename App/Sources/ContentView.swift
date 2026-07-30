@@ -924,15 +924,15 @@ struct StackRow: View {
                         Image(decorative: thumbnail, scale: 2)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(width: 30, height: 21)
+                            .frame(width: 60, height: 42)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                             .overlay(RoundedRectangle(cornerRadius: 3)
                                 .strokeBorder(.separator, lineWidth: 0.5))
                     } else {
                         Image(systemName: "square.stack.3d.up")
-                            .font(.caption)
+                            .font(.title2)
                             .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                            .frame(width: 30, height: 21)
+                            .frame(width: 60, height: 42)
                     }
                     Text(stack.name)
                         .fontWeight(isSelected ? .semibold : .regular)

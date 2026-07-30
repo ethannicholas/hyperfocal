@@ -227,9 +227,9 @@ public final class AppModel: ObservableObject {
     private var stackThumbnailsInFlight: Set<UUID> = []
 
     /// Longest thumbnail edge, sized for stack rows at 2× displays in both
-    /// shells (rows draw it around 32×22 points). nonisolated: read from the
+    /// shells (rows draw it around 60×42 points). nonisolated: read from the
     /// detached decode task.
-    public nonisolated static let stackThumbnailMaxSide = 96
+    public nonisolated static let stackThumbnailMaxSide = 192
 
     public func requestStackThumbnail(for stackID: UUID) {
         guard let stack = stacks.first(where: { $0.id == stackID }),

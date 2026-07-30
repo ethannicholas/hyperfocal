@@ -990,10 +990,10 @@ ApplicationWindow {
                         source: modelData.thumbToken !== 0
                                 ? "image://hfthumb/" + index + "?" + modelData.thumbToken
                                 : ""
-                        sourceSize.width: 30
-                        sourceSize.height: 21
-                        Layout.preferredWidth: 30
-                        Layout.preferredHeight: 21
+                        sourceSize.width: 60
+                        sourceSize.height: 42
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 42
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                     }
