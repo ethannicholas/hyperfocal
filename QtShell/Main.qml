@@ -799,7 +799,7 @@ ApplicationWindow {
 
     // Grouped-form card — the native sidebar renders each Form section
     // on a rounded, slightly-lighter background (formStyle(.grouped));
-    // headers sit above the cards.
+    // the section header is the card's first row, like native.
     component SidebarCard: Rectangle {
         default property alias content: cardColumn.data
         Layout.fillWidth: true
@@ -814,6 +814,14 @@ ApplicationWindow {
             anchors.margins: 10
             spacing: 10
         }
+    }
+
+    // The rule under a card's title row — the native form draws the same
+    // separator between its header row and the section content.
+    component CardRule: Rectangle {
+        Layout.fillWidth: true
+        implicitHeight: 1
+        color: theme.cardBorder
     }
 
     // Native sectionHeader: chevron + title as one toggle for the
@@ -918,15 +926,63 @@ ApplicationWindow {
             height: Math.max(implicitHeight, sidebarScroll.availableHeight)
             spacing: 10
 
+            // Stack card: header inside the card like every other section
+            // (and like native); the title reads "Stacks" once a second
+            // stack exists, when the flat frame list yields to the tree.
+            SidebarCard {
+            SectionHeader {
+                id: stackHeader
+                title: stackList.count > 1 ? qsTr("Stacks") : qsTr("Stack")
+                section: "stack"
+                // "N of M" included count, the native stack.count.
+                subtitle: {
+                    if (Shell.frames.length === 0) return ""
+                    var n = 0
+                    for (var i = 0; i < Shell.frames.length; ++i)
+                        if (Shell.frames[i].included) ++n
+                    return qsTr("%1 of %2").arg(n).arg(Shell.frames.length)
+                }
+                Button {
+                    text: qsTr("All")
+                    visible: frameList.count > 0
+                    enabled: !Shell.isRunning
+                    flat: true
+                    font.pixelSize: 11
+                    // Tight header buttons: Fusion's Button background
+                    // imposes a large minimum implicit width (~80px) that
+                    // crowded the header row until the whole sidebar
+                    // column overflowed; size these to their text.
+                    leftPadding: 8
+                    rightPadding: 8
+                    Layout.preferredWidth: implicitContentWidth
+                                           + leftPadding + rightPadding
+                    onClicked: Shell.setAllFramesIncluded(true)
+                }
+                Button {
+                    text: qsTr("None")
+                    visible: frameList.count > 0
+                    enabled: !Shell.isRunning
+                    flat: true
+                    font.pixelSize: 11
+                    // Tight header buttons: Fusion's Button background
+                    // imposes a large minimum implicit width (~80px) that
+                    // crowded the header row until the whole sidebar
+                    // column overflowed; size these to their text.
+                    leftPadding: 8
+                    rightPadding: 8
+                    Layout.preferredWidth: implicitContentWidth
+                                           + leftPadding + rightPadding
+                    onClicked: Shell.setAllFramesIncluded(false)
+                }
+            }
+            ColumnLayout {
+            visible: !stackHeader.collapsed
+            Layout.fillWidth: true
+            spacing: 10
+            CardRule {}
             // Stack tree (flat mirror): shown once a second stack exists,
             // like the native sidebar. Row click selects (stash/install);
             // the checkbox is the batch-fuse opt-in.
-            Label {
-                text: qsTr("Stacks")
-                visible: stackList.count > 1
-                color: theme.textPrimary
-                font.bold: true
-            }
             ListView {
                 id: stackList
                 visible: count > 1
@@ -1088,57 +1144,11 @@ ApplicationWindow {
                 }
             }
 
-            SectionHeader {
-                id: stackHeader
-                title: qsTr("Stack")
-                section: "stack"
-                // "N of M" included count, the native stack.count.
-                subtitle: {
-                    if (Shell.frames.length === 0) return ""
-                    var n = 0
-                    for (var i = 0; i < Shell.frames.length; ++i)
-                        if (Shell.frames[i].included) ++n
-                    return qsTr("%1 of %2").arg(n).arg(Shell.frames.length)
-                }
-                Button {
-                    text: qsTr("All")
-                    visible: frameList.count > 0
-                    enabled: !Shell.isRunning
-                    flat: true
-                    font.pixelSize: 11
-                    // Tight header buttons: Fusion's Button background
-                    // imposes a large minimum implicit width (~80px) that
-                    // crowded the header row until the whole sidebar
-                    // column overflowed; size these to their text.
-                    leftPadding: 8
-                    rightPadding: 8
-                    Layout.preferredWidth: implicitContentWidth
-                                           + leftPadding + rightPadding
-                    onClicked: Shell.setAllFramesIncluded(true)
-                }
-                Button {
-                    text: qsTr("None")
-                    visible: frameList.count > 0
-                    enabled: !Shell.isRunning
-                    flat: true
-                    font.pixelSize: 11
-                    // Tight header buttons: Fusion's Button background
-                    // imposes a large minimum implicit width (~80px) that
-                    // crowded the header row until the whole sidebar
-                    // column overflowed; size these to their text.
-                    leftPadding: 8
-                    rightPadding: 8
-                    Layout.preferredWidth: implicitContentWidth
-                                           + leftPadding + rightPadding
-                    onClicked: Shell.setAllFramesIncluded(false)
-                }
-            }
-            // Native empty state: hint + Open Folder…, under the
-            // Stack label, only while no stack is open.
+            // Native empty state: hint + Open Folder…, inside the card,
+            // only while no stack is open.
             Label {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
-                         && !stackHeader.collapsed
                 text: qsTr("Drop a folder of frames here, or:")
                 color: theme.textDim
                 font.pixelSize: 12
@@ -1147,7 +1157,6 @@ ApplicationWindow {
             Button {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
-                         && !stackHeader.collapsed
                 text: qsTr("Open Folder…")
                 enabled: !Shell.isRunning
                 onClicked: openDialog.open()
@@ -1156,7 +1165,7 @@ ApplicationWindow {
                 id: frameList
                 // Single-stack projects list frames flat; with several
                 // stacks the tree's nested rows take over, like native.
-                visible: stackList.count <= 1 && !stackHeader.collapsed
+                visible: stackList.count <= 1
                 Layout.fillWidth: true
                 Layout.preferredHeight: visible
                     ? Math.min(300, contentHeight) : 0
@@ -1196,7 +1205,10 @@ ApplicationWindow {
                     }
                 }
             }
+            }
+            }
 
+            SidebarCard {
             SectionHeader {
                 id: fusionHeader
                 title: qsTr("Fusion")
@@ -1218,8 +1230,11 @@ ApplicationWindow {
                     onClicked: Shell.resetFusion()
                 }
             }
-            SidebarCard {
+            ColumnLayout {
                 visible: !fusionHeader.collapsed
+                Layout.fillWidth: true
+                spacing: 10
+                CardRule {}
                 // Algorithm selector: DMap (depth map) or PMax (pyramid
                 // fusion), each with an info tooltip. Only DMap carries depth;
                 // the persisted raw value is "dmap"/"pmax". Native lays this
@@ -1344,7 +1359,9 @@ ApplicationWindow {
                     onClicked: Shell.fuseEnabledStacks()
                 }
             }
+            }
 
+            SidebarCard {
             SectionHeader {
                 id: toneHeader
                 title: qsTr("Tone")
@@ -1365,8 +1382,11 @@ ApplicationWindow {
                     onClicked: Shell.resetTone()
                 }
             }
-            SidebarCard {
+            ColumnLayout {
                 visible: !toneHeader.collapsed
+                Layout.fillWidth: true
+                spacing: 10
+                CardRule {}
                 // Every tone control reads signed (native "%+.2f EV" /
                 // "%+.0f"): these are offsets from neutral, so the sign is
                 // part of the value, not noise.
@@ -1401,14 +1421,19 @@ ApplicationWindow {
                     showsSign: true
                 }
             }
+            }
 
+            SidebarCard {
             SectionHeader {
                 id: editHeader
                 title: qsTr("Edit")
                 section: "retouch"
             }
-            SidebarCard {
+            ColumnLayout {
                 visible: !editHeader.collapsed
+                Layout.fillWidth: true
+                spacing: 10
+                CardRule {}
                 Button {
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
@@ -1567,22 +1592,28 @@ ApplicationWindow {
                     elide: Text.ElideRight
                 }
             }
+            }
 
             Item { Layout.fillHeight: true }
 
+            SidebarCard {
             SectionHeader {
                 id: exportHeader
                 title: qsTr("Export")
                 section: "export"
             }
-            SidebarCard {
+            ColumnLayout {
                 visible: !exportHeader.collapsed
+                Layout.fillWidth: true
+                spacing: 10
+                CardRule {}
                 Button {
                     Layout.fillWidth: true
                     text: Shell.depthMode ? qsTr("Export Depth Map…") : qsTr("Export Result…")
                     enabled: !Shell.isRunning && Shell.hasDisplay
                     onClicked: Shell.exportInteractive()
                 }
+            }
             }
         }
         }

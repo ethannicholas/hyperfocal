@@ -31,12 +31,15 @@ struct ContentView: View {
 
     // MARK: - Sidebar
 
-    /// The frame list lives outside the Form: a List nested in a grouped Form
-    /// doesn't get its own scrolling.
+    /// The Stack card lives outside the Form: a List nested in a grouped
+    /// Form loses its scrolling entirely — wheel events over it are
+    /// swallowed dead (they don't even reach the form's own scroll view)
+    /// and `proxy.scrollTo` is a no-op, both remeasured when this layout
+    /// last changed. Its card chrome is therefore hand-drawn to match the
+    /// form's (see `cardStyled`).
     private var sidebar: some View {
         VStack(spacing: 0) {
             stackPanel
-            Divider()
             Form {
                 fusionSection
                 toneSection
@@ -52,8 +55,28 @@ struct ContentView: View {
         }
     }
 
+    /// The grouped-form card look, replicated for the one section that can't
+    /// live in the Form (above). `.background.secondary` matches the form's
+    /// card fill within 1/255 in both light and dark (measured against
+    /// live renders); insets and radius likewise mirror the form's.
+    private func cardStyled<T: View>(@ViewBuilder _ content: () -> T) -> some View {
+        VStack(alignment: .leading, spacing: 0, content: content)
+            .background(.background.secondary)
+            // Clip content too (the frame List runs to the card's bottom
+            // edge), not just the fill.
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+    }
+
+    /// The form's inter-row separator, replicated (Divider alone is twice as
+    /// bright — the form draws its rules at half strength in both schemes).
+    private var cardSeparator: some View {
+        Divider().opacity(0.5).padding(.horizontal, 10)
+    }
+
     private var stackPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        cardStyled {
             HStack(spacing: 5) {
                 // Same real-button treatment as sectionHeader (accessibility
                 // and automation); All/None stay siblings outside the button.
@@ -91,13 +114,13 @@ struct ContentView: View {
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, model.isCollapsed(.stack) ? 10 : 0)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 36)
 
             if model.isCollapsed(.stack) {
                 EmptyView()
             } else if model.stacks.isEmpty {
+                cardSeparator
                 VStack(spacing: 10) {
                     Text("Drop a folder of frames here, or:")
                         .foregroundStyle(.secondary)
@@ -105,8 +128,8 @@ struct ContentView: View {
                         .accessibilityIdentifier("stack.open-folder")
                 }
                 .frame(maxWidth: .infinity, minHeight: 120)
-                .padding(.bottom, 10)
             } else {
+                cardSeparator
                 ScrollViewReader { proxy in
                     List(selection: $model.selection) {
                         // One stack keeps the familiar flat list; several show
@@ -158,6 +181,9 @@ struct ContentView: View {
                         }
                     }
                     .listStyle(.inset)
+                    // Let the card fill show through — the list's own
+                    // backdrop is the window background, visibly darker.
+                    .scrollContentBackground(.hidden)
                     .frame(minHeight: 140, idealHeight: 280, maxHeight: 360)
                     .onChange(of: model.selection) { _, newValue in
                         model.selectionChanged()
@@ -232,7 +258,10 @@ struct ContentView: View {
     /// button toggling the section's collapsed state (persisted across runs)
     /// — a button rather than a tap gesture so the header is accessible and
     /// automatable. `trailing` stays a sibling outside the button: nesting
-    /// buttons inside a button label breaks hit-testing.
+    /// buttons inside a button label breaks hit-testing. Rendered as the
+    /// section's FIRST ROW (inside the card), not its `header:` — matching
+    /// the Stack card, so every title sits on its card's background at the
+    /// same leading edge.
     private func sectionHeader<T: View>(
         _ title: LocalizedStringKey, _ section: AppModel.SidebarSection,
         @ViewBuilder trailing: () -> T
@@ -246,11 +275,9 @@ struct ContentView: View {
                           ? "chevron.right" : "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    // Font pinned (matching the Stack panel's header): a
-                    // collapsed section leaves its Section empty, and the
-                    // grouped Form then restyles the *next* section's header
-                    // as mid-group text — ambient styling can't be trusted
-                    // here.
+                    // Font pinned (matching the Stack card's header): a form
+                    // ROW styles its text as body — the title must keep the
+                    // header weight itself.
                     Text(title)
                         .font(.headline)
                         .foregroundStyle(.primary)
@@ -264,7 +291,6 @@ struct ContentView: View {
             .accessibilityValue(model.isCollapsed(section) ? "collapsed" : "expanded")
             trailing()
         }
-        .padding(.bottom, model.isCollapsed(section) ? 12 : 0)
     }
 
     private func sectionHeader(_ title: LocalizedStringKey,
@@ -286,6 +312,15 @@ struct ContentView: View {
         // live in Settings (⌘,); the sidebar keeps the per-stack creative
         // controls.
         Section {
+            sectionHeader("Fusion", .fusion) {
+                if !model.fusionSettingsAreDefault {
+                    Button("Reset") { model.resetFusionSettings() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                        .disabled(model.phase.isRunning)
+                        .accessibilityIdentifier("fusion.reset")
+                }
+            }
             if !model.isCollapsed(.fusion) {
             // Algorithm selector: DMap (depth map) vs PMax (pyramid fusion),
             // each with an info tooltip. Only DMap carries depth (depth view,
@@ -389,21 +424,19 @@ struct ContentView: View {
                 .help("Fuses every enabled stack whose result is missing or out of date (frames or settings changed), one after another with the current settings; bad frames are excluded automatically.")
             }
             }
-        } header: {
-            sectionHeader("Fusion", .fusion) {
-                if !model.fusionSettingsAreDefault {
-                    Button("Reset") { model.resetFusionSettings() }
-                        .controlSize(.small)
-                        .buttonStyle(.borderless)
-                        .disabled(model.phase.isRunning)
-                        .accessibilityIdentifier("fusion.reset")
-                }
-            }
         }
     }
 
     private var toneSection: some View {
         Section {
+            sectionHeader("Tone", .tone) {
+                if !model.tone.isNeutral {
+                    Button("Reset") { model.resetTone() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("tone.reset")
+                }
+            }
             if !model.isCollapsed(.tone) {
             LabeledSlider(
                 label: "Exposure", id: "tone.slider.exposure", value: $model.tone.exposure, range: -5...5,
@@ -436,15 +469,6 @@ struct ContentView: View {
                 help: "Moves the black point itself: the very bottom of the range.",
                 onEditingChanged: { model.toneEditing($0) })
             }
-        } header: {
-            sectionHeader("Tone", .tone) {
-                if !model.tone.isNeutral {
-                    Button("Reset") { model.resetTone() }
-                        .controlSize(.small)
-                        .buttonStyle(.borderless)
-                        .accessibilityIdentifier("tone.reset")
-                }
-            }
         }
     }
 
@@ -455,6 +479,7 @@ struct ContentView: View {
         // itself. Crop and Retouch are mutually exclusive modes; whichever
         // is active swaps its controls in.
         Section {
+            sectionHeader("Edit", .retouch)
             if !model.isCollapsed(.retouch) {
                 if model.cropMode {
                     CropControls(model: model)
@@ -487,13 +512,12 @@ struct ContentView: View {
                     .accessibilityIdentifier("retouch.start")
                 }
             }
-        } header: {
-            sectionHeader("Edit", .retouch)
         }
     }
 
     private var exportSection: some View {
         Section {
+            sectionHeader("Export", .export)
             if !model.isCollapsed(.export) {
             // Format and color space live in the export dialogs themselves
             // (ExportOptionsView in MacDialogService.swift) — the options sit
@@ -530,8 +554,6 @@ struct ContentView: View {
                 .help("Writes every fused stack (retouch edits included) to one folder, named after the stacks, in the format and color space chosen in the dialog.")
             }
             }
-        } header: {
-            sectionHeader("Export", .export)
         }
     }
 

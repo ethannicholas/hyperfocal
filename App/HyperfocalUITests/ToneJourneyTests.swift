@@ -16,6 +16,17 @@ final class ToneJourneyTests: XCTestCase {
         waitForFuseDone(app)
         try sendCommand(["action": "set-export", "format": "TIFF (16-bit)"])
 
+        XCTContext.runActivity(named: "collapse the stack card") { _ in
+            // The frame list plays no part in a tone session, and with the
+            // titles-inside-cards sidebar the Tone rows sit at the window's
+            // bottom edge — XCUITest clicks a half-clipped button into the
+            // void (macOS XCUITest never auto-scrolls). Collapsing the
+            // stack card is the real user gesture that brings Tone up.
+            let header = app.buttons["section.stack"]
+            header.click()
+            XCTAssertEqual(header.value as? String, "collapsed")
+        }
+
         let baseline = try exportAndInspect("tone-baseline.tif")
 
         let exposureValue = app.staticTexts["tone.slider.exposure.value"]
