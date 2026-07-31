@@ -1182,7 +1182,7 @@ public final class AppModel: ObservableObject {
               else { return true }
         let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         return runConfirmAlert(
-            message: localizedString("Not enough disk space for the fusion cache", comment: ""),
+            message: localizedString("Low disk space", comment: ""),
             informative: String(format: localizedString(
                 "Fusion normally uses a disk cache to improve performance. This stack needs about %@ and the disk has %@ free. Fusion will be slower without a disk cache.",
                 comment: ""), fmt(short.needed), fmt(short.available)),
