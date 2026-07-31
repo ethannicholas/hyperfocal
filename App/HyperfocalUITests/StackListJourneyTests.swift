@@ -45,9 +45,16 @@ final class StackListJourneyTests: XCTestCase {
             XCTAssertTrue(menuItemEnabled(app, menu: "File", item: "Save Project As…"))
         }
 
-        XCTContext.runActivity(named: "disclosure collapse hides frame rows") { _ in
+        XCTContext.runActivity(named: "disclosure: bulk ingests start collapsed, "
+                               + "chevron toggles frame rows") { _ in
+            // Several stacks arriving together start collapsed (a wall of
+            // expanded frame lists buries the stack rows); later activities
+            // need stack-a's frame checkboxes, so this ends expanded.
             let firstFrame = app.staticTexts["frame.row.\(framesA[0])"]
-            XCTAssertTrue(firstFrame.exists)
+            XCTAssertFalse(firstFrame.exists,
+                           "bulk-ingested stacks should arrive collapsed")
+            app.buttons["stack.row.stack-a.disclose"].click()
+            XCTAssertTrue(firstFrame.waitForExistence(timeout: 5))
             app.buttons["stack.row.stack-a.disclose"].click()
             XCTAssertTrue(waitFor { !firstFrame.exists }, "frames still listed")
             app.buttons["stack.row.stack-a.disclose"].click()
