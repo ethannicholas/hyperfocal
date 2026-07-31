@@ -835,6 +835,11 @@ ApplicationWindow {
         default property alias trailing: trailingRow.data
         readonly property bool collapsed:
             Shell.collapsedSections.indexOf(section) >= 0
+        // Leading indent that puts a content row's label flush with the
+        // TITLE text (not the chevron): the chevron's square cell plus
+        // this row's spacing. Derived, not hardcoded — it tracks the
+        // glyph's rendered size.
+        readonly property real textIndent: chevronCell.implicitWidth + spacing
         Layout.fillWidth: true
         spacing: 6
         // Headers are always as tall as their trailing flat buttons
@@ -851,6 +856,7 @@ ApplicationWindow {
             font.pixelSize: 11
         }
         Item {
+            id: chevronCell
             // Native's chevron.right/chevron.down: a real chevron,
             // rotating to point down when expanded (the triangle
             // glyphs render too small to read as disclosure arrows).
@@ -1235,6 +1241,13 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 spacing: 10
                 CardRule {}
+                // Labeled controls sit one text-indent in, so their labels
+                // line up with the header's title text (the buttons below
+                // keep the card's full width, like native).
+                ColumnLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: fusionHeader.textIndent
+                spacing: 10
                 // Algorithm selector: DMap (depth map) or PMax (pyramid
                 // fusion), each with an info tooltip. Only DMap carries depth;
                 // the persisted raw value is "dmap"/"pmax". Native lays this
@@ -1344,6 +1357,7 @@ ApplicationWindow {
                     label: qsTr("Focus threshold"); from: 0; to: 0.3
                     enabled: !Shell.isRunning
                 }
+                }
                 Button {
                     Layout.fillWidth: true
                     text: qsTr("Fuse Stack")
@@ -1389,7 +1403,12 @@ ApplicationWindow {
                 CardRule {}
                 // Every tone control reads signed (native "%+.2f EV" /
                 // "%+.0f"): these are offsets from neutral, so the sign is
-                // part of the value, not noise.
+                // part of the value, not noise. One text-indent in, so the
+                // labels line up with the header's title text.
+                ColumnLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: toneHeader.textIndent
+                spacing: 10
                 SidebarSlider {
                     sliderId: "tone.slider.exposure"
                     label: qsTr("Exposure"); from: -5; to: 5; format: qsTr("%1 EV")
@@ -1419,6 +1438,7 @@ ApplicationWindow {
                     sliderId: "tone.slider.blacks"
                     label: qsTr("Blacks"); from: -100; to: 100; decimals: 0
                     showsSign: true
+                }
                 }
             }
             }

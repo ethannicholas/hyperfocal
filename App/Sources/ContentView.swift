@@ -75,6 +75,13 @@ struct ContentView: View {
         Divider().opacity(0.5).padding(.horizontal, 10)
     }
 
+    /// Leading indent that aligns a row's label with the header's TITLE
+    /// (not its chevron): the chevron glyph's width (caption semibold)
+    /// plus the header HStack's 5pt spacing, measured against live
+    /// renders. Applied to the labeled rows (sliders, pickers) — the
+    /// full-width action buttons keep the plain row inset.
+    private var sectionRowIndent: CGFloat { 16.5 }
+
     private var stackPanel: some View {
         cardStyled {
             HStack(spacing: 5) {
@@ -353,6 +360,7 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.leading, sectionRowIndent)
             .disabled(model.phase.isRunning)
 
             // Locked during a fuse: the run uses the values it started with,
@@ -397,6 +405,7 @@ struct ContentView: View {
                 help: "Fine-scale focus energy a frame must exceed at a pixel to win the debloom two-track select. Higher is stricter — more of the bloomed frame is rejected in favor of the in-focus one; too high starts rejecting genuinely sharp detail.")
             }
             }
+            .padding(.leading, sectionRowIndent)
             .disabled(model.phase.isRunning)
 
             Button {
@@ -438,6 +447,7 @@ struct ContentView: View {
                 }
             }
             if !model.isCollapsed(.tone) {
+            Group {
             LabeledSlider(
                 label: "Exposure", id: "tone.slider.exposure", value: $model.tone.exposure, range: -5...5,
                 format: "%+.2f EV",
@@ -468,6 +478,8 @@ struct ContentView: View {
                 format: "%+.0f",
                 help: "Moves the black point itself: the very bottom of the range.",
                 onEditingChanged: { model.toneEditing($0) })
+            }
+            .padding(.leading, sectionRowIndent)
             }
         }
     }
