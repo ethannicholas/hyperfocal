@@ -850,6 +850,23 @@ Task { @MainActor in
     }
     print("probe: fusion defaults shared app↔engine OK")
 
+    // 3a0. The background secondary's memory gate: a second full-canvas
+    // fusion must not start eagerly on machines whose RAM can't absorb it on
+    // top of the fuse-completion working set (an 8 GB Linux machine was
+    // OOM-killed at exactly that point on a 10 × 45.7 MP DNG stack). The
+    // boundary cases pin the heuristic's constants — moving them is fine,
+    // silently regressing to always-eager is not.
+    guard AppModel.eagerCompletionFits(canvasPixels: 12_000_000,
+                                      physicalMemory: 8 << 30),
+          !AppModel.eagerCompletionFits(canvasPixels: 46_000_000,
+                                       physicalMemory: 8 << 30),
+          AppModel.eagerCompletionFits(canvasPixels: 46_000_000,
+                                      physicalMemory: 16 << 30) else {
+        print("probe: SECONDARY MEMORY GATE REGRESSED")
+        exit(1)
+    }
+    print("probe: secondary memory gate OK")
+
     // 3a1. Retouch depth merge: strokes co-paint the depth plane, and
     // leaving retouch folds it into resultDepth (what saves, the depth
     // export, and the rocking animation read). Reverting and re-merging

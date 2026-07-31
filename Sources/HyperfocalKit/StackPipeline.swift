@@ -292,6 +292,12 @@ public enum StackPipeline {
         if despill > 0, let inputs = output.despill {
             Despill.apply(to: &output.image, inputs: inputs, intensity: despill, log: log)
         }
+        // The despill inputs carry two full-resolution f32 planes (~360 MB at
+        // 45 MP) and nothing downstream of this cleanup reads them — they must
+        // not ride the Output into the app's fuse-completion retention, which
+        // holds the Output alive through retouch prewarm and the secondary
+        // launch.
+        output.despill = nil
         if blackPoint > 0 {
             BlackPoint.applyExport(to: &output.image, intensity: blackPoint, log: log)
         }

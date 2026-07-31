@@ -574,21 +574,80 @@ public final class AppModel: ObservableObject {
     private var backgroundFusionCancellation: CancellationToken?
     private var backgroundFusionTask: Task<Void, Never>?
 
+    /// A secondary generation the fuse completion chose NOT to start eagerly
+    /// (see `eagerCompletionFits`): everything `startBackgroundFusion` needs,
+    /// held until the user actually selects that algorithm as a retouch brush
+    /// source (`RetouchSession.onOtherSourceNeeded`). Same lifetime rules as a
+    /// running secondary — cleared by `cancelBackgroundFusion`, so a new fuse,
+    /// a stack switch, or project close discards it.
+    private var pendingSecondary: (method: FusionMethod, urls: [URL],
+                                   config: StackPipeline.Configuration)?
+
     /// The primary fuse's retained warped-frame cache while the background
-    /// secondary generation is consuming it. Mirror of the reference inside
-    /// the background task's configuration, kept ONLY so a re-fuse's disk
-    /// preflight can credit its bytes as about-to-be-reclaimed (the new fuse
-    /// cancels that generation, which releases the cache) — cleared wherever
-    /// the background pass ends so this mirror never extends the lifetime.
+    /// secondary generation is consuming it — or, for a deferred secondary,
+    /// the sole owner keeping the (disk-backed) spill alive until that pass is
+    /// requested. Also lets a re-fuse's disk preflight credit its bytes as
+    /// about-to-be-reclaimed (the new fuse cancels that generation, which
+    /// releases the cache) — cleared wherever the background pass ends.
     private var retainedWarpedFrames: WarpedFrameCache?
 
-    /// Stops the background secondary-algorithm generation, if any.
+    /// Stops the background secondary-algorithm generation, if any — running
+    /// or still pending.
     private func cancelBackgroundFusion() {
         backgroundFusionCancellation?.cancel()
         backgroundFusionCancellation = nil
         backgroundFusionTask?.cancel()
         backgroundFusionTask = nil
+        pendingSecondary = nil
         retainedWarpedFrames = nil
+    }
+
+    /// Whether the fuse-completion extras — the retouch prewarm and the
+    /// background secondary generation — may run eagerly, or should wait
+    /// until the user asks for what they produce. The completion moment is
+    /// the process's peak: the fused image, previews, and the input-pane
+    /// re-decode are all live, and the prewarm's full-resolution decodes plus
+    /// a second full-canvas fusion on top OOM-killed an 8 GB Linux machine on
+    /// a 10 × 45.7 MP DNG stack (measured 2026-07-30; the primary alone
+    /// peaked at 4.9 GB). The estimate is a heuristic in the same spirit as
+    /// `FramePrefetcher.defaultLookahead`: ~80 B/px for the completion working
+    /// set (retained results + previews + in-flight decode transients),
+    /// ~70 B/px for the secondary's own streaming window + pyramid, plus a
+    /// flat 2 GiB for the OS/desktop/app baseline — sized so a 45 MP-class
+    /// stack defers on a true 8 GiB machine. Deliberately physical-RAM
+    /// based (not free-RAM) so the answer is stable for a given machine+stack.
+    /// Pure — the `HYPERFOCAL_EAGER_COMPLETION` override lives at the call
+    /// site, so the probe can pin these boundaries.
+    static func eagerCompletionFits(
+        canvasPixels: Int,
+        physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory) -> Bool {
+        let workingSet = UInt64(canvasPixels) * 150 + (2 << 30)
+        return workingSet <= physicalMemory
+    }
+
+    /// The retouch session asked for the other algorithm's image and no
+    /// background pass has produced it. Start one now: either the fuse
+    /// deferred it (memory gate — everything stashed in `pendingSecondary`),
+    /// or no completion ever kicked one for this result — a batch fuse, a
+    /// reloaded project (`pmaxResult` is in-memory only), a stack switch that
+    /// cancelled the pass — and the session would otherwise sit in
+    /// "Preparing the … result" forever. In the latter cases the
+    /// configuration is rebuilt from the current settings: the other
+    /// algorithm's options were never part of the primary's fuse, so there is
+    /// no fuse-time snapshot to be faithful to. Either way the user is
+    /// explicitly waiting on this result, and the fuse-completion transients
+    /// are long gone.
+    private func startDeferredSecondary() {
+        guard backgroundFusionTask == nil, phase == .done,
+              let method = resultMethod else { return }
+        let other: FusionMethod = method == .dmap ? .pmax : .dmap
+        guard (other == .pmax ? pmaxResult : dmapResult) == nil else { return }
+        let pending = pendingSecondary ?? (other, fuseURLs, currentConfiguration())
+        pendingSecondary = nil
+        guard !pending.urls.isEmpty else { return }
+        startBackgroundFusion(other: pending.method, generation: fusionGeneration,
+                              urls: pending.urls, config: pending.config,
+                              warpedFrames: retainedWarpedFrames)
     }
 
     // Noise-floor preview: while the slider is dragged, the output pane shows
@@ -1065,6 +1124,27 @@ public final class AppModel: ObservableObject {
     /// Stacks the queue button would fuse: enabled and out of date.
     public var pendingStackCount: Int {
         stacks.filter { $0.enabled && needsRefuse($0) }.count
+    }
+
+    /// The pipeline configuration the current model settings describe — the
+    /// shared base of fuse() (which adds retention flags and the bad-frame
+    /// handler) and an on-demand secondary generation (which has no fuse-time
+    /// snapshot to replay — see `startDeferredSecondary`).
+    private func currentConfiguration() -> StackPipeline.Configuration {
+        var config = StackPipeline.Configuration()
+        config.align = alignFrames
+        config.preferGPU = useGPU
+        config.method = fusionMethod
+        // No on/off decision here: coarseLevels == 0 disables, inside Options.
+        config.pmax = PyramidFusion.Options(
+            coarseLevels: pmaxCoarseLevels, threshold: Float(pmaxFocusThreshold))
+        config.dmap = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
+                                           blendRadius: Float(blendRadius),
+                                           noiseFloor: Float(noiseFloor),
+                                           medianRadius: Int(medianRadius),
+                                           normalizeExposure: normalizeExposure,
+                                           spillEnabled: fusionDiskCache)
+        return config
     }
 
     private func currentFuseSettings() -> FuseSettings {
@@ -2702,25 +2782,16 @@ public final class AppModel: ObservableObject {
         let settingsInUse = currentFuseSettings()
         let pmaxSettingsInUse = currentPMaxSettings()
         let method = fusionMethod
-        var config = StackPipeline.Configuration()
-        config.align = alignFrames
-        config.preferGPU = useGPU
-        config.method = method
-        // No on/off decision here: coarseLevels == 0 disables, inside Options.
-        config.pmax = PyramidFusion.Options(
-            coarseLevels: pmaxCoarseLevels, threshold: Float(pmaxFocusThreshold))
-        config.dmap = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
-                                           blendRadius: Float(blendRadius),
-                                           noiseFloor: Float(noiseFloor),
-                                           medianRadius: Int(medianRadius),
-                                           normalizeExposure: normalizeExposure,
-                                           spillEnabled: fusionDiskCache)
+        var config = currentConfiguration()
         // A DMap primary (outside a batch) is followed by the background PMax
         // generation: keep the warped-frame spill so that pass streams frames
         // off disk instead of re-decoding the stack — its RAW decodes and
         // retouch's on-demand source loads otherwise contend on Apple's RAW
         // engine (measured ≥4× slower end-to-end). The spill is released when
-        // the background pass finishes (its task drops the configuration).
+        // the background pass finishes (its task drops the configuration) —
+        // or, when the memory gate deferred that pass, whenever it is
+        // requested-and-finishes or `cancelBackgroundFusion` discards it
+        // (new fuse, stack switch, project close). Disk-backed either way.
         config.dmap.retainSpill = method == .dmap && !batchMode
         // A PMax primary retains its per-frame sharpness planes so retouch's
         // space auto-pick works immediately (a DMap fuse retains them
@@ -2777,7 +2848,8 @@ public final class AppModel: ObservableObject {
             }
             if cancellation.isCancelled { return }  // cancelled while waiting
             do {
-                let result = try StackPipeline.fuseResult(urls: urls, configuration: config,
+                var result: StackPipeline.FuseResult? =
+                    try StackPipeline.fuseResult(urls: urls, configuration: config,
                                                           alignmentCache: cache,
                                                           log: logFusion,
                                                           progress: { update in
@@ -2845,11 +2917,26 @@ public final class AppModel: ObservableObject {
                         }
                     }
                 }, cancellation: cancellation)
-                let output = result.output
+                let issues = result!.issues
+                let fusedURLs = result!.fusedURLs
+                var mutableOutput = result!.output
+                // Drop the FuseResult's own reference before the completion
+                // hop: the closure below holds everything it captures through
+                // retouch prewarm and the secondary launch, and a second
+                // reference keeping the Output's full-res planes alive is
+                // pure peak-footprint.
+                result = nil
                 MemoryFootprint.mark("engine output landed")
-                let resultCG = try Preview.image(from: output.image)
+                let resultCG = try Preview.image(from: mutableOutput.image)
                 // PMax has no depth map; only render its preview for DMap.
-                let depthCG = method == .dmap ? try Preview.image(from: output.depthMap) : nil
+                let depthCG = method == .dmap
+                    ? try Preview.image(from: mutableOutput.depthMap) : nil
+                // The full-res depth image existed only to seed that preview
+                // (the model re-derives it from `resultDepth` on demand) —
+                // ~360 MB at 45 MP that must not survive into the completion
+                // closure's retention.
+                mutableOutput.depthMap = ImageBuffer(width: 0, height: 0)
+                let output = mutableOutput
                 await MainActor.run { [weak self] in
                     // Generation gate: if the user cancelled (and possibly
                     // started something new), this result belongs to a
@@ -2862,9 +2949,9 @@ public final class AppModel: ObservableObject {
                     // must be what was actually fused: retouch sources, saves,
                     // and exports all key off it.
                     self.frameIssues = Dictionary(uniqueKeysWithValues:
-                        result.issues.map { (urls[$0.index], $0.summary) })
-                    self.included.subtract(Set(urls).subtracting(result.fusedURLs))
-                    self.fuseURLs = result.fusedURLs
+                        issues.map { (urls[$0.index], $0.summary) })
+                    self.included.subtract(Set(urls).subtracting(fusedURLs))
+                    self.fuseURLs = fusedURLs
                     if method == .pmax {
                         // PMax primary: image only. Depth + retouch come from
                         // the background DMap pass kicked below.
@@ -2906,21 +2993,53 @@ public final class AppModel: ObservableObject {
                         self.showInputFrame(url)
                     }
                     MemoryFootprint.mark("results + previews stored")
-                    // Retouch is available on the primary result immediately —
-                    // depth-optional, so a PMax primary never waits for depth.
-                    if !self.batchMode { self.prepareRetouch() }
-                    MemoryFootprint.mark("retouch session pre-warmed")
-                    // Background-generate the OTHER algorithm as a retouch paint
-                    // source (image only; a DMap secondary's depth map is
-                    // discarded — depth belongs to a DMap *primary*). It is
-                    // never the displayed result. Batches stay single-algorithm.
                     if !self.batchMode {
                         self.retainedWarpedFrames = output.warpedFrames
-                        self.startBackgroundFusion(other: method == .dmap ? .pmax : .dmap,
-                                                   generation: generation,
-                                                   urls: result.fusedURLs,
-                                                   config: config,
-                                                   warpedFrames: output.warpedFrames)
+                        let other: FusionMethod = method == .dmap ? .pmax : .dmap
+                        // HYPERFOCAL_EAGER_COMPLETION = 1/0 forces the gate's
+                        // answer (A/B + selftest tap, not a user setting).
+                        let eager: Bool
+                        if let forced = ProcessInfo.processInfo
+                            .environment["HYPERFOCAL_EAGER_COMPLETION"] {
+                            eager = forced != "0"
+                        } else {
+                            eager = Self.eagerCompletionFits(
+                                canvasPixels: output.image.width * output.image.height)
+                        }
+                        if eager {
+                            // Retouch is available on the primary result
+                            // immediately — depth-optional, so a PMax primary
+                            // never waits for depth. Then background-generate
+                            // the OTHER algorithm as a retouch paint source
+                            // (image only; a DMap secondary's depth map is
+                            // discarded — depth belongs to a DMap *primary*).
+                            // It is never the displayed result.
+                            self.prepareRetouch()
+                            MemoryFootprint.mark("retouch session pre-warmed")
+                            self.startBackgroundFusion(other: other,
+                                                       generation: generation,
+                                                       urls: fusedURLs,
+                                                       config: config,
+                                                       warpedFrames: output.warpedFrames)
+                        } else {
+                            // Machines whose RAM can't absorb the completion
+                            // extras — the retouch prewarm's full-resolution
+                            // decodes racing the input-pane re-decode, plus a
+                            // second full-canvas fusion — defer both: entering
+                            // retouch builds the session through its normal
+                            // "Loading source…" flow, and the OTHER algorithm
+                            // generates when its brush source is selected (the
+                            // session's "Preparing the … result" state covers
+                            // the wait). Measured: an 8 GB Linux machine was
+                            // OOM-killed at exactly this point on a
+                            // 10 × 45.7 MP DNG stack.
+                            logFusion("fuse completion: retouch prewarm and "
+                                + "\(other.rawValue) secondary deferred — canvas "
+                                + "\(output.image.width)x\(output.image.height) vs "
+                                + "\(ProcessInfo.processInfo.physicalMemory / (1 << 20)) MB physical")
+                            self.pendingSecondary = (other, fusedURLs, config)
+                            MemoryFootprint.mark("completion extras deferred")
+                        }
                     }
                 }
             } catch {
@@ -3371,12 +3490,22 @@ public final class AppModel: ObservableObject {
                 retouch?.provideOtherResult(other)
             }
             retouch?.onEdited = { [weak self] in self?.hasUnsavedWork = true }
+            // The other algorithm's pass may have been deferred by the fuse's
+            // memory gate — selecting its brush source is what starts it.
+            retouch?.onOtherSourceNeeded = { [weak self] in
+                self?.startDeferredSecondary()
+            }
             retouch?.onSourceChanged = { [weak self] index in
                 guard let self, let session = self.retouch,
                       session.urls.indices.contains(index) else { return }
                 self.selection = [session.urls[index]]
             }
         }
+        // A session can come up already waiting on the other algorithm's
+        // source (its saved source index): that request fired inside the
+        // constructor, before the callback above existed. Ask again on its
+        // behalf — idempotent when the pass is running or already produced.
+        if retouch?.isWaitingForOtherSource == true { startDeferredSecondary() }
     }
 
     public func exitRetouch() {

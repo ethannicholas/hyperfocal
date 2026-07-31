@@ -125,7 +125,7 @@ public final class FrameSpill {
         let spillBytes = Int64(slotBytes) * Int64(frameCount)
         let needed = spillBytes + margin(for: spillBytes)
         #if canImport(Darwin)
-        guard let capacity = (try? FileManager.default.temporaryDirectory.resourceValues(
+        guard let capacity = (try? FrameSpill.spillDirectory.resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
                 .volumeAvailableCapacityForImportantUsage else {
             return nil
@@ -134,17 +134,17 @@ public final class FrameSpill {
         // Bytes available to this caller (quota-aware), same figure the spill
         // has to fit inside.
         var free = ULARGE_INTEGER()
-        let ok = FileManager.default.temporaryDirectory.path.withCString(encodedAs: UTF16.self) {
+        let ok = FrameSpill.spillDirectory.path.withCString(encodedAs: UTF16.self) {
             GetDiskFreeSpaceExW($0, &free, nil, nil)
         }
         guard ok else { return nil }
         let capacity = Int64(free.QuadPart)
         #else
-        // Linux has no "important usage" capacity; statvfs on the temp volume
+        // Linux has no "important usage" capacity; statvfs on the spill volume
         // reports the blocks available to an unprivileged writer, which is the
         // figure the spill has to fit inside.
         var vfs = Glibc.statvfs()
-        guard statvfs(FileManager.default.temporaryDirectory.path, &vfs) == 0 else {
+        guard statvfs(FrameSpill.spillDirectory.path, &vfs) == 0 else {
             return nil
         }
         let capacity = Int64(vfs.f_bavail) * Int64(vfs.f_frsize)
@@ -154,7 +154,27 @@ public final class FrameSpill {
         return (needed, effective)
     }
 
-    /// Returns nil (logging why) when the temp volume can't hold the spill
+    /// Where the spill file lives (also the volume the preflight measures).
+    /// The temporary directory — except on Linux, where /tmp is
+    /// conventionally tmpfs (RAM + swap): spilling gigabytes there would
+    /// consume exactly the memory the spill exists to avoid, while the
+    /// preflight happily approves it against tmpfs's "free space". The user
+    /// cache directory is disk-backed by convention, and the unlink-after-
+    /// create pattern keeps it invisible there just the same.
+    static var spillDirectory: URL {
+        #if os(Linux)
+        if let cache = FileManager.default.urls(for: .cachesDirectory,
+                                                in: .userDomainMask).first {
+            let dir = cache.appendingPathComponent("hyperfocal", isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        #endif
+        return FileManager.default.temporaryDirectory
+    }
+
+    /// Returns nil (logging why) when the spill volume can't hold the spill
     /// with headroom to spare, or the file can't be created — callers fall
     /// back to re-decoding.
     init?(frameBytes: Int, frameCount: Int, log: ((String) -> Void)? = nil) {
@@ -166,7 +186,7 @@ public final class FrameSpill {
             return nil
         }
         slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
-        let url = FileManager.default.temporaryDirectory
+        let url = FrameSpill.spillDirectory
             .appendingPathComponent("hyperfocal-spill-\(UUID().uuidString).bin")
         #if os(Windows)
         // DELETE_ON_CLOSE is the Win32 spelling of the unlink-after-create

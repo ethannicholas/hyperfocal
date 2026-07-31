@@ -121,6 +121,12 @@ public final class RetouchSession: ObservableObject {
     /// Fired whenever the working pixels change (stroke, undo, redo, revert) —
     /// the app tracks unsaved work with it.
     var onEdited: (() -> Void)?
+    /// Fired when the user selects the other algorithm's brush source and no
+    /// image exists yet — the model's cue to start a *deferred* background
+    /// pass (on memory-tight machines that pass doesn't run eagerly at fuse
+    /// completion). Harmless when the pass is already running: the model
+    /// ignores the cue and `provideOtherResult` resolves the pane as usual.
+    var onOtherSourceNeeded: (() -> Void)?
 
     // Aligned source frames: float pixels for painting, CGImage for the pane.
     // Published because `canPaint` derives from it (the result layer is
@@ -518,9 +524,26 @@ public final class RetouchSession: ObservableObject {
         if baseMethod == .dmap { useBaseSource() } else { useOtherSource() }
     }
 
+    /// One memory gate for the whole app (`AppModel.eagerCompletionFits`): on
+    /// machines that can't afford spare full-resolution planes, the
+    /// frame-source cache is dropped whenever a result layer is selected —
+    /// those slices are cold while a result layer paints, and two 45 MP
+    /// entries are ~1.1 GB that a deferred secondary generation (which the
+    /// same selection can trigger) needs back. Switching back to a frame
+    /// source re-decodes through the normal loading flow.
+    private lazy var frugalMemory =
+        !AppModel.eagerCompletionFits(canvasPixels: width * height)
+
+    private func trimSourceCacheIfFrugal() {
+        guard frugalMemory else { return }
+        sourceCache.removeAll()
+        sourceCacheOrder.removeAll()
+    }
+
     /// The fused base as a brush source (the eraser): instant — its buffer is
     /// retained anyway; only the 8-bit pane preview is rendered, once.
     private func useBaseSource() {
+        trimSourceCacheIfFrugal()
         sourceFloat = originalResult
         sourceStatus = nil
         sourceError = nil
@@ -551,6 +574,7 @@ public final class RetouchSession: ObservableObject {
     /// the model's background pass, which feeds the forming preview via
     /// `otherSourceProgress` and completes via `provideOtherResult`.
     private func useOtherSource() {
+        trimSourceCacheIfFrugal()
         if let other = otherImage {
             sourceFloat = other.buffer
             sourceDisplay = other.image
@@ -564,6 +588,16 @@ public final class RetouchSession: ObservableObject {
         sourceLoading = true
         sourceError = nil
         sourceStatus = preparingStatus(nil)
+        onOtherSourceNeeded?()
+    }
+
+    /// True while the selected brush source is the other algorithm's image and
+    /// that image hasn't arrived. The model checks this when it defers the
+    /// background pass: a restored session can come up already waiting (its
+    /// saved source index), having fired `onOtherSourceNeeded` before the
+    /// model had anything to start.
+    var isWaitingForOtherSource: Bool {
+        sourceIndex == otherIndex && otherImage == nil
     }
 
     /// Space key: measure the brush region's sharpness in *every* frame and jump

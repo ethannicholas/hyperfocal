@@ -148,7 +148,11 @@ public enum DMapFusion {
         /// Regularized depth as a grayscale image: white = first frame, black =
         /// last. Stacks are typically shot close-to-far, so near is bright — the
         /// usual depth/disparity convention.
-        public let depthMap: ImageBuffer
+        /// `var`, not `let`: the app renders its depth preview from this once,
+        /// then replaces it with an empty buffer — a full-resolution plane must
+        /// not stay retained through retouch prewarm and the secondary launch
+        /// (the model re-derives a full-res depth image from `depth` on demand).
+        public var depthMap: ImageBuffer
         /// The regularized per-pixel frame index itself (full resolution) — the
         /// "which frame is sharpest here" table. Retouching uses it to auto-pick
         /// a source slice for a brush region without touching any pixels.

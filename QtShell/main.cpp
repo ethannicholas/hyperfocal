@@ -47,6 +47,21 @@ namespace {
 // constant to reach for if they start flaking.
 constexpr int kDecodeWaitTicks = 150;   // 150 × 200 ms = 30 s
 
+// The other-algorithm brush source can cost a whole second fusion, not a
+// decode: on memory-tight machines (or under HYPERFOCAL_EAGER_COMPLETION=0)
+// the fuse defers the background pass, and selecting the layer is what starts
+// it. Sized for a 45 MP raw stack on a 2-core machine — same philosophy as
+// kDecodeWaitTicks: the poll returns the moment the source is ready, so the
+// budget only bounds how long a genuine failure takes to report.
+constexpr int kSecondaryWaitTicks = 3000;   // 3000 × 200 ms = 10 min
+
+// Zoom-cycle settle budget. Not decode-bound, but grab-stability at 45 MP on
+// a software rasterizer (llvmpipe VM) legitimately outlives the old 40-tick
+// budget: each window grab is itself slow, and tiles trickle in under memory
+// pressure. Same philosophy as above — the poll advances the moment two
+// consecutive grabs match.
+constexpr int kZoomSettleTicks = 120;
+
 struct SelfTest {
     QString stackDir;
     QString stack2Dir;    // HFQT_STACK2: batch journey (two stacks)
@@ -67,6 +82,7 @@ struct SelfTest {
     bool undoOK = false, projectOK = false, previewOK = false;
     bool cycledSource = false;
     bool retouchOK = false;
+    bool otherSourceOK = false;
     QString projectFile;
     QString expectedInput;    // selected frame's name
     int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
@@ -262,7 +278,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->zoomPrev = QImage();
             };
             switch (state->finishStage) {
-            case 0:    // async input-frame decode, ~10s ceiling
+            case 0:    // async input-frame decode — decode-bound, so it gets
+                       // the decode budget: a 45 MP raw's aligned swap is a
+                       // full decode + warp, ~15-20 s on a 2-core machine
+                       // (the old 40-tick/10 s ceiling failed exactly there).
                 // inputLoading must have cleared: the title names the new
                 // frame as soon as it's selected, but the pane serves the
                 // PREVIOUS image until the decode lands — grabbing the
@@ -270,7 +289,8 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->inputOK = state->expectedInput.isEmpty()
                     || (shell->hasInput() && !shell->inputLoading()
                         && shell->inputTitle().startsWith(state->expectedInput));
-                if (!state->inputOK && ++state->finishTries < 40) return;
+                if (!state->inputOK && ++state->finishTries < kDecodeWaitTicks)
+                    return;
                 // Zoom-cycle journey: deep zoom, out, and back — the same
                 // pixels must return (a stale coarse tile left covering
                 // the fine level would blur the pane; the layering trap).
@@ -283,7 +303,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     state->zoomShotA = state->zoomPrev;
                     pane->setZoom(0.2);
                     advance(2);
-                } else if (++state->stageTicks > 40) {
+                } else if (++state->stageTicks > kZoomSettleTicks) {
                     qWarning() << "selftest zoom: stage 1 (8x) never settled";
                     state->zoomOK = false;
                     advance(4);
@@ -293,7 +313,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 if (stable()) {
                     pane->setZoom(8);
                     advance(3);
-                } else if (++state->stageTicks > 40) {
+                } else if (++state->stageTicks > kZoomSettleTicks) {
                     qWarning() << "selftest zoom: stage 2 (0.2x) never settled";
                     state->zoomOK = false;
                     advance(4);
@@ -314,7 +334,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     }
                     pane->setZoom(1);
                     advance(4);
-                } else if (++state->stageTicks > 40) {
+                } else if (++state->stageTicks > kZoomSettleTicks) {
                     qWarning() << "selftest zoom: stage 3 (back to 8x) never "
                                   "settled";
                     state->zoomOK = false;
@@ -464,12 +484,32 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     && shell->undo()
                     && shell->retouchHasEdits()
                     && shell->revertRetouch()
-                    && !shell->retouchHasEdits()
-                    && shell->exitRetouch()
+                    && !shell->retouchHasEdits();
+                // The OTHER algorithm's layer as a brush source. The journey
+                // fuses DMap, so kind 1 (PMax) is the layer the background
+                // pass provides — and on memory-tight machines (or under
+                // HYPERFOCAL_EAGER_COMPLETION=0) the fuse DEFERRED that pass:
+                // selecting the layer is what starts it, and the source must
+                // still become paintable. Stage 8 waits it out with a
+                // fusion-sized budget.
+                shell->setRetouchSourceKind(1);
+                advance(8);
+                return;
+            }
+            case 8: {   // other-algorithm layer lands (maybe a deferred fusion)
+                if (!shell->retouchCanPaint()
+                    && ++state->stageTicks < kSecondaryWaitTicks)
+                    return;
+                if (!shell->retouchCanPaint())
+                    qWarning() << "selftest retouch: other-algorithm layer not"
+                               << "paintable after" << state->stageTicks
+                               << "polls —" << shell->retouchSourceStatus();
+                state->otherSourceOK = shell->retouchCanPaint();
+                state->retouchOK = state->retouchOK && shell->exitRetouch()
                     && !shell->retouchMode();
                 // Project round-trip: save must clear the dirty flag and
                 // set the path; reopening the file must restore a fused
-                // stack (stage 8 waits out the load). Compare paths with
+                // stack (stage 9 waits out the load). Compare paths with
                 // forward slashes: the bridge echoes them that way, while a
                 // Windows runner passes the out path with backslashes.
                 state->projectFile = state->outPath + ".hyperfocal";
@@ -485,10 +525,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                                << shell->projectPath();
                 if (state->projectOK)
                     shell->openStack(QUrl::fromLocalFile(state->projectFile));
-                advance(8);
+                advance(9);
                 return;
             }
-            case 8: {   // reload settles: a stack is back, still fused
+            case 9: {   // reload settles: a stack is back, still fused
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const QVariantList stacks = shell->stacks();
                 const bool reloaded = stacks.size() >= 1
@@ -507,10 +547,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->projectOK = state->projectOK
                     && shell->confirmNewProject()
                     && shell->newProject(QUrl::fromLocalFile(state->stackDir));
-                advance(9);
+                advance(10);
                 return;
             }
-            case 9: {   // new-project load settles: exactly one stack
+            case 10: {   // new-project load settles: exactly one stack
                 if (shell->isRunning()) { state->stageTicks = 0; return; }
                 const bool replaced = shell->stacks().size() == 1;
                 if (!replaced && ++state->stageTicks < 40) return;
@@ -544,6 +584,7 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!state->projectOK) { QCoreApplication::exit(16); return; }
             if (!state->previewOK) { QCoreApplication::exit(17); return; }
             if (!state->retouchOK) { QCoreApplication::exit(18); return; }
+            if (!state->otherSourceOK) { QCoreApplication::exit(19); return; }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the
@@ -552,8 +593,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
     });
     poll->start(200);
 
-    // Backstop: a hung fuse must fail the test, not wedge it.
-    QTimer::singleShot(300000, engine, [] { QCoreApplication::exit(2); });
+    // No backstop here: main() already bounds the whole run with the
+    // HFQT_SELFTEST_TIMEOUT watchdog (same 5-minute default this duplicate
+    // used to hard-code, but overridable — a 45 MP raw journey on a 2-core
+    // machine legitimately outlives 5 minutes).
 }
 
 }  // namespace
@@ -629,6 +672,12 @@ int main(int argc, char *argv[]) {
                 << "selftest: stack directory has no files:" << dir.path();
             return 2;
         }
+        // A test gate must never wait on a human: any surprise dialog (the
+        // low-disk spill preflight is the one that bit, mid-run, on a tight
+        // disk) wedges the journey until someone clicks it. --selftest
+        // therefore implies HFQT_AUTOCONFIRM — same semantics as exporting it
+        // by hand: every confirm takes its default button.
+        qputenv("HFQT_AUTOCONFIRM", "1");
     }
     if (!selftest && forcedLang != QStringLiteral("en")) {
         const QStringList tags = forcedLang.isEmpty()

@@ -19,11 +19,15 @@ final class FramePrefetcher {
     /// consumer (GPU submission / CPU fusion), and cap the in-flight frames
     /// so the window fits in about a quarter of physical memory even for
     /// 45 MP frames (~1 GB each with decode transients). 16 GB / 8-core → 4;
-    /// 64 GB / 12-core → 8.
+    /// 64 GB / 12-core → 8. The floor is 1, not 2: a machine under 8 GiB
+    /// (VMs report less than the nominal figure) genuinely cannot afford two
+    /// in-flight 45 MP decode transients on top of a fusion's accumulators —
+    /// measured pushing an 8 GB Linux box into the OOM killer when a
+    /// secondary fusion re-decoded a stack the model was still retaining.
     static var defaultLookahead: Int {
         let info = ProcessInfo.processInfo
         let cores = max(2, info.activeProcessorCount - 2)
-        let memoryFrames = max(2, Int(info.physicalMemory / (4 << 30)))
+        let memoryFrames = max(1, Int(info.physicalMemory / (4 << 30)))
         return min(cores, memoryFrames, 8)
     }
 
