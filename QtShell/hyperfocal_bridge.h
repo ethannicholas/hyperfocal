@@ -68,6 +68,11 @@ int hf_load_stack(const char *path);
 // property name (e.g. "algorithmDMapTip"); 0 bytes for an unknown key.
 int hf_ui_string(const char *key, char *buf, int cap);
 
+// Hover delay in milliseconds for the (i) info icons' tooltips, shared with
+// the native app (AppCore.UIStrings.infoTipDelayMilliseconds) so the shells
+// can't drift. Ordinary tooltips keep the platform default delay.
+int hf_info_tip_delay_ms(void);
+
 int hf_can_fuse(void);
 int hf_fuse(void);        // 0 if canFuse is false
 int hf_is_running(void);

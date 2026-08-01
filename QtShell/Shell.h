@@ -126,6 +126,11 @@ public:
     /// hf_ui_string) — button labels, section titles, tooltips. `key` is
     /// the string's Swift property name, e.g. "algorithmDMapTip".
     Q_INVOKABLE QString uiString(const QString &key) const;
+    /// Hover delay in ms for the (i) info icons' tooltips (InfoIcon), shared
+    /// with the native app the same way (AppCore.UIStrings.
+    /// infoTipDelayMilliseconds, via hf_info_tip_delay_ms). Other tooltips
+    /// keep InfoTip's default delay.
+    Q_INVOKABLE int infoTipDelayMs() const;
     Q_INVOKABLE bool gpuAvailable() const;
     Q_INVOKABLE bool newProject(const QUrl &folder);
     Q_INVOKABLE bool fuse();

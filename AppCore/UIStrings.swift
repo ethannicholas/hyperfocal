@@ -268,6 +268,17 @@ public enum UIStrings {
     public static let zoomFit =
         localizedString("Fit", comment: "Zoom level: fit the image to the pane")
 
+    // MARK: - Shared UI behavior
+
+    /// Hover delay before an (i) info icon's tooltip appears, in both
+    /// shells: the macOS icons' hand-rolled tip (`InfoTip.swift` — AppKit
+    /// has no per-view tooltip delay, and the process-global
+    /// `NSInitialToolTipDelay` would drag every tooltip with it) and the Qt
+    /// shell's `InfoIcon`, via `hf_info_tip_delay_ms`. Ordinary tooltips
+    /// keep each platform's default delay. Not a string, so it lives
+    /// outside `all`.
+    public static let infoTipDelayMilliseconds: Int32 = 250
+
     /// Every value above, keyed by its Swift property name — what the Qt
     /// shell looks up through `hf_ui_string`/`Shell::uiString`. Keep in sync
     /// by construction: each entry mirrors the `static let` above it.

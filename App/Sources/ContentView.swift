@@ -349,7 +349,7 @@ struct ContentView: View {
                                 Text(method.displayName).foregroundStyle(.primary)
                                 Image(systemName: "info.circle")
                                     .foregroundStyle(.secondary).font(.caption)
-                                    .help(algorithmTooltip(method))
+                                    .infoTip(algorithmTooltip(method))
                                 Spacer(minLength: 0)
                             }
                             .contentShape(Rectangle())
@@ -1890,7 +1890,7 @@ struct LabeledSlider: View {
                 Image(systemName: "info.circle")
                     .foregroundStyle(.secondary)
                     .font(.caption)
-                    .help(help)
+                    .infoTip(help)
                 Spacer()
                 Text(displayString)
                     .monospacedDigit()
@@ -1904,7 +1904,10 @@ struct LabeledSlider: View {
             .accessibilityLabel(label)
             .accessibilityValue(displayString)
         }
-        .help(help)
+        // The (i) icon alone carries the tooltip (its .infoTip above) — a
+        // row-wide .help would double up with it, and the Qt shell already
+        // scopes the tip to the icon so hovering the slider doesn't
+        // surprise the user with a popup.
     }
 }
 

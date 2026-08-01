@@ -950,6 +950,8 @@ void Shell::setBoolSetting(const QString &id, bool value) {
 
 QString Shell::uiString(const QString &key) const { return bridgeUIString(key); }
 
+int Shell::infoTipDelayMs() const { return hf_info_tip_delay_ms(); }
+
 bool Shell::gpuAvailable() const { return hf_gpu_available() != 0; }
 
 bool Shell::confirmQuit() {

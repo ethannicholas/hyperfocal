@@ -736,6 +736,8 @@ ApplicationWindow {
     // unrelated default spot instead of near that widget.
     component InfoTip: ToolTip {
         id: tip
+        // Default for ordinary tooltips (buttons, badges); the (i) info
+        // icons override this with the shared cross-shell constant below.
         delay: 600
         x: 0
         y: parent ? parent.height + 4 : 0
@@ -765,7 +767,15 @@ ApplicationWindow {
         color: theme.textSecondary
         font.pixelSize: 12
         HoverHandler { id: iconHover }
-        InfoTip { parent: icon; visible: iconHover.hovered; text: icon.tip }
+        // (i) tips answer faster than ordinary tooltips — the delay is the
+        // shared cross-shell constant (native's InfoTip.swift reads the
+        // same value).
+        InfoTip {
+            parent: icon
+            visible: iconHover.hovered
+            text: icon.tip
+            delay: Shell.infoTipDelayMs()
+        }
     }
 
     component SidebarSlider: ColumnLayout {

@@ -244,6 +244,14 @@ public func hf_ui_string(_ key: UnsafePointer<CChar>?,
     return fillUTF8(value, buffer, cap)
 }
 
+/// Hover delay for the (i) info icons' tooltips, shared with the native app
+/// (`UIStrings.infoTipDelayMilliseconds`) so the two shells can't drift
+/// apart. Ordinary tooltips keep the platform default delay.
+@_cdecl("hf_info_tip_delay_ms")
+public func hf_info_tip_delay_ms() -> Int32 {
+    UIStrings.infoTipDelayMilliseconds
+}
+
 // MARK: - Exports
 
 /// Drain the process main queue once (non-blocking). On Apple platforms
