@@ -4903,6 +4903,70 @@
         }
       }
     },
+    "Crop the result image": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Ergebnisbild zuschneiden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recortar la imagen resultante"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recadrer l’image résultante"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ritaglia l’immagine risultante"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "結果画像を切り抜きます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "결과 이미지를 자릅니다"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De resulterende afbeelding bijsnijden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recortar a imagem resultante"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обрезать итоговое изображение"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "裁剪结果图像"
+          }
+        }
+      }
+    },
     "Crop…": {
       "localizations": {
         "de": {
@@ -9787,70 +9851,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "噪声阈值"
-          }
-        }
-      }
-    },
-    "Non-destructive — applies to every export and the rocking animation, and is saved with the project.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nicht destruktiv — gilt für jeden Export und die Parallaxen-Animation und wird mit dem Projekt gesichert."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No destructivo: se aplica a todas las exportaciones y a la animación de balanceo, y se guarda con el proyecto."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Non destructif — s’applique à chaque export et à l’animation de balancement, et est enregistré avec le projet."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Non distruttivo — si applica a ogni esportazione e all’animazione oscillante, e viene salvato con il progetto."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "非破壊 — すべての書き出しとスイングアニメーションに適用され、プロジェクトと一緒に保存されます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "비파괴 — 모든 내보내기와 로킹 애니메이션에 적용되며 프로젝트와 함께 저장됩니다."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Niet-destructief — geldt voor elke export en de kantelanimatie, en wordt met het project bewaard."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Não destrutivo — aplica-se a todas as exportações e à animação de balanço, e é salvo com o projeto."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Недеструктивно — применяется к каждому экспорту и анимации покачивания и сохраняется вместе с проектом."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "非破坏性 — 应用于每次导出和摇摆动画，并随项目一起保存。"
           }
         }
       }

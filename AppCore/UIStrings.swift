@@ -145,7 +145,7 @@ public enum UIStrings {
     public static let cropButton =
         localizedString("Crop…", comment: "Button: enter crop mode")
     public static let cropTip = localizedString(
-        "Non-destructive — applies to every export and the rocking animation, and is saved with the project.",
+        "Crop the result image",
         comment: "Crop button tooltip")
     public static let aspectRatioLabel =
         localizedString("Aspect Ratio", comment: "Crop aspect picker label")
