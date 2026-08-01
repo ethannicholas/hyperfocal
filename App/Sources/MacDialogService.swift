@@ -52,7 +52,7 @@ final class MacDialogService: DialogService {
         alert.messageText = message
         alert.informativeText = informative
         alert.addButton(withTitle: String(localized: "Download"))
-        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: UIStrings.cancel)
         if alert.runModal() == .alertFirstButtonReturn, let link = URL(string: url) {
             NSWorkspace.shared.open(link)
         }
@@ -205,11 +205,11 @@ final class AnimationOptionsView: NSView {
         // half-cycle phase shift of these symmetric loops — provably
         // invisible; see RockingAnimation.Options.)
         let rows: [(String, NSControl)] = [
-            (String(localized: "Format:"), formatPopup),
+            (UIStrings.format, formatPopup),
             (String(localized: "Frame rate:"), fpsPopup),
-            (String(localized: "Duration:"), durationPopup),
-            (String(localized: "Path:"), pathPopup),
-            (String(localized: "Strength:"), strengthPopup),
+            (UIStrings.duration, durationPopup),
+            (UIStrings.path, pathPopup),
+            (UIStrings.strength, strengthPopup),
         ]
         let labels = rows.map { NSTextField(labelWithString: $0.0) }
         for label in labels { label.sizeToFit() }
@@ -293,7 +293,7 @@ final class ExportOptionsView: NSView {
     /// always carries linear P3, and a disabled popup frozen on the
     /// previous choice would read as "DNG uses sRGB and you can't
     /// change it".
-    private static let dngSpaceTitle = String(localized: "Linear Display P3")
+    private static let dngSpaceTitle = UIStrings.linearDisplayP3
 
     init(model: AppModel, panel: NSSavePanel?) {
         self.model = model
@@ -321,7 +321,7 @@ final class ExportOptionsView: NSView {
         // (~30% CPU). Plain frames give the bridge a constant answer.
         // Width is computed with the widest spacePopup contents (the DNG
         // placeholder) present so refresh() never changes any frame.
-        let labelFormat = NSTextField(labelWithString: String(localized: "Format:"))
+        let labelFormat = NSTextField(labelWithString: UIStrings.format)
         let labelSpace = NSTextField(labelWithString: String(localized: "Color space:"))
         spacePopup.addItem(withTitle: Self.dngSpaceTitle)
         for control in [labelFormat, labelSpace, formatPopup, spacePopup] {

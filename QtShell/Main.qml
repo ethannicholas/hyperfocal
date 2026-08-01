@@ -74,6 +74,11 @@ ApplicationWindow {
         // .regularMaterial does.
         readonly property color overlayCard: dark ? "#e0282828" : "#e6f2f2f2"
         readonly property color overlayCardSoft: dark ? "#c0282828" : "#ccf2f2f2"
+        // Tooltips sit over image content (the busiest background in the
+        // app), so unlike overlayCard they're fully opaque, not translucent.
+        readonly property color tooltipFill: dark ? "#3c3c3c" : "#ffffff"
+        readonly property color tooltipBorder:
+            dark ? Qt.rgba(1, 1, 1, 0.16) : Qt.rgba(0, 0, 0, 0.16)
     }
 
     // The scheme as a real Controls palette so Fusion (Windows/Linux)
@@ -114,7 +119,7 @@ ApplicationWindow {
         Menu {
             title: qsTr("File")
             Action {
-                text: qsTr("New Project…")
+                text: Shell.uiString("newProject")
                 shortcut: StandardKey.New
                 enabled: !Shell.isRunning
                 // Confirm before the picker, like native; the chosen
@@ -125,31 +130,31 @@ ApplicationWindow {
                 }
             }
             Action {
-                text: qsTr("Open Project…")
+                text: Shell.uiString("openProject")
                 shortcut: StandardKey.Open
                 enabled: !Shell.isRunning
                 onTriggered: openProjectDialog.open()
             }
             Action {
-                text: qsTr("Add Stack Folder…")
+                text: Shell.uiString("addStackFolder")
                 shortcut: "Ctrl+Shift+N"
                 enabled: !Shell.isRunning
                 onTriggered: openDialog.open()
             }
             MenuSeparator {}
             Action {
-                text: qsTr("Close Stack")
+                text: Shell.uiString("closeStack")
                 enabled: !Shell.isRunning && Shell.stacks.length > 0
                 onTriggered: Shell.closeStack()
             }
             Action {
-                text: qsTr("Close Project")
+                text: Shell.uiString("closeProject")
                 enabled: !Shell.isRunning && Shell.stacks.length > 0
                 onTriggered: Shell.closeProject()
             }
             MenuSeparator {}
             Action {
-                text: qsTr("Save Project")
+                text: Shell.uiString("saveProject")
                 shortcut: StandardKey.Save
                 enabled: !Shell.isRunning
                 onTriggered: {
@@ -158,7 +163,7 @@ ApplicationWindow {
                 }
             }
             Action {
-                text: qsTr("Save Project As…")
+                text: Shell.uiString("saveProjectAs")
                 shortcut: "Ctrl+Shift+S"
                 enabled: !Shell.isRunning
                 onTriggered: {
@@ -169,32 +174,32 @@ ApplicationWindow {
             }
             MenuSeparator {}
             Action {
-                text: Shell.depthMode ? qsTr("Export Depth Map…") : qsTr("Export Result…")
+                text: Shell.depthMode ? Shell.uiString("exportDepthMap") : Shell.uiString("exportResult")
                 shortcut: "Ctrl+E"
                 enabled: !Shell.isRunning && Shell.hasDisplay
                 onTriggered: Shell.exportInteractive()
             }
             Action {
-                text: qsTr("Export All Fused…")
+                text: Shell.uiString("exportAllFused")
                 enabled: !Shell.isRunning && Shell.fusedStackCount > 1
                 onTriggered: exportAllDialog.open()
             }
             Action {
-                text: qsTr("Export Aligned Frames…")
+                text: Shell.uiString("exportAlignedFrames")
                 shortcut: "Ctrl+Shift+E"
                 enabled: !Shell.isRunning && Shell.canExportAligned
                 onTriggered: exportAlignedDialog.open()
             }
             Action {
-                text: qsTr("Export Rocking Animation…")
+                text: Shell.uiString("exportRockingAnimation")
                 enabled: !Shell.isRunning && Shell.canAnimate
                 onTriggered: Shell.exportAnimationInteractive()
             }
         }
         Menu {
-            title: qsTr("Edit")
+            title: Shell.uiString("editSectionTitle")
             Action {
-                text: qsTr("Crop…")
+                text: Shell.uiString("cropButton")
                 shortcut: "C"
                 enabled: Shell.canCrop && !Shell.cropMode
                 onTriggered: Shell.beginCrop()
@@ -238,14 +243,14 @@ ApplicationWindow {
         Menu {
             title: qsTr("Help")
             Action {
-                text: qsTr("Hyperfocal Help")
+                text: Shell.uiString("hyperfocalHelp")
                 shortcut: "Ctrl+?"
                 // The server 301s http → https; link the final URL.
                 onTriggered: Qt.openUrlExternally(
                     "https://ethannicholas.com/hyperfocal/tutorial.html")
             }
             Action {
-                text: qsTr("About Hyperfocal")
+                text: Shell.uiString("aboutHyperfocal")
                 onTriggered: aboutDialog.open()
             }
         }
@@ -531,28 +536,28 @@ ApplicationWindow {
             spacing: 8
             CheckBox {
                 id: orderToggle
-                text: qsTr("Order frames by capture time")
+                text: Shell.uiString("settingsOrderByCaptureTime")
                 onToggled: Shell.setBoolSetting("order-by-capture", checked)
             }
             CheckBox {
                 id: alignToggle
-                text: qsTr("Align frames")
+                text: Shell.uiString("settingsAlignFrames")
                 onToggled: Shell.setBoolSetting("align", checked)
             }
             CheckBox {
                 id: normalizeToggle
-                text: qsTr("Even out exposure")
+                text: Shell.uiString("settingsEvenOutExposure")
                 onToggled: Shell.setBoolSetting("normalize-exposure", checked)
             }
             CheckBox {
                 id: gpuToggle
-                text: qsTr("Use GPU")
+                text: Shell.uiString("settingsUseGPU")
                 enabled: Shell.gpuAvailable()
                 onToggled: Shell.setBoolSetting("gpu", checked)
             }
             CheckBox {
                 id: diskToggle
-                text: qsTr("Cache frames on disk while fusing")
+                text: Shell.uiString("settingsCacheFrames")
                 onToggled: Shell.setBoolSetting("disk-cache", checked)
             }
         }
@@ -720,7 +725,51 @@ ApplicationWindow {
         }
     }
 
+    // Every hover-triggered tooltip in the shell (native's help-tag
+    // equivalent) goes through this: a real hover delay (native tooltips
+    // don't pop instantly), an opaque background readable over busy image
+    // content, and word-wrapping at a fixed width instead of a single
+    // stretched-out line.
+    // Popup (ToolTip's base) does NOT pick up its visual parent from QML
+    // nesting the way an Item does — every instance below sets `parent:`
+    // explicitly to the widget it's hovering, or it renders in some
+    // unrelated default spot instead of near that widget.
+    component InfoTip: ToolTip {
+        id: tip
+        delay: 600
+        x: 0
+        y: parent ? parent.height + 4 : 0
+        contentItem: Label {
+            text: tip.text
+            wrapMode: Text.WordWrap
+            color: theme.textPrimary
+            font.pixelSize: 12
+        }
+        background: Rectangle {
+            color: theme.tooltipFill
+            border.color: theme.tooltipBorder
+            border.width: 1
+            radius: 6
+        }
+        width: 260
+    }
+
+    // A small (i) affordance next to a label, mirroring the algorithm
+    // picker's info icon — the tooltip triggers on the icon itself, not
+    // the whole row, so hovering the label or control doesn't surprise
+    // the user with a popup.
+    component InfoIcon: Label {
+        id: icon
+        property string tip: ""
+        text: "ⓘ"   // ⓘ
+        color: theme.textSecondary
+        font.pixelSize: 12
+        HoverHandler { id: iconHover }
+        InfoTip { parent: icon; visible: iconHover.hovered; text: icon.tip }
+    }
+
     component SidebarSlider: ColumnLayout {
+        id: sliderRoot
         required property string sliderId
         required property string label
         required property real from
@@ -734,6 +783,10 @@ ApplicationWindow {
         // Native formats the tone sliders "%+.0f" — the sign is always
         // shown, so a centred slider reads "+0", not "0".
         property bool showsSign: false
+        // Matches native's LabeledSlider.help: an info icon next to the
+        // label carries the tooltip (below, InfoIcon), same as the
+        // algorithm picker.
+        property string tip: ""
         // A hair below zero formats as "-0.00" (drag back toward zero and
         // stop a fraction short) — show the zero it rounds to instead, the
         // same guard native's displayString applies.
@@ -747,17 +800,36 @@ ApplicationWindow {
         RowLayout {
             id: valueRow
             Layout.fillWidth: true
-            // The title flexes and elides; the value keeps its natural
-            // width. With a fixed spacer instead, wider style fonts
-            // (Fusion on Windows) overflowed the row and the value was
-            // clipped at the sidebar edge.
+            spacing: 4
+            // The label and its (i) icon are one unit — the icon sits
+            // right after the label text (a suffix), never drifting to
+            // the right edge as a prefix to the value. fillWidth capped
+            // at implicitWidth lets the label shrink (and elide) when
+            // the sidebar is tight without ever growing past its text;
+            // the spacer after the icon takes the slack, and the value
+            // keeps its natural width (wider style fonts on Windows
+            // overflowed the row when the value was squeezed instead).
             Label {
                 text: label
                 color: theme.textSecondary
                 font.pixelSize: 12
                 Layout.fillWidth: true
+                // Both pins are needed: maximum stops the label from
+                // growing past its text (which parked the icon at the
+                // right edge), and preferred stops the layout from
+                // handing it LESS than its text when space is plentiful
+                // (fillWidth surplus distribution otherwise elided
+                // "Median radius" in a half-empty row).
+                // Ceil, not the raw implicitWidth: the layout hands some
+                // items a whole-pixel width, and elide fires on the
+                // sub-pixel shortfall — "Median radius" at 79px vs an
+                // implicit 79.28 elided a full character for 0.28px.
+                Layout.preferredWidth: Math.ceil(implicitWidth)
+                Layout.maximumWidth: Math.ceil(implicitWidth)
                 elide: Text.ElideRight
             }
+            InfoIcon { tip: sliderRoot.tip; visible: tip.length > 0 }
+            Item { Layout.fillWidth: true }
             Label {
                 id: valueLabel
                 text: format.arg(displayValue)
@@ -938,7 +1010,7 @@ ApplicationWindow {
             SidebarCard {
             SectionHeader {
                 id: stackHeader
-                title: stackList.count > 1 ? qsTr("Stacks") : qsTr("Stack")
+                title: stackList.count > 1 ? Shell.uiString("stackPlural") : Shell.uiString("stackSingular")
                 section: "stack"
                 // "N of M" included count, the native stack.count.
                 subtitle: {
@@ -949,7 +1021,7 @@ ApplicationWindow {
                     return qsTr("%1 of %2").arg(n).arg(Shell.frames.length)
                 }
                 Button {
-                    text: qsTr("All")
+                    text: Shell.uiString("includeAllFrames")
                     visible: frameList.count > 0
                     enabled: !Shell.isRunning
                     flat: true
@@ -965,7 +1037,7 @@ ApplicationWindow {
                     onClicked: Shell.setAllFramesIncluded(true)
                 }
                 Button {
-                    text: qsTr("None")
+                    text: Shell.uiString("includeNoFrames")
                     visible: frameList.count > 0
                     enabled: !Shell.isRunning
                     flat: true
@@ -1039,9 +1111,12 @@ ApplicationWindow {
                         }
                     }
                     CheckBox {
+                        id: enabledCheckBox
                         checked: modelData.enabled
                         enabled: !Shell.isRunning
                         onToggled: Shell.setStackEnabled(index, checked)
+                        HoverHandler { id: enabledHover }
+                        InfoTip { parent: enabledCheckBox; visible: enabledHover.hovered; text: Shell.uiString("includeStackTip") }
                     }
                     Image {
                         // Middle-frame thumbnail, like native's stack rows.
@@ -1076,24 +1151,30 @@ ApplicationWindow {
                         }
                     }
                     Label {
+                        id: orderBadge
                         // Load-time frame-order warning badge.
                         text: "△"
                         visible: modelData.orderWarning !== ""
                         color: theme.warn
-                        ToolTip.visible: orderHover.hovered
-                        ToolTip.text: modelData.orderWarning
                         HoverHandler { id: orderHover }
+                        InfoTip { parent: orderBadge; visible: orderHover.hovered; text: modelData.orderWarning }
                     }
                     Label {
+                        id: statusBadge
                         // The native tree's status glyph, textified:
                         // fusing / fused / failed (hover = message).
                         text: modelData.status === 1 ? "…"
                             : modelData.status === 2 ? "✓"
                             : modelData.status === 3 ? "⚠" : ""
                         color: modelData.status === 3 ? theme.warn : theme.ok
-                        ToolTip.visible: modelData.status === 3 && hover.hovered
-                        ToolTip.text: modelData.failure
                         HoverHandler { id: hover }
+                        InfoTip {
+                            parent: statusBadge
+                            visible: (modelData.status === 3 || modelData.status === 2)
+                                     && hover.hovered
+                            text: modelData.status === 3 ? modelData.failure
+                                                          : Shell.uiString("fusedStatusTip")
+                        }
                     }
                     Label {
                         text: stackDelegate.modelData.frameCount
@@ -1138,12 +1219,12 @@ ApplicationWindow {
                                 }
                             }
                             Label {
+                                id: nestedIssueBadge
                                 text: "⚠"
                                 visible: modelData.issue !== ""
                                 color: theme.warn
-                                ToolTip.visible: nestedIssueHover.hovered
-                                ToolTip.text: modelData.issue
                                 HoverHandler { id: nestedIssueHover }
+                                InfoTip { parent: nestedIssueBadge; visible: nestedIssueHover.hovered; text: modelData.issue }
                             }
                         }
                     }
@@ -1155,7 +1236,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
-                text: qsTr("Drop a folder of frames here, or:")
+                text: Shell.uiString("dropFolderHint")
                 color: theme.textDim
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
@@ -1163,7 +1244,7 @@ ApplicationWindow {
             Button {
                 Layout.fillWidth: true
                 visible: stackList.count === 0 && frameList.count === 0
-                text: qsTr("Open Folder…")
+                text: Shell.uiString("openFolder")
                 enabled: !Shell.isRunning
                 onClicked: openDialog.open()
             }
@@ -1201,13 +1282,13 @@ ApplicationWindow {
                         TapHandler { onTapped: Shell.selectFrame(index) }
                     }
                     Label {
+                        id: issueBadge
                         // Fuse-time issue badge (misfire/misalignment).
                         text: "⚠"
                         visible: modelData.issue !== ""
                         color: theme.warn
-                        ToolTip.visible: issueHover.hovered
-                        ToolTip.text: modelData.issue
                         HoverHandler { id: issueHover }
+                        InfoTip { parent: issueBadge; visible: issueHover.hovered; text: modelData.issue }
                     }
                 }
             }
@@ -1217,10 +1298,10 @@ ApplicationWindow {
             SidebarCard {
             SectionHeader {
                 id: fusionHeader
-                title: qsTr("Fusion")
+                title: Shell.uiString("fusionSectionTitle")
                 section: "fusion"
                 Button {
-                    text: qsTr("Reset")
+                    text: Shell.uiString("reset")
                     visible: !Shell.fusionDefault
                     enabled: !Shell.isRunning
                     flat: true
@@ -1273,7 +1354,7 @@ ApplicationWindow {
                         Label {
                             id: algorithmLabel
                             anchors.verticalCenter: parent.verticalCenter
-                            text: qsTr("Algorithm:")
+                            text: Shell.uiString("algorithmLabel")
                             color: theme.textSecondary
                             font.pixelSize: 12
                         }
@@ -1288,9 +1369,9 @@ ApplicationWindow {
                                 // DisplayNamed makes for FusionMethod (see
                                 // Localization.swift).
                                 { key: "dmap", label: "DMap",
-                                  tip: qsTr("Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap.") },
+                                  tip: Shell.uiString("algorithmDMapTip") },
                                 { key: "pmax", label: "PMax",
-                                  tip: qsTr("Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce.") }
+                                  tip: Shell.uiString("algorithmPMaxTip") }
                             ]
                             delegate: RowLayout {
                                 Layout.fillWidth: true
@@ -1299,15 +1380,8 @@ ApplicationWindow {
                                     checked: Shell.fusionAlgorithm === modelData.key
                                     enabled: !Shell.isRunning
                                     onClicked: Shell.fusionAlgorithm = modelData.key
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: modelData.tip
                                 }
-                                Label {
-                                    text: "ⓘ"; color: theme.textSecondary
-                                    HoverHandler { id: infoHover }
-                                    ToolTip.visible: infoHover.hovered
-                                    ToolTip.text: modelData.tip
-                                }
+                                InfoIcon { tip: modelData.tip }
                                 Item { Layout.fillWidth: true }
                             }
                         }
@@ -1317,14 +1391,16 @@ ApplicationWindow {
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.sharpness"
-                    label: qsTr("Sharpness σ"); from: 1; to: 16; format: qsTr("%1 px")
+                    label: Shell.uiString("sliderSharpnessLabel"); from: 1; to: 16; format: qsTr("%1 px")
+                    tip: Shell.uiString("sliderSharpnessTip")
                     decimals: 1
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.noise-floor"
-                    label: qsTr("Noise floor"); from: 0.01; to: 1
+                    label: Shell.uiString("sliderNoiseFloorLabel"); from: 0.01; to: 1
+                    tip: Shell.uiString("sliderNoiseFloorTip")
                     // A fraction in the model, a percentage on screen.
                     format: "%1%"
                     displayScale: 100; decimals: 0
@@ -1333,44 +1409,51 @@ ApplicationWindow {
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.median-radius"
-                    label: qsTr("Median radius"); from: 0; to: 32; format: qsTr("%1 px")
+                    label: Shell.uiString("sliderMedianRadiusLabel"); from: 0; to: 32; format: qsTr("%1 px")
+                    tip: Shell.uiString("sliderMedianRadiusTip")
                     decimals: 0
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm !== "pmax"
                     sliderId: "fusion.slider.blend-radius"
-                    label: qsTr("Blend radius"); from: 0.75; to: 4
+                    label: Shell.uiString("sliderBlendRadiusLabel"); from: 0.75; to: 4
+                    tip: Shell.uiString("sliderBlendRadiusTip")
                     enabled: !Shell.isRunning
                 }
                 // PMax debloom sliders (shown for the pyramid-fusion algorithm)
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm === "pmax"
                     sliderId: "fusion.slider.debloom-levels"
-                    label: qsTr("Debloom levels"); from: 0; to: 8; format: "%1"
+                    label: Shell.uiString("sliderDebloomLevelsLabel"); from: 0; to: 8; format: "%1"
+                    tip: Shell.uiString("sliderDebloomLevelsTip")
                     decimals: 0
                     enabled: !Shell.isRunning
                 }
                 SidebarSlider {
                     visible: Shell.fusionAlgorithm === "pmax"
                     sliderId: "fusion.slider.focus-threshold"
-                    label: qsTr("Focus threshold"); from: 0; to: 0.3
+                    label: Shell.uiString("sliderFocusThresholdLabel"); from: 0; to: 0.3
+                    tip: Shell.uiString("sliderFocusThresholdTip")
                     enabled: !Shell.isRunning
                 }
                 }
                 Button {
                     Layout.fillWidth: true
-                    text: qsTr("Fuse Stack")
+                    text: Shell.uiString("fuseStack")
                     enabled: Shell.canFuse
                     highlighted: true
                     onClicked: Shell.fuse()
                 }
                 Button {
+                    id: fuseEnabledButton
                     Layout.fillWidth: true
                     visible: stackList.count > 1
                     text: qsTr("Fuse %1 Stacks").arg(Shell.pendingStackCount)
                     enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
                     onClicked: Shell.fuseEnabledStacks()
+                    HoverHandler { id: fuseEnabledHover }
+                    InfoTip { parent: fuseEnabledButton; visible: fuseEnabledHover.hovered; text: Shell.uiString("fuseEnabledStacksTip") }
                 }
             }
             }
@@ -1378,10 +1461,10 @@ ApplicationWindow {
             SidebarCard {
             SectionHeader {
                 id: toneHeader
-                title: qsTr("Tone")
+                title: Shell.uiString("toneSectionTitle")
                 section: "tone"
                 Button {
-                    text: qsTr("Reset")
+                    text: Shell.uiString("reset")
                     visible: !Shell.toneNeutral
                     flat: true
                     font.pixelSize: 11
@@ -1411,32 +1494,38 @@ ApplicationWindow {
                 spacing: 10
                 SidebarSlider {
                     sliderId: "tone.slider.exposure"
-                    label: qsTr("Exposure"); from: -5; to: 5; format: qsTr("%1 EV")
+                    label: Shell.uiString("sliderExposureLabel"); from: -5; to: 5; format: qsTr("%1 EV")
+                    tip: Shell.uiString("sliderExposureTip")
                     showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.contrast"
-                    label: qsTr("Contrast"); from: -100; to: 100; decimals: 0
+                    label: Shell.uiString("sliderContrastLabel"); from: -100; to: 100; decimals: 0
+                    tip: Shell.uiString("sliderContrastTip")
                     showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.highlights"
-                    label: qsTr("Highlights"); from: -100; to: 100; decimals: 0
+                    label: Shell.uiString("sliderHighlightsLabel"); from: -100; to: 100; decimals: 0
+                    tip: Shell.uiString("sliderHighlightsTip")
                     showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.shadows"
-                    label: qsTr("Shadows"); from: -100; to: 100; decimals: 0
+                    label: Shell.uiString("sliderShadowsLabel"); from: -100; to: 100; decimals: 0
+                    tip: Shell.uiString("sliderShadowsTip")
                     showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.whites"
-                    label: qsTr("Whites"); from: -100; to: 100; decimals: 0
+                    label: Shell.uiString("sliderWhitesLabel"); from: -100; to: 100; decimals: 0
+                    tip: Shell.uiString("sliderWhitesTip")
                     showsSign: true
                 }
                 SidebarSlider {
                     sliderId: "tone.slider.blacks"
-                    label: qsTr("Blacks"); from: -100; to: 100; decimals: 0
+                    label: Shell.uiString("sliderBlacksLabel"); from: -100; to: 100; decimals: 0
+                    tip: Shell.uiString("sliderBlacksTip")
                     showsSign: true
                 }
                 }
@@ -1446,7 +1535,7 @@ ApplicationWindow {
             SidebarCard {
             SectionHeader {
                 id: editHeader
-                title: qsTr("Edit")
+                title: Shell.uiString("editSectionTitle")
                 section: "retouch"
             }
             ColumnLayout {
@@ -1455,17 +1544,20 @@ ApplicationWindow {
                 spacing: 10
                 CardRule {}
                 Button {
+                    id: cropButton
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
-                    text: qsTr("Crop…")
+                    text: Shell.uiString("cropButton")
                     enabled: Shell.canCrop
                     onClicked: Shell.beginCrop()
+                    HoverHandler { id: cropButtonHover }
+                    InfoTip { parent: cropButton; visible: cropButtonHover.hovered; text: Shell.uiString("cropTip") }
                 }
                 Button {
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
-                    text: Shell.retouchHasEdits ? qsTr("Continue Retouching")
-                                                : qsTr("Start Retouching")
+                    text: Shell.retouchHasEdits ? Shell.uiString("continueRetouching")
+                                                : Shell.uiString("startRetouching")
                     enabled: Shell.canRetouch
                     onClicked: Shell.enterRetouch()
                 }
@@ -1474,12 +1566,12 @@ ApplicationWindow {
                 // "Crop" sub-header — the native CropControls placement.
                 Label {
                     visible: Shell.cropMode
-                    text: qsTr("Crop"); color: theme.textPrimary; font.bold: true
+                    text: Shell.uiString("cropHeader"); color: theme.textPrimary; font.bold: true
                 }
                 RowLayout {
                     visible: Shell.cropMode
                     Layout.fillWidth: true
-                    Label { text: qsTr("Aspect Ratio"); color: theme.textSecondary }
+                    Label { text: Shell.uiString("aspectRatioLabel"); color: theme.textSecondary }
                     ComboBox {
                         Layout.fillWidth: true
                         // The aspect value persists through the bridge:
@@ -1506,6 +1598,7 @@ ApplicationWindow {
                         onActivated: index => Shell.cropAspect = model[index].value
                     }
                     Button {
+                        id: orientationButton
                         // Icon button in the aspect row, like native's
                         // symbol button: the current orientation's
                         // rectangle with a rotation arrow (drawn SVGs — SF
@@ -1517,9 +1610,7 @@ ApplicationWindow {
                         icon.width: 18
                         icon.height: 18
                         onClicked: Shell.toggleCropOrientation()
-                        ToolTip.visible: hovered
-                        ToolTip.text:
-                            qsTr("Swap the crop between landscape and portrait (X).")
+                        InfoTip { parent: orientationButton; visible: orientationButton.hovered; text: Shell.uiString("swapCropOrientationTip") }
                     }
                 }
                 RowLayout {
@@ -1528,30 +1619,32 @@ ApplicationWindow {
                     Button {
                         Layout.fillWidth: true
                         highlighted: true
-                        text: qsTr("Accept")
+                        text: Shell.uiString("accept")
                         onClicked: Shell.acceptCrop()
                     }
                     Button {
                         Layout.fillWidth: true
-                        text: qsTr("Cancel")
+                        text: Shell.uiString("cancel")
                         onClicked: Shell.cancelCrop()
                     }
                 }
 
                 Label {
                     visible: Shell.retouchMode
-                    text: qsTr("Retouching"); color: theme.textPrimary; font.bold: true
+                    text: Shell.uiString("retouchingTitle"); color: theme.textPrimary; font.bold: true
                 }
                 SidebarSlider {
                     visible: Shell.retouchMode
                     sliderId: "retouch.slider.brush-size"
-                    label: qsTr("Brush size"); from: 1; to: 800; decimals: 0
+                    label: Shell.uiString("sliderBrushSizeLabel"); from: 1; to: 800; decimals: 0
                     format: qsTr("%1 px")
+                    tip: Shell.uiString("sliderBrushSizeTip")
                 }
                 SidebarSlider {
                     visible: Shell.retouchMode
                     sliderId: "retouch.slider.softness"
-                    label: qsTr("Softness"); from: 0; to: 1
+                    label: Shell.uiString("sliderSoftnessLabel"); from: 0; to: 1
+                    tip: Shell.uiString("sliderSoftnessTip")
                     // Feathered fraction: 0…1 in the model, 0%…100% shown.
                     format: "%1%"
                     displayScale: 100; decimals: 0
@@ -1560,23 +1653,27 @@ ApplicationWindow {
                     visible: Shell.retouchMode
                     Layout.fillWidth: true
                     spacing: 2
-                    Label {
-                        text: qsTr("Retouch from")
-                        color: theme.textSecondary
-                        font.pixelSize: 12
+                    RowLayout {
+                        spacing: 4
+                        Label {
+                            text: Shell.uiString("retouchFromLabel")
+                            color: theme.textSecondary
+                            font.pixelSize: 12
+                        }
+                        InfoIcon { tip: Shell.uiString("retouchSourceTip") }
                     }
                     RadioButton {
-                        text: qsTr("Source Image")
+                        text: Shell.uiString("retouchSourceImage")
                         checked: Shell.retouchSourceKind === 0
                         onClicked: Shell.retouchSourceKind = 0
                     }
                     RadioButton {
-                        text: qsTr("PMax Result")
+                        text: Shell.uiString("retouchPMaxResult")
                         checked: Shell.retouchSourceKind === 1
                         onClicked: Shell.retouchSourceKind = 1
                     }
                     RadioButton {
-                        text: qsTr("DMap Result")
+                        text: Shell.uiString("retouchDMapResult")
                         checked: Shell.retouchSourceKind === 2
                         onClicked: Shell.retouchSourceKind = 2
                     }
@@ -1585,14 +1682,14 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     visible: Shell.retouchMode
                     enabled: Shell.retouchHasEdits
-                    text: qsTr("Revert All")
+                    text: Shell.uiString("revertAll")
                     onClicked: Shell.revertRetouch()
                 }
                 Button {
                     Layout.fillWidth: true
                     visible: Shell.retouchMode
                     highlighted: true
-                    text: qsTr("Done Retouching")
+                    text: Shell.uiString("doneRetouching")
                     onClicked: Shell.exitRetouch()
                 }
 
@@ -1619,7 +1716,7 @@ ApplicationWindow {
             SidebarCard {
             SectionHeader {
                 id: exportHeader
-                title: qsTr("Export")
+                title: Shell.uiString("exportSectionTitle")
                 section: "export"
             }
             ColumnLayout {
@@ -1629,7 +1726,7 @@ ApplicationWindow {
                 CardRule {}
                 Button {
                     Layout.fillWidth: true
-                    text: Shell.depthMode ? qsTr("Export Depth Map…") : qsTr("Export Result…")
+                    text: Shell.depthMode ? Shell.uiString("exportDepthMap") : Shell.uiString("exportResult")
                     enabled: !Shell.isRunning && Shell.hasDisplay
                     onClicked: Shell.exportInteractive()
                 }
@@ -1670,7 +1767,7 @@ ApplicationWindow {
                         ? qsTr("Source: %1   ↑/↓ cycle · space picks sharpest")
                           .arg(Shell.retouchSourceName)
                         : Shell.inputTitle !== "" ? Shell.inputTitle
-                                                  : qsTr("Input")
+                                                  : Shell.uiString("inputTitle")
                     // A decode that failed outranks both hints: without this the
                     // pane claims nothing is selected while a frame plainly is.
                     // Matches the native pane, which reads the same model value.
@@ -1678,7 +1775,7 @@ ApplicationWindow {
                         : Shell.inputError !== "" ? Shell.inputError
                         : Shell.frames.length === 0
                             ? qsTr("Open a stack to begin")
-                            : qsTr("Select a frame in the Stack list")
+                            : Shell.uiString("selectFrameHint")
                     // Mid-fuse the pane cycles processing sources — the
                     // spinner would just flicker (native gates the same
                     // way); the retouch source keeps its own status label.
@@ -1712,7 +1809,7 @@ ApplicationWindow {
                             ? Shell.retouchSourceError
                             : Shell.retouchSourceStatus !== ""
                                 ? Shell.retouchSourceStatus
-                                : qsTr("Loading source…")
+                                : Shell.uiString("loadingSource")
                         color: theme.textSecondary
                         font.pixelSize: 13
                         padding: 8
@@ -1728,12 +1825,12 @@ ApplicationWindow {
                     title: Shell.retouchMode
                         ? (Shell.depthMode
                            ? qsTr("Retouched Depth")
-                           : qsTr("Retouched Output — drag to paint from source"))
-                        : qsTr("Output")
+                           : Shell.uiString("retouchedOutputHint"))
+                        : Shell.uiString("outputTitle")
                     dataDisplay: Shell.displayIsData
                     hint: Shell.hasDisplay ? ""
-                        : Shell.canFuse ? qsTr("Press “Fuse Stack”")
-                                        : qsTr("No output yet")
+                        : Shell.canFuse ? Shell.uiString("pressFuseStackHint")
+                                        : Shell.uiString("noOutputYet")
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     // Segmented mode picker in the pane header, the
@@ -1829,7 +1926,7 @@ ApplicationWindow {
                                     font.pixelSize: 12
                                 }
                                 Button {
-                                    text: qsTr("Cancel")
+                                    text: Shell.uiString("cancel")
                                     font.pixelSize: 11
                                     onClicked: Shell.cancelFuse()
                                 }
@@ -1845,10 +1942,10 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.margins: 6
                 Item { Layout.fillWidth: true }
-                Label { text: qsTr("Zoom:"); color: theme.textSecondary; font.pixelSize: 12 }
+                Label { text: Shell.uiString("zoomLabel"); color: theme.textSecondary; font.pixelSize: 12 }
                 ToolButton {
                     id: zoomMenuButton
-                    text: (outputPane.item.fitted ? qsTr("Fit")
+                    text: (outputPane.item.fitted ? Shell.uiString("zoomFit")
                           : Math.round(outputPane.item.displayScale * 100)
                             + "%") + "  ⌵"
                     font.pixelSize: 12
@@ -1856,7 +1953,7 @@ ApplicationWindow {
                     Menu {
                         id: zoomMenu
                         y: -implicitHeight - 4
-                        MenuItem { text: qsTr("Fit"); onTriggered: outputPane.item.fit() }
+                        MenuItem { text: Shell.uiString("zoomFit"); onTriggered: outputPane.item.fit() }
                         MenuItem { text: "25%"; onTriggered: outputPane.item.setAbsoluteScale(0.25) }
                         MenuItem { text: "50%"; onTriggered: outputPane.item.setAbsoluteScale(0.5) }
                         MenuItem { text: "100%"; onTriggered: outputPane.item.setAbsoluteScale(1) }

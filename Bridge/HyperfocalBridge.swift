@@ -229,6 +229,21 @@ private func fillUTF8(_ string: String,
     return Int32(bytes.count)
 }
 
+// MARK: - Shared UI strings
+
+/// Static text shared verbatim with the native app (see `AppCore.UIStrings`)
+/// — button labels, section titles, tooltips. One generic getter instead of
+/// one `hf_*` function per string: `key` is the `UIStrings.all` key (its
+/// Swift property name). Returns 0 bytes for an unknown key.
+@_cdecl("hf_ui_string")
+public func hf_ui_string(_ key: UnsafePointer<CChar>?,
+                          _ buffer: UnsafeMutablePointer<CChar>?,
+                          _ cap: Int32) -> Int32 {
+    guard let key else { return 0 }
+    let value = UIStrings.all[String(cString: key)] ?? ""
+    return fillUTF8(value, buffer, cap)
+}
+
 // MARK: - Exports
 
 /// Drain the process main queue once (non-blocking). On Apple platforms

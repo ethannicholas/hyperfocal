@@ -63,6 +63,11 @@ void hf_set_guide_callback(hf_guide_cb guide, void *ctx);
 // drop on the native app. 0 if refused (e.g. while a fuse runs).
 int hf_load_stack(const char *path);
 
+// Static UI text shared verbatim with the native app (AppCore.UIStrings) —
+// button labels, section titles, tooltips. `key` is the string's Swift
+// property name (e.g. "algorithmDMapTip"); 0 bytes for an unknown key.
+int hf_ui_string(const char *key, char *buf, int cap);
+
 int hf_can_fuse(void);
 int hf_fuse(void);        // 0 if canFuse is false
 int hf_is_running(void);

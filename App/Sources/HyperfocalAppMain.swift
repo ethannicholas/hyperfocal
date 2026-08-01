@@ -132,7 +132,7 @@ struct HyperfocalApp: App {
             // bundle) plus a credits blurb carrying the Adobe-required DNG
             // attribution and a link to the repository.
             CommandGroup(replacing: .appInfo) {
-                Button("About Hyperfocal") {
+                Button(UIStrings.aboutHyperfocal) {
                     let attributes: [NSAttributedString.Key: Any] = [
                         .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
                         .foregroundColor: NSColor.secondaryLabelColor,
@@ -160,18 +160,18 @@ struct HyperfocalApp: App {
                 // deliberately named differently: from the File menu the
                 // mental model is starting a project; from the empty window
                 // it's pointing the app at a folder of frames.
-                Button("New Project…") { model.openFrames() }
+                Button(UIStrings.newProject) { model.openFrames() }
                     .keyboardShortcut("n", modifiers: .command)
                     .disabled(model.phase.isRunning)
-                Button("Open Project…") { model.openProjectPanel() }
+                Button(UIStrings.openProject) { model.openProjectPanel() }
                     .keyboardShortcut("o", modifiers: .command)
                     .disabled(model.phase.isRunning)
-                Button("Add Stack Folder…") { model.addStackFolderPanel() }
+                Button(UIStrings.addStackFolder) { model.addStackFolderPanel() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(model.phase.isRunning)
-                Button("Close Stack") { model.closeSelectedStack() }
+                Button(UIStrings.closeStack) { model.closeSelectedStack() }
                     .disabled(model.phase.isRunning || model.selectedStackID == nil)
-                Button("Close Project") { model.closeProject() }
+                Button(UIStrings.closeProject) { model.closeProject() }
                     .disabled(model.phase.isRunning || model.stacks.isEmpty)
                 Divider()
                 // Enabled whenever there's anything at all to save: unfused
@@ -181,19 +181,19 @@ struct HyperfocalApp: App {
                 // Save writes back to the project's file; a never-saved
                 // project falls through to the Save As panel (no ellipsis:
                 // the common case shows no dialog).
-                Button("Save Project") { model.saveProject() }
+                Button(UIStrings.saveProject) { model.saveProject() }
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(model.stacks.isEmpty || model.phase.isRunning)
-                Button("Save Project As…") { model.saveProjectAs() }
+                Button(UIStrings.saveProjectAs) { model.saveProjectAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(model.stacks.isEmpty || model.phase.isRunning)
-                Button("Export Result…") { model.exportResult() }
+                Button(UIStrings.exportResult) { model.exportResult() }
                     .keyboardShortcut("e", modifiers: .command)
                     .disabled(!model.canExport)
-                Button("Export Aligned Frames…") { model.exportAlignedFramesPanel() }
+                Button(UIStrings.exportAlignedFrames) { model.exportAlignedFramesPanel() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(!model.canExportAligned)
-                Button("Export Rocking Animation…") { model.exportAnimation() }
+                Button(UIStrings.exportRockingAnimation) { model.exportAnimation() }
                     .disabled(!model.canAnimate)
             }
             // Edit > Undo/Redo, mode-scoped (we don't use NSUndoManager):
@@ -226,7 +226,7 @@ struct HyperfocalApp: App {
                     .keyboardShortcut("0", modifiers: .command)
             }
             CommandGroup(replacing: .help) {
-                Button("Hyperfocal Help") {
+                Button(UIStrings.hyperfocalHelp) {
                     // The server 301s http → https; link the final URL.
                     NSWorkspace.shared.open(
                         URL(string: "https://ethannicholas.com/hyperfocal/tutorial.html")!)

@@ -95,7 +95,7 @@ struct ContentView: View {
                               ? "chevron.right" : "chevron.down")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text(model.stacks.count > 1 ? "Stacks" : "Stack").font(.headline)
+                        Text(model.stacks.count > 1 ? UIStrings.stackPlural : UIStrings.stackSingular).font(.headline)
                         Spacer()
                     }
                     .contentShape(Rectangle())
@@ -110,11 +110,11 @@ struct ContentView: View {
                         .font(.caption)
                         .accessibilityIdentifier("stack.count")
                     if !model.isCollapsed(.stack) {
-                        Button("All") { model.includeAll(true) }
+                        Button(UIStrings.includeAllFrames) { model.includeAll(true) }
                             .controlSize(.small)
                             .disabled(model.phase.isRunning)
                             .accessibilityIdentifier("stack.include-all")
-                        Button("None") { model.includeAll(false) }
+                        Button(UIStrings.includeNoFrames) { model.includeAll(false) }
                             .controlSize(.small)
                             .disabled(model.phase.isRunning)
                             .accessibilityIdentifier("stack.include-none")
@@ -129,9 +129,9 @@ struct ContentView: View {
             } else if model.stacks.isEmpty {
                 cardSeparator
                 VStack(spacing: 10) {
-                    Text("Drop a folder of frames here, or:")
+                    Text(UIStrings.dropFolderHint)
                         .foregroundStyle(.secondary)
-                    Button("Open Folder…") { model.openFrames() }
+                    Button(UIStrings.openFolder) { model.openFrames() }
                         .accessibilityIdentifier("stack.open-folder")
                 }
                 .frame(maxWidth: .infinity, minHeight: 120)
@@ -270,7 +270,7 @@ struct ContentView: View {
     /// the Stack card, so every title sits on its card's background at the
     /// same leading edge.
     private func sectionHeader<T: View>(
-        _ title: LocalizedStringKey, _ section: AppModel.SidebarSection,
+        _ title: String, _ section: AppModel.SidebarSection,
         @ViewBuilder trailing: () -> T
     ) -> some View {
         HStack(spacing: 5) {
@@ -300,17 +300,17 @@ struct ContentView: View {
         }
     }
 
-    private func sectionHeader(_ title: LocalizedStringKey,
+    private func sectionHeader(_ title: String,
                                _ section: AppModel.SidebarSection) -> some View {
         sectionHeader(title, section) { EmptyView() }
     }
 
-    private func algorithmTooltip(_ method: FusionMethod) -> LocalizedStringKey {
+    private func algorithmTooltip(_ method: FusionMethod) -> String {
         switch method {
         case .dmap:
-            return "Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap."
+            return UIStrings.algorithmDMapTip
         case .pmax:
-            return "Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce."
+            return UIStrings.algorithmPMaxTip
         }
     }
 
@@ -319,9 +319,9 @@ struct ContentView: View {
         // live in Settings (⌘,); the sidebar keeps the per-stack creative
         // controls.
         Section {
-            sectionHeader("Fusion", .fusion) {
+            sectionHeader(UIStrings.fusionSectionTitle, .fusion) {
                 if !model.fusionSettingsAreDefault {
-                    Button("Reset") { model.resetFusionSettings() }
+                    Button(UIStrings.reset) { model.resetFusionSettings() }
                         .controlSize(.small)
                         .buttonStyle(.borderless)
                         .disabled(model.phase.isRunning)
@@ -335,7 +335,7 @@ struct ContentView: View {
             // LabeledContent puts "Algorithm:" in the Form's label column and
             // the stacked radios in its content column — lined up with the
             // sliders below.
-            LabeledContent("Algorithm:") {
+            LabeledContent(UIStrings.algorithmLabel) {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(FusionMethod.allCases, id: \.self) { method in
                         Button {
@@ -369,13 +369,13 @@ struct ContentView: View {
             Group {
             if model.fusionMethod == .dmap {
             LabeledSlider(
-                label: "Sharpness σ", id: "fusion.slider.sharpness", value: $model.sharpnessSigma, range: 1...16,
+                label: UIStrings.sliderSharpnessLabel, id: "fusion.slider.sharpness", value: $model.sharpnessSigma, range: 1...16,
                 format: "%.1f px",
-                help: "Radius of the local-contrast measurement that decides which frame is sharpest at each pixel. Larger values are steadier on smooth, low-texture surfaces; smaller values resolve finer depth detail.")
+                help: UIStrings.sliderSharpnessTip)
             LabeledSlider(
-                label: "Noise floor", id: "fusion.slider.noise-floor", value: $model.noiseFloor, range: 0.01...1,
+                label: UIStrings.sliderNoiseFloorLabel, id: "fusion.slider.noise-floor", value: $model.noiseFloor, range: 0.01...1,
                 format: "%.0f%%", displayScale: 100,
-                help: "Fraction of the image's overall sharpness below which a pixel is treated as featureless and takes its depth from confident neighbors. Drag to preview the depth map this floor would produce: featureless regions inheriting smoothly from their surroundings is normal — raise the floor until glow halos standing off subjects disappear, and stop before real detail starts dissolving into its neighbors.",
+                help: UIStrings.sliderNoiseFloorTip,
                 onEditingChanged: { editing in
                     if editing {
                         model.beginNoiseFloorPreview()
@@ -384,25 +384,25 @@ struct ContentView: View {
                     }
                 })
             LabeledSlider(
-                label: "Median radius", id: "fusion.slider.median-radius", value: $model.medianRadius, range: 0...32,
+                label: UIStrings.sliderMedianRadiusLabel, id: "fusion.slider.median-radius", value: $model.medianRadius, range: 0...32,
                 format: "%.0f px",
-                help: "Size of the majority vote that removes isolated wrong-depth patches at edges where the background shows through a defocused subject. 0 disables it.")
+                help: UIStrings.sliderMedianRadiusTip)
             LabeledSlider(
-                label: "Blend radius", id: "fusion.slider.blend-radius", value: $model.blendRadius,
+                label: UIStrings.sliderBlendRadiusLabel, id: "fusion.slider.blend-radius", value: $model.blendRadius,
                 range: Double(DMapFusion.minBlendRadius)...4,
                 format: "%.2f",
-                help: "How many neighboring frames blend together at each pixel when rendering. Wider is smoother across focus transitions, but slightly softer.")
+                help: UIStrings.sliderBlendRadiusTip)
             } else {
             LabeledSlider(
-                label: "Debloom levels", id: "fusion.slider.debloom-levels",
+                label: UIStrings.sliderDebloomLevelsLabel, id: "fusion.slider.debloom-levels",
                 value: Binding(get: { Double(model.pmaxCoarseLevels) },
                                set: { model.pmaxCoarseLevels = Int($0.rounded()) }),
                 range: 0...8, format: "%.0f",
-                help: "How many of the coarsest pyramid levels are focus-gated to suppress highlight bloom — where an out-of-focus bright halo leaks over a sharp neighbor. 0 turns debloom off (standard PMax, more faithful on stacks without bloom); higher gates more levels, cutting more bloom.")
+                help: UIStrings.sliderDebloomLevelsTip)
             LabeledSlider(
-                label: "Focus threshold", id: "fusion.slider.focus-threshold", value: $model.pmaxFocusThreshold,
+                label: UIStrings.sliderFocusThresholdLabel, id: "fusion.slider.focus-threshold", value: $model.pmaxFocusThreshold,
                 range: 0...0.3, format: "%.2f",
-                help: "Fine-scale focus energy a frame must exceed at a pixel to win the debloom two-track select. Higher is stricter — more of the bloomed frame is rejected in favor of the in-focus one; too high starts rejecting genuinely sharp detail.")
+                help: UIStrings.sliderFocusThresholdTip)
             }
             }
             .padding(.leading, sectionRowIndent)
@@ -411,7 +411,7 @@ struct ContentView: View {
             Button {
                 model.fuse()
             } label: {
-                Label("Fuse Stack", systemImage: "square.3.layers.3d.down.forward")
+                Label(UIStrings.fuseStack, systemImage: "square.3.layers.3d.down.forward")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
@@ -430,7 +430,7 @@ struct ContentView: View {
                 }
                 .disabled(model.phase.isRunning || pending == 0)
                 .accessibilityIdentifier("fusion.fuse-enabled")
-                .help("Fuses every enabled stack whose result is missing or out of date (frames or settings changed), one after another with the current settings; bad frames are excluded automatically.")
+                .help(UIStrings.fuseEnabledStacksTip)
             }
             }
         }
@@ -438,9 +438,9 @@ struct ContentView: View {
 
     private var toneSection: some View {
         Section {
-            sectionHeader("Tone", .tone) {
+            sectionHeader(UIStrings.toneSectionTitle, .tone) {
                 if !model.tone.isNeutral {
-                    Button("Reset") { model.resetTone() }
+                    Button(UIStrings.reset) { model.resetTone() }
                         .controlSize(.small)
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("tone.reset")
@@ -449,34 +449,34 @@ struct ContentView: View {
             if !model.isCollapsed(.tone) {
             Group {
             LabeledSlider(
-                label: "Exposure", id: "tone.slider.exposure", value: $model.tone.exposure, range: -5...5,
+                label: UIStrings.sliderExposureLabel, id: "tone.slider.exposure", value: $model.tone.exposure, range: -5...5,
                 format: "%+.2f EV",
-                help: "Overall brightness, in stops of linear light — the loupe for judging a fuse in deep shadow. Like every Tone control, it applies to the previews (including retouching) and bakes into TIFF/PNG/JPEG exports; Linear DNG is never affected.",
+                help: UIStrings.sliderExposureTip,
                 onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
-                label: "Contrast", id: "tone.slider.contrast", value: $model.tone.contrast, range: -100...100,
+                label: UIStrings.sliderContrastLabel, id: "tone.slider.contrast", value: $model.tone.contrast, range: -100...100,
                 format: "%+.0f",
-                help: "S-curve around the midtones: positive deepens shadows and brightens highlights, negative flattens.",
+                help: UIStrings.sliderContrastTip,
                 onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
-                label: "Highlights", id: "tone.slider.highlights", value: $model.tone.highlights, range: -100...100,
+                label: UIStrings.sliderHighlightsLabel, id: "tone.slider.highlights", value: $model.tone.highlights, range: -100...100,
                 format: "%+.0f",
-                help: "Brightens or recovers the upper midtones and highlights without moving pure white.",
+                help: UIStrings.sliderHighlightsTip,
                 onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
-                label: "Shadows", id: "tone.slider.shadows", value: $model.tone.shadows, range: -100...100,
+                label: UIStrings.sliderShadowsLabel, id: "tone.slider.shadows", value: $model.tone.shadows, range: -100...100,
                 format: "%+.0f",
-                help: "Lifts or deepens the shadows without moving pure black — usually the fastest way to inspect a dark fuse.",
+                help: UIStrings.sliderShadowsTip,
                 onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
-                label: "Whites", id: "tone.slider.whites", value: $model.tone.whites, range: -100...100,
+                label: UIStrings.sliderWhitesLabel, id: "tone.slider.whites", value: $model.tone.whites, range: -100...100,
                 format: "%+.0f",
-                help: "Moves the white point itself: the very top of the range.",
+                help: UIStrings.sliderWhitesTip,
                 onEditingChanged: { model.toneEditing($0) })
             LabeledSlider(
-                label: "Blacks", id: "tone.slider.blacks", value: $model.tone.blacks, range: -100...100,
+                label: UIStrings.sliderBlacksLabel, id: "tone.slider.blacks", value: $model.tone.blacks, range: -100...100,
                 format: "%+.0f",
-                help: "Moves the black point itself: the very bottom of the range.",
+                help: UIStrings.sliderBlacksTip,
                 onEditingChanged: { model.toneEditing($0) })
             }
             .padding(.leading, sectionRowIndent)
@@ -491,7 +491,7 @@ struct ContentView: View {
         // itself. Crop and Retouch are mutually exclusive modes; whichever
         // is active swaps its controls in.
         Section {
-            sectionHeader("Edit", .retouch)
+            sectionHeader(UIStrings.editSectionTitle, .retouch)
             if !model.isCollapsed(.retouch) {
                 if model.cropMode {
                     CropControls(model: model)
@@ -503,19 +503,19 @@ struct ContentView: View {
                     Button {
                         model.beginCrop()
                     } label: {
-                        Label("Crop…", systemImage: "crop")
+                        Label(UIStrings.cropButton, systemImage: "crop")
                             .frame(maxWidth: .infinity)
                     }
                     .keyboardShortcut("c", modifiers: [])
                     .disabled(!model.canCrop)
                     .accessibilityIdentifier("edit.crop")
-                    .help("Non-destructive crop: applies to every export and the rocking animation, and is saved with the project.")
+                    .help(UIStrings.cropTip)
                     Button {
                         model.enterRetouch()
                     } label: {
                         Label(model.retouch?.hasEdits == true
-                                ? "Continue Retouching"
-                                : "Start Retouching",
+                                ? UIStrings.continueRetouching
+                                : UIStrings.startRetouching,
                               systemImage: "paintbrush.pointed")
                             .frame(maxWidth: .infinity)
                     }
@@ -529,7 +529,7 @@ struct ContentView: View {
 
     private var exportSection: some View {
         Section {
-            sectionHeader("Export", .export)
+            sectionHeader(UIStrings.exportSectionTitle, .export)
             if !model.isCollapsed(.export) {
             // Format and color space live in the export dialogs themselves
             // (ExportOptionsView in MacDialogService.swift) — the options sit
@@ -537,7 +537,7 @@ struct ContentView: View {
             Button {
                 model.exportResult()
             } label: {
-                Label(model.outputMode == .depth ? "Export Depth Map…" : "Export Result…",
+                Label(model.outputMode == .depth ? UIStrings.exportDepthMap : UIStrings.exportResult,
                       systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
             }
@@ -547,23 +547,23 @@ struct ContentView: View {
             Button {
                 model.exportAnimation()
             } label: {
-                Label("Export Rocking Animation…", systemImage: "video")
+                Label(UIStrings.exportRockingAnimation, systemImage: "video")
                     .frame(maxWidth: .infinity)
             }
             .disabled(!model.canAnimate)
             .accessibilityIdentifier("export.animate")
-            .help("Writes a short video that rocks the result left and right using the depth map for parallax — depth becomes visible motion. Strength is chosen in the save dialog.")
+            .help(UIStrings.exportRockingAnimationTip)
 
             if model.fusedStackCount > 1 {
                 Button {
                     model.exportAllFusedPanel()
                 } label: {
-                    Label("Export All Fused…", systemImage: "square.and.arrow.up.on.square")
+                    Label(UIStrings.exportAllFused, systemImage: "square.and.arrow.up.on.square")
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(model.phase.isRunning)
                 .accessibilityIdentifier("export.all")
-                .help("Writes every fused stack (retouch edits included) to one folder, named after the stacks, in the format and color space chosen in the dialog.")
+                .help(UIStrings.exportAllFusedTip)
             }
             }
         }
@@ -602,12 +602,12 @@ struct ContentView: View {
                     emptyHint: model.inputPreviewError
                         ?? (model.frames.isEmpty
                             ? String(localized: "Start a new project to begin")
-                            : String(localized: "Select a frame in the Stack list")),
+                            : UIStrings.selectFrameHint),
                     tone: model.tone,
                     header: { EmptyView() }
                 )
                 PreviewPane(
-                    title: String(localized: "Output"),
+                    title: UIStrings.outputTitle,
                     paneID: "output.pane",
                     image: outputImage,
                     nominalSize: model.displayCrop?.size ?? model.outputNominalSize,
@@ -615,8 +615,8 @@ struct ContentView: View {
                     sourceCanvas: model.outputNominalSize,
                     sourceAngle: model.displayCropAngle,
                     loading: false,
-                    emptyHint: model.canFuse ? String(localized: "Press “Fuse Stack”")
-                        : String(localized: "No output yet"),
+                    emptyHint: model.canFuse ? UIStrings.pressFuseStackHint
+                        : UIStrings.noOutputYet,
                     tone: outputPaneShowsData ? ToneSettings() : model.tone,
                     eventOverlay: model.cropMode ? AnyView(CropOverlay(
                         viewport: model.viewport,
@@ -654,7 +654,7 @@ struct ContentView: View {
                                         .accessibilityIdentifier("progress.eta")
                                 }
                                 Spacer()
-                                Button("Cancel") { model.cancelFusion() }
+                                Button(UIStrings.cancel) { model.cancelFusion() }
                                     .controlSize(.small)
                                     .accessibilityIdentifier("progress.cancel")
                             }
@@ -694,7 +694,7 @@ struct ContentView: View {
 
     private var inputPaneTitle: String {
         if showProcessingSource, let label = model.processingSourceLabel { return label }
-        guard let url = model.inputPreviewURL else { return String(localized: "Input") }
+        guard let url = model.inputPreviewURL else { return UIStrings.inputTitle }
         return url.lastPathComponent
             + (model.inputPreviewAligned ? String(localized: " (aligned)") : "")
     }
@@ -745,7 +745,7 @@ struct RetouchPreviewArea: View {
                 sourceCanvas: session.nominalSize,
                 sourceAngle: cropAngle,
                 loading: session.sourceLoading,
-                emptyHint: session.sourceError ?? String(localized: "Loading source…"),
+                emptyHint: session.sourceError ?? UIStrings.loadingSource,
                 loadingStatus: session.sourceStatus,
                 brushCursor: brushCursor,
                 tone: session.sourceShowsData ? ToneSettings() : tone,
@@ -754,7 +754,7 @@ struct RetouchPreviewArea: View {
             PreviewPane(
                 title: outputMode == .depth
                     ? String(localized: "Retouched Depth — drag to paint from source")
-                    : String(localized: "Retouched Output — drag to paint from source"),
+                    : UIStrings.retouchedOutputHint,
                 image: nil,
                 nominalSize: nominal,
                 loading: false,
@@ -816,30 +816,30 @@ struct RetouchControls: View {
     let onReset: () -> Void
 
     var body: some View {
-        Text("Retouching")
+        Text(UIStrings.retouchingTitle)
             .font(.headline)
         LabeledSlider(
-            label: "Brush size", id: "retouch.slider.brush-size", value: $session.brushRadius,
+            label: UIStrings.sliderBrushSizeLabel, id: "retouch.slider.brush-size", value: $session.brushRadius,
             range: RetouchSession.brushRadiusRange,
             format: "%.0f px",
-            help: "Brush radius in image pixels. Painting copies pixels from the aligned source frame into the output.")
+            help: UIStrings.sliderBrushSizeTip)
         LabeledSlider(
-            label: "Softness", id: "retouch.slider.softness", value: $session.brushSoftness, range: 0...1,
+            label: UIStrings.sliderSoftnessLabel, id: "retouch.slider.softness", value: $session.brushSoftness, range: 0...1,
             format: "%.0f%%", displayScale: 100,
-            help: "Feathered fraction of the brush edge. 0% is hard-edged; 100% fades from the center.")
-        Picker("Retouch from", selection: Binding(
+            help: UIStrings.sliderSoftnessTip)
+        Picker(UIStrings.retouchFromLabel, selection: Binding(
             get: { session.sourceKind },
             set: { session.selectKind($0) })) {
-            Text("Source Image").tag(RetouchSession.SourceKind.frame)
-            Text("PMax Result").tag(RetouchSession.SourceKind.pmax)
-            Text("DMap Result").tag(RetouchSession.SourceKind.dmap)
+            Text(UIStrings.retouchSourceImage).tag(RetouchSession.SourceKind.frame)
+            Text(UIStrings.retouchPMaxResult).tag(RetouchSession.SourceKind.pmax)
+            Text(UIStrings.retouchDMapResult).tag(RetouchSession.SourceKind.dmap)
         }
         .pickerStyle(.radioGroup)
         .accessibilityIdentifier("retouch.source-kind")
-        .help("What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. DMap Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.")
+        .help(UIStrings.retouchSourceTip)
         HStack {
             Spacer()
-            Button("Revert All", role: .destructive) { onReset() }
+            Button(UIStrings.revertAll, role: .destructive) { onReset() }
                 .disabled(!session.hasEdits)
                 .accessibilityIdentifier("retouch.revert-all")
         }
@@ -849,7 +849,7 @@ struct RetouchControls: View {
         Button {
             onDone()
         } label: {
-            Label("Done Retouching", systemImage: "checkmark.circle")
+            Label(UIStrings.doneRetouching, systemImage: "checkmark.circle")
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
@@ -868,10 +868,10 @@ struct ZoomBar: View {
     var body: some View {
         HStack(spacing: 12) {
             Spacer()
-            Text("Zoom:")
+            Text(UIStrings.zoomLabel)
                 .foregroundStyle(.secondary)
             Menu {
-                Button("Fit") { viewport.reset() }
+                Button(UIStrings.zoomFit) { viewport.reset() }
                 ForEach(ViewportState.fixedLevels, id: \.self) { level in
                     Button(ViewportState.percentLabel(level)) {
                         viewport.mode = .scale(level)
@@ -911,7 +911,7 @@ struct ZoomBar: View {
 
     private var label: String {
         switch viewport.mode {
-        case .fit: return String(localized: "Fit")
+        case .fit: return UIStrings.zoomFit
         case .scale(let s): return ViewportState.percentLabel(s)
         }
     }
@@ -945,7 +945,7 @@ struct StackRow: View {
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .disabled(isRunning)
-                .help("Include this stack in Fuse Enabled Stacks. Doesn't change its per-frame checkboxes.")
+                .help(UIStrings.includeStackTip)
                 .accessibilityIdentifier("stack.row.\(stack.name).enabled")
             if let warning = stack.orderWarning {
                 // Frame-order sanity: a shuffled or interleaved load fuses to
@@ -1018,7 +1018,7 @@ struct StackRow: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .font(.caption)
-                .help("Fused — select to view, retouch, or export")
+                .help(UIStrings.fusedStatusTip)
         case .failed(let message):
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
@@ -1861,7 +1861,7 @@ struct RetouchOverlay: NSViewRepresentable {
 // MARK: - Labeled slider with help
 
 struct LabeledSlider: View {
-    let label: LocalizedStringKey
+    let label: String
     /// Accessibility identifier for the slider (`<id>.value` names the value
     /// text). See CLAUDE.md for the `area.control` naming convention.
     var id: String? = nil
@@ -1870,7 +1870,7 @@ struct LabeledSlider: View {
     let format: String
     /// Multiplier applied to the value for display only (e.g. 100 for percent).
     var displayScale: Double = 1
-    let help: LocalizedStringKey
+    let help: String
     var onEditingChanged: ((Bool) -> Void)? = nil
 
     /// A hair below zero formats as "-0.00" (drag the slider back toward
@@ -1938,10 +1938,10 @@ struct CropControls: View {
     }
 
     var body: some View {
-        Text("Crop")
+        Text(UIStrings.cropHeader)
             .font(.headline)
         HStack {
-            Picker("Aspect Ratio", selection: $model.cropAspect) {
+            Picker(UIStrings.aspectRatioLabel, selection: $model.cropAspect) {
                 ForEach(AppModel.CropAspect.allCases, id: \.self) { aspect in
                     Text(aspect.displayName).tag(aspect)
                 }
@@ -1958,13 +1958,13 @@ struct CropControls: View {
             }
             .keyboardShortcut("x", modifiers: [])
             .accessibilityIdentifier("edit.crop-orientation")
-            .help("Swap the crop between landscape and portrait (X).")
+            .help(UIStrings.swapCropOrientationTip)
         }
         HStack {
-            Button("Accept") { model.acceptCrop() }
+            Button(UIStrings.accept) { model.acceptCrop() }
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("edit.crop-accept")
-            Button("Cancel") { model.cancelCrop() }
+            Button(UIStrings.cancel) { model.cancelCrop() }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("edit.crop-cancel")
         }

@@ -2983,66 +2983,66 @@
         }
       }
     },
-    "Brightens or recovers the upper midtones and highlights without moving pure white.": {
+    "Affects upper midtones and highlights without affecting pure white.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hellt die oberen Mitteltöne und Lichter auf oder stellt sie wieder her, ohne reines Weiß zu verschieben."
+            "value": "Wirkt auf obere Mitteltöne und Lichter, ohne reines Weiß zu verändern."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aclara o recupera los medios tonos altos y las iluminaciones sin mover el blanco puro."
+            "value": "Afecta a los medios tonos altos y las iluminaciones sin alterar el blanco puro."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Éclaircit ou récupère les tons moyens supérieurs et les hautes lumières sans déplacer le blanc pur."
+            "value": "Agit sur les tons moyens clairs et les hautes lumières sans toucher au blanc pur."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Schiarisce o recupera i mezzitoni alti e le luci senza spostare il bianco puro."
+            "value": "Agisce sui mezzitoni alti e sulle luci senza toccare il bianco puro."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "純白を動かさずに、明るめの中間調とハイライトを明るくしたり復元したりします。"
+            "value": "純白には影響を与えずに、明るい中間調とハイライトを調整します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "순수한 흰색은 그대로 두고 밝은 미드톤과 하이라이트를 밝히거나 복원합니다."
+            "value": "순백에는 영향을 주지 않고 밝은 중간톤과 하이라이트를 조정합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verheldert of herstelt de hogere middentonen en hoge lichten zonder zuiver wit te verplaatsen."
+            "value": "Beïnvloedt hoge middentonen en hoge lichten zonder zuiver wit te veranderen."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Clareia ou recupera os meios-tons superiores e os realces sem mover o branco puro."
+            "value": "Afeta os meios-tons superiores e os realces sem alterar o branco puro."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Осветляет или восстанавливает верхние средние тона и света, не сдвигая чистый белый."
+            "value": "Влияет на верхние средние тона и света, не затрагивая чистый белый."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "提亮或恢复较亮的中间调与高光，而不移动纯白。"
+            "value": "调整较亮的中间调和高光，而不影响纯白。"
           }
         }
       }
@@ -6567,66 +6567,66 @@
         }
       }
     },
-    "Fraction of the image's overall sharpness below which a pixel is treated as featureless and takes its depth from confident neighbors. Drag to preview the depth map this floor would produce: featureless regions inheriting smoothly from their surroundings is normal — raise the floor until glow halos standing off subjects disappear, and stop before real detail starts dissolving into its neighbors.": {
+    "Pixels below this sharpness are treated as featureless and take their depth from neighbors. Raise it until glow halos disappear; stop before real detail blurs.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anteil der Gesamtschärfe des Bildes, unterhalb dessen ein Pixel als strukturlos gilt und seine Tiefe von verlässlichen Nachbarn übernimmt. Beim Ziehen wird die Tiefenkarte für diese Grenze als Vorschau gezeigt: dass strukturlose Bereiche weich von ihrer Umgebung erben, ist normal — erhöhe die Grenze, bis Leuchtsäume um Motive verschwinden, und höre auf, bevor sich echte Details in ihre Nachbarn auflösen."
+            "value": "Pixel unterhalb dieser Schärfe gelten als strukturlos und übernehmen die Tiefe ihrer Nachbarn. Erhöhen, bis Leuchtsäume verschwinden — aufhören, bevor echte Details verschwimmen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fracción de la nitidez global de la imagen por debajo de la cual un píxel se considera sin rasgos y toma su profundidad de vecinos fiables. Arrastra para previsualizar el mapa de profundidad que produciría este umbral: es normal que las zonas sin rasgos hereden suavemente de su entorno; sube el umbral hasta que desaparezcan los halos alrededor de los sujetos y detente antes de que el detalle real empiece a disolverse en sus vecinos."
+            "value": "Los píxeles por debajo de esta nitidez se consideran sin textura y toman la profundidad de sus vecinos. Súbelo hasta que desaparezcan los halos; detente antes de que se difumine el detalle real."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fraction de la netteté globale de l’image au-dessous de laquelle un pixel est considéré comme sans structure et prend sa profondeur de voisins fiables. Faites glisser pour prévisualiser la carte de profondeur correspondante : il est normal que les zones sans structure héritent en douceur de leur entourage — montez le seuil jusqu’à la disparition des halos autour des sujets, et arrêtez-vous avant que les vrais détails ne se dissolvent dans leurs voisins."
+            "value": "Les pixels sous ce seuil de netteté sont considérés comme sans texture et prennent la profondeur de leurs voisins. Augmentez jusqu’à faire disparaître les halos ; arrêtez avant que les vrais détails ne se floutent."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Frazione della nitidezza complessiva dell’immagine sotto la quale un pixel è considerato privo di dettagli e prende la profondità dai vicini affidabili. Trascina per vedere l’anteprima della mappa di profondità con questa soglia: è normale che le zone senza dettagli ereditino dolcemente dall’ambiente circostante — alza la soglia finché gli aloni attorno ai soggetti scompaiono, e fermati prima che il dettaglio reale inizi a dissolversi nei vicini."
+            "value": "I pixel sotto questa nitidezza sono considerati privi di texture e prendono la profondità dai vicini. Aumenta finché gli aloni non scompaiono; fermati prima che i dettagli reali si sfochino."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "画像全体のシャープネスに対する割合で、これを下回るピクセルは特徴なしとみなされ、信頼できる近傍から深度を引き継ぎます。ドラッグするとこのしきい値での深度マップをプレビューできます。特徴のない領域が周囲から滑らかに引き継ぐのは正常です。被写体の周りのハローが消えるまで上げ、実際のディテールが周囲に溶け始める前に止めてください。"
+            "value": "このシャープネスを下回るピクセルは特徴なしとみなされ、周囲から深度を引き継ぎます。光のにじみが消えるまで上げ、実際のディテールがぼやける前に止めてください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이미지 전체 선명도에 대한 비율로, 이보다 낮은 픽셀은 특징 없음으로 간주되어 신뢰할 수 있는 이웃에서 깊이를 가져옵니다. 드래그하면 이 임계값이 만들 깊이 맵을 미리 볼 수 있습니다. 특징 없는 영역이 주변에서 부드럽게 이어받는 것은 정상입니다. 피사체 주위의 광륜이 사라질 때까지 올리고, 실제 디테일이 이웃으로 녹아들기 전에 멈추세요."
+            "value": "이 선명도보다 낮은 픽셀은 특징이 없는 것으로 간주되어 주변에서 깊이를 가져옵니다. 빛 번짐이 사라질 때까지 올리되, 실제 디테일이 흐려지기 전에 멈추세요."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fractie van de totale scherpte van de afbeelding waaronder een pixel als structuurloos geldt en zijn diepte van betrouwbare buren overneemt. Sleep om de dieptekaart bij deze drempel te bekijken: dat structuurloze gebieden vloeiend van hun omgeving erven is normaal — verhoog de drempel tot gloeiende halo's rond onderwerpen verdwijnen, en stop voordat echt detail in zijn buren oplost."
+            "value": "Pixels onder deze scherpte gelden als structuurloos en nemen de diepte van hun buren over. Verhoog tot lichtranden verdwijnen; stop voordat echte details vervagen."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fração da nitidez global da imagem abaixo da qual um pixel é tratado como sem detalhes e herda a profundidade de vizinhos confiáveis. Arraste para pré-visualizar o mapa de profundidade desse piso: regiões sem detalhes herdando suavemente do entorno é normal — suba o piso até os halos ao redor dos objetos sumirem, e pare antes que o detalhe real comece a se dissolver nos vizinhos."
+            "value": "Pixels abaixo desta nitidez são tratados como sem textura e herdam a profundidade dos vizinhos. Aumente até os halos de brilho sumirem; pare antes que o detalhe real fique borrado."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Доля общей резкости изображения, ниже которой пиксель считается бесструктурным и берёт глубину от надёжных соседей. Перетаскивайте, чтобы увидеть карту глубины для этого порога: плавное наследование бесструктурных областей от окружения — это нормально. Повышайте порог, пока не исчезнут ореолы вокруг объектов, и остановитесь до того, как настоящие детали начнут растворяться в соседях."
+            "value": "Пиксели ниже этой резкости считаются бесструктурными и берут глубину у соседей. Повышайте, пока не исчезнут светящиеся ореолы; остановитесь, прежде чем размоются настоящие детали."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "低于图像整体锐度该比例的像素被视为无特征，其深度取自可信的相邻像素。拖动可预览此阈值产生的深度图：无特征区域平滑继承周围深度属正常现象 — 提高阈值直到主体周围的光晕消失，并在真实细节开始溶入周围之前停止。"
+            "value": "低于此锐度的像素被视为无特征，其深度取自相邻像素。调高直到辉光光晕消失；在真实细节变模糊之前停止。"
           }
         }
       }
@@ -7295,66 +7295,66 @@
         }
       }
     },
-    "Fuses every enabled stack whose result is missing or out of date (frames or settings changed), one after another with the current settings; bad frames are excluded automatically.": {
+    "Fuses every enabled stack which needs it, one at a time.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusioniert nacheinander mit den aktuellen Einstellungen jeden aktivierten Stapel, dessen Ergebnis fehlt oder veraltet ist (Bilder oder Einstellungen geändert); fehlerhafte Einzelbilder werden automatisch ausgeschlossen."
+            "value": "Fusioniert nacheinander jeden aktivierten Stapel, der es benötigt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusiona una tras otra, con los ajustes actuales, cada pila activada cuyo resultado falte o esté desactualizado (imágenes o ajustes cambiados); las imágenes defectuosas se excluyen automáticamente."
+            "value": "Fusiona una a una todas las pilas activadas que lo necesiten."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusionne l’une après l’autre, avec les réglages actuels, chaque pile activée dont le résultat manque ou est obsolète (images ou réglages modifiés) ; les mauvaises images sont exclues automatiquement."
+            "value": "Fusionne une à une toutes les piles activées qui en ont besoin."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fonde una dopo l’altra, con le impostazioni attuali, ogni pila attiva il cui risultato manca o è obsoleto (fotogrammi o impostazioni cambiati); i fotogrammi difettosi sono esclusi automaticamente."
+            "value": "Fonde una alla volta tutte le pile attive che ne hanno bisogno."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "結果がないか古くなった（フレームや設定が変わった）有効なスタックを、現在の設定で順に合成します。問題のあるフレームは自動的に除外されます。"
+            "value": "必要な有効スタックを1つずつ順に合成します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "결과가 없거나 오래된(프레임 또는 설정이 변경된) 모든 활성화된 스택을 현재 설정으로 차례로 합성합니다. 문제 있는 프레임은 자동으로 제외됩니다."
+            "value": "합성이 필요한 활성화된 스택을 하나씩 차례로 합성합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voegt achtereenvolgens met de huidige instellingen elke ingeschakelde stapel samen waarvan het resultaat ontbreekt of verouderd is (opnamen of instellingen gewijzigd); slechte opnamen worden automatisch uitgesloten."
+            "value": "Voegt elke ingeschakelde stapel die het nodig heeft één voor één samen."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Funde uma após a outra, com os ajustes atuais, cada pilha ativada cujo resultado falta ou está desatualizado (imagens ou ajustes mudaram); imagens ruins são excluídas automaticamente."
+            "value": "Funde uma a uma todas as pilhas ativadas que precisarem."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Объединяет по очереди с текущими настройками каждый включённый стек, чей результат отсутствует или устарел (изменились кадры или настройки); плохие кадры исключаются автоматически."
+            "value": "Объединяет по очереди каждый включённый стек, которому это нужно."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "按当前设置依次合成每个已启用但结果缺失或过期（图像或设置已更改）的堆栈；有问题的图像会自动排除。"
+            "value": "逐个合成每个需要合成的已启用堆栈。"
           }
         }
       }
@@ -7871,66 +7871,66 @@
         }
       }
     },
-    "How many neighboring frames blend together at each pixel when rendering. Wider is smoother across focus transitions, but slightly softer.": {
+    "How many neighboring frames blend at each pixel. Larger values are smoother but softer.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wie viele benachbarte Einzelbilder beim Rendern pro Pixel ineinander übergehen. Breiter ist weicher über Fokusübergänge hinweg, aber etwas unschärfer."
+            "value": "Wie viele benachbarte Einzelbilder an jedem Pixel überblendet werden. Größere Werte sind gleichmäßiger, aber weicher."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cuántas imágenes vecinas se mezclan en cada píxel al renderizar. Más amplio es más suave en las transiciones de enfoque, pero ligeramente menos nítido."
+            "value": "Cuántas imágenes vecinas se mezclan en cada píxel. Valores mayores son más uniformes pero más suaves."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nombre d’images voisines fondues à chaque pixel lors du rendu. Plus large est plus lisse aux transitions de mise au point, mais légèrement plus doux."
+            "value": "Combien d’images voisines se fondent à chaque pixel. Des valeurs plus grandes sont plus régulières mais plus douces."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quanti fotogrammi vicini si fondono in ogni pixel durante il rendering. Più ampio è più fluido nelle transizioni di fuoco, ma leggermente più morbido."
+            "value": "Quanti fotogrammi vicini si fondono in ogni pixel. Valori più grandi sono più uniformi ma più morbidi."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "レンダリング時に各ピクセルでいくつの隣接フレームをブレンドするかです。広いほどフォーカスの変わり目が滑らかになりますが、わずかにソフトになります。"
+            "value": "各ピクセルでブレンドする隣接フレームの数。大きいほど滑らかになりますが、ソフトになります。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "렌더링할 때 각 픽셀에서 몇 개의 이웃 프레임을 혼합할지입니다. 넓을수록 초점 전환이 매끄럽지만 약간 부드러워집니다."
+            "value": "각 픽셀에서 블렌드되는 인접 프레임 수입니다. 값이 클수록 더 매끄럽지만 선명도는 떨어집니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hoeveel naburige opnamen per pixel worden gemengd bij het renderen. Breder is vloeiender over scherpstelovergangen, maar iets zachter."
+            "value": "Hoeveel naburige opnamen per pixel worden gemengd. Grotere waarden zijn gelijkmatiger maar zachter."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quantas imagens vizinhas se mesclam em cada pixel ao renderizar. Mais amplo é mais suave nas transições de foco, porém um pouco menos nítido."
+            "value": "Quantas imagens vizinhas se mesclam em cada pixel. Valores maiores são mais uniformes, porém mais suaves."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Сколько соседних кадров смешивается в каждом пикселе при рендеринге. Шире — плавнее на переходах фокуса, но чуть мягче."
+            "value": "Сколько соседних кадров смешивается в каждом пикселе. Большие значения дают более плавный, но менее резкий результат."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "渲染时每个像素混合多少相邻图像。范围越宽，焦点过渡越平滑，但略微偏软。"
+            "value": "每个像素混合多少相邻图像。数值越大越平滑，但也越柔。"
           }
         }
       }
@@ -8255,66 +8255,66 @@
         }
       }
     },
-    "Include this stack in Fuse Enabled Stacks. Doesn't change its per-frame checkboxes.": {
+    "Include this stack in Fuse Enabled Stacks; frame checkboxes are unaffected.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Diesen Stapel in „Aktivierte Stapel fusionieren“ einbeziehen. Ändert nicht seine Häkchen pro Einzelbild."
+            "value": "Diesen Stapel in „Aktivierte Stapel fusionieren“ einbeziehen; die Kästchen der Einzelbilder bleiben unberührt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Incluye esta pila en «Fusionar pilas activadas». No cambia sus casillas por imagen."
+            "value": "Incluye esta pila en «Fusionar pilas activadas»; las casillas de las imágenes no cambian."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Inclut cette pile dans « Fusionner les piles activées ». Ne change pas ses cases par image."
+            "value": "Inclut cette pile dans « Fusionner les piles activées » ; les cases des images restent inchangées."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Include questa pila in “Fondi pile attive”. Non cambia le sue caselle per fotogramma."
+            "value": "Include questa pila in “Fondi pile attive”; le caselle dei fotogrammi restano invariate."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このスタックを「有効なスタックを合成」に含めます。フレームごとのチェックは変わりません。"
+            "value": "このスタックを「有効なスタックを合成」に含めます。フレームのチェックボックスには影響しません。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이 스택을 ‘활성화된 스택 합성’에 포함합니다. 프레임별 체크박스는 바뀌지 않습니다."
+            "value": "이 스택을 ‘활성화된 스택 합성’에 포함합니다. 프레임 체크박스에는 영향을 주지 않습니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Neemt deze stapel op in ‘Ingeschakelde stapels samenvoegen’. Wijzigt de aankruisvakken per opname niet."
+            "value": "Neemt deze stapel op in ‘Ingeschakelde stapels samenvoegen’; de aankruisvakken van opnamen blijven ongewijzigd."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Inclui esta pilha em “Fundir Pilhas Ativadas”. Não altera as caixas por imagem."
+            "value": "Inclui esta pilha em “Fundir Pilhas Ativadas”; as caixas de seleção das imagens não são afetadas."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Включает этот стек в «Объединить включённые стеки». Флажки отдельных кадров не меняются."
+            "value": "Включает этот стек в «Объединить включённые стеки»; флажки кадров не затрагиваются."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "将此堆栈纳入“合成已启用的堆栈”。不会更改其中每张图像的勾选状态。"
+            "value": "将此堆栈纳入“合成已启用的堆栈”；不影响各图像的复选框。"
           }
         }
       }
@@ -8575,66 +8575,66 @@
         }
       }
     },
-    "Lifts or deepens the shadows without moving pure black — usually the fastest way to inspect a dark fuse.": {
+    "Affects shadows without affecting pure black.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hebt oder vertieft die Schatten, ohne reines Schwarz zu verschieben — meist der schnellste Weg, eine dunkle Fusion zu prüfen."
+            "value": "Wirkt auf die Tiefen, ohne reines Schwarz zu verändern."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Levanta o profundiza las sombras sin mover el negro puro; suele ser la forma más rápida de inspeccionar una fusión oscura."
+            "value": "Afecta a las sombras sin alterar el negro puro."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Débouche ou renforce les ombres sans déplacer le noir pur — généralement le moyen le plus rapide d’inspecter une fusion sombre."
+            "value": "Agit sur les ombres sans toucher au noir pur."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Solleva o approfondisce le ombre senza spostare il nero puro — di solito il modo più rapido per esaminare una fusione scura."
+            "value": "Agisce sulle ombre senza toccare il nero puro."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "純黒を動かさずにシャドウを持ち上げたり深めたりします。暗い合成を確認する最速の方法です。"
+            "value": "純黒には影響を与えずにシャドウを調整します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "순수한 검정은 그대로 두고 그림자를 들어 올리거나 깊게 합니다. 어두운 합성 결과를 살펴보는 가장 빠른 방법입니다."
+            "value": "순흑에는 영향을 주지 않고 그림자를 조정합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Licht de schaduwen op of verdiept ze zonder zuiver zwart te verplaatsen — meestal de snelste manier om een donkere samenvoeging te inspecteren."
+            "value": "Beïnvloedt schaduwen zonder zuiver zwart te veranderen."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Levanta ou aprofunda as sombras sem mover o preto puro — geralmente o jeito mais rápido de inspecionar uma fusão escura."
+            "value": "Afeta as sombras sem alterar o preto puro."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Поднимает или углубляет тени, не сдвигая чистый чёрный — обычно самый быстрый способ рассмотреть тёмное объединение."
+            "value": "Влияет на тени, не затрагивая чистый чёрный."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "提起或加深阴影而不移动纯黑 — 通常是检查偏暗合成结果的最快方式。"
+            "value": "调整阴影，而不影响纯黑。"
           }
         }
       }
@@ -9279,130 +9279,130 @@
         }
       }
     },
-    "Moves the black point itself: the very bottom of the range.": {
+    "Adjusts the very bottom of the brightness range.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verschiebt den Schwarzpunkt selbst: das untere Ende des Bereichs."
+            "value": "Passt das unterste Ende des Helligkeitsbereichs an."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mueve el propio punto negro: el extremo inferior del rango."
+            "value": "Ajusta el extremo inferior del rango de brillo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Déplace le point noir lui-même : le bas de la plage."
+            "value": "Ajuste l’extrémité basse de la plage de luminosité."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sposta il punto di nero stesso: l’estremo inferiore della gamma."
+            "value": "Regola l’estremità inferiore della gamma di luminosità."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ブラックポイントそのもの（レンジの最下端）を動かします。"
+            "value": "輝度レンジの最下端を調整します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "블랙 포인트 자체, 즉 범위의 최하단을 이동합니다."
+            "value": "밝기 범위의 최하단을 조정합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verplaatst het zwartpunt zelf: de onderkant van het bereik."
+            "value": "Past de onderkant van het helderheidsbereik aan."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Move o próprio ponto preto: a base do intervalo."
+            "value": "Ajusta o extremo inferior da faixa de brilho."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Сдвигает саму точку чёрного: самый низ диапазона."
+            "value": "Регулирует самый низ диапазона яркости."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "移动黑点本身：范围的最底端。"
+            "value": "调整亮度范围的最底端。"
           }
         }
       }
     },
-    "Moves the white point itself: the very top of the range.": {
+    "Adjusts the very top of the brightness range.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verschiebt den Weißpunkt selbst: das obere Ende des Bereichs."
+            "value": "Passt das oberste Ende des Helligkeitsbereichs an."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mueve el propio punto blanco: el extremo superior del rango."
+            "value": "Ajusta el extremo superior del rango de brillo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Déplace le point blanc lui-même : le sommet de la plage."
+            "value": "Ajuste l’extrémité haute de la plage de luminosité."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sposta il punto di bianco stesso: l’estremo superiore della gamma."
+            "value": "Regola l’estremità superiore della gamma di luminosità."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ホワイトポイントそのもの（レンジの最上端）を動かします。"
+            "value": "輝度レンジの最上端を調整します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "화이트 포인트 자체, 즉 범위의 최상단을 이동합니다."
+            "value": "밝기 범위의 최상단을 조정합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verplaatst het witpunt zelf: de bovenkant van het bereik."
+            "value": "Past de bovenkant van het helderheidsbereik aan."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Move o próprio ponto branco: o topo do intervalo."
+            "value": "Ajusta o extremo superior da faixa de brilho."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Сдвигает саму точку белого: самый верх диапазона."
+            "value": "Регулирует самый верх диапазона яркости."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "移动白点本身：范围的最顶端。"
+            "value": "调整亮度范围的最顶端。"
           }
         }
       }
@@ -9791,66 +9791,66 @@
         }
       }
     },
-    "Non-destructive crop: applies to every export and the rocking animation, and is saved with the project.": {
+    "Non-destructive — applies to every export and the rocking animation, and is saved with the project.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nicht-destruktives Zuschneiden: gilt für jeden Export und die Parallaxen-Animation und wird mit dem Projekt gesichert."
+            "value": "Nicht destruktiv — gilt für jeden Export und die Parallaxen-Animation und wird mit dem Projekt gesichert."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Recorte no destructivo: se aplica a todas las exportaciones y a la animación de balanceo, y se guarda con el proyecto."
+            "value": "No destructivo: se aplica a todas las exportaciones y a la animación de balanceo, y se guarda con el proyecto."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Recadrage non destructif : s’applique à chaque exportation et à l’animation de balancement, et s’enregistre avec le projet."
+            "value": "Non destructif — s’applique à chaque export et à l’animation de balancement, et est enregistré avec le projet."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ritaglio non distruttivo: si applica a ogni esportazione e all’animazione oscillante, e viene salvato con il progetto."
+            "value": "Non distruttivo — si applica a ogni esportazione e all’animazione oscillante, e viene salvato con il progetto."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "非破壊トリミング。すべての書き出しとスイングアニメーションに適用され、プロジェクトと一緒に保存されます。"
+            "value": "非破壊 — すべての書き出しとスイングアニメーションに適用され、プロジェクトと一緒に保存されます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "비파괴 자르기: 모든 내보내기와 로킹 애니메이션에 적용되며 프로젝트와 함께 저장됩니다."
+            "value": "비파괴 — 모든 내보내기와 로킹 애니메이션에 적용되며 프로젝트와 함께 저장됩니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Niet-destructief bijsnijden: geldt voor elke export en de kantelanimatie, en wordt met het project bewaard."
+            "value": "Niet-destructief — geldt voor elke export en de kantelanimatie, en wordt met het project bewaard."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Corte não destrutivo: aplica-se a todas as exportações e à animação de balanço, e é salvo com o projeto."
+            "value": "Não destrutivo — aplica-se a todas as exportações e à animação de balanço, e é salvo com o projeto."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Недеструктивное кадрирование: применяется к каждому экспорту и анимации покачивания и сохраняется вместе с проектом."
+            "value": "Недеструктивно — применяется к каждому экспорту и анимации покачивания и сохраняется вместе с проектом."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "非破坏性裁剪：应用于所有导出和摇摆动画，并随项目一起存储。"
+            "value": "非破坏性 — 应用于每次导出和摇摆动画，并随项目一起保存。"
           }
         }
       }
@@ -10751,130 +10751,130 @@
         }
       }
     },
-    "How many of the coarsest pyramid levels are focus-gated to suppress highlight bloom — where an out-of-focus bright halo leaks over a sharp neighbor. 0 turns debloom off (standard PMax, more faithful on stacks without bloom); higher gates more levels, cutting more bloom.": {
+    "Suppresses highlight bloom by gating the coarsest pyramid levels. 0 turns it off; higher cuts more bloom.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wie viele der gröbsten Pyramidenebenen per Fokus gefiltert werden, um Überstrahlung von Lichtern zu unterdrücken — wenn ein unscharfer heller Halo über einen scharfen Nachbarn läuft. 0 schaltet Debloom aus (Standard-PMax, treuer bei Stapeln ohne Überstrahlung); höhere Werte filtern mehr Ebenen und reduzieren mehr Überstrahlung."
+            "value": "Unterdrückt das Überstrahlen von Lichtern (Bloom), indem die gröbsten Pyramidenstufen gefiltert werden. 0 schaltet es aus; höhere Werte entfernen mehr Bloom."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cuántos de los niveles más gruesos de la pirámide se filtran por enfoque para suprimir el halo de las altas luces, cuando un halo brillante desenfocado se derrama sobre un vecino nítido. 0 desactiva el debloom (PMax estándar, más fiel en pilas sin halo); valores más altos filtran más niveles y recortan más halo."
+            "value": "Suprime el bloom de las iluminaciones filtrando los niveles más gruesos de la pirámide. 0 lo desactiva; valores mayores eliminan más bloom."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Combien des niveaux les plus grossiers de la pyramide sont filtrés par la netteté pour supprimer le halo des hautes lumières — lorsqu'un halo lumineux flou déborde sur un voisin net. 0 désactive le débloom (PMax standard, plus fidèle sur les piles sans halo) ; plus la valeur est élevée, plus de niveaux sont filtrés et plus le halo est réduit."
+            "value": "Supprime le halo (bloom) des hautes lumières en filtrant les niveaux les plus grossiers de la pyramide. 0 le désactive ; plus haut, plus de bloom est éliminé."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quanti dei livelli più grossolani della piramide vengono filtrati in base al fuoco per sopprimere l'alone delle alte luci — quando un alone luminoso sfocato deborda su un vicino nitido. 0 disattiva il debloom (PMax standard, più fedele su pile senza alone); valori più alti filtrano più livelli e riducono più alone."
+            "value": "Sopprime il bloom delle luci filtrando i livelli più grossolani della piramide. 0 lo disattiva; valori più alti rimuovono più bloom."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ハイライトのハロー（ピンぼけの明るいハローが鮮明な隣に漏れ出す現象）を抑えるため、ピラミッドの最も粗いレベルのうちいくつをフォーカスでゲートするか。0でハロー抑制をオフにします（標準のPMax。ハローのないスタックではより忠実）。値が大きいほど多くのレベルをゲートし、ハローをより多く除去します。"
+            "value": "最も粗いピラミッドレベルを制御してハイライトのハロー（にじみ）を抑えます。0でオフ、高いほど強く抑制します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "하이라이트 광륜(초점이 맞지 않는 밝은 광륜이 선명한 이웃 위로 번지는 현상)을 억제하기 위해 피라미드의 가장 거친 레벨 중 몇 개를 초점으로 게이트할지입니다. 0은 광륜 억제를 끕니다(표준 PMax, 광륜이 없는 스택에서 더 충실). 값이 클수록 더 많은 레벨을 게이트하여 광륜을 더 많이 제거합니다."
+            "value": "가장 거친 피라미드 레벨을 걸러 하이라이트의 광륜(블룸)을 억제합니다. 0이면 꺼지고, 높을수록 광륜을 더 많이 제거합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hoeveel van de grofste piramideniveaus op scherpte worden gefilterd om overstraling van hoge lichten te onderdrukken — wanneer een onscherpe heldere halo over een scherpe buur uitloopt. 0 zet debloom uit (standaard-PMax, getrouwer bij stapels zonder halo); hogere waarden filteren meer niveaus en verminderen meer overstraling."
+            "value": "Onderdrukt bloom in hoge lichten door de grofste piramideniveaus te filteren. 0 schakelt het uit; hoger verwijdert meer bloom."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quantos dos níveis mais grosseiros da pirâmide são filtrados por foco para suprimir o halo das altas luzes — quando um halo brilhante desfocado vaza sobre um vizinho nítido. 0 desativa o debloom (PMax padrão, mais fiel em pilhas sem halo); valores mais altos filtram mais níveis e reduzem mais halo."
+            "value": "Suprime o bloom dos realces filtrando os níveis mais grossos da pirâmide. 0 desativa; valores maiores cortam mais bloom."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Сколько самых грубых уровней пирамиды фильтруются по фокусу для подавления ореола на светах — когда размытый яркий ореол перетекает на резкого соседа. 0 отключает подавление (стандартный PMax, точнее на стопках без ореола); большие значения фильтруют больше уровней и сильнее убирают ореол."
+            "value": "Подавляет ореолы вокруг светов, фильтруя самые грубые уровни пирамиды. 0 — выключено; чем выше, тем сильнее подавление."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "为抑制高光光晕（失焦的明亮光晕漫过清晰的相邻区域）而对金字塔最粗的若干层按对焦进行门控的层数。0 关闭去光晕（标准 PMax，在无光晕的堆栈上更忠实）；数值越大门控的层数越多，去除的光晕也越多。"
+            "value": "通过控制最粗糙的金字塔层级来抑制高光光晕。0 表示关闭；数值越高，去除的光晕越多。"
           }
         }
       }
     },
-    "Fine-scale focus energy a frame must exceed at a pixel to win the debloom two-track select. Higher is stricter — more of the bloomed frame is rejected in favor of the in-focus one; too high starts rejecting genuinely sharp detail.": {
+    "How sharp a frame must be to win over the bloomed one. Higher is stricter; too high rejects genuinely sharp detail.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Feinskalige Fokusenergie, die ein Einzelbild an einem Pixel überschreiten muss, um die Zwei-Spur-Auswahl von Debloom zu gewinnen. Höher ist strenger — mehr vom überstrahlten Bild wird zugunsten des scharfen verworfen; zu hoch verwirft echte scharfe Details."
+            "value": "Wie scharf ein Einzelbild sein muss, um sich gegen das überstrahlte durchzusetzen. Höher ist strenger; zu hoch verwirft auch wirklich scharfe Details."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Energía de enfoque a escala fina que un fotograma debe superar en un píxel para ganar la selección de dos vías del debloom. Más alto es más estricto: se rechaza más del fotograma con halo en favor del enfocado; demasiado alto empieza a rechazar detalle realmente nítido."
+            "value": "Cuán nítida debe ser una imagen para imponerse a la que tiene bloom. Un valor mayor es más estricto; demasiado alto rechaza detalles realmente nítidos."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Énergie de netteté à fine échelle qu'une image doit dépasser sur un pixel pour gagner la sélection à deux voies du débloom. Plus haut est plus strict — une plus grande partie de l'image avec halo est rejetée au profit de l'image nette ; trop haut commence à rejeter des détails réellement nets."
+            "value": "Netteté qu’une image doit atteindre pour l’emporter sur celle avec bloom. Plus haut, plus strict ; trop haut rejette des détails réellement nets."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Energia di fuoco a scala fine che un fotogramma deve superare in un pixel per vincere la selezione a due tracce del debloom. Più alto è più severo — viene scartata più parte del fotogramma con alone a favore di quello a fuoco; troppo alto inizia a scartare dettaglio davvero nitido."
+            "value": "Quanto deve essere nitido un fotogramma per prevalere su quello con bloom. Più alto è più severo; troppo alto scarta dettagli davvero nitidi."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ハロー抑制の2トラック選択で勝つために、フレームが各ピクセルで超える必要のある微細スケールのフォーカスエネルギー。高いほど厳しく、ハローのあるフレームがより多く却下され、ピントの合ったフレームが優先されます。高すぎると本当に鮮明なディテールまで却下し始めます。"
+            "value": "ハローの出たフレームに対して優先されるために必要なシャープさ。高いほど厳格になり、高すぎると本当にシャープなディテールまで除外されます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "광륜 억제의 2트랙 선택에서 이기기 위해 프레임이 각 픽셀에서 넘어야 하는 미세 스케일 초점 에너지입니다. 높을수록 엄격하여 광륜이 있는 프레임이 더 많이 거부되고 초점이 맞은 프레임이 우선됩니다. 너무 높으면 진짜 선명한 디테일까지 거부하기 시작합니다."
+            "value": "블룸이 생긴 프레임을 이기려면 프레임이 얼마나 선명해야 하는지입니다. 높을수록 엄격하며, 너무 높으면 실제로 선명한 디테일까지 제외됩니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fijnschalige scherpte-energie die een opname op een pixel moet overschrijden om de tweesporenkeuze van debloom te winnen. Hoger is strenger — meer van de opname met halo wordt verworpen ten gunste van de scherpe; te hoog begint echt scherpe details te verwerpen."
+            "value": "Hoe scherp een opname moet zijn om te winnen van de opname met bloom. Hoger is strenger; te hoog verwerpt echt scherpe details."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Energia de foco em escala fina que um quadro precisa exceder em um pixel para vencer a seleção de duas vias do debloom. Mais alto é mais rígido — mais do quadro com halo é rejeitado em favor do quadro em foco; alto demais começa a rejeitar detalhe realmente nítido."
+            "value": "Quão nítida uma imagem precisa ser para vencer a que tem bloom. Maior é mais rigoroso; alto demais rejeita detalhes realmente nítidos."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Мелкомасштабная энергия фокуса, которую кадр должен превысить в пикселе, чтобы победить в двухдорожечном выборе подавления ореола. Выше — строже: больше кадра с ореолом отбрасывается в пользу резкого; слишком высоко — начинают отбрасываться действительно резкие детали."
+            "value": "Насколько резким должен быть кадр, чтобы победить кадр с ореолом. Выше — строже; слишком высокое значение отбрасывает действительно резкие детали."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "帧在某像素上必须超过的细尺度对焦能量，才能在去光晕的双轨选择中胜出。越高越严格 — 更多带光晕的帧被舍弃，转而采用对焦清晰的帧；过高会开始舍弃真正清晰的细节。"
+            "value": "一张图像需要多锐利才能胜过出现光晕的那张。数值越高越严格；过高会剔除真正锐利的细节。"
           }
         }
       }
@@ -11009,132 +11009,132 @@
         }
       }
     },
-    "Depth-map fusion. The only mode with a depth map — needed for the depth view, rocking animation, and depth-aware retouching. Can misjudge where objects at different depths overlap.": {
+    "Strengths: Accurate color. Cleaner handling of highlights. Depth map is necessary for certain features.\n\nWeaknesses: Can struggle with overlapping or translucent details.": {
       "comment": "Tooltip for the DMap algorithm radio. Needs translation.",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tiefenkarten-Fusion. Der einzige Modus mit Tiefenkarte — nötig für die Tiefenansicht, die Parallaxen-Animation und tiefenbasierte Retusche. Kann sich dort verschätzen, wo sich Objekte in verschiedenen Tiefen überlappen."
+            "value": "Stärken: Präzise Farben. Sauberere Wiedergabe von Lichtern. Die Tiefenkarte ist für bestimmte Funktionen erforderlich.\n\nSchwächen: Kann mit überlappenden oder durchscheinenden Details Schwierigkeiten haben."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusión por mapa de profundidad. El único modo con mapa de profundidad: necesario para la vista de profundidad, la animación de balanceo y el retoque según la profundidad. Puede equivocarse donde se solapan objetos a distintas profundidades."
+            "value": "Fortalezas: Color preciso. Manejo más limpio de las iluminaciones. El mapa de profundidad es necesario para ciertas funciones.\n\nDebilidades: Puede tener dificultades con detalles superpuestos o translúcidos."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusion par carte de profondeur. Le seul mode avec carte de profondeur — nécessaire à la vue de profondeur, à l’animation de balancement et à la retouche tenant compte de la profondeur. Peut se tromper là où des objets à des profondeurs différentes se chevauchent."
+            "value": "Points forts : couleurs fidèles. Meilleur rendu des hautes lumières. La carte de profondeur est nécessaire à certaines fonctions.\n\nPoints faibles : peut avoir du mal avec les détails qui se chevauchent ou translucides."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusione con mappa di profondità. L’unica modalità con mappa di profondità: necessaria per la vista in profondità, l’animazione oscillante e il ritocco basato sulla profondità. Può sbagliare dove si sovrappongono oggetti a profondità diverse."
+            "value": "Punti di forza: colori accurati. Gestione più pulita delle luci. La mappa di profondità è necessaria per alcune funzioni.\n\nPunti deboli: può avere difficoltà con dettagli sovrapposti o traslucidi."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "深度マップ合成。深度マップを持つ唯一のモードで、深度表示、スイングアニメーション、深度を考慮したレタッチに必要です。異なる深度の被写体が重なる部分では判断を誤ることがあります。"
+            "value": "長所: 正確な色。ハイライトの処理がよりクリーン。深度マップは一部の機能に必要です。\n\n短所: 重なり合うディテールや半透明のディテールは苦手な場合があります。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "깊이 맵 합성. 깊이 맵을 만드는 유일한 모드로 깊이 보기, 로킹 애니메이션, 깊이 기반 리터칭에 필요합니다. 서로 다른 깊이의 피사체가 겹치는 곳에서는 잘못 판단할 수 있습니다."
+            "value": "강점: 정확한 색상. 하이라이트를 더 깔끔하게 처리. 일부 기능에는 깊이 맵이 필요합니다.\n\n약점: 겹치거나 반투명한 디테일은 처리하기 어려울 수 있습니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Samenvoegen via dieptekaart. De enige modus met een dieptekaart — nodig voor de diepteweergave, de kantelanimatie en dieptebewust retoucheren. Kan zich vergissen waar objecten op verschillende diepten elkaar overlappen."
+            "value": "Sterke punten: nauwkeurige kleuren. Nettere weergave van hoge lichten. De dieptekaart is nodig voor bepaalde functies.\n\nZwakke punten: kan moeite hebben met overlappende of doorschijnende details."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusão por mapa de profundidade. O único modo com mapa de profundidade — necessário para a visualização de profundidade, a animação de balanço e o retoque com reconhecimento de profundidade. Pode errar onde objetos em profundidades diferentes se sobrepõem."
+            "value": "Pontos fortes: cores precisas. Tratamento mais limpo dos realces. O mapa de profundidade é necessário para certos recursos.\n\nPontos fracos: pode ter dificuldade com detalhes sobrepostos ou translúcidos."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Объединение по карте глубины. Единственный режим с картой глубины — она нужна для просмотра глубины, анимации покачивания и ретуши с учётом глубины. Может ошибаться там, где перекрываются объекты на разной глубине."
+            "value": "Сильные стороны: точные цвета. Более чистая обработка светов. Карта глубины необходима для некоторых функций.\n\nСлабые стороны: возможны трудности с перекрывающимися или полупрозрачными деталями."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "深度图合成。唯一生成深度图的模式——深度视图、摇摆动画和基于深度的修饰都需要它。在不同深度的物体相互重叠处可能判断有误。"
+            "value": "优势：色彩准确。高光处理更干净。某些功能需要深度图。\n\n劣势：处理重叠或半透明的细节时可能表现欠佳。"
           }
         }
       }
     },
-    "Pyramid fusion. Clean where depths overlap, but has no depth map (no depth view or rocking) and can bloom highlights, which the Debloom controls reduce.": {
+    "Strengths: Can do a better job with overlapping or translucent details.\n\nWeaknesses: Can alter colors and cause highlights to bloom.": {
       "comment": "Tooltip for the PMax algorithm radio. Needs translation.",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pyramiden-Fusion. Sauber, wo sich Tiefen überlappen, aber ohne Tiefenkarte (keine Tiefenansicht, keine Parallaxen-Animation) und mit möglichem Überstrahlen der Lichter, das die Debloom-Regler verringern."
+            "value": "Stärken: Kommt mit überlappenden oder durchscheinenden Details besser zurecht.\n\nSchwächen: Kann Farben verändern und Lichter überstrahlen lassen (Bloom)."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusión piramidal. Limpia donde se solapan las profundidades, pero sin mapa de profundidad (sin vista de profundidad ni animación de balanceo) y puede provocar halos en las iluminaciones, que los controles de debloom reducen."
+            "value": "Fortalezas: Maneja mejor los detalles superpuestos o translúcidos.\n\nDebilidades: Puede alterar los colores y provocar bloom en las iluminaciones."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusion pyramidale. Propre là où les profondeurs se chevauchent, mais sans carte de profondeur (ni vue de profondeur ni animation de balancement) et peut faire déborder les hautes lumières, ce que les réglages de débloom atténuent."
+            "value": "Points forts : gère mieux les détails qui se chevauchent ou translucides.\n\nPoints faibles : peut altérer les couleurs et provoquer un halo (bloom) sur les hautes lumières."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusione piramidale. Pulita dove le profondità si sovrappongono, ma senza mappa di profondità (niente vista in profondità né animazione oscillante) e può far sfiorire le luci, effetto che i controlli di debloom riducono."
+            "value": "Punti di forza: gestisce meglio i dettagli sovrapposti o traslucidi.\n\nPunti deboli: può alterare i colori e causare bloom nelle luci."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ピラミッド合成。深度が重なる部分でもきれいですが、深度マップがなく（深度表示もスイングアニメーションも使えません）、ハイライトがにじむことがあります。これはハロー抑制コントロールで軽減できます。"
+            "value": "長所: 重なり合うディテールや半透明のディテールをよりうまく処理できます。\n\n短所: 色が変わったり、ハイライトにハロー（にじみ）が出たりすることがあります。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "피라미드 합성. 깊이가 겹치는 곳에서도 깔끔하지만 깊이 맵이 없어(깊이 보기와 로킹 애니메이션 불가) 하이라이트가 번질 수 있으며, 이는 광륜 억제 컨트롤로 줄일 수 있습니다."
+            "value": "강점: 겹치거나 반투명한 디테일을 더 잘 처리할 수 있습니다.\n\n약점: 색상이 달라지거나 하이라이트에 광륜(블룸)이 생길 수 있습니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Piramidesamenvoeging. Netjes waar diepten elkaar overlappen, maar zonder dieptekaart (geen diepteweergave of kantelanimatie) en kan hoge lichten laten uitbloeien, wat de Debloom-regelaars verminderen."
+            "value": "Sterke punten: kan beter overweg met overlappende of doorschijnende details.\n\nZwakke punten: kan kleuren veranderen en hoge lichten laten uitbloeien (bloom)."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusão em pirâmide. Limpa onde as profundidades se sobrepõem, mas não tem mapa de profundidade (sem visualização de profundidade nem animação de balanço) e pode estourar os realces, o que os controles de debloom reduzem."
+            "value": "Pontos fortes: lida melhor com detalhes sobrepostos ou translúcidos.\n\nPontos fracos: pode alterar as cores e causar bloom nos realces."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Пирамидальное объединение. Чисто там, где перекрываются глубины, но без карты глубины (нет ни просмотра глубины, ни анимации покачивания) и может размывать света — это уменьшают регуляторы подавления ореола."
+            "value": "Сильные стороны: лучше справляется с перекрывающимися или полупрозрачными деталями.\n\nСлабые стороны: может искажать цвета и вызывать ореолы вокруг светов."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "金字塔合成。在深度重叠处很干净，但没有深度图（无法使用深度视图或摇摆动画），并且高光可能溢出，可用去光晕控件减轻。"
+            "value": "优势：能更好地处理重叠或半透明的细节。\n\n劣势：可能改变色彩，并使高光产生光晕。"
           }
         }
       }
@@ -11203,66 +11203,66 @@
         }
       }
     },
-    "Overall brightness, in stops of linear light — the loupe for judging a fuse in deep shadow. Like every Tone control, it applies to the previews (including retouching) and bakes into TIFF/PNG/JPEG exports; Linear DNG is never affected.": {
+    "Overall image brightness": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gesamthelligkeit in Blendenstufen linearen Lichts — die Lupe, um eine Fusion im tiefen Schatten zu beurteilen. Wie jeder Tonwert-Regler wirkt sie auf die Vorschauen (einschließlich Retusche) und wird in TIFF/PNG/JPEG-Exporte eingebrannt; lineares DNG bleibt stets unberührt."
+            "value": "Gesamthelligkeit des Bildes"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Brillo global, en pasos de luz lineal: la lupa para juzgar una fusión en sombras profundas. Como todo control de tono, se aplica a las previsualizaciones (incluido el retoque) y se incorpora a las exportaciones TIFF/PNG/JPEG; el DNG lineal nunca se ve afectado."
+            "value": "Brillo general de la imagen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Luminosité globale, en valeurs d’exposition de lumière linéaire — la loupe pour juger une fusion dans les ombres profondes. Comme chaque réglage de tonalité, elle s’applique aux aperçus (retouche comprise) et est incorporée aux exportations TIFF/PNG/JPEG ; le DNG linéaire n’est jamais affecté."
+            "value": "Luminosité générale de l’image"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Luminosità complessiva, in stop di luce lineare — la lente per giudicare una fusione nelle ombre profonde. Come ogni controllo Tono, si applica alle anteprime (ritocco incluso) e viene impressa nelle esportazioni TIFF/PNG/JPEG; il DNG lineare non è mai toccato."
+            "value": "Luminosità generale dell’immagine"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "リニア光の段数で表す全体の明るさです。深い影の中の合成を確認するためのルーペです。他のトーン調整と同様、プレビュー（レタッチ含む）に適用され、TIFF/PNG/JPEG書き出しに焼き込まれます。リニアDNGには影響しません。"
+            "value": "画像全体の明るさ"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "선형 광의 스톱 단위 전체 밝기입니다. 깊은 그림자 속 합성 결과를 살피는 돋보기 역할을 합니다. 다른 톤 컨트롤처럼 미리보기(리터칭 포함)에 적용되고 TIFF/PNG/JPEG 내보내기에 반영됩니다. 선형 DNG에는 영향을 주지 않습니다."
+            "value": "이미지 전체 밝기"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Algehele helderheid, in stops lineair licht — de loep om een samenvoeging in diepe schaduw te beoordelen. Zoals elke tintregelaar geldt dit voor de voorvertoningen (inclusief retoucheren) en wordt het in TIFF/PNG/JPEG-exports gebakken; lineaire DNG blijft altijd onaangetast."
+            "value": "Algehele helderheid van de afbeelding"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Brilho geral, em pontos de luz linear — a lupa para avaliar uma fusão em sombras profundas. Como todo controle de Tom, aplica-se às pré-visualizações (inclusive retoque) e é gravado nas exportações TIFF/PNG/JPEG; o DNG linear nunca é afetado."
+            "value": "Brilho geral da imagem"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Общая яркость в ступенях линейного света — лупа для оценки объединения в глубокой тени. Как и все тоновые регуляторы, применяется к предпросмотру (включая ретушь) и запекается в экспорт TIFF/PNG/JPEG; линейный DNG не затрагивается никогда."
+            "value": "Общая яркость изображения"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "整体亮度，以线性光的档位计 — 是审视深阴影中合成效果的放大镜。与所有色调控制一样，它作用于预览（包括修饰）并烘焙到 TIFF/PNG/JPEG 导出中；线性 DNG 永不受影响。"
+            "value": "图像整体亮度"
           }
         }
       }
@@ -11779,66 +11779,66 @@
         }
       }
     },
-    "Radius of the local-contrast measurement that decides which frame is sharpest at each pixel. Larger values are steadier on smooth, low-texture surfaces; smaller values resolve finer depth detail.": {
+    "Radius used to judge sharpness at each pixel. Larger is steadier on smooth surfaces; smaller resolves finer detail.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Radius der lokalen Kontrastmessung, die für jedes Pixel das schärfste Einzelbild bestimmt. Größere Werte sind auf glatten, texturarmen Flächen stabiler; kleinere lösen feinere Tiefendetails auf."
+            "value": "Radius, mit dem die Schärfe an jedem Pixel beurteilt wird. Größere Werte sind auf glatten Flächen stabiler, kleinere lösen feinere Details auf."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Radio de la medición de contraste local que decide qué imagen es la más nítida en cada píxel. Valores mayores son más estables en superficies lisas con poca textura; valores menores resuelven detalles de profundidad más finos."
+            "value": "Radio con el que se evalúa la nitidez en cada píxel. Un valor mayor es más estable en superficies lisas; uno menor resuelve detalles más finos."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Rayon de la mesure de contraste local qui décide quelle image est la plus nette à chaque pixel. Des valeurs plus grandes sont plus stables sur les surfaces lisses et peu texturées ; des valeurs plus petites résolvent des détails de profondeur plus fins."
+            "value": "Rayon utilisé pour évaluer la netteté de chaque pixel. Plus grand, il est plus stable sur les surfaces lisses ; plus petit, il résout des détails plus fins."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Raggio della misura di contrasto locale che decide quale fotogramma è più nitido in ogni pixel. Valori più grandi sono più stabili su superfici lisce e poco texturizzate; valori più piccoli risolvono dettagli di profondità più fini."
+            "value": "Raggio usato per valutare la nitidezza di ogni pixel. Più grande è più stabile sulle superfici lisce; più piccolo risolve dettagli più fini."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "各ピクセルでどのフレームが最も鮮明かを決める局所コントラスト測定の半径です。大きい値は滑らかでテクスチャの少ない面で安定し、小さい値はより細かい深度の詳細を解像します。"
+            "value": "各ピクセルのシャープネス判定に使う半径。大きいほど滑らかな面で安定し、小さいほど細かいディテールを捉えます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "각 픽셀에서 어떤 프레임이 가장 선명한지 판단하는 국소 대비 측정의 반경입니다. 값이 크면 매끄럽고 텍스처가 적은 표면에서 안정적이고, 작으면 더 미세한 깊이 디테일을 분해합니다."
+            "value": "각 픽셀의 선명도를 판단하는 데 사용하는 반경입니다. 클수록 매끄러운 표면에서 안정적이고, 작을수록 더 미세한 디테일을 분해합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Straal van de lokale contrastmeting die per pixel bepaalt welke opname het scherpst is. Grotere waarden zijn stabieler op gladde oppervlakken met weinig textuur; kleinere waarden lossen fijnere dieptedetails op."
+            "value": "Straal waarmee de scherpte per pixel wordt beoordeeld. Groter is stabieler op gladde oppervlakken; kleiner lost fijnere details op."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Raio da medição de contraste local que decide qual imagem é a mais nítida em cada pixel. Valores maiores são mais estáveis em superfícies lisas e de pouca textura; valores menores resolvem detalhes de profundidade mais finos."
+            "value": "Raio usado para avaliar a nitidez em cada pixel. Maior é mais estável em superfícies lisas; menor resolve detalhes mais finos."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Радиус измерения локального контраста, определяющего, какой кадр резче в каждом пикселе. Большие значения устойчивее на гладких малотекстурных поверхностях; меньшие разрешают более тонкие детали глубины."
+            "value": "Радиус, по которому оценивается резкость в каждом пикселе. Больший устойчивее на гладких поверхностях; меньший различает более мелкие детали."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用于判定每个像素处哪张图像最清晰的局部对比度测量半径。较大的值在平滑、低纹理表面上更稳定；较小的值能分辨更精细的深度细节。"
+            "value": "用于判断每个像素锐度的半径。较大时在平滑表面上更稳定；较小时能分辨更精细的细节。"
           }
         }
       }
@@ -12996,66 +12996,66 @@
         }
       }
     },
-    "S-curve around the midtones: positive deepens shadows and brightens highlights, negative flattens.": {
+    "Overall image contrast": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "S-Kurve um die Mitteltöne: positiv vertieft Schatten und hellt Lichter auf, negativ flacht ab."
+            "value": "Gesamtkontrast des Bildes"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Curva en S alrededor de los medios tonos: en positivo profundiza las sombras y aclara las iluminaciones; en negativo aplana."
+            "value": "Contraste general de la imagen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Courbe en S autour des tons moyens : positif renforce les ombres et éclaircit les hautes lumières, négatif aplatit."
+            "value": "Contraste général de l’image"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Curva a S attorno ai mezzitoni: positivo scurisce le ombre e schiarisce le luci, negativo appiattisce."
+            "value": "Contrasto generale dell’immagine"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "中間調を中心としたSカーブ。プラスでシャドウが深くハイライトが明るくなり、マイナスでフラットになります。"
+            "value": "画像全体のコントラスト"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "미드톤 중심의 S 커브입니다. 양수는 그림자를 깊게 하고 하이라이트를 밝게 하며, 음수는 평탄하게 만듭니다."
+            "value": "이미지 전체 대비"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "S-curve rond de middentonen: positief verdiept schaduwen en verheldert hoge lichten, negatief maakt vlakker."
+            "value": "Algeheel contrast van de afbeelding"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Curva em S ao redor dos meios-tons: positivo aprofunda sombras e clareia realces, negativo achata."
+            "value": "Contraste geral da imagem"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "S-кривая вокруг средних тонов: положительные значения углубляют тени и осветляют света, отрицательные — сглаживают."
+            "value": "Общий контраст изображения"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "围绕中间调的 S 曲线：正值加深阴影、提亮高光，负值使影调变平。"
+            "value": "图像整体对比度"
           }
         }
       }
@@ -13508,66 +13508,66 @@
         }
       }
     },
-    "Size of the majority vote that removes isolated wrong-depth patches at edges where the background shows through a defocused subject. 0 disables it.": {
+    "Fixes small wrong-depth patches at subject edges by a majority vote over this radius. Raising this too high can cause thin details to become blurry.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Größe der Mehrheitsentscheidung, die vereinzelte Flecken falscher Tiefe an Kanten entfernt, wo der Hintergrund durch ein unscharfes Motiv durchscheint. 0 deaktiviert sie."
+            "value": "Behebt kleine Flecken mit falscher Tiefe an Motivkanten per Mehrheitsentscheid über diesen Radius. Ein zu hoher Wert kann dünne Details verschwimmen lassen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tamaño del voto mayoritario que elimina parches aislados de profundidad errónea en bordes donde el fondo se transparenta a través de un sujeto desenfocado. 0 lo desactiva."
+            "value": "Corrige pequeñas zonas con profundidad errónea en los bordes del sujeto mediante un voto mayoritario dentro de este radio. Subirlo demasiado puede difuminar los detalles finos."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Taille du vote majoritaire qui supprime les taches isolées de profondeur erronée aux bords où l’arrière-plan transparaît à travers un sujet flou. 0 le désactive."
+            "value": "Corrige les petites zones de profondeur erronée au bord du sujet par un vote majoritaire sur ce rayon. Une valeur trop élevée peut flouter les détails fins."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dimensione del voto di maggioranza che rimuove le chiazze isolate di profondità errata ai bordi dove lo sfondo traspare attraverso un soggetto sfocato. 0 lo disattiva."
+            "value": "Corregge piccole zone con profondità errata sui bordi del soggetto con un voto di maggioranza su questo raggio. Un valore troppo alto può sfocare i dettagli sottili."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ピンボケの被写体越しに背景が透けて見えるエッジ部で、孤立した誤深度の斑点を除去する多数決のサイズです。0で無効になります。"
+            "value": "この半径内の多数決により、被写体の縁にある誤った深度の小さな領域を修正します。上げすぎると細いディテールがぼやけることがあります。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "초점이 나간 피사체 너머로 배경이 비치는 가장자리에서 고립된 잘못된 깊이 패치를 제거하는 다수결의 크기입니다. 0이면 비활성화됩니다."
+            "value": "이 반경에 대한 다수결로 피사체 가장자리의 잘못된 깊이 조각을 수정합니다. 너무 높이면 가는 디테일이 흐려질 수 있습니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Grootte van de meerderheidsstemming die geïsoleerde plekken met verkeerde diepte verwijdert aan randen waar de achtergrond door een onscherp onderwerp heen schijnt. 0 schakelt dit uit."
+            "value": "Herstelt kleine vlekken met verkeerde diepte langs randen van het onderwerp via een meerderheidsstemming binnen deze straal. Te hoog kan dunne details vervagen."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tamanho do voto majoritário que remove manchas isoladas de profundidade errada em bordas onde o fundo transparece através de um objeto desfocado. 0 desativa."
+            "value": "Corrige pequenas manchas de profundidade errada nas bordas do assunto por voto majoritário neste raio. Um valor alto demais pode borrar detalhes finos."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Размер мажоритарного голосования, убирающего одиночные пятна неверной глубины на краях, где фон просвечивает сквозь расфокусированный объект. 0 отключает."
+            "value": "Исправляет небольшие участки с неверной глубиной на краях объекта путём мажоритарного голосования в этом радиусе. Слишком большое значение может размыть тонкие детали."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "多数表决的范围大小，用于去除背景透过失焦主体显现的边缘处孤立的错误深度斑块。0 表示停用。"
+            "value": "通过在此半径内进行多数表决，修复主体边缘的小块错误深度区域。调得过高会使纤细的细节变模糊。"
           }
         }
       }
@@ -15812,66 +15812,66 @@
         }
       }
     },
-    "What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest under the brush). PMax Result: a pyramid fusion of the whole stack — where structures at different depths overlap, the depth map has to pick one side, and this layer keeps both; built on first use, then cached. DMap Result: the untouched fusion — an eraser that restores it exactly where a stroke overreached, without undoing everything since.": {
+    "What the brush paints from. Source Image: any aligned frame (↑/↓ to pick, space for the sharpest). PMax Result: keeps both sides where depths overlap. DMap Result: the original fusion — use it to erase a stroke without undoing edits made after it.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Woraus der Pinsel malt. Quellbild: ein beliebiges ausgerichtetes Einzelbild (↑/↓ zum Wählen, Leertaste für das schärfste unter dem Pinsel). PMax-Ergebnis: eine Pyramidenfusion des ganzen Stapels — wo sich Strukturen verschiedener Tiefen überlappen, muss sich die Tiefenkarte für eine Seite entscheiden, diese Ebene behält beide; beim ersten Gebrauch berechnet, dann zwischengespeichert. DMap-Ergebnis: die unberührte Fusion — ein Radierer, der sie genau dort wiederherstellt, wo ein Strich zu weit ging, ohne alles Spätere rückgängig zu machen."
+            "value": "Wovon der Pinsel malt. Quellbild: ein beliebiges ausgerichtetes Einzelbild (↑/↓ zum Auswählen, Leertaste für das schärfste). PMax-Ergebnis: erhält beide Seiten, wo sich Tiefen überlappen. DMap-Ergebnis: die ursprüngliche Fusion — löscht einen Strich, ohne spätere Bearbeitungen rückgängig zu machen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "De dónde pinta el pincel. Imagen de origen: cualquier imagen alineada (↑/↓ para elegir, espacio para la más nítida bajo el pincel). Resultado PMax: una fusión piramidal de toda la pila; donde se solapan estructuras a distintas profundidades, el mapa de profundidad debe elegir un lado, y esta capa conserva ambos; se genera al primer uso y luego se guarda en caché. Resultado DMap: la fusión intacta, un borrador que la restaura exactamente donde un trazo se pasó, sin deshacer todo lo posterior."
+            "value": "De dónde pinta el pincel. Imagen de origen: cualquier imagen alineada (↑/↓ para elegir, espacio para la más nítida). Resultado PMax: conserva ambos lados donde las profundidades se superponen. Resultado DMap: la fusión original; úsala para borrar un trazo sin deshacer ediciones posteriores."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ce que le pinceau peint. Image source : n’importe quelle image alignée (↑/↓ pour choisir, espace pour la plus nette sous le pinceau). Résultat PMax : une fusion pyramidale de toute la pile — là où des structures à différentes profondeurs se chevauchent, la carte de profondeur doit choisir un côté, et ce calque garde les deux ; calculé au premier usage, puis mis en cache. Résultat DMap : la fusion intacte — une gomme qui la restaure exactement là où un trait a débordé, sans annuler tout ce qui a suivi."
+            "value": "Ce que le pinceau peint. Image source : n’importe quelle image alignée (↑/↓ pour choisir, espace pour la plus nette). Résultat PMax : conserve les deux côtés là où les profondeurs se chevauchent. Résultat DMap : la fusion d’origine — pour effacer un coup de pinceau sans annuler les retouches faites après."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Da cosa dipinge il pennello. Immagine sorgente: qualsiasi fotogramma allineato (↑/↓ per scegliere, spazio per il più nitido sotto il pennello). Risultato PMax: una fusione piramidale dell’intera pila — dove strutture a profondità diverse si sovrappongono, la mappa di profondità deve scegliere un lato, e questo livello li conserva entrambi; generato al primo uso, poi in cache. Risultato DMap: la fusione intatta — una gomma che la ripristina esattamente dove un tratto ha esagerato, senza annullare tutto il resto."
+            "value": "Da cosa dipinge il pennello. Immagine sorgente: qualsiasi fotogramma allineato (↑/↓ per scegliere, spazio per il più nitido). Risultato PMax: conserva entrambi i lati dove le profondità si sovrappongono. Risultato DMap: la fusione originale — usala per cancellare un tratto senza annullare le modifiche successive."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ブラシの描画元です。ソース画像：任意の位置合わせ済みフレーム（↑/↓で選択、スペースでブラシ下の最も鮮明なもの）。PMax結果：スタック全体のピラミッド合成。異なる深度の構造が重なる場所では深度マップはどちらか一方を選ばざるを得ませんが、このレイヤーは両方を保持します。初回使用時に生成され、以後キャッシュされます。DMap結果：手つかずの合成。ストロークが行き過ぎた場所だけを正確に復元する消しゴムで、それ以降の作業を取り消しません。"
+            "value": "ブラシの描画元。ソース画像: 位置合わせ済みの任意のフレーム（↑/↓で選択、スペースで最もシャープなフレーム）。PMax結果: 深度が重なる部分の両側を保持。DMap結果: 元の合成結果 — 後の編集を取り消さずにストロークだけを消せます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "브러시가 무엇에서 페인트할지입니다. 소스 이미지: 정렬된 아무 프레임(↑/↓로 선택, 스페이스 바로 브러시 아래 가장 선명한 것). PMax 결과: 스택 전체의 피라미드 합성 — 서로 다른 깊이의 구조가 겹치는 곳에서 깊이 맵은 한쪽을 골라야 하지만 이 레이어는 둘 다 유지합니다. 처음 사용할 때 생성되고 이후 캐시됩니다. DMap 결과: 손대지 않은 합성 — 획이 지나친 곳만 정확히 복원하는 지우개로, 이후 작업을 취소하지 않습니다."
+            "value": "브러시가 무엇에서 페인트할지 정합니다. 소스 이미지: 정렬된 아무 프레임(↑/↓로 선택, 스페이스로 가장 선명한 프레임). PMax 결과: 깊이가 겹치는 곳의 양쪽을 모두 유지. DMap 결과: 원래 합성 결과 — 이후 편집을 취소하지 않고 스트로크를 지울 때 사용하세요."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Waaruit het penseel schildert. Bronafbeelding: elke uitgelijnde opname (↑/↓ om te kiezen, spatie voor de scherpste onder het penseel). PMax-resultaat: een piramidefusie van de hele stapel — waar structuren op verschillende dieptes overlappen moet de dieptekaart één kant kiezen, en deze laag behoudt beide; bij eerste gebruik berekend, daarna gecachet. DMap-resultaat: de onaangeroerde samenvoeging — een gum die deze precies herstelt waar een streek te ver ging, zonder alles daarna ongedaan te maken."
+            "value": "Waaruit het penseel schildert. Bronafbeelding: elke uitgelijnde opname (↑/↓ om te kiezen, spatie voor de scherpste). PMax-resultaat: behoudt beide kanten waar dieptes overlappen. DMap-resultaat: de oorspronkelijke samenvoeging — wis er een streek mee zonder latere bewerkingen ongedaan te maken."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "De onde o pincel pinta. Imagem de Origem: qualquer imagem alinhada (↑/↓ para escolher, espaço para a mais nítida sob o pincel). Resultado PMax: uma fusão piramidal da pilha inteira — onde estruturas em profundidades diferentes se sobrepõem, o mapa de profundidade precisa escolher um lado, e esta camada mantém ambos; gerada no primeiro uso e depois armazenada em cache. Resultado DMap: a fusão intocada — um apagador que a restaura exatamente onde uma pincelada passou do ponto, sem desfazer tudo desde então."
+            "value": "De onde o pincel pinta. Imagem de Origem: qualquer imagem alinhada (↑/↓ para escolher, espaço para a mais nítida). Resultado PMax: mantém os dois lados onde as profundidades se sobrepõem. Resultado DMap: a fusão original — use para apagar um traço sem desfazer edições posteriores."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Из чего рисует кисть. Исходное изображение: любой выровненный кадр (↑/↓ — выбор, пробел — самый резкий под кистью). Результат PMax: пирамидное объединение всего стека — там, где структуры на разной глубине перекрываются, карта глубины вынуждена выбрать одну сторону, а этот слой сохраняет обе; строится при первом использовании, затем кэшируется. Результат DMap: нетронутое объединение — ластик, восстанавливающий его ровно там, где мазок зашёл слишком далеко, не отменяя всё сделанное после."
+            "value": "Откуда рисует кисть. Исходное изображение: любой выровненный кадр (↑/↓ — выбор, пробел — самый резкий). Результат PMax: сохраняет обе стороны там, где глубины перекрываются. Результат DMap: исходное объединение — стирайте им штрих, не отменяя более поздние правки."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "画笔的绘制来源。源图像：任意已对齐图像（↑/↓ 选择，空格选画笔下最清晰的）。PMax 结果：整个堆栈的金字塔合成 — 不同深度的结构重叠处，深度图只能取其一，而该图层两者都保留；首次使用时生成，之后缓存。DMap 结果：未经修饰的合成 — 一块橡皮，只在笔画越界处精确还原，而不撤销之后的所有操作。"
+            "value": "画笔的绘制来源。源图像：任意已对齐的图像（↑/↓ 选择，空格键选最锐利的一张）。PMax 结果：在深度重叠处保留两侧。DMap 结果：原始合成结果 — 可用它擦除某一笔而不撤销之后的编辑。"
           }
         }
       }
@@ -15940,130 +15940,130 @@
         }
       }
     },
-    "Writes a short video that rocks the result left and right using the depth map for parallax — depth becomes visible motion. Strength is chosen in the save dialog.": {
+    "A short video that rocks the result left and right for a parallax effect. Strength is set in the save dialog.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Schreibt ein kurzes Video, das das Ergebnis mithilfe der Tiefenkarte für Parallaxe hin- und herbewegt — Tiefe wird zu sichtbarer Bewegung. Die Stärke wird im Sichern-Dialog gewählt."
+            "value": "Ein kurzes Video, das das Ergebnis für einen Parallaxeneffekt hin und her neigt. Die Stärke wird im Sicherungsdialog festgelegt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Escribe un vídeo corto que balancea el resultado a izquierda y derecha usando el mapa de profundidad para el paralaje: la profundidad se convierte en movimiento visible. La intensidad se elige en el diálogo de guardado."
+            "value": "Un vídeo corto que balancea el resultado a izquierda y derecha con un efecto de paralaje. La intensidad se elige en el diálogo de guardado."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Écrit une courte vidéo qui balance le résultat de gauche à droite en utilisant la carte de profondeur pour la parallaxe — la profondeur devient un mouvement visible. L’intensité se choisit dans la boîte de dialogue d’enregistrement."
+            "value": "Une courte vidéo qui balance le résultat de gauche à droite pour un effet de parallaxe. L’intensité se règle dans la boîte de dialogue d’enregistrement."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Scrive un breve video che fa oscillare il risultato a sinistra e a destra usando la mappa di profondità per la parallasse — la profondità diventa movimento visibile. L’intensità si sceglie nella finestra di salvataggio."
+            "value": "Un breve video che fa oscillare il risultato a destra e sinistra con un effetto parallasse. L’intensità si imposta nella finestra di salvataggio."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "深度マップを視差に使って結果を左右に揺らす短い動画を書き出します。深度が目に見える動きになります。強さは保存ダイアログで選びます。"
+            "value": "結果を左右に揺らして視差効果を生む短い動画です。強さは保存ダイアログで設定します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "깊이 맵을 시차에 활용해 결과를 좌우로 흔드는 짧은 비디오를 기록합니다. 깊이가 눈에 보이는 움직임이 됩니다. 강도는 저장 대화상자에서 선택합니다."
+            "value": "결과를 좌우로 흔들어 시차 효과를 내는 짧은 비디오입니다. 강도는 저장 대화상자에서 설정합니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Schrijft een korte video die het resultaat heen en weer kantelt met de dieptekaart voor parallax — diepte wordt zichtbare beweging. De sterkte kiest u in het bewaarvenster."
+            "value": "Een korte video die het resultaat heen en weer kantelt voor een parallax-effect. De sterkte stel je in het bewaarvenster in."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Grava um vídeo curto que balança o resultado para a esquerda e a direita usando o mapa de profundidade para paralaxe — a profundidade vira movimento visível. A intensidade é escolhida no diálogo de salvamento."
+            "value": "Um vídeo curto que balança o resultado para a esquerda e a direita com efeito de paralaxe. A intensidade é definida no diálogo de salvamento."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Записывает короткое видео, покачивающее результат влево-вправо с параллаксом по карте глубины — глубина становится видимым движением. Сила выбирается в диалоге сохранения."
+            "value": "Короткое видео, покачивающее результат влево-вправо для эффекта параллакса. Сила задаётся в диалоге сохранения."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "写出一段短视频，利用深度图产生视差让结果左右摇摆 — 深度变为可见的运动。强度在存储对话框中选择。"
+            "value": "一段左右摇摆结果、产生视差效果的短视频。强度在保存对话框中设置。"
           }
         }
       }
     },
-    "Writes every fused stack (retouch edits included) to one folder, named after the stacks, in the format and color space chosen in the dialog.": {
+    "Exports every fused stack, retouch edits included, to one folder named after the stacks.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Schreibt jeden fusionierten Stapel (einschließlich Retuschen) in einen Ordner, benannt nach den Stapeln, im Format und Farbraum aus dem Dialog."
+            "value": "Exportiert alle fusionierten Stapel samt Retuschen in einen Ordner; die Dateien sind nach den Stapeln benannt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Escribe cada pila fusionada (retoques incluidos) en una carpeta, con el nombre de las pilas, en el formato y espacio de color elegidos en el diálogo."
+            "value": "Exporta todas las pilas fusionadas, retoques incluidos, a una carpeta con archivos nombrados según las pilas."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Écrit chaque pile fusionnée (retouches comprises) dans un seul dossier, nommée d’après les piles, dans le format et l’espace colorimétrique choisis dans la boîte de dialogue."
+            "value": "Exporte toutes les piles fusionnées, retouches comprises, dans un dossier avec des fichiers nommés d’après les piles."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Scrive ogni pila fusa (ritocchi inclusi) in una cartella, con il nome delle pile, nel formato e nello spazio colore scelti nella finestra."
+            "value": "Esporta tutte le pile fuse, ritocchi inclusi, in una cartella con file denominati come le pile."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "合成済みの各スタックを（レタッチも含めて）スタック名を付けた1つのフォルダに、ダイアログで選んだフォーマットと色空間で書き出します。"
+            "value": "合成済みのすべてのスタックをレタッチ込みで1つのフォルダに書き出します。ファイル名はスタック名になります。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "합성된 모든 스택을(리터칭 포함) 스택 이름을 딴 폴더 하나에, 대화상자에서 선택한 포맷과 색상 공간으로 기록합니다."
+            "value": "합성된 모든 스택을 리터칭을 포함해 한 폴더로 내보냅니다. 파일 이름은 스택 이름을 따릅니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Schrijft elke samengevoegde stapel (inclusief retouches) naar één map, vernoemd naar de stapels, in de in het venster gekozen structuur en kleurruimte."
+            "value": "Exporteert elke samengevoegde stapel, inclusief retouches, naar één map met bestanden vernoemd naar de stapels."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Grava cada pilha fundida (com os retoques) em uma pasta, nomeada conforme as pilhas, no formato e espaço de cores escolhidos no diálogo."
+            "value": "Exporta todas as pilhas fundidas, incluindo retoques, para uma pasta com arquivos nomeados conforme as pilhas."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Записывает каждый объединённый стек (включая ретушь) в одну папку с именами стеков, в формате и цветовом пространстве из диалога."
+            "value": "Экспортирует все объединённые стеки, включая ретушь, в одну папку; файлы называются по именам стеков."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "将每个已合成的堆栈（含修饰编辑）写入一个文件夹，以堆栈命名，采用对话框中选择的格式和色彩空间。"
+            "value": "将所有已合成的堆栈（含修饰编辑）导出到一个文件夹，文件按堆栈命名。"
           }
         }
       }

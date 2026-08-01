@@ -66,6 +66,15 @@ QString alertBody(const QString &message, const QString &informative) {
     return informative.isEmpty() ? message : informative;
 }
 
+// Static UI text shared verbatim with the native app (AppCore.UIStrings) —
+// used both by Shell::uiString (QML call sites) and directly by the free
+// functions below (dialog buttons built outside any Shell method).
+QString bridgeUIString(const QString &key) {
+    char buffer[1024];
+    const int n = hf_ui_string(key.toUtf8().constData(), buffer, sizeof buffer);
+    return QString::fromUtf8(buffer, n);
+}
+
 // Option combos show translated labels but persist enum rawValues, so the
 // two lists are kept parallel and selection is by INDEX, never by text —
 // matching a translated label against a raw value would silently reset the
@@ -108,7 +117,7 @@ void shellGuideDownload(const char *message, const char *informative,
     applyAlertIcon(box);
     QAbstractButton *download =
         box.addButton(QObject::tr("Open Download Page"), QMessageBox::AcceptRole);
-    box.addButton(QObject::tr("Cancel"), QMessageBox::RejectRole);
+    box.addButton(bridgeUIString("cancel"), QMessageBox::RejectRole);
     box.exec();
     if (box.clickedButton() == download)
         QDesktopServices::openUrl(QUrl(QString::fromUtf8(url)));
@@ -308,8 +317,8 @@ void Shell::exportAnimationInteractive() {
     if (auto *grid = qobject_cast<QGridLayout *>(dialog.layout())) {
         int row = grid->rowCount();
         const std::pair<QString, QComboBox *> rows[] = {
-            {tr("Duration:"), duration}, {tr("Path:"), path},
-            {tr("Strength:"), strength}};
+            {bridgeUIString("duration"), duration}, {bridgeUIString("path"), path},
+            {bridgeUIString("strength"), strength}};
         for (const auto &[label, combo] : rows) {
             grid->addWidget(new QLabel(label, &dialog),
                             row, 0, Qt::AlignRight);
@@ -738,7 +747,7 @@ void Shell::exportInteractive() {
                                  QStringLiteral("DNG (raw)"),
                                  QStringLiteral("PNG (16-bit)"),
                                  QStringLiteral("JPEG")};
-    const QStringList formatLabels = {tr("TIFF (16-bit)"), tr("DNG (raw)"),
+    const QStringList formatLabels = {bridgeUIString("tiff16bit"), tr("DNG (raw)"),
                                       tr("PNG (16-bit)"), tr("JPEG")};
     const QStringList suffixes = {QStringLiteral("tif"), QStringLiteral("dng"),
                                   QStringLiteral("png"), QStringLiteral("jpg")};
@@ -768,7 +777,7 @@ void Shell::exportInteractive() {
         if (dng && space->isEnabled()) {
             savedSpace = spaces.value(space->currentIndex());
             space->clear();
-            space->addItem(tr("Linear Display P3"));
+            space->addItem(bridgeUIString("linearDisplayP3"));
             space->setEnabled(false);
         } else if (!dng && !space->isEnabled()) {
             space->clear();
@@ -939,6 +948,8 @@ void Shell::setBoolSetting(const QString &id, bool value) {
     hf_set_bool_setting(id.toUtf8().constData(), value ? 1 : 0);
 }
 
+QString Shell::uiString(const QString &key) const { return bridgeUIString(key); }
+
 bool Shell::gpuAvailable() const { return hf_gpu_available() != 0; }
 
 bool Shell::confirmQuit() {
@@ -948,7 +959,7 @@ bool Shell::confirmQuit() {
     applyAlertIcon(box);
     QAbstractButton *quit = box.addButton(tr("Quit"),
                                           QMessageBox::AcceptRole);
-    box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+    box.addButton(bridgeUIString("cancel"), QMessageBox::RejectRole);
     box.exec();
     return box.clickedButton() == quit;
 }

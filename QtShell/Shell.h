@@ -122,6 +122,10 @@ public:
     Q_INVOKABLE bool confirmQuit();
     Q_INVOKABLE bool boolSetting(const QString &id) const;
     Q_INVOKABLE void setBoolSetting(const QString &id, bool value);
+    /// Static UI text shared with the native app (AppCore.UIStrings, via
+    /// hf_ui_string) — button labels, section titles, tooltips. `key` is
+    /// the string's Swift property name, e.g. "algorithmDMapTip".
+    Q_INVOKABLE QString uiString(const QString &key) const;
     Q_INVOKABLE bool gpuAvailable() const;
     Q_INVOKABLE bool newProject(const QUrl &folder);
     Q_INVOKABLE bool fuse();

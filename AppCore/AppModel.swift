@@ -1029,7 +1029,7 @@ public final class AppModel: ObservableObject {
                                 "Close the stack “%@”?", comment: ""), stack.name),
                             informative: localizedString(
                                 "Any unsaved work in it will be lost.", comment: ""),
-                            confirmTitle: localizedString("Close Stack", comment: "")) {
+                            confirmTitle: UIStrings.closeStack) {
             return
         }
         let index = stacks.firstIndex { $0.id == stack.id } ?? 0
@@ -1051,7 +1051,7 @@ public final class AppModel: ObservableObject {
         guard !phase.isRunning else { return }
         guard confirmDiscardingUnsavedWork(
             message: localizedString("Close this project?", comment: ""),
-            confirmTitle: localizedString("Close Project", comment: "")) else { return }
+            confirmTitle: UIStrings.closeProject) else { return }
         clearProject()
     }
 

@@ -256,10 +256,6 @@ number that moves when depth selection fails.
   menu items are disabled".
 - Improve the experience of saving a project. It currently beachballs for several
   seconds with a big project.
-- Clean up the tooltips. They currently read like they were written by an LLM that
-  was very proud of what it had built and wanted everybody to understand all of the
-  details. They need to be much tighter and focused on what the user actually needs
-  to understand.
 
 ## Release & licensing compliance
 
