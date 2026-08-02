@@ -417,8 +417,13 @@ ApplicationWindow {
         function onStacksChanged() { scrollSelectedFrameIntoView() }
     }
 
-    // The native ⌘Z family (platform-correct sequences via StandardKey);
-    // menu entries with the mode-scoped titles arrive with the menu bar.
+    // The native ⌘Z family; menu entries with the mode-scoped titles arrive
+    // with the menu bar. These look like duplicates of the Edit menu's
+    // Actions and are not: `sequences: [StandardKey.Undo]` binds EVERY
+    // platform binding, while the Action's `shortcut: StandardKey.Undo`
+    // binds only the first — Qt warns about exactly that. Measured on
+    // Windows/Qt 6.10: Undo has 3 bindings there and Redo 4, so dropping
+    // these would narrow undo/redo to Ctrl+Z / Ctrl+Y alone.
     Shortcut {
         sequences: [StandardKey.Undo]
         enabled: Shell.canUndo
@@ -430,8 +435,12 @@ ApplicationWindow {
         onActivated: Shell.redo()
     }
     // Zoom shortcuts (⌘+/⌘−/⌘0; Ctrl elsewhere) live on the View menu's
-    // Actions above — a loose Shortcut here would double-register the
-    // same sequences and Qt resolves that as ambiguous (neither fires).
+    // Actions above, and one loose Shortcut per sequence would be
+    // harmless: a menu Action and a loose Shortcut on the SAME sequence
+    // do NOT resolve as ambiguous — measured on Windows/Qt 6.10 with a
+    // two-loose-Shortcuts positive control, the Action wins and fires
+    // exactly once, in either declaration order. (Two *loose* Shortcuts
+    // on one sequence do go ambiguous and neither fires.)
     // The native retouch keys: ↑/↓ cycle the source, space picks the
     // sharpest frame under the cursor, p/r toggle the PMax/eraser
     // layers, [ ] resize the brush; r starts retouching outside the

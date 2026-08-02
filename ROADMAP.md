@@ -97,18 +97,17 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
     text doesn't self-name. Still open:
     - Residual audit scope: dialogs/message boxes were compared at code level
       only, and only the dark scheme was walked visually.
-    - Possibly-duplicated shortcuts: undo/redo are bound both as menu
-      `Action.shortcut` and as loose window `Shortcut` items in `Main.qml` —
-      on the QML menubar (Windows/Linux) duplicate registrations resolve as
-      ambiguous and may fire neither; harmless on macOS's native menubar.
-      Verify on Windows/Linux and drop the loose pair if so (the zoom
-      shortcuts already live only on the View-menu Actions for this reason).
     - Checked and **not** divergent (don't re-walk): slider
       formatting/scales/signs, info-tip delay + icon scoping, algorithm-radio
       layout, crop overlay geometry and cursors, retouch overlay events and
       brush circle, progress overlay content (incl. the batch prefix),
       "(aligned)" title suffix, section collapse behavior, keyboard
-      shortcuts, tone slider set.
+      shortcuts, tone slider set, and the doubly-bound shortcuts (undo/redo,
+      C, X sit on both a menu `Action.shortcut` and a loose `Shortcut`;
+      measured on Windows/Qt 6.10 — the Action wins and fires exactly once,
+      in either declaration order, and only *two loose* Shortcuts on one
+      sequence go ambiguous. The loose undo/redo pair is also not redundant:
+      `sequences:` binds all platform bindings, `shortcut:` only the first).
     Method that worked: `hyperfocal-cli synth` a stack into a frames-only
     directory (keep `ground_truth.tif` out — it ingests as a bad extra
     frame), then `hyperfocal-qt --selftest <frames> <out.tif> <shot.png>`
@@ -327,11 +326,6 @@ landable):
    Hyperfocal neither bundles nor redistributes it and accepts no EULA on the
    user's behalf, so there is **no ongoing obligation and nothing to retain**.
    Done = confirmed once, or consciously skipped (low risk).
-
-4. **Confirm LibRaw's Adobe-DNG-SDK path is off.** The elected license is
-   CDDL-1.0; verify the vcpkg `libraw[dng-lossy]` build does not additionally
-   enable LibRaw's optional `USE_DNGSDK` integration (a separately-licensed Adobe
-   path). vcpkg's default does not. Done = confirmed from the vcpkg port flags.
 
 ## Engine performance
 
