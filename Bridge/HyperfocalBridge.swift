@@ -1413,6 +1413,27 @@ public func hf_output_depth() -> Int32 {
     MainActor.assumeIsolated { Bridge.model?.outputMode == .depth ? 1 : 0 }
 }
 
+/// Whether a depth preview exists — gates the Result/Depth toggle (a
+/// PMax-only result has no depth), like the native picker's disable.
+@_cdecl("hf_has_depth")
+public func hf_has_depth() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.depthPreview != nil ? 1 : 0 }
+}
+
+// MARK: Sidebar width (shared "sidebarWidth" settings key)
+
+@_cdecl("hf_sidebar_width")
+public func hf_sidebar_width() -> Double {
+    MainActor.assumeIsolated { Bridge.model?.sidebarWidth ?? 280 }
+}
+
+@_cdecl("hf_set_sidebar_width")
+public func hf_set_sidebar_width(_ width: Double) {
+    MainActor.assumeIsolated {
+        Bridge.model?.sidebarWidth = min(max(width, 280), 360)
+    }
+}
+
 // MARK: Frame list (the selected stack's frames, native Stack-list order)
 
 @_cdecl("hf_frame_count")

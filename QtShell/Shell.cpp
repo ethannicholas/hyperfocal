@@ -191,7 +191,7 @@ void Shell::refreshFromBridge() {
 /// cheap scalar reads, so one pass per callback costs little while
 /// sparing every binding re-evaluation on progress ticks.
 QVariantList Shell::fingerprint() const {
-    return {exposure(), depthMode(), displayIsData(), hasInput(),
+    return {exposure(), depthMode(), displayIsData(), hasDepth(), hasInput(),
             inputLoading(), inputTitle(), displayCrop(), displayCropAngle(),
             toneNeutral(), fusionDefault(), hasDisplay(), projectPath(),
             hasUnsavedWork(), canUndo(), canRedo(), undoTitle(), redoTitle(),
@@ -348,6 +348,8 @@ void Shell::setExposure(double ev) {
 }
 
 bool Shell::displayIsData() const { return hf_display_is_data() != 0; }
+
+bool Shell::hasDepth() const { return hf_has_depth() != 0; }
 
 bool Shell::hasInput() const {
     int32_t w = 0, h = 0;
@@ -961,6 +963,10 @@ bool Shell::boolSetting(const QString &id) const {
 void Shell::setBoolSetting(const QString &id, bool value) {
     hf_set_bool_setting(id.toUtf8().constData(), value ? 1 : 0);
 }
+
+double Shell::sidebarWidth() const { return hf_sidebar_width(); }
+
+void Shell::setSidebarWidth(double width) { hf_set_sidebar_width(width); }
 
 QString Shell::uiString(const QString &key) const { return bridgeUIString(key); }
 

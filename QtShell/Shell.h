@@ -40,6 +40,9 @@ class Shell : public QObject {
     Q_PROPERTY(int pendingStackCount READ pendingStackCount NOTIFY stacksChanged)
     Q_PROPERTY(QVariantList frames READ frames NOTIFY framesChanged)
     Q_PROPERTY(bool displayIsData READ displayIsData NOTIFY changed)
+    // Gates the Result/Depth toggle: false when no depth preview exists
+    // (e.g. a PMax-only result), matching the native picker's disable.
+    Q_PROPERTY(bool hasDepth READ hasDepth NOTIFY changed)
     Q_PROPERTY(bool hasInput READ hasInput NOTIFY changed)
     Q_PROPERTY(bool inputLoading READ inputLoading NOTIFY changed)
     Q_PROPERTY(QString inputTitle READ inputTitle NOTIFY changed)
@@ -103,6 +106,7 @@ public:
     int pendingStackCount() const;
     QVariantList frames() const;
     bool displayIsData() const;
+    bool hasDepth() const;
     bool hasInput() const;
     // The selected frame's decode is in flight — the input pane still
     // shows the previous image (the title already names the new frame).
@@ -122,6 +126,13 @@ public:
     Q_INVOKABLE bool confirmQuit();
     Q_INVOKABLE bool boolSetting(const QString &id) const;
     Q_INVOKABLE void setBoolSetting(const QString &id, bool value);
+    /// Sidebar width in points, persisted through the shared
+    /// "sidebarWidth" settings key (clamped 280–360 by the model, like
+    /// the native splitter's range). Invokables, not a property: the
+    /// splitter drives the width locally during a drag and persists it
+    /// through here — a property binding would fight the drag.
+    Q_INVOKABLE double sidebarWidth() const;
+    Q_INVOKABLE void setSidebarWidth(double width);
     /// Static UI text shared with the native app (AppCore.UIStrings, via
     /// hf_ui_string) — button labels, section titles, tooltips. `key` is
     /// the string's Swift property name, e.g. "algorithmDMapTip".

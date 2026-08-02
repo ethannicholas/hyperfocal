@@ -5,6 +5,9 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
+// MultiEffect (part of qtdeclarative): rounds the stack thumbnails'
+// corners via a mask — QML has no clipping-to-radius without it.
+import QtQuick.Effects
 import QtQuick.Layouts
 import Hyperfocal
 
@@ -22,14 +25,15 @@ ApplicationWindow {
     minimumWidth: Math.min(900, Screen.desktopAvailableWidth)
     minimumHeight: Math.min(560, Screen.desktopAvailableHeight)
     visible: true
-    // Project name + dirty marker, the native titlebar behavior.
+    // Project name in the titlebar, the native document-window look
+    // (neither shell shows a dirty marker; the quit gate still asks).
     title: {
         var name = "Hyperfocal"
         if (Shell.projectPath !== "") {
             var parts = Shell.projectPath.split("/")
             name = parts[parts.length - 1].replace(/\.hyperfocal$/, "")
         }
-        return Shell.hasUnsavedWork ? qsTr("%1 — Edited").arg(name) : name
+        return name
     }
     color: theme.window
 
@@ -58,6 +62,13 @@ ApplicationWindow {
         readonly property color textFaint: dark ? "#777777" : "#9e9e9e"
         readonly property color warn: dark ? "#e0c04a" : "#8a6d00"
         readonly property color ok: dark ? "#6fbf73" : "#2e7d32"
+        // Destructive-action text (native's role: .destructive red).
+        readonly property color destructive: dark ? "#e57373" : "#c62828"
+        // Monospace family per platform (Menlo is macOS-only; its Windows
+        // fallback rendered wide).
+        readonly property string monoFamily:
+            Qt.platform.os === "osx" ? "Menlo"
+            : Qt.platform.os === "windows" ? "Consolas" : "monospace"
         readonly property color cardFill:
             dark ? Qt.rgba(1, 1, 1, 0.055) : Qt.rgba(0, 0, 0, 0.05)
         readonly property color cardBorder:
@@ -180,11 +191,6 @@ ApplicationWindow {
                 onTriggered: Shell.exportInteractive()
             }
             Action {
-                text: Shell.uiString("exportAllFused")
-                enabled: !Shell.isRunning && Shell.fusedStackCount > 1
-                onTriggered: exportAllDialog.open()
-            }
-            Action {
                 text: Shell.uiString("exportAlignedFrames")
                 shortcut: "Ctrl+Shift+E"
                 enabled: !Shell.isRunning && Shell.canExportAligned
@@ -241,6 +247,26 @@ ApplicationWindow {
             }
         }
         Menu {
+            // The native View menu's zoom items (the shortcuts are bound
+            // window-wide below; these are the discoverable menu entries).
+            title: qsTr("View")
+            Action {
+                text: qsTr("Zoom In")
+                shortcut: StandardKey.ZoomIn
+                onTriggered: outputPane.item.zoomBy(1.5)
+            }
+            Action {
+                text: qsTr("Zoom Out")
+                shortcut: StandardKey.ZoomOut
+                onTriggered: outputPane.item.zoomBy(1 / 1.5)
+            }
+            Action {
+                text: qsTr("Zoom to Fit")
+                shortcut: "Ctrl+0"
+                onTriggered: outputPane.item.fit()
+            }
+        }
+        Menu {
             title: qsTr("Help")
             Action {
                 text: Shell.uiString("hyperfocalHelp")
@@ -281,6 +307,35 @@ ApplicationWindow {
             for (var i = 0; i < drop.urls.length; ++i)
                 Shell.openStack(drop.urls[i])
         }
+    }
+
+    // Sidebar/preview hairline + grab strip, the native SidebarSplitter:
+    // dragging resizes the sidebar (280–360); the width persists through
+    // the shared "sidebarWidth" settings key on release. The strip
+    // overlays both panes, centered on the hairline, and sits above them
+    // so the pane's own event handlers can't swallow the drag.
+    Rectangle {
+        x: sidebarScroll.width
+        width: 1
+        height: parent.height
+        z: 40
+        color: theme.cardBorder
+    }
+    MouseArea {
+        x: sidebarScroll.width - width / 2
+        width: 9
+        height: parent.height
+        z: 50
+        cursorShape: Qt.SplitHCursor
+        acceptedButtons: Qt.LeftButton
+        preventStealing: true
+        onPositionChanged: function(mouse) {
+            if (!pressed) return
+            // Scene x IS the candidate width (the sidebar starts at 0).
+            var sceneX = mapToItem(null, mouse.x, 0).x
+            sidebarScroll.sidebarWidth = Math.min(Math.max(sceneX, 280), 360)
+        }
+        onReleased: Shell.setSidebarWidth(sidebarScroll.sidebarWidth)
     }
 
     // One viewport across both panes, the native shells' shared
@@ -374,19 +429,9 @@ ApplicationWindow {
         enabled: Shell.canRedo
         onActivated: Shell.redo()
     }
-    // Zoom: ⌘+/⌘−/⌘0 (Ctrl elsewhere), acting on the shared viewport.
-    Shortcut {
-        sequences: [StandardKey.ZoomIn]
-        onActivated: outputPane.item.zoomBy(1.25)
-    }
-    Shortcut {
-        sequences: [StandardKey.ZoomOut]
-        onActivated: outputPane.item.zoomBy(1 / 1.25)
-    }
-    Shortcut {
-        sequence: "Ctrl+0"
-        onActivated: outputPane.item.fit()
-    }
+    // Zoom shortcuts (⌘+/⌘−/⌘0; Ctrl elsewhere) live on the View menu's
+    // Actions above — a loose Shortcut here would double-register the
+    // same sequences and Qt resolves that as ambiguous (neither fires).
     // The native retouch keys: ↑/↓ cycle the source, space picks the
     // sharpest frame under the cursor, p/r toggle the PMax/eraser
     // layers, [ ] resize the brush; r starts retouching outside the
@@ -525,6 +570,10 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.Close
+        // Fixed width like the native settings window (480pt there):
+        // the wrapped captions would otherwise stretch the dialog to
+        // their unwrapped implicit width.
+        width: 480
         onOpened: {
             orderToggle.checked = Shell.boolSetting("order-by-capture")
             alignToggle.checked = Shell.boolSetting("align")
@@ -532,33 +581,89 @@ ApplicationWindow {
             gpuToggle.checked = Shell.boolSetting("gpu")
             diskToggle.checked = Shell.boolSetting("disk-cache")
         }
+        // The native grouped Form: Loading / Fusion / Performance cards,
+        // an explanatory caption under every toggle (SettingsView.swift
+        // is the reference; the caption strings are shared catalog keys).
         ColumnLayout {
-            spacing: 8
-            CheckBox {
-                id: orderToggle
-                text: Shell.uiString("settingsOrderByCaptureTime")
-                onToggled: Shell.setBoolSetting("order-by-capture", checked)
+            anchors.left: parent.left
+            anchors.right: parent.right
+            spacing: 6
+            Label {
+                text: qsTr("Loading")
+                color: theme.textSecondary
+                font.pixelSize: 11
+                font.bold: true
+                Layout.leftMargin: 4
             }
-            CheckBox {
-                id: alignToggle
-                text: Shell.uiString("settingsAlignFrames")
-                onToggled: Shell.setBoolSetting("align", checked)
+            SidebarCard {
+                CheckBox {
+                    id: orderToggle
+                    objectName: "settings.order-by-capture"
+                    text: Shell.uiString("settingsOrderByCaptureTime")
+                    onToggled: Shell.setBoolSetting("order-by-capture", checked)
+                }
+                SettingCaption {
+                    text: qsTr("Sorts each stack's frames by EXIF capture time when loading (filename order breaks when the camera's file counter rolls over mid-stack). Frames without timestamps fall back to filename order. Turn off to always order by filename.")
+                }
             }
-            CheckBox {
-                id: normalizeToggle
-                text: Shell.uiString("settingsEvenOutExposure")
-                onToggled: Shell.setBoolSetting("normalize-exposure", checked)
+            Label {
+                text: Shell.uiString("fusionSectionTitle")
+                color: theme.textSecondary
+                font.pixelSize: 11
+                font.bold: true
+                Layout.leftMargin: 4
+                Layout.topMargin: 6
             }
-            CheckBox {
-                id: gpuToggle
-                text: Shell.uiString("settingsUseGPU")
-                enabled: Shell.gpuAvailable()
-                onToggled: Shell.setBoolSetting("gpu", checked)
+            SidebarCard {
+                CheckBox {
+                    id: alignToggle
+                    objectName: "settings.align"
+                    text: Shell.uiString("settingsAlignFrames")
+                    onToggled: Shell.setBoolSetting("align", checked)
+                }
+                SettingCaption {
+                    text: qsTr("Register every frame to its neighbor before fusing (focus breathing, drift, rotation). Turn off only for stacks that are already pixel-aligned, e.g. re-exports from another tool.")
+                }
+                CheckBox {
+                    id: normalizeToggle
+                    objectName: "settings.normalize-exposure"
+                    text: Shell.uiString("settingsEvenOutExposure")
+                    onToggled: Shell.setBoolSetting("normalize-exposure", checked)
+                }
+                SettingCaption {
+                    text: qsTr("Measures each frame's overall brightness and corrects shot-to-shot exposure flicker (shutter or lighting variation) before blending, so it can't imprint brightness patches on the result.")
+                }
             }
-            CheckBox {
-                id: diskToggle
-                text: Shell.uiString("settingsCacheFrames")
-                onToggled: Shell.setBoolSetting("disk-cache", checked)
+            Label {
+                text: qsTr("Performance")
+                color: theme.textSecondary
+                font.pixelSize: 11
+                font.bold: true
+                Layout.leftMargin: 4
+                Layout.topMargin: 6
+            }
+            SidebarCard {
+                CheckBox {
+                    id: gpuToggle
+                    objectName: "settings.gpu"
+                    text: Shell.uiString("settingsUseGPU")
+                    enabled: Shell.gpuAvailable()
+                    onToggled: Shell.setBoolSetting("gpu", checked)
+                }
+                SettingCaption {
+                    text: Shell.gpuAvailable()
+                        ? qsTr("Fuse on the GPU (identical results, several times faster). Turn off to reduce memory pressure on low-RAM machines, free the GPU for other work, or rule out a driver issue.")
+                        : qsTr("No Metal device available — fusing runs on the CPU.")
+                }
+                CheckBox {
+                    id: diskToggle
+                    objectName: "settings.disk-cache"
+                    text: Shell.uiString("settingsCacheFrames")
+                    onToggled: Shell.setBoolSetting("disk-cache", checked)
+                }
+                SettingCaption {
+                    text: qsTr("Keeps aligned frames in a temporary file during depth fusion so the stack isn't decoded twice (identical results, faster — the file needs about 0.7 GB of free disk per 45-megapixel frame and is removed when fusing finishes). Hyperfocal warns before fusing if it won't fit; turn off to never use the disk.")
+                }
             }
         }
     }
@@ -778,6 +883,16 @@ ApplicationWindow {
         }
     }
 
+    // A settings caption: the explanatory line under each toggle in the
+    // Settings dialog (native SettingsView's caption()).
+    component SettingCaption: Label {
+        Layout.fillWidth: true
+        Layout.leftMargin: 6
+        color: theme.textDim
+        font.pixelSize: 11
+        wrapMode: Text.WordWrap
+    }
+
     component SidebarSlider: ColumnLayout {
         id: sliderRoot
         required property string sliderId
@@ -845,15 +960,16 @@ ApplicationWindow {
                 text: format.arg(displayValue)
                 color: theme.textDim
                 font.pixelSize: 12
-                // Monospace keeps the value from jittering during drags;
-                // Menlo is macOS-only (its Windows fallback rendered wide).
-                font.family: Qt.platform.os === "osx" ? "Menlo"
-                           : Qt.platform.os === "windows" ? "Consolas"
-                           : "monospace"
+                // Monospace keeps the value from jittering during drags.
+                font.family: theme.monoFamily
             }
         }
         Slider {
             id: control
+            // The shared control-id vocabulary (native accessibility
+            // identifiers) as objectName, plus a spoken name.
+            objectName: sliderRoot.sliderId
+            Accessible.name: sliderRoot.label
             Layout.fillWidth: true
             from: parent.from
             to: parent.to
@@ -917,6 +1033,10 @@ ApplicationWindow {
         default property alias trailing: trailingRow.data
         readonly property bool collapsed:
             Shell.collapsedSections.indexOf(section) >= 0
+        objectName: "section." + section
+        Accessible.role: Accessible.Button
+        Accessible.name: title
+        Accessible.onPressAction: Shell.toggleSection(section)
         // Leading indent that puts a content row's label flush with the
         // TITLE text (not the chevron): the chevron's square cell plus
         // this row's spacing. Derived, not hardcoded — it tracks the
@@ -982,8 +1102,15 @@ ApplicationWindow {
         // Sidebar — scrolls when its sections outgrow the window.
         ScrollView {
             id: sidebarScroll
-            Layout.preferredWidth: 280
-            Layout.maximumWidth: 280
+            // Draggable width, the native hand-rolled splitter: opens at
+            // the persisted value, clamped 280–360, and persists through
+            // the shared "sidebarWidth" settings key on release. A plain
+            // property (one startup read through the bridge), not a
+            // binding — the drag drives it locally.
+            property real sidebarWidth: Shell.sidebarWidth()
+            Layout.preferredWidth: sidebarWidth
+            Layout.minimumWidth: sidebarWidth
+            Layout.maximumWidth: sidebarWidth
             Layout.fillHeight: true
             contentWidth: availableWidth
             clip: true
@@ -1022,17 +1149,24 @@ ApplicationWindow {
                 id: stackHeader
                 title: stackList.count > 1 ? Shell.uiString("stackPlural") : Shell.uiString("stackSingular")
                 section: "stack"
-                // "N of M" included count, the native stack.count.
-                subtitle: {
-                    if (Shell.frames.length === 0) return ""
-                    var n = 0
-                    for (var i = 0; i < Shell.frames.length; ++i)
-                        if (Shell.frames[i].included) ++n
-                    return qsTr("%1 of %2").arg(n).arg(Shell.frames.length)
+                // "N of M" included count at the right edge beside
+                // All/None, the native stack.count placement.
+                Label {
+                    objectName: "stack.count"
+                    visible: Shell.frames.length > 0
+                    text: {
+                        var n = 0
+                        for (var i = 0; i < Shell.frames.length; ++i)
+                            if (Shell.frames[i].included) ++n
+                        return qsTr("%1 of %2").arg(n).arg(Shell.frames.length)
+                    }
+                    color: theme.textDim
+                    font.pixelSize: 11
                 }
                 Button {
+                    objectName: "stack.include-all"
                     text: Shell.uiString("includeAllFrames")
-                    visible: frameList.count > 0
+                    visible: frameList.count > 0 && !stackHeader.collapsed
                     enabled: !Shell.isRunning
                     flat: true
                     font.pixelSize: 11
@@ -1047,8 +1181,9 @@ ApplicationWindow {
                     onClicked: Shell.setAllFramesIncluded(true)
                 }
                 Button {
+                    objectName: "stack.include-none"
                     text: Shell.uiString("includeNoFrames")
-                    visible: frameList.count > 0
+                    visible: frameList.count > 0 && !stackHeader.collapsed
                     enabled: !Shell.isRunning
                     flat: true
                     font.pixelSize: 11
@@ -1105,6 +1240,15 @@ ApplicationWindow {
                     Item {
                         implicitWidth: 22
                         implicitHeight: 22
+                        objectName: "stack.row." + stackDelegate.modelData.name
+                                    + ".disclose"
+                        Accessible.role: Accessible.Button
+                        Accessible.name: stackDelegate.modelData.expanded
+                            ? qsTr("Collapse %1").arg(stackDelegate.modelData.name)
+                            : qsTr("Expand %1").arg(stackDelegate.modelData.name)
+                        Accessible.onPressAction: Shell.setStackExpanded(
+                            stackDelegate.index,
+                            !stackDelegate.modelData.expanded)
                         Text {
                             anchors.centerIn: parent
                             text: "\u276f"
@@ -1122,30 +1266,105 @@ ApplicationWindow {
                     }
                     CheckBox {
                         id: enabledCheckBox
+                        objectName: "stack.row." + stackDelegate.modelData.name
+                                    + ".enabled"
+                        Accessible.name: qsTr("Include %1 in Fuse Enabled Stacks")
+                                         .arg(stackDelegate.modelData.name)
                         checked: modelData.enabled
                         enabled: !Shell.isRunning
                         onToggled: Shell.setStackEnabled(index, checked)
                         HoverHandler { id: enabledHover }
                         InfoTip { parent: enabledCheckBox; visible: enabledHover.hovered; text: Shell.uiString("includeStackTip") }
                     }
-                    Image {
+                    Item {
                         // Middle-frame thumbnail, like native's stack rows.
+                        // The 60×42 cell is always present: a placeholder
+                        // glyph holds it while the thumbnail decodes, so
+                        // the row doesn't reflow when the image lands
+                        // (native holds the cell with square.stack.3d.up).
                         // thumbToken is 0 until the background generation
-                        // lands (the item collapses away meanwhile) and
-                        // cache-busts the URL when the source frame changes.
-                        visible: modelData.thumbToken !== 0
-                        source: modelData.thumbToken !== 0
-                                ? "image://hfthumb/" + index + "?" + modelData.thumbToken
-                                : ""
-                        sourceSize.width: 60
-                        sourceSize.height: 42
+                        // lands, and cache-busts the URL when the source
+                        // frame changes.
                         Layout.preferredWidth: 60
                         Layout.preferredHeight: 42
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
+                        Canvas {
+                            // Three stacked plates — the placeholder glyph
+                            // (no SF Symbols off macOS, so it's drawn).
+                            id: thumbPlaceholder
+                            anchors.centerIn: parent
+                            width: 24
+                            height: 22
+                            // Holds the cell until the image has really
+                            // decoded — a failed or in-flight provider
+                            // load must show the glyph, not a blank.
+                            visible: thumbImage.status !== Image.Ready
+                            property color glyphColor: theme.textFaint
+                            onGlyphColorChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.strokeStyle = String(glyphColor)
+                                ctx.lineWidth = 1.2
+                                ctx.lineJoin = "round"
+                                for (var i = 0; i < 3; ++i) {
+                                    var y = 5 + i * 6
+                                    ctx.beginPath()
+                                    ctx.moveTo(2, y)
+                                    ctx.lineTo(12, y - 5)
+                                    ctx.lineTo(22, y)
+                                    ctx.lineTo(12, y + 5)
+                                    ctx.closePath()
+                                    ctx.stroke()
+                                }
+                            }
+                        }
+                        Image {
+                            id: thumbImage
+                            anchors.fill: parent
+                            visible: false
+                            source: stackDelegate.modelData.thumbToken !== 0
+                                    ? "image://hfthumb/" + stackDelegate.index
+                                      + "?" + stackDelegate.modelData.thumbToken
+                                    : ""
+                            sourceSize.width: 60
+                            sourceSize.height: 42
+                            fillMode: Image.PreserveAspectCrop
+                            asynchronous: true
+                        }
+                        MultiEffect {
+                            // Rounds the image's corners (native's 3pt
+                            // clipShape) — QML can't clip to a radius
+                            // without a mask pass.
+                            anchors.fill: parent
+                            visible: thumbImage.status === Image.Ready
+                            source: thumbImage
+                            maskEnabled: true
+                            maskSource: thumbMask
+                        }
+                        Rectangle {
+                            id: thumbMask
+                            anchors.fill: parent
+                            radius: 3
+                            visible: false
+                            layer.enabled: true
+                        }
+                        Rectangle {
+                            // Native's hairline border over the rounding.
+                            anchors.fill: parent
+                            visible: thumbImage.status === Image.Ready
+                            radius: 3
+                            color: "transparent"
+                            border.color: theme.cardBorder
+                            border.width: 1
+                        }
                     }
                     Label {
                         text: modelData.name
+                        objectName: "stack.row." + stackDelegate.modelData.name
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Stack %1")
+                                         .arg(stackDelegate.modelData.name)
+                        Accessible.onPressAction: Shell.selectStack(stackDelegate.index)
                         // Native: the title alone dims when the stack
                         // is excluded from batch fuse; glyphs, count,
                         // and chevron keep their normal colors.
@@ -1194,69 +1413,115 @@ ApplicationWindow {
                     }
                     // Nested frame rows while disclosed; dimmed and
                     // inert when the stack is disabled, like native.
+                    // Row anatomy matches the flat list below: selection
+                    // band, monospaced caption filename, hairline
+                    // separator (native's List row treatment).
                     Repeater {
                         id: frameRepeater
                         model: stackDelegate.modelData.expanded
                                ? stackDelegate.modelData.frames : []
-                        delegate: RowLayout {
+                        delegate: Item {
+                            id: nestedFrameRow
                             required property int index
                             required property var modelData
+                            readonly property bool selected:
+                                stackDelegate.index === Shell.selectedStack
+                                && Shell.selectedFrames.indexOf(index) !== -1
                             Layout.fillWidth: true
                             Layout.leftMargin: 28
-                            spacing: 6
+                            implicitHeight: nestedRowContent.implicitHeight + 1
                             opacity: stackDelegate.modelData.enabled ? 1 : 0.4
                             enabled: stackDelegate.modelData.enabled
-                            CheckBox {
-                                checked: modelData.included
-                                enabled: !Shell.isRunning
-                                onToggled: Shell.setStackFrameIncluded(
-                                    stackDelegate.index, index, checked)
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.bottomMargin: 1
+                                radius: 4
+                                color: nestedFrameRow.selected
+                                       ? palette.highlight : "transparent"
                             }
-                            Label {
-                                // Click selects the frame, like the flat
-                                // list — the input pane follows (another
-                                // stack's frame switches stacks with it).
-                                text: modelData.name
-                                color: modelData.included ? theme.textPrimary
-                                                          : theme.textFaint
-                                font.bold: stackDelegate.index === Shell.selectedStack
-                                           && Shell.selectedFrames.indexOf(index) !== -1
-                                elide: Text.ElideMiddle
-                                Layout.fillWidth: true
-                                TapHandler {
-                                    onTapped: Shell.selectStackFrame(
-                                        stackDelegate.index, index)
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                height: 1
+                                color: theme.cardBorder
+                            }
+                            RowLayout {
+                                id: nestedRowContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                spacing: 6
+                                CheckBox {
+                                    objectName: "frame.row."
+                                        + nestedFrameRow.modelData.name + ".included"
+                                    Accessible.name: qsTr("Include %1")
+                                        .arg(nestedFrameRow.modelData.name)
+                                    checked: nestedFrameRow.modelData.included
+                                    enabled: !Shell.isRunning
+                                    onToggled: Shell.setStackFrameIncluded(
+                                        stackDelegate.index, nestedFrameRow.index, checked)
                                 }
-                            }
-                            Label {
-                                id: nestedIssueBadge
-                                text: "⚠"
-                                visible: modelData.issue !== ""
-                                color: theme.warn
-                                HoverHandler { id: nestedIssueHover }
-                                InfoTip { parent: nestedIssueBadge; visible: nestedIssueHover.hovered; text: modelData.issue }
+                                Label {
+                                    // Click selects the frame, like the flat
+                                    // list — the input pane follows (another
+                                    // stack's frame switches stacks with it).
+                                    text: nestedFrameRow.modelData.name
+                                    objectName: "frame.row."
+                                        + nestedFrameRow.modelData.name
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: nestedFrameRow.modelData.name
+                                    Accessible.onPressAction: Shell.selectStackFrame(
+                                        stackDelegate.index, nestedFrameRow.index)
+                                    color: nestedFrameRow.selected ? palette.highlightedText
+                                         : nestedFrameRow.modelData.included ? theme.textPrimary
+                                                                             : theme.textFaint
+                                    font.family: theme.monoFamily
+                                    font.pixelSize: 11
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
+                                    TapHandler {
+                                        onTapped: Shell.selectStackFrame(
+                                            stackDelegate.index, nestedFrameRow.index)
+                                    }
+                                }
+                                Label {
+                                    id: nestedIssueBadge
+                                    text: "⚠"
+                                    visible: nestedFrameRow.modelData.issue !== ""
+                                    color: theme.warn
+                                    HoverHandler { id: nestedIssueHover }
+                                    InfoTip { parent: nestedIssueBadge; visible: nestedIssueHover.hovered; text: nestedFrameRow.modelData.issue }
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Native empty state: hint + Open Folder…, inside the card,
-            // only while no stack is open.
-            Label {
-                Layout.fillWidth: true
+            // Native empty state, only while no stack is open: hint and a
+            // natural-width Open Folder…, both centered in a ~120pt block.
+            ColumnLayout {
                 visible: stackList.count === 0 && frameList.count === 0
-                text: Shell.uiString("dropFolderHint")
-                color: theme.textDim
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
-            }
-            Button {
                 Layout.fillWidth: true
-                visible: stackList.count === 0 && frameList.count === 0
-                text: Shell.uiString("openFolder")
-                enabled: !Shell.isRunning
-                onClicked: openDialog.open()
+                Layout.minimumHeight: 120
+                spacing: 10
+                Item { Layout.fillHeight: true }
+                Label {
+                    Layout.fillWidth: true
+                    text: Shell.uiString("dropFolderHint")
+                    color: theme.textDim
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    horizontalAlignment: Text.AlignHCenter
+                }
+                Button {
+                    objectName: "stack.open-folder"
+                    Layout.alignment: Qt.AlignHCenter
+                    text: Shell.uiString("openFolder")
+                    enabled: !Shell.isRunning
+                    onClicked: openDialog.open()
+                }
+                Item { Layout.fillHeight: true }
             }
             ListView {
                 id: frameList
@@ -1274,31 +1539,69 @@ ApplicationWindow {
                     Behavior on opacity { NumberAnimation { duration: 200 } }
                 }
                 model: Shell.frames
-                delegate: RowLayout {
+                // Row anatomy mirrors native's List rows: selection band,
+                // monospaced caption filename, hairline separator.
+                delegate: Item {
+                    id: flatFrameRow
+                    required property int index
+                    required property var modelData
+                    readonly property bool selected:
+                        Shell.selectedFrames.indexOf(index) !== -1
                     width: frameList.width
-                    spacing: 6
-                    CheckBox {
-                        checked: modelData.included
-                        enabled: !Shell.isRunning
-                        onToggled: Shell.setFrameIncluded(index, checked)
+                    implicitHeight: flatRowContent.implicitHeight + 1
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.bottomMargin: 1
+                        radius: 4
+                        color: flatFrameRow.selected
+                               ? palette.highlight : "transparent"
                     }
-                    Label {
-                        // Click selects the frame — the input pane follows.
-                        text: modelData.name
-                        color: modelData.included ? theme.textPrimary : theme.textFaint
-                        font.bold: Shell.selectedFrames.indexOf(index) !== -1
-                        elide: Text.ElideMiddle
-                        Layout.fillWidth: true
-                        TapHandler { onTapped: Shell.selectFrame(index) }
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 1
+                        color: theme.cardBorder
                     }
-                    Label {
-                        id: issueBadge
-                        // Fuse-time issue badge (misfire/misalignment).
-                        text: "⚠"
-                        visible: modelData.issue !== ""
-                        color: theme.warn
-                        HoverHandler { id: issueHover }
-                        InfoTip { parent: issueBadge; visible: issueHover.hovered; text: modelData.issue }
+                    RowLayout {
+                        id: flatRowContent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        spacing: 6
+                        CheckBox {
+                            objectName: "frame.row."
+                                + flatFrameRow.modelData.name + ".included"
+                            Accessible.name: qsTr("Include %1")
+                                .arg(flatFrameRow.modelData.name)
+                            checked: flatFrameRow.modelData.included
+                            enabled: !Shell.isRunning
+                            onToggled: Shell.setFrameIncluded(flatFrameRow.index, checked)
+                        }
+                        Label {
+                            // Click selects the frame — the input pane follows.
+                            text: flatFrameRow.modelData.name
+                            objectName: "frame.row." + flatFrameRow.modelData.name
+                            Accessible.role: Accessible.Button
+                            Accessible.name: flatFrameRow.modelData.name
+                            Accessible.onPressAction: Shell.selectFrame(flatFrameRow.index)
+                            color: flatFrameRow.selected ? palette.highlightedText
+                                 : flatFrameRow.modelData.included ? theme.textPrimary
+                                                                   : theme.textFaint
+                            font.family: theme.monoFamily
+                            font.pixelSize: 11
+                            elide: Text.ElideMiddle
+                            Layout.fillWidth: true
+                            TapHandler { onTapped: Shell.selectFrame(flatFrameRow.index) }
+                        }
+                        Label {
+                            id: issueBadge
+                            // Fuse-time issue badge (misfire/misalignment).
+                            text: "⚠"
+                            visible: flatFrameRow.modelData.issue !== ""
+                            color: theme.warn
+                            HoverHandler { id: issueHover }
+                            InfoTip { parent: issueBadge; visible: issueHover.hovered; text: flatFrameRow.modelData.issue }
+                        }
                     }
                 }
             }
@@ -1311,6 +1614,7 @@ ApplicationWindow {
                 title: Shell.uiString("fusionSectionTitle")
                 section: "fusion"
                 Button {
+                    objectName: "fusion.reset"
                     text: Shell.uiString("reset")
                     visible: !Shell.fusionDefault
                     enabled: !Shell.isRunning
@@ -1386,6 +1690,7 @@ ApplicationWindow {
                             delegate: RowLayout {
                                 Layout.fillWidth: true
                                 RadioButton {
+                                    objectName: "fusion.method." + modelData.key
                                     text: modelData.label
                                     checked: Shell.fusionAlgorithm === modelData.key
                                     enabled: !Shell.isRunning
@@ -1449,6 +1754,7 @@ ApplicationWindow {
                 }
                 }
                 Button {
+                    objectName: "fusion.fuse-stack"
                     Layout.fillWidth: true
                     text: Shell.uiString("fuseStack")
                     enabled: Shell.canFuse
@@ -1457,9 +1763,20 @@ ApplicationWindow {
                 }
                 Button {
                     id: fuseEnabledButton
+                    objectName: "fusion.fuse-enabled"
                     Layout.fillWidth: true
-                    visible: stackList.count > 1
-                    text: qsTr("Fuse %1 Stacks").arg(Shell.pendingStackCount)
+                    // Shown only when more than one stack is *enabled*
+                    // (the native rule) — with one enabled stack the plain
+                    // Fuse button already covers it.
+                    visible: {
+                        var enabled = 0
+                        for (var i = 0; i < Shell.stacks.length; ++i)
+                            if (Shell.stacks[i].enabled) ++enabled
+                        return enabled > 1
+                    }
+                    text: Shell.pendingStackCount === 1
+                        ? qsTr("Fuse 1 Stack")
+                        : qsTr("Fuse %1 Stacks").arg(Shell.pendingStackCount)
                     enabled: Shell.pendingStackCount > 0 && !Shell.isRunning
                     onClicked: Shell.fuseEnabledStacks()
                     HoverHandler { id: fuseEnabledHover }
@@ -1474,6 +1791,7 @@ ApplicationWindow {
                 title: Shell.uiString("toneSectionTitle")
                 section: "tone"
                 Button {
+                    objectName: "tone.reset"
                     text: Shell.uiString("reset")
                     visible: !Shell.toneNeutral
                     flat: true
@@ -1555,6 +1873,7 @@ ApplicationWindow {
                 CardRule {}
                 Button {
                     id: cropButton
+                    objectName: "edit.crop"
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
                     text: Shell.uiString("cropButton")
@@ -1564,6 +1883,7 @@ ApplicationWindow {
                     InfoTip { parent: cropButton; visible: cropButtonHover.hovered; text: Shell.uiString("cropTip") }
                 }
                 Button {
+                    objectName: "retouch.start"
                     Layout.fillWidth: true
                     visible: !Shell.retouchMode && !Shell.cropMode
                     text: Shell.retouchHasEdits ? Shell.uiString("continueRetouching")
@@ -1583,6 +1903,8 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Label { text: Shell.uiString("aspectRatioLabel"); color: theme.textSecondary }
                     ComboBox {
+                        objectName: "edit.crop-aspect"
+                        Accessible.name: Shell.uiString("aspectRatioLabel")
                         Layout.fillWidth: true
                         // The aspect value persists through the bridge:
                         // the model keeps it verbatim and only `display` is
@@ -1609,6 +1931,10 @@ ApplicationWindow {
                     }
                     Button {
                         id: orientationButton
+                        objectName: "edit.crop-orientation"
+                        // Icon-only control: the spoken name can't come
+                        // from text, so it's set explicitly.
+                        Accessible.name: qsTr("Swap Crop Orientation")
                         // Icon button in the aspect row, like native's
                         // symbol button: the current orientation's
                         // rectangle with a rotation arrow (drawn SVGs — SF
@@ -1627,12 +1953,14 @@ ApplicationWindow {
                     visible: Shell.cropMode
                     Layout.fillWidth: true
                     Button {
+                        objectName: "edit.crop-accept"
                         Layout.fillWidth: true
                         highlighted: true
                         text: Shell.uiString("accept")
                         onClicked: Shell.acceptCrop()
                     }
                     Button {
+                        objectName: "edit.crop-cancel"
                         Layout.fillWidth: true
                         text: Shell.uiString("cancel")
                         onClicked: Shell.cancelCrop()
@@ -1673,29 +2001,57 @@ ApplicationWindow {
                         InfoIcon { tip: Shell.uiString("retouchSourceTip") }
                     }
                     RadioButton {
+                        objectName: "retouch.source-kind.frame"
                         text: Shell.uiString("retouchSourceImage")
                         checked: Shell.retouchSourceKind === 0
                         onClicked: Shell.retouchSourceKind = 0
                     }
                     RadioButton {
+                        objectName: "retouch.source-kind.pmax"
                         text: Shell.uiString("retouchPMaxResult")
                         checked: Shell.retouchSourceKind === 1
                         onClicked: Shell.retouchSourceKind = 1
                     }
                     RadioButton {
+                        objectName: "retouch.source-kind.dmap"
                         text: Shell.uiString("retouchDMapResult")
                         checked: Shell.retouchSourceKind === 2
                         onClicked: Shell.retouchSourceKind = 2
                     }
                 }
-                Button {
+                RowLayout {
+                    visible: Shell.retouchMode
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        objectName: "retouch.revert-all"
+                        // Right-aligned, natural width, destructive red —
+                        // the native Revert All treatment (a full-width
+                        // button read as the section's primary action).
+                        // Red via the palette, not a custom contentItem —
+                        // the macOS native style rejects contentItem
+                        // customization with a warning (it may also ignore
+                        // the palette; the dev shell wears native chrome,
+                        // Fusion on Windows/Linux honors it).
+                        id: revertAllButton
+                        enabled: Shell.retouchHasEdits
+                        text: Shell.uiString("revertAll")
+                        palette.buttonText: theme.destructive
+                        onClicked: Shell.revertRetouch()
+                    }
+                }
+                Label {
+                    // The native shortcut-hint caption under the retouch
+                    // controls (Alt-scroll here — ⌥ is the Mac's key).
                     Layout.fillWidth: true
                     visible: Shell.retouchMode
-                    enabled: Shell.retouchHasEdits
-                    text: Shell.uiString("revertAll")
-                    onClicked: Shell.revertRetouch()
+                    text: qsTr("↑/↓ cycle source frames · space picks the sharpest frame for the brush region · p PMax result · r eraser · Alt-scroll or [ ] resize the brush · scroll/pinch to navigate")
+                    color: theme.textDim
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
                 }
                 Button {
+                    objectName: "retouch.done"
                     Layout.fillWidth: true
                     visible: Shell.retouchMode
                     highlighted: true
@@ -1703,26 +2059,11 @@ ApplicationWindow {
                     onClicked: Shell.exitRetouch()
                 }
 
-                Label {
-                    Layout.fillWidth: true
-                    visible: Shell.displayCrop.width > 0
-                    text: Shell.displayCropAngle !== 0
-                        ? qsTr("Cropped to %1×%2, %3°")
-                          .arg(Shell.displayCrop.width)
-                          .arg(Shell.displayCrop.height)
-                          .arg(Shell.displayCropAngle.toFixed(1))
-                        : qsTr("Cropped to %1×%2")
-                          .arg(Shell.displayCrop.width)
-                          .arg(Shell.displayCrop.height)
-                    color: theme.textDim
-                    font.pixelSize: 11
-                    elide: Text.ElideRight
-                }
             }
             }
 
-            Item { Layout.fillHeight: true }
-
+            // Export flows directly after Edit, like the native form —
+            // the spacer below it only soaks up leftover viewport height.
             SidebarCard {
             SectionHeader {
                 id: exportHeader
@@ -1735,13 +2076,39 @@ ApplicationWindow {
                 spacing: 10
                 CardRule {}
                 Button {
+                    objectName: "export.result"
                     Layout.fillWidth: true
                     text: Shell.depthMode ? Shell.uiString("exportDepthMap") : Shell.uiString("exportResult")
                     enabled: !Shell.isRunning && Shell.hasDisplay
                     onClicked: Shell.exportInteractive()
                 }
+                Button {
+                    id: exportAnimationButton
+                    objectName: "export.animate"
+                    Layout.fillWidth: true
+                    // Always present, disabled until a depth-carrying
+                    // result exists — the native enable rule.
+                    text: Shell.uiString("exportRockingAnimation")
+                    enabled: !Shell.isRunning && Shell.canAnimate
+                    onClicked: Shell.exportAnimationInteractive()
+                    HoverHandler { id: exportAnimationHover }
+                    InfoTip { parent: exportAnimationButton; visible: exportAnimationHover.hovered; text: Shell.uiString("exportRockingAnimationTip") }
+                }
+                Button {
+                    id: exportAllButton
+                    objectName: "export.all"
+                    Layout.fillWidth: true
+                    visible: Shell.fusedStackCount > 1
+                    text: Shell.uiString("exportAllFused")
+                    enabled: !Shell.isRunning
+                    onClicked: exportAllDialog.open()
+                    HoverHandler { id: exportAllHover }
+                    InfoTip { parent: exportAllButton; visible: exportAllHover.hovered; text: Shell.uiString("exportAllFusedTip") }
+                }
             }
             }
+
+            Item { Layout.fillHeight: true }
         }
         }
 
@@ -1784,7 +2151,7 @@ ApplicationWindow {
                     hint: Shell.hasInput ? ""
                         : Shell.inputError !== "" ? Shell.inputError
                         : Shell.frames.length === 0
-                            ? qsTr("Open a stack to begin")
+                            ? qsTr("Start a new project to begin")
                             : Shell.uiString("selectFrameHint")
                     // Mid-fuse the pane cycles processing sources — the
                     // spinner would just flicker (native gates the same
@@ -1834,7 +2201,7 @@ ApplicationWindow {
                     Layout.preferredWidth: 1
                     title: Shell.retouchMode
                         ? (Shell.depthMode
-                           ? qsTr("Retouched Depth")
+                           ? qsTr("Retouched Depth — drag to paint from source")
                            : Shell.uiString("retouchedOutputHint"))
                         : Shell.uiString("outputTitle")
                     dataDisplay: Shell.displayIsData
@@ -1849,10 +2216,14 @@ ApplicationWindow {
                         parent: outputPane.headerArea
                         spacing: 1
                         Button {
+                            objectName: "output.mode.result"
                             text: qsTr("Result")
                             checkable: true
                             autoExclusive: true
                             checked: !Shell.depthMode
+                            // Greyed while no depth preview exists (e.g. a
+                            // PMax-only result), like the native picker.
+                            enabled: Shell.hasDepth
                             onClicked: Shell.depthMode = false
                             // No width override: a hardcoded 64 elided
                             // German "Ergebnis" and Russian "Результат", and
@@ -1867,10 +2238,12 @@ ApplicationWindow {
                             font.pixelSize: 11
                         }
                         Button {
+                            objectName: "output.mode.depth"
                             text: qsTr("Depth")
                             checkable: true
                             autoExclusive: true
                             checked: Shell.depthMode
+                            enabled: Shell.hasDepth
                             onClicked: Shell.depthMode = true
                             // No width override: a hardcoded 64 elided
                             // German "Ergebnis" and Russian "Результат", and
@@ -1916,6 +2289,8 @@ ApplicationWindow {
                             anchors.margins: 10
                             spacing: 6
                             ProgressBar {
+                                objectName: "progress.bar"
+                                Accessible.name: Shell.stageText
                                 Layout.fillWidth: true
                                 value: Shell.stageFraction
                             }
@@ -1923,6 +2298,7 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 spacing: 8
                                 Label {
+                                    objectName: "progress.stage"
                                     text: Shell.stageText
                                     color: theme.textSecondary
                                     font.pixelSize: 12
@@ -1930,12 +2306,14 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                 }
                                 Label {
+                                    objectName: "progress.eta"
                                     text: Shell.stageEta
                                     visible: text !== ""
                                     color: theme.textDim
                                     font.pixelSize: 12
                                 }
                                 Button {
+                                    objectName: "progress.cancel"
                                     text: Shell.uiString("cancel")
                                     font.pixelSize: 11
                                     onClicked: Shell.cancelFuse()
@@ -1947,43 +2325,89 @@ ApplicationWindow {
             }
 
             // Zoom bar along the bottom, native placement and order:
-            // Zoom: [Fit/N% ⌵] [−] [+], flat so it reads as a toolbar.
-            RowLayout {
+            // Zoom: [Fit/N% ⌵] [−] [+] — a compact flat strip on the
+            // header-bar material with a hairline above, like native's
+            // .bar toolbar (Fusion's ToolButton renders as a large
+            // filled block, so these are flat text buttons instead).
+            Rectangle {
                 Layout.fillWidth: true
-                Layout.margins: 6
-                Item { Layout.fillWidth: true }
-                Label { text: Shell.uiString("zoomLabel"); color: theme.textSecondary; font.pixelSize: 12 }
-                ToolButton {
-                    id: zoomMenuButton
-                    text: (outputPane.item.fitted ? Shell.uiString("zoomFit")
-                          : Math.round(outputPane.item.displayScale * 100)
-                            + "%") + "  ⌵"
-                    font.pixelSize: 12
-                    onClicked: zoomMenu.open()
-                    Menu {
-                        id: zoomMenu
-                        y: -implicitHeight - 4
-                        MenuItem { text: Shell.uiString("zoomFit"); onTriggered: outputPane.item.fit() }
-                        MenuItem { text: "25%"; onTriggered: outputPane.item.setAbsoluteScale(0.25) }
-                        MenuItem { text: "50%"; onTriggered: outputPane.item.setAbsoluteScale(0.5) }
-                        MenuItem { text: "100%"; onTriggered: outputPane.item.setAbsoluteScale(1) }
-                        MenuItem { text: "200%"; onTriggered: outputPane.item.setAbsoluteScale(2) }
-                        MenuItem { text: "400%"; onTriggered: outputPane.item.setAbsoluteScale(4) }
+                implicitHeight: zoomRow.implicitHeight + 8
+                color: theme.headerBar
+                Rectangle {
+                    anchors.top: parent.top
+                    width: parent.width
+                    height: 1
+                    color: theme.cardBorder
+                }
+                RowLayout {
+                    id: zoomRow
+                    anchors.fill: parent
+                    spacing: 8
+                    Item { Layout.fillWidth: true }
+                    Label { text: Shell.uiString("zoomLabel"); color: theme.textSecondary; font.pixelSize: 12 }
+                    Button {
+                        id: zoomMenuButton
+                        objectName: "zoom.menu"
+                        Accessible.name: qsTr("Zoom level")
+                        flat: true
+                        leftPadding: 6
+                        rightPadding: 6
+                        topPadding: 2
+                        bottomPadding: 2
+                        // Fixed width + monospaced digits (native pins the
+                        // label at 60pt) so the −/+ buttons don't shift as
+                        // Fit ↔ percentages swap through. Plain text, not a
+                        // custom contentItem — the macOS native style
+                        // rejects contentItem customization with a warning.
+                        implicitWidth: 88
+                        font.pixelSize: 12
+                        font.family: theme.monoFamily
+                        text: (outputPane.item.fitted
+                               ? Shell.uiString("zoomFit")
+                               : Math.round(outputPane.item.displayScale * 100)
+                                 + "%") + " ⌵"
+                        onClicked: zoomMenu.open()
+                        Menu {
+                            id: zoomMenu
+                            y: -implicitHeight - 4
+                            MenuItem { text: Shell.uiString("zoomFit"); onTriggered: outputPane.item.fit() }
+                            // The native fixed levels (ViewportState.fixedLevels),
+                            // all seven.
+                            MenuItem { text: "6.25%"; onTriggered: outputPane.item.setAbsoluteScale(0.0625) }
+                            MenuItem { text: "12.5%"; onTriggered: outputPane.item.setAbsoluteScale(0.125) }
+                            MenuItem { text: "25%"; onTriggered: outputPane.item.setAbsoluteScale(0.25) }
+                            MenuItem { text: "50%"; onTriggered: outputPane.item.setAbsoluteScale(0.5) }
+                            MenuItem { text: "100%"; onTriggered: outputPane.item.setAbsoluteScale(1) }
+                            MenuItem { text: "200%"; onTriggered: outputPane.item.setAbsoluteScale(2) }
+                            MenuItem { text: "400%"; onTriggered: outputPane.item.setAbsoluteScale(4) }
+                        }
                     }
+                    Button {
+                        objectName: "zoom.out"
+                        Accessible.name: qsTr("Zoom out")
+                        flat: true
+                        text: "−"
+                        font.pixelSize: 14
+                        leftPadding: 8
+                        rightPadding: 8
+                        topPadding: 0
+                        bottomPadding: 0
+                        onClicked: outputPane.item.zoomBy(1 / 1.5)
+                    }
+                    Button {
+                        objectName: "zoom.in"
+                        Accessible.name: qsTr("Zoom in")
+                        flat: true
+                        text: "+"
+                        font.pixelSize: 14
+                        leftPadding: 8
+                        rightPadding: 8
+                        topPadding: 0
+                        bottomPadding: 0
+                        onClicked: outputPane.item.zoomBy(1.5)
+                    }
+                    Item { Layout.fillWidth: true }
                 }
-                ToolButton {
-                    icon.name: "zoom-out"
-                    icon.width: 16
-                    icon.height: 16
-                    onClicked: outputPane.item.zoomBy(1 / 1.25)
-                }
-                ToolButton {
-                    icon.name: "zoom-in"
-                    icon.width: 16
-                    icon.height: 16
-                    onClicked: outputPane.item.zoomBy(1.25)
-                }
-                Item { Layout.fillWidth: true }
             }
         }
     }

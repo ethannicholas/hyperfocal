@@ -187,7 +187,13 @@ struct HyperfocalApp: App {
                 Button(UIStrings.saveProjectAs) { model.saveProjectAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(model.stacks.isEmpty || model.phase.isRunning)
-                Button(UIStrings.exportResult) { model.exportResult() }
+                // Label follows the output mode, like the export button and
+                // the Qt shell's menu — in depth mode ⌘E exports the depth
+                // map, and the menu should say so.
+                Button(model.outputMode == .depth ? UIStrings.exportDepthMap
+                                                  : UIStrings.exportResult) {
+                    model.exportResult()
+                }
                     .keyboardShortcut("e", modifiers: .command)
                     .disabled(!model.canExport)
                 Button(UIStrings.exportAlignedFrames) { model.exportAlignedFramesPanel() }

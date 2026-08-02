@@ -260,9 +260,18 @@ int hf_set_slider(const char *id, double value);
 double hf_slider(const char *id);
 
 // Output mode: 0 = Result, 1 = Depth (the depth map is data — it
-// displays and exports untoned).
+// displays and exports untoned). hf_has_depth gates the Result/Depth
+// toggle: 0 when no depth preview exists (e.g. a PMax-only result),
+// matching the native picker's disable.
 void hf_set_output_depth(int depth);
 int hf_output_depth(void);
+int hf_has_depth(void);
+
+// Sidebar width in points, persisted in the shared settings suite under
+// the same "sidebarWidth" key as the native app (clamped 280–360 on
+// read, like the native splitter's range).
+double hf_sidebar_width(void);
+void hf_set_sidebar_width(double width);
 
 // Stack list, in native Stack-tree order. Selecting a stack stashes the
 // outgoing stack's state and installs the target's, like clicking its

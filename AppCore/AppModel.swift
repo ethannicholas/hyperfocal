@@ -356,7 +356,7 @@ public final class AppModel: ObservableObject {
     /// preferences. 280 (the default) matches the Qt shell's fixed-width
     /// sidebar; if that shell gains a draggable splitter it should persist
     /// through this same key.
-    @Published var sidebarWidth: Double {
+    @Published public var sidebarWidth: Double {
         didSet { Self.settings.set(sidebarWidth, forKey: "sidebarWidth") }
     }
 

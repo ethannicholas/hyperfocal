@@ -4327,6 +4327,71 @@
         }
       }
     },
+    "Collapse %1": {
+      "comment": "Qt-shell variant (Qt %1 placeholder) of “Collapse %@”.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 einklappen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraer %1"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réduire %1"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprimi %1"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1を折りたたむ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 접기"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 samenvouwen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recolher %1"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Свернуть %1"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "折叠%1"
+          }
+        }
+      }
+    },
     "Color space:": {
       "localizations": {
         "de": {
@@ -5795,6 +5860,71 @@
           "stringUnit": {
             "state": "translated",
             "value": "展开%@"
+          }
+        }
+      }
+    },
+    "Expand %1": {
+      "comment": "Qt-shell variant (Qt %1 placeholder) of “Expand %@”.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 ausklappen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expandir %1"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Développer %1"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espandi %1"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1を展開"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 펼치기"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 uitvouwen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expandir %1"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Развернуть %1"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展开%1"
           }
         }
       }
@@ -8255,6 +8385,71 @@
         }
       }
     },
+    "Include %1": {
+      "comment": "Qt-shell variant (Qt %1 placeholder) of “Include %@”.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 einbeziehen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incluir %1"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inclure %1"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Includi %1"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1を含める"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 포함"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 opnemen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incluir %1"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить %1"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "包含%1"
+          }
+        }
+      }
+    },
     "Include %@ in Fuse Enabled Stacks": {
       "localizations": {
         "de": {
@@ -8315,6 +8510,71 @@
           "stringUnit": {
             "state": "translated",
             "value": "将%@纳入“合成已启用的堆栈”"
+          }
+        }
+      }
+    },
+    "Include %1 in Fuse Enabled Stacks": {
+      "comment": "Qt-shell variant (Qt %1 placeholder) of “Include %@ in Fuse Enabled Stacks”.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 in „Aktivierte Stapel fusionieren“ einbeziehen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incluir %1 en «Fusionar pilas activadas»"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inclure %1 dans « Fusionner les piles activées »"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Includi %1 in “Fondi pile attive”"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「有効なスタックを合成」に%1を含める"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "‘활성화된 스택 합성’에 %1 포함"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1 opnemen in ‘Ingeschakelde stapels samenvoegen’"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incluir %1 em “Fundir Pilhas Ativadas”"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включать %1 в «Объединить включённые стеки»"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将%1纳入“合成已启用的堆栈”"
           }
         }
       }
@@ -14084,6 +14344,71 @@
         }
       }
     },
+    "Stack %1": {
+      "comment": "Qt-shell variant (Qt %1 placeholder) of “Stack %@”.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stapel %1"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pila %1"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pile %1"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pila %1"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スタック%1"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "스택 %1"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stapel %1"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pilha %1"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стек %1"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "堆栈%1"
+          }
+        }
+      }
+    },
     "Stack %lld of %lld · ": {
       "localizations": {
         "de": {
@@ -15748,6 +16073,71 @@
         }
       }
     },
+    "View": {
+      "comment": "Menu bar title (Qt shell; the macOS View menu is system-provided).",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ansicht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ver"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Affichage"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visualizza"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "表示"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보기"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beeld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exibir"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вид"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "视图"
+          }
+        }
+      }
+    },
     "Waiting for the previous fusion to stop…": {
       "localizations": {
         "de": {
@@ -17180,6 +17570,71 @@
         }
       }
     },
+    "↑/↓ cycle source frames · space picks the sharpest frame for the brush region · p PMax result · r eraser · Alt-scroll or [ ] resize the brush · scroll/pinch to navigate": {
+      "comment": "Qt-shell variant of the retouch shortcut hint (Alt-scroll, not ⌥-scroll).",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ Quellbilder durchschalten · Leertaste wählt das schärfste Bild für den Pinselbereich · p PMax-Ergebnis · r Radierer · Alt-Scrollen oder [ ] ändert die Pinselgröße · Scrollen/Aufziehen zum Navigieren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ recorre las imágenes de origen · espacio elige la más nítida bajo el pincel · p resultado PMax · r borrador · Alt-desplazamiento o [ ] cambia el tamaño del pincel · desplázate/pellizca para navegar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ parcourt les images sources · espace choisit l’image la plus nette sous le pinceau · p résultat PMax · r gomme · Alt-défilement ou [ ] redimensionne le pinceau · défilement/pincement pour naviguer"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ scorre i fotogrammi sorgente · spazio sceglie il più nitido sotto il pennello · p risultato PMax · r gomma · Alt-scorrimento o [ ] ridimensiona il pennello · scorri/pizzica per navigare"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓でソースフレームを切り替え · スペースでブラシ領域が最も鮮明なフレームを選択 · pでPMax結果 · rで消しゴム · Alt+スクロールまたは[ ]でブラシサイズ変更 · スクロール/ピンチで移動"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ 소스 프레임 전환 · 스페이스 바로 브러시 영역이 가장 선명한 프레임 선택 · p PMax 결과 · r 지우개 · Alt-스크롤 또는 [ ]로 브러시 크기 조절 · 스크롤/핀치로 이동"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ wisselt bronopnamen · spatie kiest de scherpste opname onder het penseel · p PMax-resultaat · r gum · Alt-scrollen of [ ] wijzigt de penseelgrootte · scrol/knijp om te navigeren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ alterna as imagens de origem · espaço escolhe a mais nítida sob o pincel · p resultado PMax · r apagador · Alt-rolagem ou [ ] redimensiona o pincel · role/belisque para navegar"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ — перебор исходных кадров · пробел — самый резкий кадр под кистью · p — результат PMax · r — ластик · Alt-прокрутка или [ ] — размер кисти · прокрутка/жест сведения — навигация"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "↑/↓ 切换源图像 · 空格键选取画笔区域最清晰的图像 · p PMax 结果 · r 擦除 · Alt-滚动或 [ ] 调整画笔大小 · 滚动/捏合以导航"
+          }
+        }
+      }
+    },
     "%1 EV": {
       "comment": "Exposure slider value, in exposure stops.",
       "localizations": {
@@ -17371,71 +17826,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%2 张中的 %1 张"
-          }
-        }
-      }
-    },
-    "%1 — Edited": {
-      "comment": "Window title when the project has unsaved changes. %1 = project name.",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — Bearbeitet"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — Editado"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — Modifié"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — Modificato"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — 編集済み"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — 편집됨"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — Bewerkt"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — Editado"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — Изменено"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1 — 已编辑"
           }
         }
       }
@@ -17761,136 +18151,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "色彩空间："
-          }
-        }
-      }
-    },
-    "Cropped to %1×%2": {
-      "comment": "Sidebar note under the crop controls: the cropped pixel dimensions.",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zugeschnitten auf %1×%2"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recortado a %1×%2"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recadré à %1×%2"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ritagliato a %1×%2"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1×%2 にトリミング"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1×%2(으)로 자름"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bijgesneden tot %1×%2"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cortado para %1×%2"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Кадрировано до %1×%2"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已裁剪为 %1×%2"
-          }
-        }
-      }
-    },
-    "Cropped to %1×%2, %3°": {
-      "comment": "Same, with a rotation angle.",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zugeschnitten auf %1×%2, %3°"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recortado a %1×%2, %3°"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recadré à %1×%2, %3°"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ritagliato a %1×%2, %3°"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1×%2、%3° にトリミング"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1×%2, %3°(으)로 자름"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bijgesneden tot %1×%2, %3°"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cortado para %1×%2, %3°"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Кадрировано до %1×%2, %3°"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已裁剪为 %1×%2，%3°"
           }
         }
       }
@@ -18480,71 +18740,6 @@
         }
       }
     },
-    "Open a stack to begin": {
-      "comment": "Input pane hint with no stack open.",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Öffne einen Stapel, um zu beginnen"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Abre una pila para empezar"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ouvrez une pile pour commencer"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apri una pila per iniziare"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "スタックを開いて始めます"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "시작하려면 스택을 여십시오"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open een stapel om te beginnen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Abra uma pilha para começar"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Откройте стек, чтобы начать"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "打开一个堆栈以开始"
-          }
-        }
-      }
-    },
     "Project": {
       "comment": "Default project file name, without the extension.",
       "localizations": {
@@ -18606,71 +18801,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "项目"
-          }
-        }
-      }
-    },
-    "Retouched Depth": {
-      "comment": "Output pane title while retouching in depth view.",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Retuschierte Tiefe"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Profundidad retocada"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Profondeur retouchée"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Profondità ritoccata"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "レタッチ後の深度"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "리터칭된 깊이"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Geretoucheerde diepte"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Profundidade Retocada"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Отретушированная глубина"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "修饰后的深度"
           }
         }
       }
