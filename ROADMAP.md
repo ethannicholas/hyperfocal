@@ -301,36 +301,7 @@ checklist. Residuals before shipping paid builds (each independently landable):
    every other user-facing string) and still says the notices live "in the
    source distribution", which stops being true once the bundle carries them.
 
-2. **The DirectX redistributables: ARM64 is not on Microsoft's list.**
-   `windeployqt` stages `dxcompiler.dll` + `dxil.dll` (31.6 MB) from
-   `Windows Kits\10\Redist\D3D\<arch>\`; Qt loads them at runtime for its
-   Direct3D 12 backend. They are Microsoft binaries, not covered by our MIT
-   license or by the Qt entry. The attribution work is **done** — `NOTICE.md`
-   entry, the verbatim Microsoft DXC third-party notice bundled in
-   `licenses/DirectXShaderCompiler-ThirdPartyNotices.txt` (LLVM/Clang under
-   NCSA), a `COMPLIANCE.md` section, and a selftest needle so the notice can't
-   silently stop shipping. Two questions remain, and both are the maintainer's
-   call, not an engineering one:
-   - **ARM64 is not covered.** Microsoft's REDIST list
-     (`go.microsoft.com/fwlink/?LinkId=524842`) names `Redist\D3D\x64\` and
-     `Redist\D3D\x86\` `dxcompiler.dll`/`dxil.dll` and **no arm64 entry** —
-     although the SDK installs an arm64 copy and other entries (MBN, ucrt) do
-     list arm/arm64. An ARM64 package built here therefore ships a binary the
-     list does not grant. Options: ship x64 only on Windows (it runs on ARM64
-     under emulation), ask Microsoft to confirm/extend the list, or drop the
-     D3D12 backend on ARM64.
-   - **"May not be redistributed with any Universal Windows apps."** A
-     full-trust MSIX with `Windows.FullTrustApplication` is a packaged *Classic*
-     Windows application rather than a UWP app, which reads as permitted — but
-     that reading should be confirmed before Store submission, since the whole
-     package hinges on it.
-   Note also the SDK terms require end users to agree to terms protecting the
-   Distributable Code at least as much as the SDK agreement. The Store's
-   standard license terms do that; the off-Store zip currently ships with no
-   EULA at all, and `NOTICE.md`/`COMPLIANCE.md` saying "not covered by the MIT
-   grant" may or may not be judged sufficient.
-
-3. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
+2. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
    the payload and stages an MSIX-ready layout — `AppxManifest.xml` from
    `Packaging/windows/AppxManifest.xml.in`, generated logo assets, and a `-Msix`
    switch that runs `makeappx` — but it writes **placeholder identity**, because
