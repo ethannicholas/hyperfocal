@@ -196,6 +196,71 @@
         }
       }
     },
+    "Couldn't align “%@” with the frames around it. Check that the folder holds a single focus stack shot from a steady camera; clearing this frame's checkbox in the Stack list may let the rest fuse.": {
+      "comment": "Fuse-failed alert body; %@ is the file name of the frame that would not align.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "„%@“ ließ sich nicht an den umliegenden Einzelbildern ausrichten. Prüfe, ob der Ordner einen einzigen, mit ruhiger Kamera aufgenommenen Stapel enthält; entfernst du das Häkchen dieses Einzelbilds in der Stapelliste, kann der Rest womöglich fusionieren."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo alinear «%@» con las imágenes vecinas. Comprueba que la carpeta contenga una sola pila tomada con la cámara estable; si desmarcas la casilla de esta imagen en la lista de la pila, quizá el resto pueda fusionarse."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d’aligner « %@ » avec les images voisines. Vérifiez que le dossier contient une seule pile prise avec un appareil stable ; en décochant la case de cette image dans la liste de la pile, le reste pourra peut-être fusionner."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile allineare “%@” con i fotogrammi vicini. Verifica che la cartella contenga una sola pila scattata con una fotocamera stabile; deselezionando la casella di questo fotogramma nell’elenco della pila, il resto potrebbe riuscire a fondersi."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%@」を前後のフレームと位置合わせできませんでした。このフォルダが、カメラを固定して撮影した1つのスタックであることを確認してください。スタックリストでこのフレームのチェックを外すと、残りを合成できる場合があります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "‘%@’을(를) 주변 프레임과 정렬할 수 없습니다. 이 폴더가 카메라를 고정하고 촬영한 하나의 스택인지 확인하세요. 스택 목록에서 이 프레임의 체크를 해제하면 나머지는 합성될 수도 있습니다."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kan ‘%@’ niet uitlijnen met de omliggende opnamen. Controleer of de map één stapel bevat die met een stabiele camera is gemaakt; als je het aankruisvak van deze opname in de stapellijst uitschakelt, kan de rest mogelijk wel worden samengevoegd."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível alinhar “%@” com as imagens vizinhas. Verifique se a pasta contém uma única pilha fotografada com a câmera firme; desmarcar a caixa desta imagem na lista da pilha pode permitir que o restante seja fundido."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось выровнять «%@» с соседними кадрами. Убедитесь, что в папке один стек, снятый с неподвижной камеры; если снять флажок с этого кадра в списке стека, остальные, возможно, удастся объединить."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法将“%@”与前后图像对齐。请确认此文件夹只包含一个用稳定相机拍摄的堆栈；在堆栈列表中取消勾选该图像后，其余图像或许可以合成。"
+          }
+        }
+      }
+    },
     "Download": {
       "comment": "Button that opens the Adobe DNG Converter download page (Windows raw fallback).",
       "localizations": {
@@ -257,6 +322,201 @@
           "stringUnit": {
             "state": "translated",
             "value": "下载"
+          }
+        }
+      }
+    },
+    "Not enough usable frames to fuse — a stack needs at least 2 after bad frames are excluded. Re-check excluded frames in the Stack list to opt them back in.": {
+      "comment": "Fuse-failed alert body: fewer than two frames survived exclusion.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu wenige verwendbare Einzelbilder zum Fusionieren — nach dem Ausschluss fehlerhafter Bilder braucht ein Stapel mindestens 2. Setze das Häkchen ausgeschlossener Einzelbilder in der Stapelliste, um sie wieder einzubeziehen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay suficientes imágenes utilizables para fusionar: tras excluir las defectuosas, una pila necesita al menos 2. Vuelve a marcar las imágenes excluidas en la lista de la pila para reincluirlas."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas assez d’images utilisables pour fusionner — après exclusion des mauvaises images, une pile en nécessite au moins 2. Recochez les images exclues dans la liste de la pile pour les réinclure."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fotogrammi utilizzabili insufficienti per fondere — dopo l’esclusione di quelli difettosi, una pila ne richiede almeno 2. Riseleziona i fotogrammi esclusi nell’elenco della pila per reincluderli."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合成に使えるフレームが足りません。問題のあるフレームを除外した後、スタックには少なくとも2枚が必要です。スタックリストで除外されたフレームに再度チェックを入れると戻せます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "합성에 사용할 수 있는 프레임이 부족합니다. 문제 있는 프레임을 제외한 후 스택에는 최소 2개가 필요합니다. 스택 목록에서 제외된 프레임을 다시 체크하면 다시 포함됩니다."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niet genoeg bruikbare opnamen om samen te voegen — na het uitsluiten van slechte opnamen heeft een stapel er minstens 2 nodig. Vink uitgesloten opnamen in de stapellijst weer aan om ze mee te laten doen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagens utilizáveis insuficientes para fundir — após excluir as ruins, uma pilha precisa de pelo menos 2. Remarque as imagens excluídas na lista da pilha para reincluí-las."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недостаточно пригодных кадров для объединения — после исключения плохих кадров в стеке должно остаться не менее 2. Установите флажки исключённых кадров в списке стека, чтобы вернуть их."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可用于合成的图像不足 — 排除有问题的图像后，堆栈至少需要 2 张。在堆栈列表中重新勾选被排除的图像即可重新纳入。"
+          }
+        }
+      }
+    },
+    "The frames couldn't be aligned with each other. Check that the folder holds a single focus stack shot from a steady camera — frames from different scenes or camera positions can't line up.": {
+      "comment": "Fuse-failed alert body: no pair of frames registered, so no single frame is to blame.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Einzelbilder ließen sich nicht aneinander ausrichten. Prüfe, ob der Ordner einen einzigen, mit ruhiger Kamera aufgenommenen Stapel enthält — Bilder aus verschiedenen Szenen oder von verschiedenen Kamerapositionen lassen sich nicht ausrichten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudieron alinear las imágenes entre sí. Comprueba que la carpeta contenga una sola pila tomada con la cámara estable: las imágenes de escenas o posiciones de cámara distintas no pueden alinearse."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d’aligner les images entre elles. Vérifiez que le dossier contient une seule pile prise avec un appareil stable — des images de scènes ou de positions différentes ne peuvent pas s’aligner."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile allineare i fotogrammi tra loro. Verifica che la cartella contenga una sola pila scattata con una fotocamera stabile — fotogrammi di scene o posizioni diverse non possono allinearsi."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フレーム同士を位置合わせできませんでした。このフォルダが、カメラを固定して撮影した1つのスタックであることを確認してください。別のシーンや別のカメラ位置のフレームは位置合わせできません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프레임들을 서로 정렬할 수 없습니다. 이 폴더가 카메라를 고정하고 촬영한 하나의 스택인지 확인하세요. 다른 장면이나 다른 카메라 위치에서 찍은 프레임은 정렬할 수 없습니다."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De opnamen konden niet op elkaar worden uitgelijnd. Controleer of de map één stapel bevat die met een stabiele camera is gemaakt — opnamen van verschillende scènes of cameraposities kunnen niet worden uitgelijnd."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível alinhar as imagens entre si. Verifique se a pasta contém uma única pilha fotografada com a câmera firme — imagens de cenas ou posições de câmera diferentes não podem ser alinhadas."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось выровнять кадры друг относительно друга. Убедитесь, что в папке один стек, снятый с неподвижной камеры, — кадры из разных сцен или с разных позиций камеры выровнять нельзя."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图像之间无法对齐。请确认此文件夹只包含一个用稳定相机拍摄的堆栈 — 来自不同场景或不同机位的图像无法对齐。"
+          }
+        }
+      }
+    },
+    "The frames differ in size (%lld×%lld vs %lld×%lld) — every frame in a stack must have the same resolution. This folder may mix images from different sources.": {
+      "comment": "Fuse-failed alert body; the numbers are two frames' pixel dimensions.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Einzelbilder sind unterschiedlich groß (%lld×%lld vs. %lld×%lld) — alle Bilder eines Stapels müssen dieselbe Auflösung haben. Möglicherweise mischt dieser Ordner Bilder aus verschiedenen Quellen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las imágenes tienen tamaños distintos (%lld×%lld frente a %lld×%lld): todas las imágenes de una pila deben tener la misma resolución. Puede que esta carpeta mezcle imágenes de distintas fuentes."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les images n’ont pas la même taille (%lld×%lld contre %lld×%lld) — toutes les images d’une pile doivent avoir la même résolution. Ce dossier mélange peut-être des images de sources différentes."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I fotogrammi hanno dimensioni diverse (%lld×%lld contro %lld×%lld) — tutti i fotogrammi di una pila devono avere la stessa risoluzione. Questa cartella potrebbe mescolare immagini di origini diverse."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フレームのサイズが一致しません（%lld×%lld と %lld×%lld）。スタック内のすべてのフレームは同じ解像度である必要があります。このフォルダには異なる出所の画像が混在している可能性があります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프레임 크기가 서로 다릅니다(%lld×%lld 대 %lld×%lld). 스택의 모든 프레임은 해상도가 같아야 합니다. 이 폴더에 서로 다른 출처의 이미지가 섞여 있을 수 있습니다."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De opnamen verschillen in grootte (%lld×%lld vs. %lld×%lld) — alle opnamen in een stapel moeten dezelfde resolutie hebben. Mogelijk bevat deze map afbeeldingen uit verschillende bronnen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As imagens têm tamanhos diferentes (%lld×%lld vs. %lld×%lld) — todas as imagens de uma pilha devem ter a mesma resolução. Esta pasta pode misturar imagens de fontes diferentes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кадры различаются по размеру (%lld×%lld против %lld×%lld) — все кадры стека должны иметь одинаковое разрешение. Возможно, в папке смешаны изображения из разных источников."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图像尺寸不一致（%lld×%lld 与 %lld×%lld）— 堆栈中的所有图像必须具有相同分辨率。此文件夹可能混杂了来自不同来源的图像。"
           }
         }
       }

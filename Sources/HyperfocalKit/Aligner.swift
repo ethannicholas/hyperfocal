@@ -14,7 +14,11 @@ import COpenCVRegister  // macOS Phase 1.5 A/B: OpenCV registration alongside Vi
 #endif
 
 public enum AlignError: Error, CustomStringConvertible {
-    case registrationFailed(Int)
+    /// `frameName` is the file name of the frame where alignment broke down —
+    /// the same name the Stack list shows — when one frame is identifiable;
+    /// nil when no pair in the stack aligned at all, where naming one frame
+    /// would misdirect the user toward excluding it.
+    case registrationFailed(frameName: String?)
     case tooFewGoodFrames(good: Int)
     /// Two frames reached the registrar at different sizes. Data, not a
     /// programmer error: a folder of mixed-resolution images is something a
@@ -25,14 +29,27 @@ public enum AlignError: Error, CustomStringConvertible {
     /// ride along because they are the only clue to *why* they disagreed.
     case frameSizeMismatch(fixed: (w: Int, h: Int), moving: (w: Int, h: Int))
 
+    /// This text is the body of the app's "Fuse failed" alert (and the CLI's
+    /// error line) — it must say what to do next, in the user's language.
     public var description: String {
         switch self {
-        case .registrationFailed(let i): return "registration failed for frame pair at index \(i)"
-        case .tooFewGoodFrames(let good):
-            return "too few usable frames after excluding bad ones (\(good) left; need 2)"
+        case .registrationFailed(let name?):
+            return String(format: localizedString(
+                "Couldn't align “%@” with the frames around it. Check that the folder holds a single focus stack shot from a steady camera; clearing this frame's checkbox in the Stack list may let the rest fuse.",
+                comment: "%@ is a frame's file name"), name)
+        case .registrationFailed(nil):
+            return localizedString(
+                "The frames couldn't be aligned with each other. Check that the folder holds a single focus stack shot from a steady camera — frames from different scenes or camera positions can't line up.",
+                comment: "")
+        case .tooFewGoodFrames:
+            return localizedString(
+                "Not enough usable frames to fuse — a stack needs at least 2 after bad frames are excluded. Re-check excluded frames in the Stack list to opt them back in.",
+                comment: "")
         case .frameSizeMismatch(let fixed, let moving):
-            return "frames differ in size (\(fixed.w)×\(fixed.h) vs \(moving.w)×\(moving.h)); "
-                 + "registration needs one resolution across the stack"
+            return String(format: localizedString(
+                "The frames differ in size (%lld×%lld vs %lld×%lld) — every frame in a stack must have the same resolution. This folder may mix images from different sources.",
+                comment: "fixed then moving frame pixel dimensions"),
+                fixed.w, fixed.h, moving.w, moving.h)
         }
     }
 }
@@ -102,7 +119,8 @@ public enum Aligner {
         if let failure = output.issues.first(where: {
             if case .registrationFailed = $0.kind { return true } else { return false }
         }) {
-            throw AlignError.registrationFailed(failure.index)
+            throw AlignError.registrationFailed(
+                frameName: urls[failure.index].lastPathComponent)
         }
         return output.transforms
     }
@@ -197,7 +215,11 @@ public enum Aligner {
             let stats = grayStats(gradient, decodeFactor: rg.decodeFactor)
             // Per-frame registration prep (SIFT detection on the OpenCV
             // path) happens here, once — pairs only match.
-            let regFrame = try prepareForRegistration(gradient, decodeFactor: rg.decodeFactor)
+            // Registration prep (SIFT detection off Apple) fails per-frame;
+            // the helper can't name the frame, so rethrow with the name here.
+            guard let regFrame = try? prepareForRegistration(gradient, decodeFactor: rg.decodeFactor) else {
+                throw AlignError.registrationFailed(frameName: urls[i].lastPathComponent)
+            }
             log?("decoded frame \(i)")
             bump(frameIndex: i, frame: preview(of: g), pass: .decode)
             return (gradient, stats, lumMean, regFrame)
@@ -277,7 +299,7 @@ public enum Aligner {
             if case .ok(_, let r) = p, r.isFinite { return r } else { return nil }
         }
         guard !finiteResiduals.isEmpty else {
-            throw AlignError.registrationFailed(kept[1])  // every pair failed
+            throw AlignError.registrationFailed(frameName: nil)  // every pair failed
         }
         let medianResidual = max(finiteResiduals.sorted()[finiteResiduals.count / 2], 0.25)
         let poorThreshold = max(3 * medianResidual, 4.0)  // absolute floor: byte units
@@ -308,7 +330,7 @@ public enum Aligner {
             if alignBad.contains(j) || alignBad.contains(j + 1) { continue }
             if kept.count == 2 {
                 // A 2-frame stack with its only pair bad: nothing to fall back on.
-                if case .failed = pairs[j] { throw AlignError.registrationFailed(kept[1]) }
+                if case .failed = pairs[j] { throw AlignError.registrationFailed(frameName: nil) }
                 log?("warning: high alignment residual between the only two frames")
                 continue
             }
@@ -326,7 +348,8 @@ public enum Aligner {
                     alignBad.insert(j)
                     bridgeCache[j - 1] = h
                 } else {
-                    throw AlignError.registrationFailed(kept[j + 1])
+                    throw AlignError.registrationFailed(
+                        frameName: urls[kept[j + 1]].lastPathComponent)
                 }
             } else {
                 log?("warning: high alignment residual between frames \(kept[j]) and \(kept[j + 1]) — possible scene change (not excluding either)")
@@ -370,7 +393,8 @@ public enum Aligner {
                     h = try register(moving: regFrames[b], fixed: regFrames[a])
                     log?("bridged frame \(b) → \(a) across excluded frame(s)")
                 } catch {
-                    throw AlignError.registrationFailed(b)
+                    throw AlignError.registrationFailed(
+                        frameName: urls[b].lastPathComponent)
                 }
             }
             chain.append(chain[s] * h)
@@ -654,7 +678,7 @@ public enum Aligner {
         let handler = VNImageRequestHandler(cgImage: fixed, options: [:])
         try handler.perform([request])
         guard let obs = request.results?.first else {
-            throw AlignError.registrationFailed(0)
+            throw AlignError.registrationFailed(frameName: nil)
         }
         return convention(obs.warpTransform, height: Float(fixed.height))
     }
@@ -700,7 +724,7 @@ public enum Aligner {
                              f.baseAddress, m.baseAddress, &h)
             }
         }
-        guard status == hfr_ok else { throw AlignError.registrationFailed(0) }
+        guard status == hfr_ok else { throw AlignError.registrationFailed(frameName: nil) }
         let hs = simd_float3x3(rows: [
             SIMD3<Float>(h[0], h[1], h[2]),
             SIMD3<Float>(h[3], h[4], h[5]),
@@ -804,7 +828,7 @@ public enum Aligner {
             let h = small.pixels.withUnsafeBufferPointer {
                 hf_sift_detect(CInt(small.width), CInt(small.height), $0.baseAddress)
             }
-            guard let h else { throw AlignError.registrationFailed(0) }
+            guard let h else { throw AlignError.registrationFailed(frameName: nil) }
             handle = h
             width = gray.width
             height = gray.height
@@ -824,7 +848,7 @@ public enum Aligner {
         }
         var h = [Float](repeating: 0, count: 9)
         guard hf_sift_match(fixed.handle, moving.handle, &h) == hf_ok else {
-            throw AlignError.registrationFailed(0)
+            throw AlignError.registrationFailed(frameName: nil)
         }
         // OpenCV already works top-left / y-down, matching our convention — no
         // flip (unlike Vision's bottom-left warp).

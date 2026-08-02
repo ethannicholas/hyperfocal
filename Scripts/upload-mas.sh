@@ -79,8 +79,8 @@ If the UI changed since the current listing's media, regenerate the App
 Store screenshots / app-preview video before updating the listing:
 
     Scripts/store-media.py --frames <stack-dir> --out <dir> \
-        --exposure 0.5 --shadows 20 --video-zoom 0.18 \
-        --shot-center <x,y> --cursor <x,y>
+        --exposure 1.0 --highlights 40 --shadows 35 --video-zoom 0.18 \
+        --shot-center 2522,945 --cursor 2638,1040
 
 That captures every store language (one app session each — plan on a few
 minutes per language of hands-off screen time; --lang <tag> restricts it

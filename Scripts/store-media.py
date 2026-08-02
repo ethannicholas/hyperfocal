@@ -299,6 +299,7 @@ def main():
     p.add_argument("--screenshot", action="store_true",
                    help="capture only the screenshot")
     p.add_argument("--exposure", type=float, default=0.0, help="EV")
+    p.add_argument("--highlights", type=float, default=0.0)
     p.add_argument("--shadows", type=float, default=0.0)
     p.add_argument("--video-zoom", type=float, default=0.16,
                    help="viewport scale during the fusion video")
@@ -384,6 +385,9 @@ def capture_language(lang, args, do_video, do_shot, binary, mouse, frames,
         if args.exposure:
             app.require("set-slider", id="tone.slider.exposure",
                         value=args.exposure)
+        if args.highlights:
+            app.require("set-slider", id="tone.slider.highlights",
+                        value=args.highlights)
         if args.shadows:
             app.require("set-slider", id="tone.slider.shadows",
                         value=args.shadows)
