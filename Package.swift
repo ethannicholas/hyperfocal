@@ -406,9 +406,10 @@ if wgpuEnabled {
     #else
     // HYPERFOCAL_WGPU_STATIC=1 links the release archive's libwgpu_native.a
     // instead of the dylib — no runtime library to deploy beside the
-    // binary. Verified on macOS (parity suite, no DYLD_LIBRARY_PATH);
-    // -lwgpu_native would still pick the dylib when both files sit in
-    // lib/, hence the explicit archive path.
+    // binary. Verified on macOS and Linux (parity suite, no
+    // DYLD_LIBRARY_PATH/LD_LIBRARY_PATH); -lwgpu_native would still pick
+    // the dylib when both files sit in lib/, hence the explicit archive
+    // path.
     if wgpuStatic {
         kitLinkerSettings.append(.unsafeFlags(["\(wgpuRoot)/lib/libwgpu_native.a"]))
     } else {
