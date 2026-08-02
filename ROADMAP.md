@@ -77,86 +77,38 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
     - No trackpad two-finger pan off macOS (trackpad scroll arrives as wheel
       angle deltas, indistinguishable from a mouse; pan via left-drag, or
       middle-/Ctrl-drag in retouch mode).
-  - **Qt↔native presentation parity: fix the recorded divergences.** The
-    side-by-side divergence audit ran 2026-08-01 (full read of
-    `ContentView.swift`/`HyperfocalAppMain.swift`/`SettingsView.swift` against
-    `Main.qml`/`Shell.cpp` + the overlay QML, plus a screenshot comparison of
-    both shells fused on the same synth stack). The native shell is the source
-    of truth. Divergences found, roughly by visibility:
-    - **Zoom bar** (`Main.qml` bottom row vs `ZoomBar`,
-      `ContentView.swift:864`): Qt's three controls are `ToolButton`s, which
-      Fusion renders as large filled blocks — native is a compact flat strip
-      (borderless glyphs on `.bar` material with a hairline above). Restyle
-      flat + compact on a `theme.headerBar` strip with a 1px top rule; pin the
-      percent button's label width (native fixes 60pt, monospaced digits) so
-      the −/+ buttons stop shifting as the label changes. Zoom-step parity:
-      buttons and Ctrl+=/Ctrl+− must use ×1.5 (`AppModel.zoomIn`), Qt uses
-      ×1.25. The zoom menu is missing the 6.25% and 12.5% levels
-      (`ViewportState.fixedLevels` has seven entries, Qt lists five).
-    - **Export card is missing two buttons**: native always shows "Export
-      Rocking Animation" (disabled until `canAnimate`) and adds "Export All
-      Fused…" once `fusedStackCount > 1`; Qt has both actions in the File menu
-      only. Add the buttons with the native enable rules and tooltips (strings
-      are already in the catalog).
-    - **"Fuse N Stacks" button** (`fuseEnabledButton`): visible when the
-      project has >1 stacks; native shows it only when >1 stacks are
-      *enabled*. And it always renders the plural — "Fuse 1 Stacks" — where
-      native has a singular form ("Fuse 1 Stack"; new catalog entry, all ten
-      languages).
-    - **Result/Depth toggle never disables**: native greys the segmented
-      picker while `depthPreview == nil` (e.g. PMax-only results); Qt's two
-      header buttons stay clickable. Needs a bridge getter if none exists.
-    - **Retouch sidebar**: the shortcut-hint caption ("↑/↓ cycle source
-      frames · space picks the sharpest…", `RetouchControls`) is absent in
-      Qt; "Revert All" is a full-width button where native right-aligns a
-      small destructive one; the depth-mode pane title drops the "— drag to
-      paint from source" suffix ("Retouched Depth" vs the native string).
-    - **Stack card**: the "N of M" count renders just right of the title
-      (subtitle slot) — native puts it at the right edge beside All/None.
-      Frame rows have no selection highlight (native's List row background;
-      Qt only bolds the name), the filename isn't monospaced (native: caption
-      monospaced), and there are no row separators. Tree rows have no
-      placeholder glyph while the thumbnail decodes (the row visibly reflows
-      when it lands; native holds the 60×42 cell with `square.stack.3d.up`),
-      and thumbnails lack native's 3pt corner rounding + hairline border.
-    - **Empty stack card**: left-aligned hint + full-width button; native
-      centers the hint and a natural-width "Open Folder…" in a ~120pt block.
-    - **Input pane empty hint**: "Open a stack to begin" vs native's "Start a
-      new project to begin" — same state, different sentence. Adopt the
-      native one and drop the Qt-only catalog key.
-    - **Sidebar is fixed at 280px** (`Layout.maximumWidth`); native is a
-      draggable pane (280–360, hand-rolled splitter in `ContentView.swift`)
-      whose width persists in settings as `sidebarWidth` — if the Qt shell
-      gains a splitter it should persist through the same key.
-    - **Export card is pinned to the window bottom** by a fillHeight spacer;
-      native's Export flows directly after Edit.
-    - **Settings dialog**: a flat run of five checkboxes; native groups them
-      (Loading / Fusion / Performance) with an explanatory caption under
-      every toggle, including the "No Metal device…" caption when GPU is
-      unavailable. Port the grouping + captions (captions need Qt-side
-      catalog wiring).
-    - **No View-menu zoom items**: Qt binds the shortcuts but has no menu
-      entries; native's View menu lists Zoom In / Zoom Out / Zoom to Fit.
-    - **No QML accessibility**: `Accessible.*` appears nowhere in the shell,
-      while every native control carries an identifier + label (the dual-UI
-      invariant asks for matching hooks on both sides). Start with the
-      controls the selftest can't reach by objectName: zoom controls, mode
-      toggle, sliders, stack rows.
-    - **Qt-only extras to reconcile** (port to native or drop): the
-      "Cropped to W×H[, θ°]" caption in the Edit card; File > "Export All
-      Fused…" as a menu item and the export item's label swapping to "Export
-      Depth Map" in depth mode (the native menu always reads "Export
-      Result"); the title-bar "— Edited" dirty marker (native shows no
-      unsaved-work cue at all — consider `isDocumentEdited` instead of
-      dropping).
+  - **Qt↔native presentation parity: remaining reconcile items.** The
+    2026-08-01 audit's divergence list was closed 2026-08-01 (git history:
+    zoom bar restyle + ×1.5 steps + full level list, export-card buttons,
+    fuse-button rules, depth-toggle disable, retouch sidebar, stack-card row
+    anatomy + thumbnail placeholder/rounding, empty states, draggable
+    sidebar splitter persisting `sidebarWidth`, settings grouping + captions,
+    View-menu zoom items, first QML `Accessible.*` hooks — plus the
+    stack-thumbnail capacity bug the work surfaced: the shell's fixed 96×96
+    copy buffer silently failed once `stackThumbnailMaxSide` grew to 192, so
+    Qt stack rows had lost their thumbnails entirely; `hf_stack_thumbnail`
+    now reports dimensions on a too-small buffer and the shell resizes and
+    retries). The Qt-only extras were reconciled the same day, by decision:
+    Cropped-to caption and title-bar dirty marker dropped, Export All Fused
+    is a sidebar button (no menu item) on both sides, and the native File
+    menu's export item now swaps to "Export Depth Map" in depth mode like
+    the Qt shell's; the Qt controls all carry objectNames mirroring the
+    native accessibility-identifier vocabulary plus `Accessible.*` where
+    text doesn't self-name. Still open:
+    - Residual audit scope: dialogs/message boxes were compared at code level
+      only, and only the dark scheme was walked visually.
+    - Possibly-duplicated shortcuts: undo/redo are bound both as menu
+      `Action.shortcut` and as loose window `Shortcut` items in `Main.qml` —
+      on the QML menubar (Windows/Linux) duplicate registrations resolve as
+      ambiguous and may fire neither; harmless on macOS's native menubar.
+      Verify on Windows/Linux and drop the loose pair if so (the zoom
+      shortcuts already live only on the View-menu Actions for this reason).
     - Checked and **not** divergent (don't re-walk): slider
       formatting/scales/signs, info-tip delay + icon scoping, algorithm-radio
       layout, crop overlay geometry and cursors, retouch overlay events and
       brush circle, progress overlay content (incl. the batch prefix),
       "(aligned)" title suffix, section collapse behavior, keyboard
-      shortcuts, tone slider set. Residual scope: dialogs/message boxes were
-      compared at code level only, and only the dark scheme was walked
-      visually.
+      shortcuts, tone slider set.
     Method that worked: `hyperfocal-cli synth` a stack into a frames-only
     directory (keep `ground_truth.tif` out — it ingests as a bad extra
     frame), then `hyperfocal-qt --selftest <frames> <out.tif> <shot.png>`
@@ -164,9 +116,17 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
     side launch with `HYPERFOCAL_UITEST=1 HYPERFOCAL_LOAD_STACK=<container
     path>` (fixtures must live inside the sandbox container) and trigger
     `{"action":"fuse"}` over the uitest command channel, then
-    `screencapture` the window. Worth considering whether any part of this
-    can become a gate rather than a one-off audit — the formatting drift in
-    particular is comparable data on both sides.
+    `screencapture` the window. Two traps the close-out hit: the selftest's
+    zoom-cycle check compares whole-window grabs, so anything that repaints
+    between its two 8× settles fails it — including the macOS native style
+    desaturating every accent-colored control when the window deactivates
+    (a stray click away from the window mid-run reads as "pixels differ
+    after zoom cycle"); and the macOS native style rejects `contentItem`
+    customization outright (warnings + fallback), so shared QML must style
+    controls via text/font/palette, not custom content items. Worth
+    considering whether any part of this can become a gate rather than a
+    one-off audit — the formatting drift in particular is comparable data
+    on both sides.
 
 ## Fusion quality on real stacks
 
