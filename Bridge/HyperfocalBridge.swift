@@ -1631,9 +1631,13 @@ public func hf_stack_thumbnail(_ index: Int32, _ out: UnsafeMutablePointer<UInt8
               let image = model.stackThumbnails[model.stacks[Int(index)].id],
               let out, let w, let h else { return 0 }
         let iw = image.width, ih = image.height
-        guard Int(capacity) >= iw * ih * 4 else { return 0 }
+        // Dimensions are reported even when the buffer is too small, so
+        // the caller can size to fit and retry — a silently-failing
+        // capacity check is how the Qt shell lost its thumbnails when
+        // the thumbnail edge grew past its fixed buffer.
         w.pointee = Int32(iw)
         h.pointee = Int32(ih)
+        guard Int(capacity) >= iw * ih * 4 else { return 0 }
         #if canImport(CoreGraphics)
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: out, width: iw, height: ih,

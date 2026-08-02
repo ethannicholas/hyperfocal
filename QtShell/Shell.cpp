@@ -631,12 +631,26 @@ QVariantList Shell::buildStacks() const {
         if (thumbToken != 0) {
             QMutexLocker lock(&thumbCacheMutex);
             if (!thumbCache.contains(thumbToken)) {
-                static QByteArray buffer(96 * 96 * 4, Qt::Uninitialized);
+                // Sized by asking, not by a constant: the bridge reports
+                // the thumbnail's dimensions even when the buffer is too
+                // small, so a bigger model-side thumbnail (AppModel.
+                // stackThumbnailMaxSide) grows the buffer instead of
+                // silently failing forever — a fixed 96×96 buffer here is
+                // exactly how the shell lost its thumbnails when the edge
+                // doubled to 192.
+                static QByteArray buffer(192 * 192 * 4, Qt::Uninitialized);
                 int32_t tw = 0, th = 0;
-                if (hf_stack_thumbnail(i,
-                                       reinterpret_cast<uint8_t *>(buffer.data()),
-                                       int32_t(buffer.size()), &tw, &th)
-                    && tw > 0 && th > 0) {
+                bool ok = hf_stack_thumbnail(i,
+                                             reinterpret_cast<uint8_t *>(buffer.data()),
+                                             int32_t(buffer.size()), &tw, &th) != 0;
+                if (!ok && tw > 0 && th > 0
+                        && buffer.size() < qsizetype(tw) * th * 4) {
+                    buffer.resize(qsizetype(tw) * th * 4);
+                    ok = hf_stack_thumbnail(i,
+                                            reinterpret_cast<uint8_t *>(buffer.data()),
+                                            int32_t(buffer.size()), &tw, &th) != 0;
+                }
+                if (ok && tw > 0 && th > 0) {
                     thumbCache.insert(thumbToken,
                         QImage(reinterpret_cast<const uchar *>(buffer.constData()),
                                tw, th, tw * 4, QImage::Format_RGBA8888).copy());

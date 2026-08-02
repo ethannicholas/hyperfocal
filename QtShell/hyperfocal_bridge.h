@@ -287,7 +287,8 @@ int hf_stack_expanded(int index);
 // kicks the background generation when none exists yet, so polling it
 // from the stacks refresh is the request path. hf_stack_thumbnail copies
 // RGBA8 rows into `out` (capacity in bytes) and reports the dimensions;
-// returns 1 on success, 0 when absent or the buffer is too small.
+// returns 1 on success, 0 when absent or the buffer is too small — in the
+// too-small case w/h are still written, so size to w*h*4 and retry.
 long long hf_stack_thumbnail_token(int index);
 int hf_stack_thumbnail(int index, uint8_t *out, int32_t capacity,
                        int32_t *w, int32_t *h);
