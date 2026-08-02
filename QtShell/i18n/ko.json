@@ -267,6 +267,7 @@
 "The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw.":"파이프라인은 Display P3에서 작동합니다. sRGB는 공유에 안전한 기본값이고, Display P3는 전체 작업 색역을 유지하며, ProPhoto는 이후의 본격적인 편집에 적합합니다. DNG는 항상 전체 P3 색역을 선형 raw로 담습니다.",
 "The selected frames are written to this folder, aligned to the fused canvas.":"선택한 프레임이 합성 캔버스에 정렬되어 이 폴더에 기록됩니다.",
 "These frames carry no capture times, so they fuse in filename order. Make sure filenames follow focus order.":"이 프레임들에는 촬영 시각이 없어 파일 이름 순으로 합성됩니다. 파일 이름이 초점 순서를 따르는지 확인하세요.",
+"Third-Party Notices":"서드파티 고지",
 "This image cannot be previewed":"이 이미지는 미리 볼 수 없습니다",
 "Tone":"톤",
 "Tone Adjustment":"톤 조절",

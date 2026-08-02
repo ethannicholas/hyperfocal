@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIX manifest template for the Windows package. Scripts/package-windows.ps1
+  substitutes the @TOKENS@ and writes the result into the staged layout, so
+  `makeappx pack` (or the script's -Msix switch) needs nothing else.
+
+  Identity/Publisher come from the Microsoft Store reservation and must match
+  the signing certificate's subject exactly; the script leaves obvious
+  placeholders when they are not supplied, which Store submission rejects
+  rather than silently accepting.
+
+  Full trust (runFullTrust) is required: Hyperfocal reads and writes user-chosen
+  folders of camera raw files and shells out to the Adobe DNG Converter when one
+  is installed. There is no sandbox on Windows — see CLAUDE.md.
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap rescap">
+
+  <Identity Name="@MSIX_IDENTITY@"
+            Publisher="@MSIX_PUBLISHER@"
+            Version="@MSIX_VERSION@"
+            ProcessorArchitecture="@MSIX_ARCH@" />
+
+  <Properties>
+    <DisplayName>Hyperfocal</DisplayName>
+    <PublisherDisplayName>@MSIX_PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Description>Focus stacking for photographers.</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop"
+                        MinVersion="10.0.19041.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-US" />
+    <Resource Language="de" />
+    <Resource Language="es" />
+    <Resource Language="fr" />
+    <Resource Language="it" />
+    <Resource Language="ja" />
+    <Resource Language="ko" />
+    <Resource Language="nl" />
+    <Resource Language="pt-BR" />
+    <Resource Language="ru" />
+    <Resource Language="zh-Hans" />
+  </Resources>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+  <Applications>
+    <Application Id="Hyperfocal"
+                 Executable="hyperfocal-qt.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+          DisplayName="Hyperfocal"
+          Description="Focus stacking for photographers."
+          BackgroundColor="transparent"
+          Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="hyperfocalproject">
+            <uap:DisplayName>Hyperfocal Project</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.hyperfocal</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

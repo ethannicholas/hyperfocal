@@ -165,6 +165,14 @@ swift build -c release
 QtShell\build.ps1 -Run        # build and launch the desktop app
 ```
 
+To produce a redistributable build — the app plus every Qt, Swift and imaging
+DLL it needs, the third-party notices and license texts, and an MSIX-ready
+layout:
+
+```powershell
+Scripts\package-windows.ps1   # -> dist\Hyperfocal-<version>-<arch>\ and .zip
+```
+
 **High-Efficiency NEFs (and other undecodable raws).** LibRaw can't decode
 Nikon High-Efficiency (HE/HE\*) NEFs or cameras newer than itself. When
 Hyperfocal hits one, it transcodes it to a cached DNG via the free

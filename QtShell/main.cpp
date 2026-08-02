@@ -97,6 +97,31 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
     auto *shell = engine->singletonInstance<Shell *>("Hyperfocal", "Shell");
     if (!shell) { QCoreApplication::exit(3); return; }
 
+    // Help > Third-Party Notices must have something to show. The notices and
+    // license texts reach the binary through a CMake glob over ../licenses,
+    // which is exactly the sort of wiring that breaks silently: the menu item
+    // stays, the dialog opens, and it is simply empty. Assert on content, not
+    // on the files existing next to the source tree.
+    {
+        const QString notices = shell->noticesText();
+        struct { const char *what; QLatin1String needle; } required[] = {
+            {"NOTICE.md", QLatin1String("Adobe DNG SDK")},
+            {"NOTICE.md (Qt/LGPL entry)", QLatin1String("LGPL-3.0")},
+            {"licenses/LGPL-3.0.txt", QLatin1String("GNU LESSER GENERAL PUBLIC LICENSE")},
+            {"licenses/Apache-2.0.txt", QLatin1String("Apache License")},
+            {"licenses/CDDL-1.0.txt", QLatin1String("COMMON DEVELOPMENT AND DISTRIBUTION LICENSE")},
+        };
+        for (const auto &req : required) {
+            if (!notices.contains(req.needle)) {
+                qWarning() << "selftest notices: missing" << req.what
+                           << "- expected to find" << req.needle.data()
+                           << "in the" << notices.size() << "bundled characters";
+                QCoreApplication::exit(20);
+                return;
+            }
+        }
+    }
+
     if (!shell->openStack(QUrl::fromLocalFile(state->stackDir))) {
         QCoreApplication::exit(4);
         return;
@@ -731,6 +756,19 @@ int main(int argc, char *argv[]) {
                 QCoreApplication::exit(3);
             });
         }
+    } else if (args.size() >= 2 && !args[1].startsWith(QLatin1Char('-'))) {
+        // A path in argv: double-clicking a .hyperfocal project (the file
+        // association the MSIX manifest declares), dropping a folder of
+        // frames on the executable, or a Linux desktop entry's %f all
+        // arrive this way. The Mac app has opened Finder double-clicks and
+        // Dock drops since it shipped, so this closes a divergence rather
+        // than adding a feature. openStack dispatches on the extension —
+        // the same call the Open Project dialog makes.
+        const QString path = args[1];
+        QTimer::singleShot(0, &engine, [&engine, path] {
+            auto *shell = engine.singletonInstance<Shell *>("Hyperfocal", "Shell");
+            if (shell) { shell->openStack(QUrl::fromLocalFile(path)); }
+        });
     }
     return app.exec();
 }

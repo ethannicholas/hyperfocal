@@ -60,6 +60,16 @@ targets:
       # through String(localized:)/NSLocalizedString — see AppCore/
       # Localization.swift for the enum displayName seam.
       - Resources/Localizable.xcstrings
+      # Third-party notices + the standard license texts, inside the bundle so
+      # an installed app carries them without the source tree (the licenses
+      # require it of a binary distribution, and Help > Third-Party Notices
+      # reads them from here — see NoticesWindow.swift). The Windows package
+      # stages the same two paths; see Scripts/package-windows.ps1.
+      - path: ../NOTICE.md
+        buildPhase: resources
+      - path: ../licenses
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: HyperfocalKit
         product: HyperfocalKit

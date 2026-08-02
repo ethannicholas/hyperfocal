@@ -267,6 +267,7 @@
 "The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw.":"De pijplijn werkt in Display P3. sRGB is de veilige standaard om te delen; Display P3 behoudt het volledige werkgamma; ProPhoto past bij verdere zware bewerking. DNG draagt altijd het volledige P3-gamma als lineaire raw.",
 "The selected frames are written to this folder, aligned to the fused canvas.":"De geselecteerde opnamen worden naar deze map geschreven, uitgelijnd op het samengevoegde canvas.",
 "These frames carry no capture times, so they fuse in filename order. Make sure filenames follow focus order.":"Deze opnamen hebben geen opnametijden en worden dus in naamvolgorde samengevoegd. Zorg dat de bestandsnamen de scherpstelvolgorde volgen.",
+"Third-Party Notices":"Kennisgevingen van derden",
 "This image cannot be previewed":"Kan geen voorbeeld van deze afbeelding tonen",
 "Tone":"Tinten",
 "Tone Adjustment":"Tintaanpassing",

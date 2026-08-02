@@ -10,4 +10,7 @@ __pycache__/
 xcuserdata
 Hyperfocal.xcodeproj
 .DS_Store
+# QtShell/build is the dev loop's tree; build-release is the one
+# Scripts/package-windows.ps1 configures (release bridge, never clobbering it).
 QtShell/build
+QtShell/build-release

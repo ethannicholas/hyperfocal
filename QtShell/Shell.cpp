@@ -8,6 +8,8 @@
 #include <QComboBox>
 #include <QCursor>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QHash>
@@ -969,6 +971,29 @@ double Shell::sidebarWidth() const { return hf_sidebar_width(); }
 void Shell::setSidebarWidth(double width) { hf_set_sidebar_width(width); }
 
 QString Shell::uiString(const QString &key) const { return bridgeUIString(key); }
+
+QString Shell::noticesText() const {
+    QString out;
+    QFile notice(QStringLiteral(":/notices/NOTICE.md"));
+    if (notice.open(QIODevice::ReadOnly)) {
+        out = QString::fromUtf8(notice.readAll());
+    }
+    // The standard license texts (LGPL-3.0, GPL-3.0, Apache-2.0, CDDL-1.0)
+    // follow NOTICE.md, each under its filename. They are reproduced
+    // verbatim by license requirement, so they are never translated and
+    // never reflowed.
+    const QDir dir(QStringLiteral(":/notices/licenses"));
+    const QStringList names = dir.entryList(QDir::Files, QDir::Name);
+    for (const QString &name : names) {
+        QFile file(dir.filePath(name));
+        if (!file.open(QIODevice::ReadOnly)) { continue; }
+        // i18n-exempt: a rule and a filename, no prose to translate.
+        out += QStringLiteral("\n\n----------------------------------------\n%1\n"
+                              "----------------------------------------\n\n").arg(name);
+        out += QString::fromUtf8(file.readAll());
+    }
+    return out;
+}
 
 int Shell::infoTipDelayMs() const { return hf_info_tip_delay_ms(); }
 

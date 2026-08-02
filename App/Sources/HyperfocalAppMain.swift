@@ -238,6 +238,9 @@ struct HyperfocalApp: App {
                         URL(string: "https://ethannicholas.com/hyperfocal/tutorial.html")!)
                 }
                 .keyboardShortcut("?", modifiers: .command)
+                // The bundled NOTICE.md + license texts (Resources, via
+                // project.yml). The Qt shell carries the same menu item.
+                Button(UIStrings.thirdPartyNotices) { NoticesWindow.show() }
             }
         }
 

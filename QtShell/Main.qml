@@ -276,6 +276,15 @@ ApplicationWindow {
                     "https://ethannicholas.com/hyperfocal/tutorial.html")
             }
             Action {
+                // The notices and license texts also ship as files beside
+                // the executable (Scripts/package-windows.ps1), which is what
+                // the LGPL actually requires; this is the discoverable copy,
+                // and it works from a Store install where the package
+                // directory is write-protected and awkward to browse.
+                text: Shell.uiString("thirdPartyNotices")
+                onTriggered: noticesDialog.open()
+            }
+            Action {
                 text: Shell.uiString("aboutHyperfocal")
                 onTriggered: aboutDialog.open()
             }
@@ -569,6 +578,37 @@ ApplicationWindow {
                 color: theme.textDim
                 font.pixelSize: 11
                 Layout.alignment: Qt.AlignHCenter
+            }
+        }
+    }
+
+    // Third-party notices + the full license texts, compiled into the
+    // executable's resources so they are readable with no repo and no
+    // writable install directory. Read once per open: it is ~80 KB of text
+    // and nothing about it changes at runtime.
+    Dialog {
+        id: noticesDialog
+        objectName: "help.third-party-notices"
+        title: Shell.uiString("thirdPartyNotices")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Close
+        width: Math.min(720, Math.max(360, window.width - 80))
+        height: Math.min(560, Math.max(280, window.height - 80))
+        onOpened: {
+            if (noticesBody.text === "") { noticesBody.text = Shell.noticesText() }
+        }
+        ScrollView {
+            anchors.fill: parent
+            clip: true
+            TextArea {
+                id: noticesBody
+                readOnly: true
+                wrapMode: TextArea.Wrap
+                selectByMouse: true
+                font.family: theme.monoFamily
+                font.pixelSize: 11
+                Accessible.name: Shell.uiString("thirdPartyNotices")
             }
         }
     }

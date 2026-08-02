@@ -37,6 +37,9 @@ public enum UIStrings {
         localizedString("Open Folder…", comment: "Empty-state button: point the app at a folder of frames")
     public static let hyperfocalHelp =
         localizedString("Hyperfocal Help", comment: "Menu item")
+    public static let thirdPartyNotices =
+        localizedString("Third-Party Notices",
+                        comment: "Menu item: shows the bundled NOTICE/licenses")
     public static let dropFolderHint =
         localizedString("Drop a folder of frames here, or:", comment: "Empty-state hint")
 
@@ -293,6 +296,7 @@ public enum UIStrings {
         "saveProjectAs": saveProjectAs,
         "openFolder": openFolder,
         "hyperfocalHelp": hyperfocalHelp,
+        "thirdPartyNotices": thirdPartyNotices,
         "dropFolderHint": dropFolderHint,
         "stackSingular": stackSingular,
         "stackPlural": stackPlural,

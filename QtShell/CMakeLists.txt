@@ -123,6 +123,25 @@ qt_add_resources(hyperfocal-qt "hyperfocal-cursors"
           "${CMAKE_CURRENT_SOURCE_DIR}/../App/Resources/crop-rotate-1@2x.png"
 )
 
+# Third-party notices + the standard license texts, for Help > Third-Party
+# Notices (Shell::noticesText). They ALSO ship as plain files beside the
+# executable — that is what the LGPL requires of a binary distribution — but
+# a resource copy is what makes them readable from a Store install, whose
+# package directory is write-protected and buried.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.md"
+    PROPERTIES QT_RESOURCE_ALIAS "NOTICE.md")
+file(GLOB HFQT_LICENSES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/../licenses/*.txt")
+foreach(license ${HFQT_LICENSES})
+    get_filename_component(license_name "${license}" NAME)
+    set_source_files_properties("${license}"
+        PROPERTIES QT_RESOURCE_ALIAS "licenses/${license_name}")
+endforeach()
+qt_add_resources(hyperfocal-qt "hyperfocal-notices"
+    PREFIX "/notices"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.md" ${HFQT_LICENSES}
+)
+
 # The pane's tone shader (see lut.frag) — compiled to qsb for the scene
 # graph's RHI backends.
 qt_add_shaders(hyperfocal-qt "hyperfocal-shaders"

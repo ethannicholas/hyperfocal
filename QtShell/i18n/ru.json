@@ -262,6 +262,7 @@
 "The pipeline works in Display P3. sRGB is the safe default for sharing; Display P3 keeps the full working gamut; ProPhoto suits further heavy editing. DNG always carries the full P3 gamut as linear raw.":"Конвейер работает в Display P3. sRGB — безопасный вариант для публикации; Display P3 сохраняет весь рабочий охват; ProPhoto подходит для дальнейшей серьёзной обработки. DNG всегда несёт полный охват P3 как линейный raw.",
 "The selected frames are written to this folder, aligned to the fused canvas.":"Выбранные кадры записываются в эту папку, выровненные по объединённому холсту.",
 "These frames carry no capture times, so they fuse in filename order. Make sure filenames follow focus order.":"У этих кадров нет времени съёмки, поэтому они объединяются в порядке имён файлов. Убедитесь, что имена следуют порядку фокусировки.",
+"Third-Party Notices":"Уведомления третьих сторон",
 "This image cannot be previewed":"Предварительный просмотр этого изображения недоступен",
 "Tone":"Тона",
 "Tone Adjustment":"Коррекция тонов",

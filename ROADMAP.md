@@ -286,46 +286,36 @@ number that moves when depth selection fails.
 The 2026-07-23 dependency-license audit cleared the release model (MIT source,
 reproducible paid app-store builds); the one blocker was fixed (GPL exiv2 →
 BSD-2 easyexif), `NOTICE.md` + `licenses/` are complete, and LibRaw is used under
-its CDDL-1.0 arm. The macOS build is essentially clean; the remaining work is all
-Windows/packaging. Residuals before shipping paid builds (each independently
-landable):
+its CDDL-1.0 arm. The Windows package now exists and meets the Qt LGPL-3.0
+checklist. Residuals before shipping paid builds (each independently landable):
 
-1. **Bundle the notices into the shipped binaries.** `NOTICE.md` + `licenses/`
-   live only in the source tree, and both About dialogs point to "NOTICE.md in
-   the source distribution." Strict permissive-license attribution — and the Qt
-   LGPL duty to ship the GPL+LGPL texts *with* the binary — want them local to
-   the app. Add them to the Mac `.app` Resources (via `App/project.yml`, then
-   `xcodegen generate`; surface through the About/Help path) and to the Windows
-   package. Done = both installed apps carry the notices + license texts without
-   the repo. (Mac side needs a Mac session — `xcodegen`/xcodebuild.)
+1. **The macOS half of the notices bundling.** The Windows package carries
+   `NOTICE.md`, `LICENSE.txt`, `licenses/` and a generated `COMPLIANCE.md`, and
+   both shells gained Help > Third-Party Notices reading a bundled copy
+   (`Shell::noticesText` / `App/Sources/NoticesWindow.swift`); the Qt shell's
+   selftest asserts the text is really there. `App/project.yml` already lists
+   the two resource paths, but **nothing on the Mac side has been built or run**
+   — that needs a Mac session: `cd App && xcodegen generate`, build, and check
+   the menu item opens a populated window. Also still open there: the macOS
+   About panel's credits blurb is a bare Swift `String` (not localized, unlike
+   every other user-facing string) and still says the notices live "in the
+   source distribution", which stops being true once the bundle carries them.
 
-2. **Microsoft Store / MSIX packaging with Qt LGPL-3.0 compliance.** No Windows
-   packaging exists yet; build it to this checklist (dynamically-linked Qt keeps
-   the app's own MIT license fine — LGPL §4 "Combined Works", and §4e
-   Installation Information does *not* apply to general-purpose PCs):
-   (a) bundle the GPL-3.0 + LGPL-3.0 texts (in `licenses/`) with the package;
-   (b) prominent in-app "uses Qt under LGPLv3" notice (done — Qt About);
-   (c) host the **exact Qt source** built against, or a written 3-year offer — a
-   bare qt.io link is explicitly insufficient per Qt's FAQ;
-   (d) ship Qt as replaceable DLLs via windeployqt — **never static-link Qt**;
-   (e) do **not** redistribute `qsb.exe` (GPLv3-only build tool) — ship only the
-   compiled `.qsb` shaders + the LGPLv3 runtime DLLs;
-   (f) because the MSIX copy in `WindowsApps` is locked, **also offer the same
-   build off-Store** (direct download) so users can substitute a modified Qt and
-   relink — the reproducible-build + public-MIT-source model already provides
-   this; state it in the compliance notice. This off-Store route is the
-   load-bearing mitigation for the one genuinely-unsettled point (MSIX vs LGPL
-   §4(d)(1) DLL-replaceability), and also covers the small static
-   `libQt6QmlBuiltins.a` fragment (Qt 6.7+). Done = a Store-submittable package
-   meeting (a)–(f) with the off-Store build published.
-
-3. **DNG Converter EULA — one-time developer glance, no artifact.** When the free
-   Adobe DNG Converter is installed to test the transcode fallback, skim its
-   license once to confirm there's no anti-automation or non-commercial clause
-   (none expected — Adobe's own CLI manual endorses headless automation).
-   Hyperfocal neither bundles nor redistributes it and accepts no EULA on the
-   user's behalf, so there is **no ongoing obligation and nothing to retain**.
-   Done = confirmed once, or consciously skipped (low risk).
+2. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
+   the payload and stages an MSIX-ready layout — `AppxManifest.xml` from
+   `Packaging/windows/AppxManifest.xml.in`, generated logo assets, and a `-Msix`
+   switch that runs `makeappx` — but it writes **placeholder identity**, because
+   the real values come from a Store reservation. Remaining: reserve the package
+   name, supply `-Identity` / `-Publisher` (the `CN=…` matching the signing
+   cert) / `-PublisherDisplayName`, sign, and submit; then publish the same
+   build off-Store. The LGPL-3.0 checklist the package was built to is settled
+   and enforced in the script — Qt ships as replaceable DLLs (asserted), the
+   GPLv3-only `qsb`/`lupdate`/`lrelease` tools are asserted absent, and the
+   GPL-3.0 + LGPL-3.0 texts plus the written 3-year source offer ride in
+   `COMPLIANCE.md`. The off-Store build stays load-bearing: it is the mitigation
+   for the one genuinely-unsettled point (MSIX vs LGPL §4(d)(1)
+   DLL-replaceability, since the `WindowsApps` copy is locked) and it also
+   covers the small static `libQt6QmlBuiltins.a` fragment (Qt 6.7+).
 
 ## Engine performance
 
