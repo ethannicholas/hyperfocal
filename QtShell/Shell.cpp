@@ -263,16 +263,16 @@ void Shell::exportAnimationInteractive() {
     // the bridge; the parallel *Labels list is what the user reads. Never
     // write a label back — that would persist a translated rawValue.
     //
-    // H.264 needs an encoder the platform supplies: AVFoundation on macOS,
-    // Media Foundation on Windows. Linux has neither (no encoder we may
-    // bundle — see cimaging.h), and the engine writes GIF only there, so
-    // don't offer a container the export would then have to refuse.
+    // H.264 needs an encoder this build actually carries (AVFoundation on
+    // macOS, Media Foundation on Windows, OpenH264 on Linux — see
+    // cimaging.h), so ask the bridge rather than hardcoding a platform list:
+    // never offer a container the export would then have to refuse.
     QStringList formats, formatLabels, suffixes;
-#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
-    formats << QStringLiteral("MP4 (H.264)");
-    formatLabels << tr("MP4 (H.264)");
-    suffixes << QStringLiteral("mp4");
-#endif
+    if (hf_animation_mp4_available()) {
+        formats << QStringLiteral("MP4 (H.264)");
+        formatLabels << tr("MP4 (H.264)");
+        suffixes << QStringLiteral("mp4");
+    }
     formats << QStringLiteral("GIF (loops automatically)");
     formatLabels << tr("GIF (loops automatically)");
     suffixes << QStringLiteral("gif");

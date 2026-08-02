@@ -218,6 +218,33 @@ dynamically. License: `MIT`.
 > The above copyright notice and this permission notice shall be included in
 > all copies or substantial portions of the Software.
 
+### OpenH264 (Linux build only)
+
+H.264 encoding for the rocking-animation MP4 export on Linux, linked
+dynamically from the system's `libopenh264`. License: `BSD-2-Clause`.
+
+> Copyright © 2013, Cisco Systems. All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that redistributions retain the above
+> copyright notice, this list of conditions and the following disclaimer.
+
+H.264 is covered by patents in some jurisdictions. Hyperfocal distributes no
+Linux binaries; anyone who compiles and distributes a build containing an
+H.264 encoder is responsible for whatever patent licenses their jurisdictions
+require. (The Windows and macOS builds use the operating system's own encoder
+and do not include OpenH264.)
+
+### minimp4
+
+MP4 muxing for the rocking-animation export on Linux. Vendored at
+`Sources/CImaging/minimp4/` (upstream commit `5a212a1`). License: `CC0-1.0`
+(public-domain dedication) — full text beside the source.
+
+> To the extent possible under law, the author(s) have dedicated all copyright
+> and related and neighboring rights to this software to the public domain
+> worldwide.
+
 ### OpenCombine
 
 `ObservableObject`/`@Published` on non-Apple platforms. License: `MIT`.

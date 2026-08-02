@@ -16,6 +16,19 @@ import CImaging
 /// which reads better than any inpainting and needs none.
 public enum RockingAnimation {
 
+    /// Whether this build can write the MP4 (H.264) container. Always true on
+    /// Apple (AVFoundation); elsewhere it reflects the imaging shim's encoder
+    /// (Media Foundation on Windows, OpenH264 on Linux — `hf_video_available`).
+    /// Both shells gate their format choices on it so the export path never
+    /// has to refuse a format the dialog offered.
+    public static var mp4Available: Bool {
+        #if canImport(AVFoundation)
+        return true
+        #else
+        return hf_video_available() != 0
+        #endif
+    }
+
     /// The viewpoint's motion (the rocking path options): a straight rock on
     /// either axis, or a circular orbit — the strongest 3D read, since no
     /// scene structure can hide parallel to the motion.
@@ -335,11 +348,11 @@ public enum RockingAnimation {
         return
     }
     #else
-    /// GIF via the CImaging giflib writer; H.264 via its `hf_video_*` writer,
-    /// which exists on Windows (Media Foundation's sink writer, i.e. the
-    /// encoder the OS already ships) and not on Linux — there, no encoder we
-    /// may bundle exists yet, so the export asks for a `.gif` rather than
-    /// failing vaguely. See `cimaging.h` for the licensing behind that split.
+    /// GIF via the CImaging giflib writer; H.264 via its `hf_video_*` writer
+    /// where this build carries an encoder (`mp4Available` — Media
+    /// Foundation's sink writer on Windows, OpenH264 on Linux; see
+    /// `cimaging.h` for the licensing behind that pairing). Without one, a
+    /// non-`.gif` filename is refused up front instead of failing vaguely.
     public static func write(to url: URL, image: ImageBuffer, depth: [Float],
                              options: Options = Options(),
                              log: ((String) -> Void)? = nil,
@@ -348,13 +361,11 @@ public enum RockingAnimation {
         precondition(depth.count == image.width * image.height,
                      "depth plane must match the image")
         let gif = url.pathExtension.lowercased() == "gif"
-        #if !os(Windows)
-        guard gif else {
+        guard gif || mp4Available else {
             throw ImageFileError.unsupported(localizedString(
                 "Rocking animations export as GIF on this platform — choose a .gif filename.",
                 comment: "Non-Apple rocking export: only the GIF container is available"))
         }
-        #endif
         let scale = min(1.0, Double(options.maxSide) / Double(max(image.width, image.height)))
         // Even dimensions: H.264 4:2:0 subsampling requires them. GIF doesn't,
         // but sharing the rounding means both containers produce the same

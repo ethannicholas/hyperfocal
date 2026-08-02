@@ -1,8 +1,9 @@
 // H.264 writer for the rocking animation's MP4 container (hf_video_* in
-// include/cimaging.h). Windows only, over Media Foundation's sink writer:
-// the OS encoder is the only H.264 encoder we may ship — see the header for
-// the licensing that forces that, and cimaging_priv.h for why this is a
-// translation unit of its own rather than part of cimaging.cpp.
+// include/cimaging.h). Two implementations: Media Foundation's sink writer on
+// Windows (the OS encoder), and the system OpenH264 + the vendored minimp4
+// muxer on Linux (HF_HAVE_OPENH264) — see the header for the licensing that
+// forces that pairing, and cimaging_priv.h for why this is a translation unit
+// of its own rather than part of cimaging.cpp.
 
 #ifdef _WIN32
 
@@ -329,12 +330,253 @@ extern "C" hf_status hf_video_finish(hf_video* v) {
 
 extern "C" void hf_video_abort(hf_video* v) { destroy(v, false); }
 
-#else   // !_WIN32
+extern "C" int hf_video_available(void) { return 1; }
+
+#elif defined(HF_HAVE_OPENH264)
+
+// Linux: OpenH264 (the system libopenh264) encodes, the vendored minimp4
+// muxes. Same output contract as the Media Foundation path above: BT.709
+// limited-range 4:2:0, VUI-tagged, presentation times derived from the frame
+// index.
+
+#include "cimaging.h"
+#include "cimaging_priv.h"
+
+#include <wels/codec_api.h>
+#define MINIMP4_IMPLEMENTATION
+#include "minimp4/minimp4.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <vector>
+
+struct hf_video {
+    std::string path;
+    FILE* file = nullptr;
+    MP4E_mux_t* mux = nullptr;
+    mp4_h26x_writer_t writer = {};
+    bool writerOpen = false;
+    ISVCEncoder* enc = nullptr;
+    int w = 0, h = 0;
+    double fps = 30;
+    long long frame = 0;
+    std::vector<uint8_t> yuv;   // one frame of I420, w*h*3/2
+};
+
+namespace {
+
+inline float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+
+int mp4WriteAt(int64_t offset, const void* buffer, size_t size, void* token) {
+    FILE* f = (FILE*)token;
+    if (fseeko(f, (off_t)offset, SEEK_SET) != 0) return 1;
+    return fwrite(buffer, 1, size, f) != size;
+}
+
+// Everything below hf_video_begin allocated, in reverse; shared by the three
+// teardown paths (begin-failure, finish, abort).
+void teardown(hf_video* m, bool deleteFile) {
+    if (m->mux) { MP4E_close(m->mux); m->mux = nullptr; }
+    if (m->writerOpen) { mp4_h26x_write_close(&m->writer); m->writerOpen = false; }
+    if (m->file) { fclose(m->file); m->file = nullptr; }
+    if (m->enc) {
+        m->enc->Uninitialize();
+        WelsDestroySVCEncoder(m->enc);
+        m->enc = nullptr;
+    }
+    if (deleteFile) std::remove(m->path.c_str());
+}
+
+// P3 float RGBA -> limited-range BT.709 I420 into m->yuv. Chroma is the
+// mean of each 2x2 cell's gamma-encoded sRGB, per video convention.
+bool frameToI420(hf_video* m, const float* rgba) {
+    const int w = m->w, h = m->h;
+    const size_t px = (size_t)w * h;
+    std::vector<float> tmp(rgba, rgba + px * 4);
+    if (!hfConvertFromP3(tmp.data(), (int)px, "srgb")) return false;
+    uint8_t* Y = m->yuv.data();
+    uint8_t* U = Y + px;
+    uint8_t* V = U + px / 4;
+    for (size_t i = 0; i < px; i++) {
+        const float r = clamp01(tmp[i * 4]);
+        const float g = clamp01(tmp[i * 4 + 1]);
+        const float b = clamp01(tmp[i * 4 + 2]);
+        const float luma = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        Y[i] = (uint8_t)std::lround(16.0f + 219.0f * luma);
+    }
+    for (int cy = 0; cy < h / 2; cy++) {
+        for (int cx = 0; cx < w / 2; cx++) {
+            float r = 0, g = 0, b = 0;
+            for (int dy = 0; dy < 2; dy++) {
+                for (int dx = 0; dx < 2; dx++) {
+                    const size_t i = ((size_t)(cy * 2 + dy) * w + cx * 2 + dx) * 4;
+                    r += clamp01(tmp[i]);
+                    g += clamp01(tmp[i + 1]);
+                    b += clamp01(tmp[i + 2]);
+                }
+            }
+            r *= 0.25f; g *= 0.25f; b *= 0.25f;
+            const float luma = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            const size_t ci = (size_t)cy * (w / 2) + cx;
+            U[ci] = (uint8_t)std::lround(128.0f + 224.0f * (b - luma) / 1.8556f);
+            V[ci] = (uint8_t)std::lround(128.0f + 224.0f * (r - luma) / 1.5748f);
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+extern "C" int hf_video_available(void) { return 1; }
+
+extern "C" hf_video* hf_video_begin(const char* path, int w, int h, double fps) {
+    if (!path || w < 2 || h < 2 || (w & 1) || (h & 1) || fps <= 0) return nullptr;
+    auto m = std::make_unique<hf_video>();
+    m->path = path;
+    m->w = w;
+    m->h = h;
+    m->fps = fps;
+    m->yuv.resize((size_t)w * h * 3 / 2);
+
+    if (WelsCreateSVCEncoder(&m->enc) != 0 || !m->enc) return nullptr;
+    // Errors only, set before InitializeExt (which is where the noise comes
+    // from): the default level prints rate-control tuning notes to the
+    // console on every export (e.g. "bitrate can't be controlled ... without
+    // enabling skip frame" — a trade this writer makes deliberately).
+    int traceLevel = WELS_LOG_ERROR;
+    m->enc->SetOption(ENCODER_OPTION_TRACE_LEVEL, &traceLevel);
+    SEncParamExt p;
+    m->enc->GetDefaultParams(&p);
+    p.iUsageType = CAMERA_VIDEO_REAL_TIME;
+    p.iPicWidth = w;
+    p.iPicHeight = h;
+    p.fMaxFrameRate = (float)fps;
+    p.iRCMode = RC_BITRATE_MODE;
+    // ~0.15 bit/pixel/frame — the neighbourhood AVAssetWriter's default
+    // H.264 settings spend at these sizes, so the two platforms' files come
+    // out comparable.
+    p.iTargetBitrate = (int)std::min(std::max(0.15 * w * h * fps, 1e6), 4e7);
+    p.iMaxBitrate = p.iTargetBitrate;
+    // Offline export: never trade a dropped frame for rate — a skip would
+    // also silently break the fixed per-sample duration the muxer writes.
+    p.bEnableFrameSkip = false;
+    p.uiIntraPeriod = 0;             // 2-6 s clips: one IDR up front
+    p.iTemporalLayerNum = 1;
+    p.iSpatialLayerNum = 1;
+    // Single slice per frame, single-threaded: the mp4 writer emits one
+    // sample per slice NAL with a full frame duration each, so a multi-slice
+    // frame would stretch the timeline. Clips are short; speed is ample.
+    p.iMultipleThreadIdc = 1;
+    p.sSpatialLayers[0].iVideoWidth = w;
+    p.sSpatialLayers[0].iVideoHeight = h;
+    p.sSpatialLayers[0].fFrameRate = (float)fps;
+    p.sSpatialLayers[0].iSpatialBitrate = p.iTargetBitrate;
+    p.sSpatialLayers[0].iMaxSpatialBitrate = p.iMaxBitrate;
+    p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+    // Tag what the pixels actually are (sRGB primaries/matrix per BT.709,
+    // limited range) — same signal the Apple path tags via
+    // AVVideoColorProperties.
+    p.sSpatialLayers[0].bVideoSignalTypePresent = true;
+    p.sSpatialLayers[0].uiVideoFormat = VF_UNDEF;
+    p.sSpatialLayers[0].bFullRange = false;
+    p.sSpatialLayers[0].bColorDescriptionPresent = true;
+    p.sSpatialLayers[0].uiColorPrimaries = CP_BT709;
+    p.sSpatialLayers[0].uiTransferCharacteristics = TRC_BT709;
+    p.sSpatialLayers[0].uiColorMatrix = CM_BT709;
+    if (m->enc->InitializeExt(&p) != cmResultSuccess) {
+        WelsDestroySVCEncoder(m->enc);
+        m->enc = nullptr;
+        return nullptr;
+    }
+    int fmt = videoFormatI420;
+    m->enc->SetOption(ENCODER_OPTION_DATAFORMAT, &fmt);
+
+    m->file = fopen(path, "wb");
+    if (!m->file) { teardown(m.get(), false); return nullptr; }
+    m->mux = MP4E_open(0 /*seekable*/, 0 /*unfragmented*/, m->file, mp4WriteAt);
+    if (!m->mux) { teardown(m.get(), true); return nullptr; }
+    if (mp4_h26x_write_init(&m->writer, m->mux, w, h, 0 /*h264*/)
+            != MP4E_STATUS_OK) {
+        teardown(m.get(), true);
+        return nullptr;
+    }
+    m->writerOpen = true;
+    return m.release();
+}
+
+extern "C" hf_status hf_video_add_frame(hf_video* m, const float* rgba) {
+    if (!m || !rgba) return hf_err_encode;
+    if (!frameToI420(m, rgba)) return hf_err_color;
+    const size_t px = (size_t)m->w * m->h;
+    SSourcePicture pic;
+    std::memset(&pic, 0, sizeof pic);
+    pic.iPicWidth = m->w;
+    pic.iPicHeight = m->h;
+    pic.iColorFormat = videoFormatI420;
+    pic.iStride[0] = m->w;
+    pic.iStride[1] = m->w / 2;
+    pic.iStride[2] = m->w / 2;
+    pic.pData[0] = m->yuv.data();
+    pic.pData[1] = m->yuv.data() + px;
+    pic.pData[2] = m->yuv.data() + px + px / 4;
+    pic.uiTimeStamp = (long long)std::llround(m->frame * 1000.0 / m->fps);
+    SFrameBSInfo info;
+    std::memset(&info, 0, sizeof info);
+    if (m->enc->EncodeFrame(&pic, &info) != cmResultSuccess
+            || info.eFrameType == videoFrameTypeSkip) {
+        return hf_err_encode;
+    }
+    m->frame++;
+    const unsigned duration = (unsigned)std::llround(90000.0 / m->fps);
+    for (int layer = 0; layer < info.iLayerNum; layer++) {
+        const SLayerBSInfo& L = info.sLayerInfo[layer];
+        int bytes = 0;
+        for (int n = 0; n < L.iNalCount; n++) bytes += L.pNalLengthInByte[n];
+        // A layer's NALs sit contiguous in pBsBuf as Annex-B; the writer
+        // splits on start codes itself (SPS/PPS are cached, each slice
+        // becomes one timed sample — hence single-slice frames above).
+        if (mp4_h26x_write_nal(&m->writer, L.pBsBuf, bytes, duration)
+                != MP4E_STATUS_OK) {
+            return hf_err_encode;
+        }
+    }
+    return hf_ok;
+}
+
+extern "C" hf_status hf_video_finish(hf_video* m) {
+    if (!m) return hf_err_encode;
+    std::unique_ptr<hf_video> owner(m);
+    // No flush pass: OpenH264 buffers nothing (no B-frames/lookahead), so
+    // every EncodeFrame already returned its bitstream synchronously.
+    hf_status result = hf_ok;
+    if (MP4E_close(m->mux) != MP4E_STATUS_OK) result = hf_err_encode;
+    m->mux = nullptr;
+    mp4_h26x_write_close(&m->writer);
+    m->writerOpen = false;
+    if (fclose(m->file) != 0) result = hf_err_encode;
+    m->file = nullptr;
+    teardown(m, result != hf_ok);
+    return result;
+}
+
+extern "C" void hf_video_abort(hf_video* m) {
+    if (!m) return;
+    std::unique_ptr<hf_video> owner(m);
+    teardown(m, true);
+}
+
+#else   // neither encoder in this build
 
 #include "cimaging.h"
 
-// Linux: no permissively-licensed encoder to reach for yet (VA-API would be
-// the equivalent move). The engine checks for NULL here and asks for a .gif.
+// The engine checks hf_video_available() (and NULL from hf_video_begin) and
+// offers GIF only.
+extern "C" int hf_video_available(void) { return 0; }
+
 extern "C" hf_video* hf_video_begin(const char*, int, int, double) {
     return nullptr;
 }
@@ -347,4 +589,4 @@ extern "C" hf_status hf_video_finish(hf_video*) { return hf_err_unsupported; }
 
 extern "C" void hf_video_abort(hf_video*) {}
 
-#endif  // _WIN32
+#endif  // _WIN32 / HF_HAVE_OPENH264

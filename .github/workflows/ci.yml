@@ -18,7 +18,7 @@ jobs:
           apt-get update
           apt-get install -y build-essential pkg-config curl unzip \
             libraw-dev liblcms2-dev libjpeg-turbo8-dev libgif-dev \
-            libtiff-dev libpng-dev zlib1g-dev libopencv-dev
+            libtiff-dev libpng-dev zlib1g-dev libopencv-dev libopenh264-dev
 
       # GPU fusion is compiled into every Linux build (Package.swift), so this
       # job needs the tree even though it runs no parity gates — the wgpu job
@@ -89,7 +89,7 @@ jobs:
           apt-get install -y build-essential pkg-config curl unzip \
             libraw-dev liblcms2-dev libjpeg-turbo8-dev libgif-dev \
             libtiff-dev libpng-dev zlib1g-dev libopencv-dev \
-            libvulkan1 mesa-vulkan-drivers
+            libopenh264-dev libvulkan1 mesa-vulkan-drivers
 
       - name: Fetch pinned wgpu-native
         run: Scripts/fetch-wgpu.sh

@@ -955,6 +955,11 @@ public func hf_set_export_color_space(_ name: UnsafePointer<CChar>?) -> Int32 {
     }
 }
 
+@_cdecl("hf_animation_mp4_available")
+public func hf_animation_mp4_available() -> Int32 {
+    RockingAnimation.mp4Available ? 1 : 0
+}
+
 @_cdecl("hf_animation_format")
 public func hf_animation_format(_ buffer: UnsafeMutablePointer<CChar>?,
                                 _ cap: Int32) -> Int32 {

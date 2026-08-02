@@ -189,6 +189,11 @@ int hf_animation_strength(char *buf, int cap);      // returns bytes
 int hf_set_animation_strength(const char *name);
 // Animation format ("MP4 (H.264)" / "GIF (loops automatically)"),
 // rocking path, and duration — the native animate accessory's popups.
+// hf_animation_mp4_available reports whether this build can write MP4
+// (H.264): Media Foundation on Windows, OpenH264 on Linux. The shell builds
+// the format list from it — never offer a container the export would then
+// refuse.
+int hf_animation_mp4_available(void);
 int hf_animation_format(char *buf, int cap);        // returns bytes
 int hf_set_animation_format(const char *name);
 int hf_animation_path(char *buf, int cap);          // returns bytes

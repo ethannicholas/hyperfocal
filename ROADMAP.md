@@ -47,20 +47,17 @@ The engine, CLI, and Qt/QML shell are **landed at feature parity** on macOS,
 Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan.md`
 (+ git history). Remaining:
 
-- **Rocking-animation MP4 on Linux.** GIF exports on all three OSes (giflib,
-  via `hf_gif_*`) and H.264 now exports on macOS (AVFoundation) and Windows
-  (Media Foundation, `hf_video_*` in `Sources/CImaging/video.cpp`); Linux is
-  the one platform left refusing a non-`.gif` filename. The blocker is the
-  encoder's licence, not the plumbing — distro FFmpeg builds are configured
-  `--enable-gpl` and libx264 is GPL-only, neither of which MIT source + paid
-  app-store builds can absorb — which is why both shipped paths use the
-  encoder the OS already licenses. **VA-API is the equivalent move** (its
-  `libva` is MIT, and the encode is the driver's, not ours); OpenH264 (BSD)
-  is the fallback if VA-API's hardware dependence proves too narrow. Either
-  goes through the `third-party-deps` gate first. The Swift side is already
-  shaped for it: `RockingAnimation.writeH264` is portable and only the
-  `#if !os(Windows)` guard on the "choose a .gif" refusal, plus a non-null
-  `hf_video_begin`, stand between Linux and the same path Windows takes.
+- **Rocking-animation MP4: honest availability on Windows N editions.**
+  H.264 export now ships on all three OSes (AVFoundation / Media Foundation /
+  OpenH264+minimp4 — `hf_video_*` in `Sources/CImaging/video.cpp`), and both
+  shells build their format lists from `hf_video_available()`. On Windows
+  that reports 1 unconditionally, but N/KN editions lack the Media Feature
+  Pack (and with it the H.264 encoder MFT), so there the dialog offers MP4
+  and the export then fails with a generic I/O error instead of the GIF-only
+  refusal. Needs a Windows session: probe encoder presence at runtime
+  (e.g. `MFTEnumEx` for an H.264 encoder, cached) so `hf_video_available()`
+  stays honest. Done = on an N edition without the pack, the dialog is
+  GIF-only; with it installed, MP4 appears.
 - **GPU fusion on Linux.** The Windows package ships it (2026-08-06); Linux
   can build it — `Scripts/fetch-wgpu.sh` covers `linux-x86_64`/`linux-aarch64`
   and the parity suite runs on llvmpipe in CI — but there is no Linux package

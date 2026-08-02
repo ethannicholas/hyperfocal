@@ -111,17 +111,22 @@ void hf_gif_abort(hf_gif* gif);
 // GIF writer above and the same frame contract (RGBA Float32 P3, w*h, converted
 // to sRGB here and encoded BT.709 limited-range 4:2:0).
 //
-// Implemented on Windows only, over Media Foundation's sink writer — i.e. the
-// H.264 encoder the OS already ships, which is what makes this shippable at
-// all: every bundleable encoder is GPL (libx264, and the distro FFmpeg builds
-// configured against it), and neither an MIT source tree nor a paid app-store
-// build can absorb that. It is the same arrangement the macOS build has with
-// AVFoundation. Elsewhere (Linux) hf_video_begin returns NULL and the engine
-// asks for a .gif instead; VA-API would be that platform's equivalent.
+// The encoder is always one the OS supplies or a permissively-licensed
+// library, because every bundleable alternative is GPL (libx264, and the
+// distro FFmpeg builds configured against it) and neither an MIT source tree
+// nor a paid app-store build can absorb that: Media Foundation's sink writer
+// on Windows, the system OpenH264 (BSD-2-Clause) muxed by the vendored
+// minimp4 on Linux (HF_HAVE_OPENH264) — both in video.cpp — matching the
+// arrangement the macOS build has with AVFoundation.
+//
+// hf_video_available() reports whether this build carries an encoder. The
+// Swift layer gates both shells' format lists and the export path on it, so
+// a build without one is GIF-only up front rather than failing at write time.
 //
 // `fps` is the frame rate the samples are timed at; presentation times are
 // derived from the frame index so they cannot drift. `w` and `h` must be even
 // (4:2:0 subsampling) — hf_video_begin returns NULL rather than rounding.
+int hf_video_available(void);
 typedef struct hf_video hf_video;
 hf_video* hf_video_begin(const char* path, int w, int h, double fps);
 hf_status hf_video_add_frame(hf_video* video, const float* rgba);

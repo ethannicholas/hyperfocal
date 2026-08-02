@@ -297,17 +297,23 @@ if ProcessInfo.processInfo.environment["HYPERFOCAL_OPENCV_AB"] == "1",
 #elseif os(Linux)
 // The C-ABI imaging shim over the system libraries. pkg-config supplies the
 // (multiarch) include and link flags at manifest-eval time.
-let imagingPkgs = ["libtiff-4", "libpng", "libjpeg", "lcms2", "libraw", "opencv4"]
+let imagingPkgs = ["libtiff-4", "libpng", "libjpeg", "lcms2", "libraw", "opencv4",
+                   "openh264"]
 // giflib ships no pkg-config file on Ubuntu (libgif-dev), so it is linked by name.
 let imagingExtraLibs = ["-lgif"]
 extraTargets.append(
     .target(
         name: "CImaging",
         path: "Sources/CImaging",
-        exclude: ["easyexif/LICENSE"],
+        exclude: ["easyexif/LICENSE", "minimp4/LICENSE"],
         publicHeadersPath: "include",
         cxxSettings: [
             .unsafeFlags(pkgConfig("--cflags", imagingPkgs)),
+            // The rocking-animation MP4 writer (hf_video_* in video.cpp):
+            // OpenH264 encode + the vendored minimp4 mux. Windows takes its
+            // Media Foundation branch instead; without either, the shim
+            // compiles stubs and hf_video_available() reports 0.
+            .define("HF_HAVE_OPENH264"),
             .unsafeFlags(["-Wno-deprecated-declarations"]),
             // Same rationale as HyperfocalKit's debug -O: the shim's
             // per-pixel decode/convert loops are ~10x slower at -O0.
@@ -360,7 +366,7 @@ extraTargets.append(
     .target(
         name: "CImaging",
         path: "Sources/CImaging",
-        exclude: ["easyexif/LICENSE"],
+        exclude: ["easyexif/LICENSE", "minimp4/LICENSE"],
         publicHeadersPath: "include",
         cxxSettings: [
             .unsafeFlags(["-I", vcpkgPrefix + "\\include",
