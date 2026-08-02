@@ -352,6 +352,13 @@ public final class AppModel: ObservableObject {
                               forKey: "collapsedSections")
         }
     }
+    /// Sidebar width in points, persisted like the other set-and-forget UI
+    /// preferences. 280 (the default) matches the Qt shell's fixed-width
+    /// sidebar; if that shell gains a draggable splitter it should persist
+    /// through this same key.
+    @Published var sidebarWidth: Double {
+        didSet { Self.settings.set(sidebarWidth, forKey: "sidebarWidth") }
+    }
 
     public func isCollapsed(_ section: SidebarSection) -> Bool {
         collapsedSections.contains(section)
@@ -739,6 +746,10 @@ public final class AppModel: ObservableObject {
         orderByCaptureTime = d.object(forKey: "orderByCaptureTime") as? Bool ?? true
         collapsedSections = Set((d.stringArray(forKey: "collapsedSections") ?? [])
             .compactMap(SidebarSection.init))
+        // Clamped to the split view's live range, in case an old or edited
+        // value is out of bounds.
+        sidebarWidth = min(max(d.object(forKey: "sidebarWidth") as? Double ?? 280,
+                               280), 360)
 
         // One-time cleanup: earlier builds autosaved the whole project on quit
         // (hundreds of MB of pixel blobs — the write took too long, which is

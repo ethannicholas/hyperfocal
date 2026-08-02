@@ -7,11 +7,33 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        HSplitView {
+        // Hand-rolled splitter, not HSplitView: the sidebar must open at its
+        // persisted width, and HSplitView offers no control over that — it
+        // ignores idealWidth and re-derives pane sizes from min/max
+        // constraints on every layout pass (stretching the sidebar to
+        // maxWidth; to minWidth with a layoutPriority on the preview), and
+        // it overrides NSSplitView.setPosition on the next pass (all
+        // measured). A fixed-width sidebar plus a draggable divider gives
+        // the launch width exactly and sends window-resize slack to the
+        // preview, matching the Qt shell.
+        HStack(spacing: 0) {
             sidebar
-                .frame(minWidth: 280, idealWidth: 300, maxWidth: 360)
+                .frame(width: model.sidebarWidth)
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
             previewSide
                 .frame(minWidth: 620, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        // The grab strip overlays BOTH panes, centered on the hairline. As
+        // a sibling between the panes it was topmost over the sidebar but
+        // under the preview's event views (AppKit z-order follows sibling
+        // order), so a mouse-down in the strip's right half went to the
+        // pane — about half of drag attempts were dead, seemingly at
+        // random. An overlay on the whole split container is above both.
+        .overlay(alignment: .leading) {
+            SidebarSplitter(width: $model.sidebarWidth)
+                .offset(x: model.sidebarWidth + 0.5 - SidebarSplitter.grabWidth / 2)
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             Task {
@@ -1884,7 +1906,10 @@ struct LabeledSlider: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        // 6, not the old 2: with the full-width track (labelsHidden below)
+        // the label row sits directly over the slider, and 2pt read tight —
+        // the Qt shell's style pads its slider control internally.
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 Text(label)
                 Image(systemName: "info.circle")
@@ -1897,9 +1922,14 @@ struct LabeledSlider: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier(id.map { "\($0).value" } ?? "")
             }
+            // The grouped Form treats a bare Slider as a labeled control and
+            // pins it to the form's shared content-column guide — half a row.
+            // labelsHidden() opts it out, so the track spans the full row
+            // (label above, slider below), matching the Qt shell's layout.
             Slider(value: $value, in: range) { editing in
                 onEditingChanged?(editing)
             }
+            .labelsHidden()
             .accessibilityIdentifier(id ?? "")
             .accessibilityLabel(label)
             .accessibilityValue(displayString)
@@ -1908,6 +1938,102 @@ struct LabeledSlider: View {
         // row-wide .help would double up with it, and the Qt shell already
         // scopes the tip to the icon so hovering the slider doesn't
         // surprise the user with a popup.
+    }
+}
+
+/// The sidebar/preview divider's grab strip: drags like HSplitView's
+/// divider (resize cursor, absolute tracking from the grab point, hit area
+/// wider than the visible hairline), writing the width through the binding
+/// so it persists (AppModel.sidebarWidth). Positioned over the hairline by
+/// the split container's overlay — see the z-order comment there.
+private struct SidebarSplitter: View {
+    @Binding var width: Double
+    /// The sidebar's draggable range — the floor matches the Qt shell's
+    /// fixed width; the ceiling is the old HSplitView maxWidth.
+    static let range: ClosedRange<Double> = 280...360
+    /// Grabbable a few points either side of the hairline, like a real
+    /// split view divider.
+    static let grabWidth: CGFloat = 9
+
+    var body: some View {
+        SplitterDragOverlay(
+            startWidth: { width },
+            resize: { width = min(max($0, Self.range.lowerBound),
+                                  Self.range.upperBound) })
+            .frame(width: Self.grabWidth)
+    }
+}
+
+/// AppKit event layer for the splitter: SwiftUI's DragGesture loses the
+/// resize cursor mid-drag; an NSView holds it with cursor push/pop and
+/// tracks in window coordinates.
+private struct SplitterDragOverlay: NSViewRepresentable {
+    /// Reads the sidebar width at mouse-down; the drag applies its total
+    /// delta to that anchor, so a drag clamped at a bound doesn't wind up.
+    let startWidth: () -> Double
+    let resize: (Double) -> Void
+
+    final class SplitterEventView: NSView {
+        var startWidth: () -> Double = { 0 }
+        var resize: (Double) -> Void = { _ in }
+        private var dragAnchor: (x: CGFloat, width: Double)?
+
+        // A tracking area re-asserting the cursor on EVERY move, not a
+        // cursor rect: addCursorRect fires only on entering the rect, and
+        // approaching from the preview side the hosting view's own
+        // tracking re-set the arrow immediately after — the resize cursor
+        // appeared only when entering from the sidebar side (same failure
+        // mode CropOverlayNSView documents).
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(
+                rect: .zero,
+                options: [.mouseMoved, .cursorUpdate, .mouseEnteredAndExited,
+                          .activeInKeyWindow, .inVisibleRect],
+                owner: self, userInfo: nil))
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func cursorUpdate(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            dragAnchor = (event.locationInWindow.x, startWidth())
+            NSCursor.resizeLeftRight.push()
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let anchor = dragAnchor else { return }
+            resize(anchor.width + Double(event.locationInWindow.x - anchor.x))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            dragAnchor = nil
+            NSCursor.pop()
+        }
+    }
+
+    func makeNSView(context: Context) -> SplitterEventView {
+        let view = SplitterEventView()
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.splitter)
+        view.setAccessibilityIdentifier("sidebar.splitter")
+        view.setAccessibilityLabel("Sidebar width")
+        return view
+    }
+
+    func updateNSView(_ view: SplitterEventView, context: Context) {
+        view.startWidth = startWidth
+        view.resize = resize
     }
 }
 
