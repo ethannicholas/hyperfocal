@@ -972,16 +972,18 @@ void Shell::setSidebarWidth(double width) { hf_set_sidebar_width(width); }
 
 QString Shell::uiString(const QString &key) const { return bridgeUIString(key); }
 
-QString Shell::noticesText() const {
-    QString out;
+QString Shell::noticesMarkdown() const {
     QFile notice(QStringLiteral(":/notices/NOTICE.md"));
-    if (notice.open(QIODevice::ReadOnly)) {
-        out = QString::fromUtf8(notice.readAll());
-    }
-    // The standard license texts (LGPL-3.0, GPL-3.0, Apache-2.0, CDDL-1.0)
-    // follow NOTICE.md, each under its filename. They are reproduced
-    // verbatim by license requirement, so they are never translated and
-    // never reflowed.
+    if (!notice.open(QIODevice::ReadOnly)) { return QString(); }
+    return QString::fromUtf8(notice.readAll());
+}
+
+QString Shell::licensesText() const {
+    // The standard license texts (LGPL-3.0, GPL-3.0, Apache-2.0, CDDL-1.0),
+    // each under its filename. They are reproduced verbatim by license
+    // requirement, so they are never translated, never reflowed — and never
+    // fed through the Markdown renderer, which would eat their line breaks.
+    QString out;
     const QDir dir(QStringLiteral(":/notices/licenses"));
     const QStringList names = dir.entryList(QDir::Files, QDir::Name);
     for (const QString &name : names) {
@@ -993,6 +995,10 @@ QString Shell::noticesText() const {
         out += QString::fromUtf8(file.readAll());
     }
     return out;
+}
+
+QString Shell::noticesText() const {
+    return noticesMarkdown() + licensesText();
 }
 
 int Shell::infoTipDelayMs() const { return hf_info_tip_delay_ms(); }

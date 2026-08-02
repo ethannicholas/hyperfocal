@@ -18609,71 +18609,6 @@
         }
       }
     },
-    "Includes the Adobe DNG SDK (DNG technology under license by Adobe Systems Incorporated) and the Qt framework under the GNU LGPL v3, plus other open-source libraries. See NOTICE.md for all third-party credits and licenses.": {
-      "comment": "About panel: third-party attribution paragraph.",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enthält das Adobe DNG SDK (DNG-Technologie unter Lizenz von Adobe Systems Incorporated) und das Qt-Framework unter der GNU LGPL v3 sowie weitere Open-Source-Bibliotheken. Alle Danksagungen und Lizenzen Dritter stehen in NOTICE.md."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Incluye el SDK de Adobe DNG (tecnología DNG con licencia de Adobe Systems Incorporated) y el framework Qt bajo la GNU LGPL v3, además de otras bibliotecas de código abierto. Consulta NOTICE.md para ver todos los créditos y licencias de terceros."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inclut le SDK Adobe DNG (technologie DNG sous licence d’Adobe Systems Incorporated) et le framework Qt sous GNU LGPL v3, ainsi que d’autres bibliothèques open source. Voir NOTICE.md pour l’ensemble des crédits et licences tiers."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Include l’SDK Adobe DNG (tecnologia DNG su licenza di Adobe Systems Incorporated) e il framework Qt con licenza GNU LGPL v3, oltre ad altre librerie open source. Consulta NOTICE.md per tutti i crediti e le licenze di terze parti."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Adobe DNG SDK（DNG テクノロジーは Adobe Systems Incorporated のライセンスによる）、GNU LGPL v3 のもとで提供される Qt フレームワーク、およびその他のオープンソースライブラリを利用しています。サードパーティのクレジットとライセンスの全文は NOTICE.md を参照してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Adobe DNG SDK(DNG 기술은 Adobe Systems Incorporated의 라이선스에 따름)와 GNU LGPL v3에 따른 Qt 프레임워크, 그리고 기타 오픈 소스 라이브러리를 포함합니다. 모든 서드파티 크레딧과 라이선스는 NOTICE.md를 참조하십시오."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bevat de Adobe DNG SDK (DNG-technologie onder licentie van Adobe Systems Incorporated) en het Qt-framework onder de GNU LGPL v3, plus andere opensourcebibliotheken. Zie NOTICE.md voor alle vermeldingen en licenties van derden."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inclui o SDK Adobe DNG (tecnologia DNG licenciada pela Adobe Systems Incorporated) e o framework Qt sob a GNU LGPL v3, além de outras bibliotecas de código aberto. Consulte NOTICE.md para todos os créditos e licenças de terceiros."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Включает Adobe DNG SDK (технология DNG используется по лицензии Adobe Systems Incorporated) и фреймворк Qt на условиях GNU LGPL v3, а также другие библиотеки с открытым исходным кодом. Полный список сторонних благодарностей и лицензий см. в NOTICE.md."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "包含 Adobe DNG SDK（DNG 技术由 Adobe Systems Incorporated 授权）和依据 GNU LGPL v3 授权的 Qt 框架，以及其他开源库。全部第三方致谢与许可信息见 NOTICE.md。"
-          }
-        }
-      }
-    },
     "Open Download Page": {
       "comment": "Button opening the Adobe DNG Converter download page.",
       "localizations": {
@@ -19190,6 +19125,71 @@
           "stringUnit": {
             "state": "translated",
             "value": "版本 %1 (%2)"
+          }
+        }
+      }
+    },
+    "Version %@ (%@)": {
+      "comment": "macOS About window: version and build number.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@ (%@)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versión %@ (%@)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@ (%@)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versione %@ (%@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バージョン %@ (%@)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "버전 %@ (%@)"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versie %@ (%@)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versão %@ (%@)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Версия %@ (%@)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "版本 %@ (%@)"
           }
         }
       }

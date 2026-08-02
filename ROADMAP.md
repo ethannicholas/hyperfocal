@@ -287,21 +287,12 @@ The 2026-07-23 dependency-license audit cleared the release model (MIT source,
 reproducible paid app-store builds); the one blocker was fixed (GPL exiv2 →
 BSD-2 easyexif), `NOTICE.md` + `licenses/` are complete, and LibRaw is used under
 its CDDL-1.0 arm. The Windows package now exists and meets the Qt LGPL-3.0
-checklist. Residuals before shipping paid builds (each independently landable):
+checklist, and both shells bundle the notices with a populated Third-Party
+Notices viewer linked from the About dialog (`Shell::noticesMarkdown` /
+`App/Sources/NoticesWindow.swift`). The one residual before shipping paid
+builds:
 
-1. **The macOS half of the notices bundling.** The Windows package carries
-   `NOTICE.md`, `LICENSE.txt`, `licenses/` and a generated `COMPLIANCE.md`, and
-   both shells gained Help > Third-Party Notices reading a bundled copy
-   (`Shell::noticesText` / `App/Sources/NoticesWindow.swift`); the Qt shell's
-   selftest asserts the text is really there. `App/project.yml` already lists
-   the two resource paths, but **nothing on the Mac side has been built or run**
-   — that needs a Mac session: `cd App && xcodegen generate`, build, and check
-   the menu item opens a populated window. Also still open there: the macOS
-   About panel's credits blurb is a bare Swift `String` (not localized, unlike
-   every other user-facing string) and still says the notices live "in the
-   source distribution", which stops being true once the bundle carries them.
-
-2. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
+1. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
    the payload and stages an MSIX-ready layout — `AppxManifest.xml` from
    `Packaging/windows/AppxManifest.xml.in`, generated logo assets, and a `-Msix`
    switch that runs `makeappx` — but it writes **placeholder identity**, because

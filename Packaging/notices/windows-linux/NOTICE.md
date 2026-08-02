@@ -1,22 +1,10 @@
-<!-- Platform markers (invisible on GitHub): Scripts/gen-notices.py splits
-     this file into the per-platform copies each binary bundles —
-     Packaging/notices/{macos,windows-linux}/NOTICE.md, checked in. A
-     `notices:` comment applies until the next one; tags are `all`, `macos`,
-     `qt` (the Windows/Linux build), and `source` (this file only). -->
 # Third-party notices
 
 Hyperfocal includes third-party software under separate licenses.
 
-<!-- notices: qt -->
 The full texts of the standard licenses referenced here are available at
 https://github.com/ethannicholas/hyperfocal/tree/main/licenses.
 
-<!-- notices: source -->
----
-
-## Both builds
-
-<!-- notices: macos qt -->
 ### Adobe DNG SDK 1.7.1
 
 `Vendor/dng_sdk/` vendors the Adobe DNG SDK (linear DNG export). Used under the
@@ -50,15 +38,6 @@ Compression for the DNG SDK. License: `Zlib`.
 > as such … (3) This notice may not be removed or altered from any source
 > distribution.
 
-<!-- notices: source -->
----
-
-## Windows / Linux build
-
-The desktop shell and imaging shim link the following. Except where noted these
-are dynamically linked (replaceable shared libraries).
-
-<!-- notices: qt -->
 ### Qt 6 — LGPL-3.0
 
 The Windows/Linux GUI (`QtShell/`) uses the Qt framework (modules: Qt Core, Gui,
@@ -212,15 +191,3 @@ dynamically. License: `MIT`.
 `ObservableObject`/`@Published` on non-Apple platforms. License: `MIT`.
 
 > Copyright © 2019 Sergej Jaskiewicz and OpenCombine contributors.
-
-<!-- notices: source -->
----
-
-## Command-line tool only (not shipped in the app)
-
-### swift-argument-parser
-
-Argument parsing in `hyperfocal-cli`. License: `Apache-2.0 WITH Swift exception`
-(the Runtime Library Exception waives attribution for compiled binaries).
-
-> Copyright © Apple Inc. and the Swift project authors.

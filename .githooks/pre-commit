@@ -2,7 +2,7 @@
 # Versioned hooks: enable them once per clone with
 #     git config core.hooksPath .githooks
 #
-# Two checks, each skipped when the commit can't affect it:
+# Three checks, each skipped when the commit can't affect it:
 #
 #  1. Rejects a staged Localizable.xcstrings that carries Xcode's rewrite (see
 #     Scripts/check-xcstrings.sh for what that is and why it's never wanted).
@@ -33,4 +33,10 @@ if grep -qE '^(App/Resources/Localizable\.xcstrings|QtShell/.*\.(qml|cpp|h)|AppC
     # Explicit interpreter: the script's python3 shebang doesn't resolve on
     # Windows (see Scripts/python-interpreter.sh).
     "$(Scripts/python-interpreter.sh)" Scripts/check-translations.py
+fi
+
+# 3. The per-platform notices (Packaging/notices/) are generated from
+#    NOTICE.md; reject a commit that changes one without the other.
+if grep -qE '^(NOTICE\.md|Packaging/notices/)' <<<"$STAGED"; then
+    "$(Scripts/python-interpreter.sh)" Scripts/gen-notices.py --check
 fi

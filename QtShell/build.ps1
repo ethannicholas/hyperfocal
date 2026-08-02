@@ -14,6 +14,21 @@ $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $root 'Scripts\windows-env.ps1')
 Push-Location $root
 try {
+    # Regenerate the checked-in derived artifacts this build compiles into
+    # the executable (the windows-linux notices slice, the i18n catalogs) so
+    # master edits always take. Skipped when Python is absent — the
+    # checked-in copies then apply, and the commit gate keeps those fresh.
+    $py = Get-Command python3, python -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($py) {
+        & $py.Source (Join-Path $root 'Scripts\gen-notices.py')
+        if ($LASTEXITCODE) { throw "gen-notices.py failed" }
+        & $py.Source (Join-Path $root 'Scripts\gen-translations.py') | Out-Null
+        if ($LASTEXITCODE) { throw "gen-translations.py failed" }
+    } else {
+        Write-Host "== python not found; building with checked-in generated artifacts"
+    }
+
     Write-Host "== building HyperfocalBridge (SwiftPM)"
     swift build --product HyperfocalBridge
     if ($LASTEXITCODE) { throw "bridge build failed" }

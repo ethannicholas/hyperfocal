@@ -84,4 +84,7 @@ Scripts/check-xcstrings.sh
 echo "== translation coverage"
 "$(Scripts/python-interpreter.sh)" Scripts/check-translations.py
 
+echo "== per-platform notices"
+"$(Scripts/python-interpreter.sh)" Scripts/gen-notices.py --check
+
 echo "== CI GATE PASSED"

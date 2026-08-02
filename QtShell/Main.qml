@@ -276,15 +276,6 @@ ApplicationWindow {
                     "https://ethannicholas.com/hyperfocal/tutorial.html")
             }
             Action {
-                // The notices and license texts also ship as files beside
-                // the executable (Scripts/package-windows.ps1), which is what
-                // the LGPL actually requires; this is the discoverable copy,
-                // and it works from a Store install where the package
-                // directory is write-protected and awkward to browse.
-                text: Shell.uiString("thirdPartyNotices")
-                onTriggered: noticesDialog.open()
-            }
-            Action {
                 text: Shell.uiString("aboutHyperfocal")
                 onTriggered: aboutDialog.open()
             }
@@ -525,10 +516,9 @@ ApplicationWindow {
     // The native Settings window's pipeline toggles (labels match
     // SettingsView.swift; GPU gated on an engine existing).
     Dialog {
-        // The native standard about panel, hand-built (Qt has no
-        // equivalent of orderFrontStandardAboutPanel): icon, name,
-        // version (build), the credits link + DNG SDK paragraph, and
-        // the bundle copyright line.
+        // The native About window, hand-built like AboutWindow.swift:
+        // icon, name, version (build), repository link, the Third-Party
+        // Notices link, and the copyright line.
         id: aboutDialog
         modal: true
         anchors.centerIn: parent
@@ -563,15 +553,22 @@ ApplicationWindow {
                 onLinkActivated: link => Qt.openUrlExternally(link)
             }
             Label {
-                // One literal, not a concatenation: the catalog key is the
-                // whole sentence, and a split expression would key on the
-                // joined result while reading as five separate strings.
-                text: qsTr("Includes the Adobe DNG SDK (DNG technology under license by Adobe Systems Incorporated) and the Qt framework under the GNU LGPL v3, plus other open-source libraries. See NOTICE.md for all third-party credits and licenses.")
-                color: theme.textDim
+                // All third-party attribution (including the Adobe DNG SDK
+                // notice) lives behind this link rather than a menu item or
+                // a credits paragraph: About is where users look for
+                // disclosures, and no license requires them displayed here.
+                objectName: "about.third-party-notices"
+                text: "<a href=\"#notices\">"   // i18n-exempt: markup shell
+                      + Shell.uiString("thirdPartyNotices") + "</a>"   // i18n-exempt: markup shell
+                textFormat: Text.RichText
                 font.pixelSize: 11
-                wrapMode: Text.WordWrap
-                Layout.preferredWidth: 300
-                horizontalAlignment: Text.AlignHCenter
+                Layout.alignment: Qt.AlignHCenter
+                Accessible.role: Accessible.Link
+                Accessible.name: Shell.uiString("thirdPartyNotices")
+                onLinkActivated: {
+                    aboutDialog.close()
+                    noticesDialog.open()
+                }
             }
             Label {
                 text: "© 2026 Ethan Nicholas"   // i18n-exempt: a name
@@ -584,11 +581,16 @@ ApplicationWindow {
 
     // Third-party notices + the full license texts, compiled into the
     // executable's resources so they are readable with no repo and no
-    // writable install directory. Read once per open: it is ~80 KB of text
-    // and nothing about it changes at runtime.
+    // writable install directory (the same files also ship beside the
+    // executable — Scripts/package-windows.ps1 — which is what the LGPL
+    // actually requires; this is the discoverable copy, and it works from a
+    // Store install where the package directory is write-protected). Read
+    // once per open: it is ~80 KB of text and nothing about it changes at
+    // runtime. Two text areas: NOTICE.md renders as Markdown, the license
+    // texts stay verbatim monospace (rendering would reflow them).
     Dialog {
         id: noticesDialog
-        objectName: "help.third-party-notices"
+        objectName: "about.third-party-notices"
         title: Shell.uiString("thirdPartyNotices")
         modal: true
         anchors.centerIn: parent
@@ -596,19 +598,47 @@ ApplicationWindow {
         width: Math.min(720, Math.max(360, window.width - 80))
         height: Math.min(560, Math.max(280, window.height - 80))
         onOpened: {
-            if (noticesBody.text === "") { noticesBody.text = Shell.noticesText() }
+            if (noticesBody.text === "") {
+                noticesBody.text = Shell.noticesMarkdown()
+                licensesBody.text = Shell.licensesText()
+            }
         }
-        ScrollView {
+        Flickable {
             anchors.fill: parent
+            contentWidth: width
+            contentHeight: noticesColumn.height
             clip: true
-            TextArea {
-                id: noticesBody
-                readOnly: true
-                wrapMode: TextArea.Wrap
-                selectByMouse: true
-                font.family: theme.monoFamily
-                font.pixelSize: 11
-                Accessible.name: Shell.uiString("thirdPartyNotices")
+            ScrollBar.vertical: ScrollBar {}
+            Column {
+                id: noticesColumn
+                width: parent.width
+                TextArea {
+                    id: noticesBody
+                    width: parent.width
+                    textFormat: TextEdit.MarkdownText
+                    readOnly: true
+                    wrapMode: TextArea.Wrap
+                    selectByMouse: true
+                    background: null
+                    font.pixelSize: 12
+                    Accessible.name: Shell.uiString("thirdPartyNotices")
+                    // NOTICE.md's relative links (LICENSE, licenses/, vendored
+                    // paths) point into the source tree, not the install;
+                    // only real URLs are followable.
+                    onLinkActivated: link => {
+                        if (link.startsWith("http")) Qt.openUrlExternally(link)
+                    }
+                }
+                TextArea {
+                    id: licensesBody
+                    width: parent.width
+                    readOnly: true
+                    wrapMode: TextArea.Wrap
+                    selectByMouse: true
+                    background: null
+                    font.family: theme.monoFamily
+                    font.pixelSize: 11
+                }
             }
         }
     }

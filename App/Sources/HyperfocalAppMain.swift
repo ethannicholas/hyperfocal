@@ -128,32 +128,12 @@ struct HyperfocalApp: App {
                 }
         }
         .commands {
-            // Standard about panel (icon/name/version/copyright come from the
-            // bundle) plus a credits blurb carrying the Adobe-required DNG
-            // attribution and a link to the repository.
+            // Hand-built About window (AboutWindow.swift): version, repo
+            // link, the Adobe-required DNG attribution, and the Third-Party
+            // Notices link — disclosures live behind About, not the Help
+            // menu, on both shells.
             CommandGroup(replacing: .appInfo) {
-                Button(UIStrings.aboutHyperfocal) {
-                    let attributes: [NSAttributedString.Key: Any] = [
-                        .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
-                        .foregroundColor: NSColor.secondaryLabelColor,
-                    ]
-                    let credits = NSMutableAttributedString(
-                        string: "https://github.com/ethannicholas/hyperfocal",
-                        attributes: attributes.merging(
-                            [.link: URL(string: "https://github.com/ethannicholas/hyperfocal")!],
-                            uniquingKeysWith: { _, new in new }))
-                    credits.append(NSAttributedString(
-                        string: """
-
-
-                        Includes the Adobe DNG SDK — DNG technology under \
-                        license by Adobe Systems Incorporated. See NOTICE.md \
-                        in the source distribution for all third-party credits.
-                        """,
-                        attributes: attributes))
-                    NSApplication.shared.orderFrontStandardAboutPanel(
-                        options: [.credits: credits])
-                }
+                Button(UIStrings.aboutHyperfocal) { AboutWindow.show() }
             }
             CommandGroup(replacing: .newItem) {
                 // Same action as the empty state's "Open Folder…" button,
@@ -238,9 +218,6 @@ struct HyperfocalApp: App {
                         URL(string: "https://ethannicholas.com/hyperfocal/tutorial.html")!)
                 }
                 .keyboardShortcut("?", modifiers: .command)
-                // The bundled NOTICE.md + license texts (Resources, via
-                // project.yml). The Qt shell carries the same menu item.
-                Button(UIStrings.thirdPartyNotices) { NoticesWindow.show() }
             }
         }
 

@@ -45,6 +45,17 @@ $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 try {
 
+# A release must ship what is committed: verify the checked-in derived
+# artifacts (the staged notices slice, the i18n catalogs) match their
+# masters instead of silently packaging stale or uncommitted content.
+$py = Get-Command python3, python -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if (-not $py) { throw "python not found (needed to verify generated artifacts)" }
+& $py.Source (Join-Path $root 'Scripts\gen-notices.py') --check
+if ($LASTEXITCODE) { throw "per-platform notices are stale - run Scripts/gen-notices.py and commit" }
+& $py.Source (Join-Path $root 'Scripts\gen-translations.py') --check
+if ($LASTEXITCODE) { throw "generated translations are stale - run Scripts/gen-translations.py and commit" }
+
 # ---------------------------------------------------------------- version --
 # Same derivation as package-app.sh and QtShell/CMakeLists.txt: marketing
 # version from the latest tag (leading v stripped), build number = commit count.
@@ -193,9 +204,10 @@ if (-not (Test-Path (Join-Path $stage 'Qt6Core.dll'))) {
 }
 
 # --------------------------------------------------------------- notices ---
-# ROADMAP release residual 1: the notices and license texts must travel with
-# the binary, not only in the source tree.
-Copy-Item (Join-Path $root 'NOTICE.md') $stage
+# The notices and license texts must travel with the binary, not only in the
+# source tree. The staged NOTICE.md is the Windows/Linux slice of the master
+# (Scripts/gen-notices.py) — this package should not list macOS-only detail.
+Copy-Item (Join-Path $root 'Packaging\notices\windows-linux\NOTICE.md') $stage
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $stage 'LICENSE.txt')
 New-Item -ItemType Directory -Force (Join-Path $stage 'licenses') | Out-Null
 Copy-Item (Join-Path $root 'licenses\*.txt') (Join-Path $stage 'licenses')

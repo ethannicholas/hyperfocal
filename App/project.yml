@@ -60,15 +60,13 @@ targets:
       # through String(localized:)/NSLocalizedString — see AppCore/
       # Localization.swift for the enum displayName seam.
       - Resources/Localizable.xcstrings
-      # Third-party notices + the standard license texts, inside the bundle so
-      # an installed app carries them without the source tree (the licenses
-      # require it of a binary distribution, and Help > Third-Party Notices
-      # reads them from here — see NoticesWindow.swift). The Windows package
-      # stages the same two paths; see Scripts/package-windows.ps1.
-      - path: ../NOTICE.md
-        buildPhase: resources
-      - path: ../licenses
-        type: folder
+      # The macOS slice of the third-party notices, inside the bundle so an
+      # installed app carries it without the source tree (About > Third-Party
+      # Notices reads it — see NoticesWindow.swift). Generated from the master
+      # NOTICE.md by Scripts/gen-notices.py; the macOS build bundles only
+      # Apple-framework-free basics (DNG SDK, zlib), so none of the standard
+      # license texts in licenses/ apply here — the Qt shell bundles those.
+      - path: ../Packaging/notices/macos/NOTICE.md
         buildPhase: resources
     dependencies:
       - package: HyperfocalKit

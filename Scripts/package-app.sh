@@ -15,6 +15,12 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# A release must ship what is committed: verify the checked-in derived
+# artifacts (per-platform notices, translation catalogs) match their
+# masters instead of silently regenerating uncommitted content.
+"$(Scripts/python-interpreter.sh)" Scripts/gen-notices.py --check
+"$(Scripts/python-interpreter.sh)" Scripts/gen-translations.py --check
+
 IDENTITY=""
 NOTARIZE_PROFILE=""
 ARCHIVES=1

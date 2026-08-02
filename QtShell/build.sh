@@ -5,6 +5,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Regenerate the checked-in derived artifacts this build compiles into the
+# executable (the windows-linux notices slice, the i18n catalogs) so master
+# edits always take. Skipped when Python is absent — the checked-in copies
+# then apply, and the commit gate keeps those fresh.
+if command -v python3 >/dev/null 2>&1; then
+    python3 Scripts/gen-notices.py
+    python3 Scripts/gen-translations.py >/dev/null
+else
+    echo "== python3 not found; building with checked-in generated artifacts"
+fi
+
 # The bridge is a SwiftPM dynamic-library product (over the AppCore
 # module) — the same build carries to Linux, where there is no Xcode.
 BRIDGE_DIR="$PWD/.build/debug"

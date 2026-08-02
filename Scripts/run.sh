@@ -23,6 +23,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Checked-in derived artifacts (per-platform notices, translation catalogs)
+# regenerate on every build so a NOTICE.md or Localizable.xcstrings edit
+# always takes — the same reason xcodegen runs every time below. Both
+# generators rewrite only files whose content changed, so incremental
+# builds see no churn.
+"$(Scripts/python-interpreter.sh)" Scripts/gen-notices.py
+"$(Scripts/python-interpreter.sh)" Scripts/gen-translations.py >/dev/null
+
 CONFIG=Debug
 RUN=1
 QT=0

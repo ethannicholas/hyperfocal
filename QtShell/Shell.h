@@ -141,9 +141,13 @@ public:
     /// with the native app the same way (AppCore.UIStrings.
     /// infoTipDelayMilliseconds, via hf_info_tip_delay_ms). Other tooltips
     /// keep InfoTip's default delay.
-    /// NOTICE.md plus every bundled license text, concatenated for the
-    /// Help > Third-Party Notices viewer. Shell-local on purpose: it reads
-    /// the executable's own Qt resources and touches no model state.
+    /// The Third-Party Notices viewer (opened from the About dialog) shows
+    /// NOTICE.md rendered as Markdown followed by the license texts verbatim,
+    /// so it reads the two halves separately; noticesText() is their
+    /// concatenation, which the selftest asserts on. Shell-local on purpose:
+    /// these read the executable's own Qt resources and touch no model state.
+    Q_INVOKABLE QString noticesMarkdown() const;
+    Q_INVOKABLE QString licensesText() const;
     Q_INVOKABLE QString noticesText() const;
     Q_INVOKABLE int infoTipDelayMs() const;
     Q_INVOKABLE bool gpuAvailable() const;
