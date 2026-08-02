@@ -301,7 +301,20 @@ checklist. Residuals before shipping paid builds (each independently landable):
    every other user-facing string) and still says the notices live "in the
    source distribution", which stops being true once the bundle carries them.
 
-2. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
+2. **`dxcompiler.dll` + `dxil.dll` are redistributed but not in `NOTICE.md`.**
+   windeployqt stages both into the Windows package (31.6 MB of the 206 MB);
+   they are Microsoft DirectX binaries — "Microsoft(r) DirectX for Windows(r) -
+   Out Of Band" — separately licensed from Qt, so the Qt entry does not cover
+   them. Nothing in the package statically imports them: Qt loads them at
+   runtime for the D3D12 RHI backend, and the packaged app renders fine without
+   them (measured — selftest exit 0 including the zoom pixel comparison and a
+   window screenshot, with both DLLs moved aside; one ARM64 VM, D3D11 default,
+   so this is not proof for every GPU). Decide between the two honest routes:
+   run them through the `third-party-deps` skill and add a `NOTICE.md` entry, or
+   drop them from the package and pin the RHI backend so no configuration can
+   reach for a compiler that isn't there. Do not ship the current state.
+
+3. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
    the payload and stages an MSIX-ready layout — `AppxManifest.xml` from
    `Packaging/windows/AppxManifest.xml.in`, generated logo assets, and a `-Msix`
    switch that runs `makeappx` — but it writes **placeholder identity**, because
