@@ -73,6 +73,20 @@ if [ "$UPLOAD" = 1 ]; then
         -exportOptionsPlist "$EXPORT_OPTS" -allowProvisioningUpdates
     echo "uploaded Hyperfocal $VERSION ($BUILD_NUMBER) — check App Store" \
         "Connect → TestFlight once processing finishes"
+    cat <<'MEDIA'
+
+If the UI changed since the current listing's media, regenerate the App
+Store screenshots / app-preview video before updating the listing:
+
+    Scripts/store-media.py --frames <stack-dir> --out <dir> \
+        --exposure 0.5 --shadows 20 --video-zoom 0.18 \
+        --shot-center <x,y> --cursor <x,y>
+
+That captures every store language (one app session each — plan on a few
+minutes per language of hands-off screen time; --lang <tag> restricts it
+for testing). Run from a GUI session; Scripts/store-media.py --help for
+the knobs; stack folder and image coordinates are operator-supplied.
+MEDIA
 else
     rm -rf dist/mas
     xcodebuild -exportArchive -archivePath "$ARCHIVE" \

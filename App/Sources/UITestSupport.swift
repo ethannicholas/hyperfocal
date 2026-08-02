@@ -49,6 +49,31 @@ import os
 ///       journeys set values here and verify the UI's value label AND the
 ///       rendered output; direct mouse-drag coverage lives in the one
 ///       context where it provably works (StackListJourney, pre-fuse).
+///
+/// Store-media capture (Scripts/store-media.py) drives the same channel to
+/// stage App Store screenshots/videos — exact window sizes, deterministic
+/// viewport framing, and enough geometry to aim the real cursor:
+///
+///   {"action": "set-window", "w": w, "h": h, "result": r}
+///       — exact window frame in points (top-left of the visible frame);
+///       capture pixel sizes follow from this × backing scale
+///   {"action": "set-zoom", "scale": s, "cx": x?, "cy": y?, "result": r}
+///       — absolute zoom scale; cx/cy center the view on that image point
+///   {"action": "set-retouch", "source": "pmax"|"dmap"|"frame",
+///    "brush-radius": px?, "brush-softness": f?, "result": r}
+///   {"action": "set-sections", "collapsed": "stack,fusion", "result": r}
+///       — collapse exactly these sidebar sections (empty = expand all) so
+///       a shot frames the sections it is about
+///   {"action": "get-geometry", "result": r}
+///       — writes a JSON snapshot: window/pane frames in screencapture's
+///       coordinate space (points, top-left origin of the main display),
+///       backing scale, viewport scale/offset, displayed image size, phase,
+///       and retouch readiness — everything a driver needs to map an image
+///       point to a screen point (same math as the pane views) and to poll
+///       long operations
+///
+/// HYPERFOCAL_WINDOW=WxH (points) sizes the window at launch instead of the
+/// fill-the-screen default — capture runs need exact dimensions.
 @MainActor
 enum UITestSupport {
 
@@ -65,18 +90,25 @@ enum UITestSupport {
         let env = ProcessInfo.processInfo.environment
         log.notice("uitest mode active; LOAD_STACK=\(env["HYPERFOCAL_LOAD_STACK"] ?? "nil", privacy: .public) OPEN_PROJECT=\(env["HYPERFOCAL_OPEN_PROJECT"] ?? "nil", privacy: .public)")
 
-        // Fresh throwaway defaults every run: a test that collapses a
-        // section must not leak that into the next test's launch.
-        AppModel.settings.removePersistentDomain(forName: "org.hyperfocal.uitest-settings")
+        // The throwaway defaults suite is cleared in AppModel.settings at
+        // first touch — doing it here was too late (the model's initializers
+        // had already read the previous run's state).
 
         // Fill the visible screen: offscreen controls are invisible to
         // XCUITest coordinate math (adjust/drag/click silently no-op), the
         // sidebar grows past small windows once the retouch section appears,
         // and a window taller than the screen puts the zoom bar off-screen.
+        // Capture runs need an exact size instead — HYPERFOCAL_WINDOW=WxH
+        // (points), anchored at the visible frame's top-left.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             if let window = NSApp.windows.first(where: { $0.isVisible }),
                let screen = NSScreen.main {
-                window.setFrame(screen.visibleFrame, display: true)
+                if let spec = env["HYPERFOCAL_WINDOW"],
+                   let frame = Self.windowFrame(spec: spec, on: screen) {
+                    window.setFrame(frame, display: true)
+                } else {
+                    window.setFrame(screen.visibleFrame, display: true)
+                }
             }
         }
 
@@ -251,8 +283,137 @@ enum UITestSupport {
         case "exit-retouch":
             model.exitRetouch()
             finish(!model.retouchMode)
+        case "set-window":
+            guard let w = command["w"].flatMap(Double.init),
+                  let h = command["h"].flatMap(Double.init) else {
+                return finish(false, "bad args")
+            }
+            guard let window = NSApp.windows.first(where: { $0.isVisible }),
+                  let screen = window.screen ?? NSScreen.main,
+                  let frame = windowFrame(spec: "\(w)x\(h)", on: screen) else {
+                return finish(false, "no window")
+            }
+            window.setFrame(frame, display: true)
+            finish(true)
+        case "set-zoom":
+            guard let scale = command["scale"].flatMap(Double.init) else {
+                return finish(false, "bad args")
+            }
+            let size = model.displayedImageSize
+            model.viewport.mode = .scale(CGFloat(scale))
+            if let cx = command["cx"].flatMap(Double.init),
+               let cy = command["cy"].flatMap(Double.init) {
+                model.viewport.offset = CGSize(width: cx - size.width / 2,
+                                               height: cy - size.height / 2)
+                model.viewport.clampOffset(imageSize: size)
+            }
+            finish(true)
+        case "set-retouch":
+            guard let session = model.retouch else {
+                return finish(false, "no retouch session")
+            }
+            if let raw = command["source"] {
+                switch raw {
+                case "pmax": session.selectKind(.pmax)
+                case "dmap": session.selectKind(.dmap)
+                case "frame": session.selectKind(.frame)
+                default: return finish(false, "unknown source \(raw)")
+                }
+            }
+            if let r = command["brush-radius"].flatMap(Double.init) {
+                session.brushRadius = r
+            }
+            if let s = command["brush-softness"].flatMap(Double.init) {
+                session.brushSoftness = s
+            }
+            finish(true)
+        case "get-geometry":
+            guard let resultPath = command["result"] else { return }
+            writeGeometry(model: model, to: resultPath)
+        case "set-sections":
+            // Which sidebar sections are collapsed — capture runs frame the
+            // sections a shot is about (scrolling the sidebar from outside
+            // is not reliable: its nested scroll regions overlap mid-scroll).
+            var sections: Set<AppModel.SidebarSection> = []
+            for name in (command["collapsed"] ?? "").split(separator: ",") {
+                guard let section = AppModel.SidebarSection(rawValue: String(name))
+                else { return finish(false, "unknown section \(name)") }
+                sections.insert(section)
+            }
+            model.collapsedSections = sections
+            finish(true)
         default:
             finish(false, "unknown action \(command["action"] ?? "nil")")
         }
+    }
+
+    // MARK: - Store-media capture support
+
+    /// "WxH" in points → a frame anchored at the visible frame's top-left.
+    private static func windowFrame(spec: String, on screen: NSScreen) -> NSRect? {
+        let parts = spec.lowercased().split(separator: "x")
+        guard parts.count == 2, let w = Double(parts[0]),
+              let h = Double(parts[1]) else { return nil }
+        let vf = screen.visibleFrame
+        return NSRect(x: vf.minX, y: vf.maxY - CGFloat(h),
+                      width: CGFloat(w), height: CGFloat(h))
+    }
+
+    /// Cocoa screen rect (bottom-left origin) → screencapture's space
+    /// (points, top-left origin of the main display).
+    private static func topLeftRect(_ rect: NSRect) -> [String: Double] {
+        let mainHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        return ["x": rect.minX, "y": mainHeight - rect.maxY,
+                "w": rect.width, "h": rect.height]
+    }
+
+    /// Everything a capture driver needs to frame the window, map an image
+    /// point to a screen point (the pane views' own math: screen = pane
+    /// center + (point − image/2 − offset) × scale; pane views are flipped,
+    /// so +y is down on both sides), and poll fuse/retouch readiness.
+    private static func writeGeometry(model: AppModel, to resultPath: String) {
+        var payload: [String: Any] = ["ok": "1"]
+        payload["phase"] = String(describing: model.phase)
+        let size = model.displayedImageSize
+        payload["image"] = ["w": size.width, "h": size.height]
+        if let window = NSApp.windows.first(where: { $0.isVisible }) {
+            payload["window"] = topLeftRect(window.frame)
+            payload["backingScale"] = Double(window.backingScaleFactor)
+            var panes: [[String: Any]] = []
+            var walk: ((NSView) -> Void)!
+            walk = { view in
+                if view is ToneFilteredPaneView, !view.isHiddenOrHasHiddenAncestor,
+                   view.window != nil {
+                    let inWindow = view.convert(view.bounds, to: nil)
+                    panes.append([
+                        "class": String(describing: type(of: view)),
+                        "frame": topLeftRect(window.convertToScreen(inWindow)),
+                    ])
+                }
+                view.subviews.forEach(walk)
+            }
+            if let root = window.contentView { walk(root) }
+            panes.sort {
+                (($0["frame"] as? [String: Double])?["x"] ?? 0)
+                    < (($1["frame"] as? [String: Double])?["x"] ?? 0)
+            }
+            payload["panes"] = panes
+            if let pane = panes.first,
+               let frame = pane["frame"] as? [String: Double] {
+                let paneSize = CGSize(width: frame["w"] ?? 0, height: frame["h"] ?? 0)
+                payload["viewportScale"] = Double(
+                    model.viewport.effectiveScale(imageSize: size, viewSize: paneSize))
+            }
+        }
+        payload["offsetW"] = Double(model.viewport.offset.width)
+        payload["offsetH"] = Double(model.viewport.offset.height)
+        payload["retouchActive"] = model.retouchMode
+        if let session = model.retouch {
+            payload["retouchSource"] = session.sourceName
+            payload["canPaint"] = session.canPaint
+            payload["sourceLoading"] = session.sourceLoading
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+        try? data.write(to: URL(fileURLWithPath: resultPath))
     }
 }

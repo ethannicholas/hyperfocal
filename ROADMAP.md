@@ -308,6 +308,28 @@ builds:
    DLL-replaceability, since the `WindowsApps` copy is locked) and it also
    covers the small static `libQt6QmlBuiltins.a` fragment (Qt 6.7+).
 
+2. **Store-listing media: the language sweep and the Windows side.**
+   `Scripts/store-media.py` captures Mac App Store media in one shot — the
+   fusion-workflow app-preview video (1920×1080 H.264 30 fps with the silent
+   stereo AAC track App Store Connect requires, time-compressed into the
+   mandatory 15–30 s if fusion runs long) and retouch-mode screenshots at an
+   accepted size (default 2560×1600; 2880×1800 is unreachable while a Dock is
+   showing because macOS clamps windows to the visible frame). It drives the
+   app over the UITestSupport command channel (`set-window`/`set-zoom`/
+   `set-retouch`/`set-sections`/`get-geometry`, `HYPERFOCAL_WINDOW`), and a
+   CGEvent helper walks the real pointer so the retouch crosshair + brush
+   circle land in the shot. Stack folder and image coordinates are operator
+   parameters (private corpus — kept out of the repo). A run defaults to
+   every catalog language, one localized app session each (`-AppleLanguages`
+   for the app catalog + `HYPERFOCAL_LANG` for the shared layer; `--lang`
+   restricts it for testing). English and German are verified; remaining:
+   - Run the full sweep and eyeball the results — especially the wide
+     languages (de, ru) — for clipped layouts in the captured framings.
+   - The Windows/Qt equivalent: a Shell.cpp-side command channel analog plus a
+     PowerShell driver. Microsoft Store wants PNG screenshots ≥ 1366×768 (up
+     to 4K, ≤ 10 per listing) and optional 1920×1080 MP4 trailers, so the
+     existing sizes/encodes carry over.
+
 ## Engine performance
 
 Throughput breakdowns, measured dead-ends, ablation taps, and the per-pixel

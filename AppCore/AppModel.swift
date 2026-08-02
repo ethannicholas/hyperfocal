@@ -287,11 +287,22 @@ public final class AppModel: ObservableObject {
     // HYPERFOCAL_SETTINGS_SUITE overrides the suite outright — the Qt
     // shell names its own store there so the two shells' settings never
     // bleed into each other (same isolation idea as the UI-test suite).
-    static let settings = UserDefaults(
-        suiteName: ProcessInfo.processInfo.environment["HYPERFOCAL_SETTINGS_SUITE"]
-            ?? (ProcessInfo.processInfo.environment["HYPERFOCAL_UITEST"] == "1"
+    static let settings: UserDefaults = {
+        let env = ProcessInfo.processInfo.environment
+        let name = env["HYPERFOCAL_SETTINGS_SUITE"]
+            ?? (env["HYPERFOCAL_UITEST"] == "1"
                 ? "org.hyperfocal.uitest-settings"
-                : "org.hyperfocal.settings")) ?? .standard
+                : "org.hyperfocal.settings")
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        // UI-test/capture runs get a FRESH throwaway suite, cleared here at
+        // first touch — clearing it any later (it used to happen in
+        // UITestSupport.activate) is after the model's initializers have
+        // already read the previous run's leftovers.
+        if env["HYPERFOCAL_UITEST"] == "1" {
+            defaults.removePersistentDomain(forName: name)
+        }
+        return defaults
+    }()
 
     // Fusion parameters
     @Published public var alignFrames: Bool {
