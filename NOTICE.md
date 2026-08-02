@@ -72,6 +72,30 @@ same one distributed outside any app store) is provided for that purpose. The
 `qsb` build tool (GPL-3.0-only) is **not** redistributed — only the compiled
 `.qsb` shader output and the LGPL-3.0 runtime libraries ship.
 
+### DirectX shader compiler — Microsoft Windows SDK Distributable Code
+
+The Windows package ships `dxcompiler.dll` and `dxil.dll`, copied by
+`windeployqt` from `Windows Kits\10\Redist\D3D\<arch>\`. Qt loads them at
+runtime for its Direct3D 12 RHI backend. They are **Microsoft binaries, not
+covered by Hyperfocal's MIT license**, redistributed as "Distributable Code"
+under the Microsoft Software License Terms for the Windows Software Development
+Kit — which list `Redist\D3D\x64\` and `Redist\D3D\x86\` `dxcompiler.dll` and
+`dxil.dll` as redistributable with Classic Windows applications.
+
+> Copyright © Microsoft Corporation. All rights reserved.
+
+`dxcompiler.dll` is built from Microsoft's DirectX Shader Compiler, which
+incorporates LLVM and Clang under the University of Illinois/NCSA Open Source
+License, the LLVM System Interface Library, and OpenBSD regex (Henry Spencer).
+Microsoft's notice for those components is reproduced verbatim — it is marked
+"Do Not Translate or Localize" — in
+[`licenses/DirectXShaderCompiler-ThirdPartyNotices.txt`](licenses/DirectXShaderCompiler-ThirdPartyNotices.txt),
+and is bundled with the Windows package.
+
+Hyperfocal does not modify these binaries, does not alter their copyright,
+trademark or patent notices, and does not use Microsoft's trademarks in its own
+name or in any way suggesting Microsoft endorsement.
+
 ### LibRaw — used under CDDL-1.0
 
 Camera-raw decoding. LibRaw is dual-licensed `LGPL-2.1-only OR CDDL-1.0`;

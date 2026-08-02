@@ -230,6 +230,25 @@ library in this folder is a separate, replaceable DLL.
   redistributed here. Only its compiled shader output ships, inside the
   executable's own resources.
 
+## Microsoft DirectX shader compiler
+
+``dxcompiler.dll`` and ``dxil.dll`` are Microsoft binaries, copied from the
+Windows SDK's ``Redist\D3D`` directory and loaded at runtime by Qt's Direct3D 12
+backend. They are **not** covered by Hyperfocal's MIT license: they are
+redistributed as "Distributable Code" under the Microsoft Software License Terms
+for the Windows Software Development Kit, unmodified and with their copyright,
+trademark and patent notices intact.
+
+``dxcompiler.dll`` is built from Microsoft's DirectX Shader Compiler, which
+incorporates LLVM and Clang under the University of Illinois/NCSA Open Source
+License. Microsoft's notice for those components is reproduced verbatim in
+``licenses\DirectXShaderCompiler-ThirdPartyNotices.txt``.
+
+> Copyright (c) Microsoft Corporation. All rights reserved.
+
+Hyperfocal's MIT license covers Hyperfocal's own code. Every third-party
+component bundled here remains under its own license, listed in ``NOTICE.md``.
+
 ## Adobe DNG SDK
 
 Linear-DNG export uses the Adobe DNG SDK. This product includes DNG technology

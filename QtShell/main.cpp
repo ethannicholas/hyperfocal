@@ -110,6 +110,11 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             {"licenses/LGPL-3.0.txt", QLatin1String("GNU LESSER GENERAL PUBLIC LICENSE")},
             {"licenses/Apache-2.0.txt", QLatin1String("Apache License")},
             {"licenses/CDDL-1.0.txt", QLatin1String("COMMON DEVELOPMENT AND DISTRIBUTION LICENSE")},
+            // Microsoft marks this one "Do Not Translate or Localize" and it
+            // covers DLLs we redistribute, so losing it is a licensing bug,
+            // not a cosmetic one.
+            {"licenses/DirectXShaderCompiler-ThirdPartyNotices.txt",
+             QLatin1String("Microsoft/DirectXShaderCompiler")},
         };
         for (const auto &req : required) {
             if (!notices.contains(req.needle)) {
