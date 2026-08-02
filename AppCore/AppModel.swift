@@ -3010,9 +3010,14 @@ public final class AppModel: ObservableObject {
                     self.phase = .done
                     // Alignment transforms exist now — swap the Input pane's
                     // raw decode for the aligned one (it sits next to Output).
-                    if let url = self.inputPreviewURL {
+                    // The Stack row marched with reading progress during the
+                    // fuse; re-sync row and pane on the first fused frame
+                    // rather than leaving the row wherever the last progress
+                    // tick parked it. Transient view state — no recordEdit.
+                    if let first = urls.first {
+                        self.selection = [first]
                         self.inputPreviewURL = nil
-                        self.showInputFrame(url)
+                        self.showInputFrame(first)
                     }
                     MemoryFootprint.mark("results + previews stored")
                     if !self.batchMode {
