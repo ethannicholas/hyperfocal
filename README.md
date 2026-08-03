@@ -69,7 +69,8 @@ result every time.
 - **Rocking animations.** Export a short looping video that rocks the result
   left and right, using the computed depth map for parallax — the depth your
   stack captured becomes visible motion. Choose the path, speed, strength,
-  and format (MP4 or loop-forever GIF).
+  and format (H.264 MP4 on macOS and Windows, or a loop-forever GIF on any
+  of the three).
 
 - **Projects and batches.** Multi-stack projects with per-stack results and
   retouch state, a queue that fuses every stack in a session, and export-all.

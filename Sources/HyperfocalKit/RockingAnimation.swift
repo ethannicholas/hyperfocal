@@ -335,10 +335,11 @@ public enum RockingAnimation {
         return
     }
     #else
-    /// GIF via the CImaging giflib writer. H.264 has no portable encoder we
-    /// can ship (every obvious FFmpeg build is GPL-configured, which our MIT
-    /// source + app-store distribution cannot take), so MP4 stays Apple-only
-    /// and asks for a `.gif` instead of failing vaguely.
+    /// GIF via the CImaging giflib writer; H.264 via its `hf_video_*` writer,
+    /// which exists on Windows (Media Foundation's sink writer, i.e. the
+    /// encoder the OS already ships) and not on Linux — there, no encoder we
+    /// may bundle exists yet, so the export asks for a `.gif` rather than
+    /// failing vaguely. See `cimaging.h` for the licensing behind that split.
     public static func write(to url: URL, image: ImageBuffer, depth: [Float],
                              options: Options = Options(),
                              log: ((String) -> Void)? = nil,
@@ -346,38 +347,61 @@ public enum RockingAnimation {
                              cancellation: CancellationToken? = nil) throws {
         precondition(depth.count == image.width * image.height,
                      "depth plane must match the image")
-        guard url.pathExtension.lowercased() == "gif" else {
+        let gif = url.pathExtension.lowercased() == "gif"
+        #if !os(Windows)
+        guard gif else {
             throw ImageFileError.unsupported(localizedString(
                 "Rocking animations export as GIF on this platform — choose a .gif filename.",
                 comment: "Non-Apple rocking export: only the GIF container is available"))
         }
+        #endif
         let scale = min(1.0, Double(options.maxSide) / Double(max(image.width, image.height)))
-        // Even dimensions aren't required by GIF, but keeping the same
-        // rounding as the H.264 path means both produce the same geometry.
+        // Even dimensions: H.264 4:2:0 subsampling requires them. GIF doesn't,
+        // but sharing the rounding means both containers produce the same
+        // geometry from the same stack.
         let w = max(2, Int(Double(image.width) * scale) & ~1)
         let h = max(2, Int(Double(image.height) * scale) & ~1)
         let (base, smallDepth) = downsample(image, depth: depth, to: (w, h))
         let disparity = normalizedDisparity(smallDepth)
         let frameCount = max(2, Int(options.duration * options.fps))
-        log?(String(format: "rocking: %dx%d, %d frames @ %.0f fps, amplitude %.1f%%, GIF",
-                    w, h, frameCount, options.fps, options.amplitude * 100))
+        log?(String(format: "rocking: %dx%d, %d frames @ %.0f fps, amplitude %.1f%%, %@",
+                    w, h, frameCount, options.fps, options.amplitude * 100,
+                    gif ? "GIF" : "H.264"))
 
         try? FileManager.default.removeItem(at: url)
+        if gif {
+            try writeGIF(to: url, base: base, disparity: disparity,
+                         frameCount: frameCount, options: options,
+                         progress: progress, cancellation: cancellation)
+        } else {
+            try writeH264(to: url, base: base, disparity: disparity,
+                          frameCount: frameCount, options: options,
+                          progress: progress, cancellation: cancellation)
+        }
+        log?("wrote \(url.lastPathComponent)")
+    }
+
+    /// The shim speaks f32 while `ImageBuffer` is f16: widen each frame through
+    /// one reusable staging plane rather than allocating a `floatPixels()` copy
+    /// per frame — at 1920 px and 30 fps that is ~90 × 40 MB of churn.
+    private static func widen(_ img: ImageBuffer, into staging: inout [Float]) {
+        img.pixels.withUnsafeBufferPointer { src in
+            staging.withUnsafeMutableBufferPointer { dst in
+                hfWiden(src.baseAddress!, dst.baseAddress!, count: dst.count)
+            }
+        }
+    }
+
+    private static func writeGIF(to url: URL, base: ImageBuffer, disparity: [Float],
+                                 frameCount: Int, options: Options,
+                                 progress: ((Double) -> Void)?,
+                                 cancellation: CancellationToken?) throws {
+        let w = base.width, h = base.height
         // GIF delays are centiseconds; below 2 many players silently clamp to
         // 10, so keep the written value honest rather than promising 30 fps.
         let delay = max(2, Int((100.0 / options.fps).rounded()))
-        // The shim speaks f32 (see ImageBuffer): widen each frame through one
-        // reusable staging plane rather than allocating a `floatPixels()` copy
-        // per frame — at 1920 px and 30 fps that is ~90 × 40 MB of churn.
         var staging = [Float](repeating: 0, count: w * h * 4)
-        func widen(_ img: ImageBuffer) {
-            img.pixels.withUnsafeBufferPointer { src in
-                staging.withUnsafeMutableBufferPointer { dst in
-                    hfWiden(src.baseAddress!, dst.baseAddress!, count: dst.count)
-                }
-            }
-        }
-        widen(base)
+        widen(base, into: &staging)
         guard let gif = staging.withUnsafeBufferPointer({
             hf_gif_begin(url.path, CInt(w), CInt(h), $0.baseAddress)
         }) else {
@@ -392,7 +416,7 @@ public enum RockingAnimation {
             let shift = options.shift(frame: frame, of: frameCount, width: w)
             warp(base, disparity: disparity, shiftX: shift.x, shiftY: shift.y,
                  into: &warped)
-            widen(warped)
+            widen(warped, into: &staging)
             let status = staging.withUnsafeBufferPointer {
                 hf_gif_add_frame(gif, $0.baseAddress, CInt(delay))
             }
@@ -405,7 +429,39 @@ public enum RockingAnimation {
         guard hf_gif_finish(gif) == hf_ok else {
             throw StackError.io("couldn't finish writing the GIF")
         }
-        log?("wrote \(url.lastPathComponent)")
+    }
+
+    private static func writeH264(to url: URL, base: ImageBuffer, disparity: [Float],
+                                  frameCount: Int, options: Options,
+                                  progress: ((Double) -> Void)?,
+                                  cancellation: CancellationToken?) throws {
+        let w = base.width, h = base.height
+        guard let video = hf_video_begin(url.path, CInt(w), CInt(h), options.fps) else {
+            throw StackError.io("couldn't create the H.264 encoder for \(url.path)")
+        }
+        var finished = false
+        defer { if !finished { hf_video_abort(video) } }
+
+        var staging = [Float](repeating: 0, count: w * h * 4)
+        var warped = ImageBuffer(width: w, height: h)
+        for frame in 0..<frameCount {
+            try cancellation?.checkCancelled()
+            let shift = options.shift(frame: frame, of: frameCount, width: w)
+            warp(base, disparity: disparity, shiftX: shift.x, shiftY: shift.y,
+                 into: &warped)
+            widen(warped, into: &staging)
+            let status = staging.withUnsafeBufferPointer {
+                hf_video_add_frame(video, $0.baseAddress)
+            }
+            guard status == hf_ok else {
+                throw StackError.io("animation frame \(frame) failed (shim status \(status.rawValue))")
+            }
+            progress?(Double(frame + 1) / Double(frameCount))
+        }
+        finished = true
+        guard hf_video_finish(video) == hf_ok else {
+            throw StackError.io("couldn't finish writing the video")
+        }
     }
     #endif
 }

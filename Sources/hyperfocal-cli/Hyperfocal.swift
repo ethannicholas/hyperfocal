@@ -651,7 +651,7 @@ struct Animate: ParsableCommand {
     var inputs: [String]
 
     @Option(name: .shortAndLong,
-            help: "Output path: .mp4 (H.264), or .gif for an animation that loops automatically in every viewer (MP4 has no loop flag players honor).")
+            help: "Output path: .mp4 (H.264; needs the OS encoder, so macOS and Windows only), or .gif for an animation that loops automatically in every viewer (MP4 has no loop flag players honor).")
     var output: String
 
     @OptionGroup var fusion: FusionOptions

@@ -309,6 +309,13 @@ hyperfocalKitDeps.append("CImaging")
 let winImagingLibs = ["tiff", "libpng16", "jpeg", "lcms2", "raw_r", "gif",
                       "opencv_core4", "opencv_imgproc4", "opencv_features2d4",
                       "opencv_calib3d4", "opencv_video4"]
+// Media Foundation, for the rocking animation's H.264 writer (video.cpp).
+// Windows SDK import libraries onto OS DLLs — nothing new is redistributed,
+// and the OS encoder is what makes shipping H.264 possible at all (see
+// include/cimaging.h). mfuuid is the SDK's static table of interface/format
+// GUIDs; ole32 is for CoInitializeEx; strmiids carries the codec-API
+// property GUIDs (mfuuid does not — checked with dumpbin, not assumed).
+let winSystemLibs = ["mfplat", "mfreadwrite", "mfuuid", "strmiids", "ole32"]
 extraTargets.append(
     .target(
         name: "CImaging",
@@ -351,7 +358,7 @@ extraTargets.append(
         ],
         linkerSettings: [
             .unsafeFlags(["-L" + vcpkgPrefix + "\\lib"]),
-        ] + winImagingLibs.map { .linkedLibrary($0) }
+        ] + (winImagingLibs + winSystemLibs).map { .linkedLibrary($0) }
     )
 )
 hyperfocalKitDeps.append("CImaging")

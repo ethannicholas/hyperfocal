@@ -49,14 +49,20 @@ The engine, CLI, and Qt/QML shell are **landed at feature parity** on macOS,
 Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan.md`
 (+ git history). Remaining:
 
-- **Rocking-animation MP4 on non-Apple.** GIF exports on all three OSes now
-  (giflib, via `hf_gif_*`); H.264 is still Apple-only and the non-Apple path
-  refuses a non-`.gif` filename rather than failing obscurely. The blocker is
-  the encoder's licence, not the plumbing: distro FFmpeg builds are configured
+- **Rocking-animation MP4 on Linux.** GIF exports on all three OSes (giflib,
+  via `hf_gif_*`) and H.264 now exports on macOS (AVFoundation) and Windows
+  (Media Foundation, `hf_video_*` in `Sources/CImaging/video.cpp`); Linux is
+  the one platform left refusing a non-`.gif` filename. The blocker is the
+  encoder's licence, not the plumbing — distro FFmpeg builds are configured
   `--enable-gpl` and libx264 is GPL-only, neither of which MIT source + paid
-  app-store builds can absorb. Pick a permissive encoder through the
-  `third-party-deps` gate first — OpenH264 (BSD), FFmpeg's own LGPL-safe mpeg4,
-  or the OS encoders (Media Foundation on Windows, VA-API on Linux).
+  app-store builds can absorb — which is why both shipped paths use the
+  encoder the OS already licenses. **VA-API is the equivalent move** (its
+  `libva` is MIT, and the encode is the driver's, not ours); OpenH264 (BSD)
+  is the fallback if VA-API's hardware dependence proves too narrow. Either
+  goes through the `third-party-deps` gate first. The Swift side is already
+  shaped for it: `RockingAnimation.writeH264` is portable and only the
+  `#if !os(Windows)` guard on the "choose a .gif" refusal, plus a non-null
+  `hf_video_begin`, stand between Linux and the same path Windows takes.
 - **HE-NEF decode on Linux/Wine** is still deferred — Windows converts them via
   the Adobe DNG Converter (`RawConverter`), but the Linux/Wine path was punted;
   see `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.

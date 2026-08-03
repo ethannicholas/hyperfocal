@@ -256,11 +256,12 @@ void Shell::exportAnimationInteractive() {
     // the bridge; the parallel *Labels list is what the user reads. Never
     // write a label back — that would persist a translated rawValue.
     //
-    // H.264 additionally needs AVFoundation: off Apple the engine writes GIF
-    // only (RockingAnimation's non-Apple path), so don't offer a container the
-    // export would then have to refuse.
+    // H.264 needs an encoder the platform supplies: AVFoundation on macOS,
+    // Media Foundation on Windows. Linux has neither (no encoder we may
+    // bundle — see cimaging.h), and the engine writes GIF only there, so
+    // don't offer a container the export would then have to refuse.
     QStringList formats, formatLabels, suffixes;
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     formats << QStringLiteral("MP4 (H.264)");
     formatLabels << tr("MP4 (H.264)");
     suffixes << QStringLiteral("mp4");

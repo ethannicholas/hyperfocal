@@ -147,9 +147,11 @@ deciding loss). Divergence documented next to the RAW-decode divergence.
 ### Phase 3 — Windows/Linux productization
 
 Platform glue (file dialogs, settings storage, atomic writes without
-the sandbox dance, plain-path project bookmarks), FFmpeg/giflib rocking
-export, installers/packaging (MSIX or Inno; AppImage/Flatpak), final
-validation passes on real Windows/Linux hardware.
+the sandbox dance, plain-path project bookmarks), rocking export (giflib
+for GIF; H.264 through the OS encoder, since every bundleable one is GPL —
+FFmpeg was the original guess and is not usable here), installers/packaging
+(MSIX or Inno; AppImage/Flatpak), final validation passes on real
+Windows/Linux hardware.
 
 ### Phase 4 (deferred, measurement-gated) — GPU backend
 

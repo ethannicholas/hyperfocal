@@ -31,6 +31,14 @@ import os
 import re
 import sys
 
+# Windows consoles default to a legacy code page (cp1252), which cannot encode
+# the ✓ this prints on success — the gate would then fail on its own success
+# message, taking ci-gate.sh and the pre-commit hook down with it. Same guard
+# as check-translations.py, for the same reason.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, 'reconfigure'):
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MASTER = os.path.join(ROOT, 'NOTICE.md')
 TARGETS = {

@@ -19,6 +19,7 @@
 #define TIFF_DISABLE_DEPRECATED
 
 #include "cimaging.h"
+#include "cimaging_priv.h"
 
 #include <algorithm>
 #include <chrono>
@@ -393,6 +394,13 @@ bool fromP3(float* rgba, int count, const char* colorspace) {
 inline float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
 } // namespace
+
+// The colour conversion, re-exported to the shim's other translation unit
+// (video.cpp) — see cimaging_priv.h for why that file can't just be part of
+// this one.
+bool hfConvertFromP3(float* rgba, int count, const char* colorspace) {
+    return fromP3(rgba, count, colorspace);
+}
 
 extern "C" void hf_free(void* ptr) { std::free(ptr); }
 

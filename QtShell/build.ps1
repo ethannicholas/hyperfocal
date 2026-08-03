@@ -18,7 +18,13 @@ try {
     # the executable (the windows-linux notices slice, the i18n catalogs) so
     # master edits always take. Skipped when Python is absent — the
     # checked-in copies then apply, and the commit gate keeps those fresh.
+    # Skip Windows' App Execution Aliases: a stock Windows 11 has a
+    # `python3.exe` under WindowsApps that Get-Command finds and that exits
+    # non-zero with "Python was not found" when run, so picking the first
+    # *resolvable* name fails the build on a machine that has a perfectly
+    # good `python`. Take the first that actually runs.
     $py = Get-Command python3, python -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notlike '*\WindowsApps\*' } |
         Select-Object -First 1
     if ($py) {
         & $py.Source (Join-Path $root 'Scripts\gen-notices.py')

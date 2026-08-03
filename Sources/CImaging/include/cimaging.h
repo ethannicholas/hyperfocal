@@ -106,6 +106,32 @@ hf_status hf_gif_finish(hf_gif* gif);
 // Closes and frees without a trailer — for cancellation or an aborted write.
 void hf_gif_abort(hf_gif* gif);
 
+// ---- H.264 video -----------------------------------------------------------
+// The rocking animation's other container, with the same streaming shape as the
+// GIF writer above and the same frame contract (RGBA Float32 P3, w*h, converted
+// to sRGB here and encoded BT.709 limited-range 4:2:0).
+//
+// Implemented on Windows only, over Media Foundation's sink writer — i.e. the
+// H.264 encoder the OS already ships, which is what makes this shippable at
+// all: every bundleable encoder is GPL (libx264, and the distro FFmpeg builds
+// configured against it), and neither an MIT source tree nor a paid app-store
+// build can absorb that. It is the same arrangement the macOS build has with
+// AVFoundation. Elsewhere (Linux) hf_video_begin returns NULL and the engine
+// asks for a .gif instead; VA-API would be that platform's equivalent.
+//
+// `fps` is the frame rate the samples are timed at; presentation times are
+// derived from the frame index so they cannot drift. `w` and `h` must be even
+// (4:2:0 subsampling) — hf_video_begin returns NULL rather than rounding.
+typedef struct hf_video hf_video;
+hf_video* hf_video_begin(const char* path, int w, int h, double fps);
+hf_status hf_video_add_frame(hf_video* video, const float* rgba);
+// Finalizes the container, closes, and frees `video` (invalid afterwards
+// either way).
+hf_status hf_video_finish(hf_video* video);
+// Closes and frees without finalizing, and deletes the partial file — an
+// un-finalized MP4 has no moov atom and no player can open it.
+void hf_video_abort(hf_video* video);
+
 // ---- EXIF (easyexif + LibRaw fallback) -------------------------------------
 // Capture time as a Unix epoch (seconds, UTC-naive) with sub-second precision
 // folded in; returns hf_err_* and leaves *out_epoch untouched if absent.

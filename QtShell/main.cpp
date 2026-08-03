@@ -1,5 +1,7 @@
 #include <QApplication>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QQuickStyle>
 #include <QStyleHints>
 #include <QIcon>
@@ -62,6 +64,29 @@ constexpr int kSecondaryWaitTicks = 3000;   // 3000 × 200 ms = 10 min
 // consecutive grabs match.
 constexpr int kZoomSettleTicks = 120;
 
+// The rocking animation renders on a detached task that never touches the
+// phase `isRunning` reports, so the only thing to wait on is its file — and
+// the wait covers a whole render (every frame warped, colour-converted and
+// encoded), not a decode. Sized like kSecondaryWaitTicks, for the same
+// reason: the poll returns the moment the container closes, so the budget
+// only bounds how long a genuine failure takes to report.
+constexpr int kAnimationWaitTicks = 1500;   // 1500 × 200 ms = 5 min
+
+// A *finalized* animation container, not merely a file that appeared. Both
+// containers write their index last — MP4 its `moov` atom at Finalize (without
+// it no player can open the file at all), GIF its 0x3B trailer — so this
+// doubles as the completion signal: the animation renders on a detached task
+// that never touches the phase `isRunning` reports, leaving the file itself as
+// the only thing to wait on.
+bool animationFinalized(const QString &path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() < 1024) return false;
+    if (path.endsWith(QLatin1String(".gif"), Qt::CaseInsensitive)) {
+        return file.seek(file.size() - 1) && file.read(1) == QByteArray("\x3B", 1);
+    }
+    return file.readAll().contains(QByteArray("moov"));
+}
+
 struct SelfTest {
     QString stackDir;
     QString stack2Dir;    // HFQT_STACK2: batch journey (two stacks)
@@ -83,6 +108,8 @@ struct SelfTest {
     bool cycledSource = false;
     bool retouchOK = false;
     bool otherSourceOK = false;
+    bool animationStarted = false, animationOK = false;
+    QString animationFile;
     QString projectFile;
     QString expectedInput;    // selected frame's name
     int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
@@ -588,6 +615,50 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     qWarning() << "selftest project: new-project replace failed —"
                                << shell->stacks().size() << "stacks";
                 state->projectOK = state->projectOK && replaced;
+                // The rocking animation comes last, and needs a depth plane
+                // the New Project load discarded — so re-fuse the replacement
+                // stack (stage 11 waits it out).
+                if (shell->canFuse()) shell->fuse();
+                advance(11);
+                return;
+            }
+            case 11: {   // re-fuse settles, then the animation goes out
+                if (shell->isRunning()) { state->stageTicks = 0; return; }
+                if (!shell->canAnimate()) {
+                    if (++state->stageTicks < kDecodeWaitTicks) return;
+                    qWarning() << "selftest animation: nothing to animate after"
+                               << state->stageTicks << "polls — canFuse"
+                               << shell->canFuse();
+                    break;
+                }
+                // The container follows the platform's encoder, exactly as the
+                // save dialog's format list does: H.264 where the OS supplies
+                // an encoder, GIF where it doesn't (RockingAnimation,
+                // cimaging.h).
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+                state->animationFile = state->outPath + QStringLiteral(".mp4");
+#else
+                state->animationFile = state->outPath + QStringLiteral(".gif");
+#endif
+                QFile::remove(state->animationFile);
+                state->animationStarted = shell->exportAnimation(
+                    QUrl::fromLocalFile(state->animationFile));
+                if (!state->animationStarted)
+                    qWarning() << "selftest animation: export refused";
+                advance(12);
+                return;
+            }
+            case 12: {   // the animation renders and its container is closed
+                if (!state->animationStarted) break;
+                state->animationOK = animationFinalized(state->animationFile);
+                if (!state->animationOK
+                        && ++state->stageTicks < kAnimationWaitTicks)
+                    return;
+                if (!state->animationOK)
+                    qWarning() << "selftest animation:" << state->animationFile
+                               << "never finalized —"
+                               << QFileInfo(state->animationFile).size()
+                               << "bytes after" << state->stageTicks << "polls";
                 break;
             }
             default:
@@ -615,6 +686,10 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
             if (!state->previewOK) { QCoreApplication::exit(17); return; }
             if (!state->retouchOK) { QCoreApplication::exit(18); return; }
             if (!state->otherSourceOK) { QCoreApplication::exit(19); return; }
+            if (!state->animationStarted || !state->animationOK) {
+                QCoreApplication::exit(21);
+                return;
+            }
             QCoreApplication::exit(0);
         });
         // First tick after the queued change signal has delivered, so the
