@@ -403,6 +403,15 @@ public final class AppModel: ObservableObject {
     @Published public var processingSource: PlatformImage?
     @Published public var processingSourceLabel: String?
     @Published public var processingSourceNominalSize: CGSize?
+    /// Whether `processingSource` is warped into the fused canvas — the
+    /// engine's `FusionProgress.sourceAligned`, tracked with the image so
+    /// `inputPaneTitle` can mark it. Never inferred from the stage.
+    @Published public private(set) var processingSourceAligned = false
+    /// The fuse's own aligned preview of the FIRST frame, kept off the
+    /// progress stream so completion can seed the input pane with correct
+    /// pixels immediately (see the completion handler). Transient: set
+    /// mid-fuse, consumed at completion, cleared on the next fuse.
+    private var fuseFirstAlignedSource: (image: PlatformImage, nominal: CGSize)?
 
     // Results & previews
     @Published public var outputPreview: PlatformImage?
@@ -2627,6 +2636,35 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Input preview
 
+    /// The input pane's title — the ONE composition both shells render (the
+    /// SwiftUI pane directly, the Qt shell via `hf_input_title`): the cycling
+    /// processing-source name mid-fuse, the previewed frame's name otherwise,
+    /// either carrying the localized "(aligned)" marker exactly when the
+    /// shown pixels are warped into the fused canvas. The marker derives
+    /// from the tracked aligned state, never from the phase — the shells
+    /// used to compose this themselves, which is how the mid-fuse path
+    /// showed warped frames without the marker (and the Qt side shipped the
+    /// suffix untranslated). `nil` when the pane has nothing to name; each
+    /// shell shows its default hint.
+    public var inputPaneTitle: String? {
+        let name: String
+        let aligned: Bool
+        if phase.isRunning, processingSource != nil {
+            guard let label = processingSourceLabel else { return nil }
+            name = label
+            aligned = processingSourceAligned
+        } else if let url = inputPreviewURL {
+            name = url.lastPathComponent
+            aligned = inputPreviewAligned
+        } else {
+            return nil
+        }
+        return aligned
+            ? String(format: localizedString("%@ (aligned)", comment:
+                "Input pane title for a frame warped into the fused canvas"), name)
+            : name
+    }
+
     public func selectionChanged() {
         guard let url = frames.first(where: { selection.contains($0) }) ?? selection.first else {
             return  // keep showing the last frame rather than blanking the pane
@@ -2769,6 +2807,8 @@ public final class AppModel: ObservableObject {
         processingSource = nil
         processingSourceLabel = nil
         processingSourceNominalSize = nil
+        processingSourceAligned = false
+        fuseFirstAlignedSource = nil
         retouch = nil
         retouchMode = false
         savedWorking = nil
@@ -2915,7 +2955,16 @@ public final class AppModel: ObservableObject {
                         if let source {
                             self.processingSource = source
                             self.processingSourceLabel = sourceLabel
+                            self.processingSourceAligned = update.sourceAligned
                             if let sourceNominal { self.processingSourceNominalSize = sourceNominal }
+                            // Completion re-syncs the pane to the first frame;
+                            // keep its aligned preview so that swap can show
+                            // correct pixels instantly instead of the stale
+                            // raw decode (depth and render both emit frame 0).
+                            if update.sourceAligned, update.sourceFrameIndex == 0,
+                               let sourceNominal {
+                                self.fuseFirstAlignedSource = (source, sourceNominal)
+                            }
                         }
                         // Follow the frame(s) being processed in the Stack
                         // panel. Concurrent stages (registration's decode and
@@ -3006,19 +3055,42 @@ public final class AppModel: ObservableObject {
                     self.progressive = nil
                     self.processingSource = nil
                     self.processingSourceLabel = nil
+                    self.processingSourceAligned = false
                     self.hasUnsavedWork = true
-                    self.phase = .done
                     // Alignment transforms exist now — swap the Input pane's
                     // raw decode for the aligned one (it sits next to Output).
                     // The Stack row marched with reading progress during the
                     // fuse; re-sync row and pane on the first fused frame
                     // rather than leaving the row wherever the last progress
                     // tick parked it. Transient view state — no recordEdit.
+                    // All BEFORE the phase flip, so the pane is coherent the
+                    // instant `.done` is observable (the probe holds this
+                    // with a synchronous phase sink).
                     if let first = urls.first {
                         self.selection = [first]
                         self.inputPreviewURL = nil
+                        // Seed the pane with the fuse's own aligned preview
+                        // of this frame — the mid-fuse cycling already
+                        // decoded and warped it. Without the seed the pane
+                        // flashes the stale pre-fuse raw decode under an
+                        // "(aligned)" title while the full-res aligned
+                        // decode runs; with it the spinner only ever refines
+                        // resolution. showInputFrame leaves `inputPreview`
+                        // alone until its decode lands, so the seed shows
+                        // through the swap. (Guard: if registration dropped
+                        // the first frame, index 0's preview is a different
+                        // file — skip seeding, the pane falls back to the
+                        // raw decode exactly as the title falls back to
+                        // unmarked.)
+                        if let seed = self.fuseFirstAlignedSource,
+                           fusedURLs.first == first {
+                            self.inputPreview = seed.image
+                            self.inputPixelSize = seed.nominal
+                        }
                         self.showInputFrame(first)
                     }
+                    self.fuseFirstAlignedSource = nil
+                    self.phase = .done
                     MemoryFootprint.mark("results + previews stored")
                     if !self.batchMode {
                         self.retainedWarpedFrames = output.warpedFrames
@@ -3080,6 +3152,7 @@ public final class AppModel: ObservableObject {
                     self.drainingFusion = nil
                     self.processingSource = nil
                     self.processingSourceLabel = nil
+                    self.processingSourceAligned = false
                     self.progressive = nil
                     if error is CancellationError {
                         self.phase = self.frames.isEmpty ? .empty : .loaded
@@ -3451,6 +3524,8 @@ public final class AppModel: ObservableObject {
         processingSource = nil
         processingSourceLabel = nil
         processingSourceNominalSize = nil
+        processingSourceAligned = false
+        fuseFirstAlignedSource = nil
     }
 
     // MARK: - Retouching

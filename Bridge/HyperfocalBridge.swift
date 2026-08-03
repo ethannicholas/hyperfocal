@@ -2049,24 +2049,15 @@ public func hf_input_crop(_ x: UnsafeMutablePointer<Double>?,
     }
 }
 
-/// The input pane's title: selected frame name + " (aligned)" when the
-/// preview is warped into the fused canvas. Empty while nothing shows.
+/// The input pane's title: selected frame name (localized " (aligned)"
+/// marker when the preview is warped into the fused canvas), or the cycling
+/// processing-source name mid-fuse. Empty while nothing shows. Composed by
+/// the shared model (`inputPaneTitle`) — identical to the native pane.
 @_cdecl("hf_input_title")
 public func hf_input_title(_ buffer: UnsafeMutablePointer<CChar>?,
                            _ cap: Int32) -> Int32 {
     MainActor.assumeIsolated {
-        guard let model = Bridge.model else { return 0 }
-        // The native inputPaneTitle: the cycling processing-source label
-        // mid-fuse, else the previewed frame's name (+ aligned marker).
-        if model.phase.isRunning, model.processingSource != nil,
-           let label = model.processingSourceLabel {
-            return fillUTF8(label, buffer, cap)
-        }
-        guard let url = model.inputPreviewURL, model.inputPreview != nil else {
-            return 0
-        }
-        let title = url.lastPathComponent
-            + (model.inputPreviewAligned ? " (aligned)" : "")
+        guard let title = Bridge.model?.inputPaneTitle else { return 0 }
         return fillUTF8(title, buffer, cap)
     }
 }

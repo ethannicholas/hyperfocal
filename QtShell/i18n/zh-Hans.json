@@ -1,6 +1,5 @@
 {
 "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.":"\n\n被排除的图像仍留在堆栈列表中，只是取消了勾选 — 重新勾选即可重新纳入并再次合成。",
-" (aligned)":"（已对齐）",
 " and %lld more":" 及另外 %lld 张",
 " depth":" 深度",
 "%.1f× brighter than the stack":"比堆栈亮 %.1f 倍",

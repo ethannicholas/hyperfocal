@@ -30,6 +30,14 @@ public struct FusionProgress {
     public let sourcePreview: ImageBuffer?
     public let sourceFullWidth: Int
     public let sourceFullHeight: Int
+    /// The contract every emitter must honor: once alignment transforms
+    /// exist, `sourcePreview` is the frame *warped into the fused canvas*
+    /// (`sourceFullWidth/Height` are canvas dimensions) and this is true;
+    /// only pre-alignment stages (registration's decode pass) and
+    /// alignment-off fuses emit raw frames, with this false. A UI labels
+    /// the source pane "(aligned)" from this bit alone — never from the
+    /// stage.
+    public let sourceAligned: Bool
     /// ALL frames in flight at this tick, sorted — non-empty only for stages
     /// that work several frames concurrently (registration's decode and
     /// gradient-matching passes). A UI reflecting "what is being processed"
@@ -42,6 +50,7 @@ public struct FusionProgress {
                 previewFullWidth: Int = 0, previewFullHeight: Int = 0,
                 sourceFrameIndex: Int = -1, sourcePreview: ImageBuffer? = nil,
                 sourceFullWidth: Int = 0, sourceFullHeight: Int = 0,
+                sourceAligned: Bool = false,
                 activeFrames: [Int] = []) {
         self.stage = stage
         self.fraction = fraction
@@ -52,6 +61,7 @@ public struct FusionProgress {
         self.sourcePreview = sourcePreview
         self.sourceFullWidth = sourceFullWidth
         self.sourceFullHeight = sourceFullHeight
+        self.sourceAligned = sourceAligned
         self.activeFrames = activeFrames
     }
 }

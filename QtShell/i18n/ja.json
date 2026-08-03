@@ -1,6 +1,5 @@
 {
 "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.":"\n\n除外されたフレームはチェックが外れた状態でスタックリストに残ります。再度チェックを入れて再合成すると戻せます。",
-" (aligned)":"（位置合わせ済み）",
 " and %lld more":" ほか%lld枚",
 " depth":" 深度",
 "%.1f× brighter than the stack":"スタックより%.1f倍明るい",

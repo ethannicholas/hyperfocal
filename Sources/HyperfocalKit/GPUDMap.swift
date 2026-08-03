@@ -462,13 +462,25 @@ public enum GPUDMap {
             log?("depth pass \(fi + 1)/\(frameCount)")
             if let progress {
                 bucket(&tReadback) {
+                    // The FusionProgress contract: once transforms exist the
+                    // source preview is the *warped* frame. It's already on
+                    // hand — `input` is the (host-visible) warp output the
+                    // spill write reads from this same loop.
+                    let aligned = source.transforms != nil
+                    let sourcePreview = aligned
+                        ? ImageBuffer.downsampledNearest(
+                            fromRGBA: input.contents().assumingMemoryBound(to: Float16.self),
+                            width: width, height: height, maxSide: 1200)
+                        : img.downsampledNearest(maxSide: 1200)
                     progress(FusionProgress(stage: .depth,
                                             fraction: Double(fi + 1) / Double(frameCount),
                                             preview: downloadPreview(),
                                             previewFullWidth: width, previewFullHeight: height,
                                             sourceFrameIndex: fi,
-                                            sourcePreview: img.downsampledNearest(maxSide: 1200),
-                                            sourceFullWidth: img.width, sourceFullHeight: img.height))
+                                            sourcePreview: sourcePreview,
+                                            sourceFullWidth: aligned ? width : img.width,
+                                            sourceFullHeight: aligned ? height : img.height,
+                                            sourceAligned: aligned))
                 }
             }
         }
@@ -588,34 +600,18 @@ public enum GPUDMap {
             }
             let fi: Int
             let input: MTLBuffer
-            var sourcePreview: ImageBuffer?
-            var sourceW = 0, sourceH = 0
             if let spill {
                 fi = renderIndices[step]
                 let t0 = CFAbsoluteTimeGetCurrent()
                 try spill.read(frame: fi, into: warpedBuf.contents())
                 tSpillRead += CFAbsoluteTimeGetCurrent() - t0
                 input = warpedBuf
-                if progress != nil {
-                    // The spill holds the *warped* frame — show that (the
-                    // aligned frame on the output canvas) as the source.
-                    sourcePreview = ImageBuffer.downsampledNearest(
-                        fromRGBA: warpedBuf.contents().assumingMemoryBound(to: Float16.self),
-                        width: width, height: height, maxSide: 1200)
-                    sourceW = width
-                    sourceH = height
-                }
             } else {
                 var next: (Int, ImageBuffer)! = nil
                 try bucket(&tRenderWait) { next = try renderPrefetcher!.next() }
                 let (idx, img) = next!
                 fi = idx
                 input = uploadAndWarp(img, frameIndex: fi, encoder: encoder)
-                if progress != nil {
-                    sourcePreview = img.downsampledNearest(maxSide: 1200)
-                    sourceW = img.width
-                    sourceH = img.height
-                }
             }
 
             var params = TentParams(index: Float(fi), radius: radius, count: UInt32(pixelCount),
@@ -645,13 +641,23 @@ public enum GPUDMap {
             renderedCount += 1
             if let progress {
                 bucket(&tRenderPreview) {
+                    // `input` holds the frame on the output canvas in every
+                    // branch — the spilled warp, or the warp this command
+                    // buffer just ran — so the source preview reads back from
+                    // it after the wait (the FusionProgress aligned contract;
+                    // the old pre-encode path showed the raw decode whenever
+                    // the spill was unavailable).
+                    let sourcePreview = ImageBuffer.downsampledNearest(
+                        fromRGBA: input.contents().assumingMemoryBound(to: Float16.self),
+                        width: width, height: height, maxSide: 1200)
                     progress(FusionProgress(stage: .render,
                                             fraction: Double(renderedCount) / Double(renderIndices.count),
                                             preview: downloadPreview(),
                                             previewFullWidth: width, previewFullHeight: height,
                                             sourceFrameIndex: fi,
                                             sourcePreview: sourcePreview,
-                                            sourceFullWidth: sourceW, sourceFullHeight: sourceH))
+                                            sourceFullWidth: width, sourceFullHeight: height,
+                                            sourceAligned: source.transforms != nil))
                 }
             }
         }

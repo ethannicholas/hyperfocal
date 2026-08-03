@@ -504,7 +504,8 @@ public enum DMapFusion {
                                         previewFullWidth: width, previewFullHeight: height,
                                         sourceFrameIndex: fi,
                                         sourcePreview: img.downsampledNearest(maxSide: 1200),
-                                        sourceFullWidth: img.width, sourceFullHeight: img.height))
+                                        sourceFullWidth: img.width, sourceFullHeight: img.height,
+                                        sourceAligned: warp != nil))
             }
         }
 
@@ -651,7 +652,8 @@ public enum DMapFusion {
                                         previewFullWidth: width, previewFullHeight: height,
                                         sourceFrameIndex: fi,
                                         sourcePreview: img.downsampledNearest(maxSide: 1200),
-                                        sourceFullWidth: img.width, sourceFullHeight: img.height))
+                                        sourceFullWidth: img.width, sourceFullHeight: img.height,
+                                        sourceAligned: warp != nil))
             }
         }
 

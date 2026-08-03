@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 // White-box regression harness: reaches model internals by design, so the
 // module is imported @testable (AppCore builds with -enable-testing) —
 // probe needs must never force AppCore internals public.
@@ -302,8 +303,48 @@ if ProcessInfo.processInfo.environment["HYPERFOCAL_BENCH_STROKE"] != nil {
 
 print("probe: fusing \(urls.count) frames")
 let cache = AlignmentCache()
-let output = try! StackPipeline.fuse(urls: Array(urls), configuration: .init(), alignmentCache: cache)
+// The FusionProgress aligned contract: once transforms exist (post-
+// registration on an align-on fuse), every source preview is the frame
+// warped onto the fused canvas and flagged sourceAligned — the seam the
+// input pane's "(aligned)" marker hangs off. The GPU depth pass used to
+// ship the raw decode here, and the divergence was only caught by eye.
+var sawDepthSource = false, sawRenderSource = false
+var alignedDims = Set<Int>()  // width<<32|height of every aligned preview
+var contractViolations = [String]()
+let output = try! StackPipeline.fuse(urls: Array(urls), configuration: .init(),
+                                     alignmentCache: cache, progress: { update in
+    guard update.sourcePreview != nil else { return }
+    switch update.stage {
+    case .depth, .render:
+        if update.stage == .depth { sawDepthSource = true } else { sawRenderSource = true }
+        if update.sourceAligned {
+            alignedDims.insert(update.sourceFullWidth << 32 | update.sourceFullHeight)
+        } else {
+            contractViolations.append("\(update.stage) source preview not aligned")
+        }
+    case .registering:
+        // Pre-alignment decodes are the one legitimately raw source preview.
+        if update.sourceAligned {
+            contractViolations.append("registering source preview claims aligned")
+        }
+    default:
+        break
+    }
+})
 print("probe: fused \(output.image.width)x\(output.image.height)")
+if !sawDepthSource || !sawRenderSource {
+    print("probe: FUSION SOURCE PREVIEWS MISSING (depth \(sawDepthSource), render \(sawRenderSource))")
+    exit(1)
+}
+if alignedDims != [output.image.width << 32 | output.image.height] {
+    contractViolations.append("aligned previews not on the output canvas")
+}
+if !contractViolations.isEmpty {
+    print("probe: SOURCE PREVIEW ALIGNED CONTRACT BROKEN: "
+          + contractViolations.prefix(3).joined(separator: "; "))
+    exit(1)
+}
+print("probe: fusion source previews honor the aligned contract OK")
 
 Task { @MainActor in
     // 1. Retouch session source loading.
@@ -683,11 +724,37 @@ Task { @MainActor in
     guard model.stacks.count == 1, model.frames.count == urls.count else {
         print("probe: INGEST WRONG (stacks=\(model.stacks.count))"); exit(1)
     }
+    // At the very instant the phase flips to .done the input pane must be
+    // coherent: an aligned, canvas-sized preview already installed (the
+    // completion seeds it from the fuse's own progress stream) — never the
+    // stale pre-fuse pixels under an "(aligned)" title. Snapshot
+    // synchronously via the phase publisher: the full-res decode kicked in
+    // that same turn cannot have landed yet, so this observes the seed, not
+    // the decode.
+    var doneSnapshot: (hasPreview: Bool, pixelSize: CGSize?, aligned: Bool)?
+    let phaseSink = model.$phase.sink { phase in
+        if phase == .done, doneSnapshot == nil {
+            doneSnapshot = (model.inputPreview != nil, model.inputPixelSize,
+                            model.inputPreviewAligned)
+        }
+    }
     model.fuse()
     ticks = 0
+    // The input-pane title is composed once in the model for BOTH shells
+    // (inputPaneTitle): any tick showing an aligned processing source must
+    // carry the "(aligned)" marker — the mid-fuse render pass showed warped
+    // frames with a bare filename before the composition was unified.
+    var alignedTitleTicks = 0, bareAlignedTicks = 0
     while model.phase != .done && ticks < 600 {
         try? await Task.sleep(nanoseconds: 100_000_000)
         ticks += 1
+        if model.processingSource != nil, model.processingSourceAligned {
+            if model.inputPaneTitle?.hasSuffix("(aligned)") == true {
+                alignedTitleTicks += 1
+            } else {
+                bareAlignedTicks += 1
+            }
+        }
     }
     guard model.phase == .done else {
         print("probe: MODEL FUSE FAILED (\(model.phase))"); exit(1)
@@ -695,6 +762,28 @@ Task { @MainActor in
     guard model.hasUnsavedWork else {
         print("probe: FUSE DID NOT MARK UNSAVED WORK"); exit(1)
     }
+    if bareAlignedTicks > 0 {
+        print("probe: MID-FUSE TITLE MISSING (aligned) ON \(bareAlignedTicks) TICKS"); exit(1)
+    }
+    if alignedTitleTicks == 0 {
+        print("probe: WARNING mid-fuse title check vacuous (fuse outpaced the 100 ms polls)")
+    }
+    // Post-fuse the pane swaps to the aligned decode; the marker must be
+    // there the moment the completion lands (the flag is set synchronously).
+    guard model.inputPaneTitle?.hasSuffix("(aligned)") == true else {
+        print("probe: POST-FUSE TITLE MISSING (aligned): \(model.inputPaneTitle ?? "nil")"); exit(1)
+    }
+    print("probe: input pane title aligned marker OK (\(alignedTitleTicks) mid-fuse ticks)")
+    phaseSink.cancel()
+    let canvas = CGSize(width: CGFloat(output.image.width),
+                        height: CGFloat(output.image.height))
+    guard let snap = doneSnapshot, snap.hasPreview, snap.aligned,
+          snap.pixelSize == canvas else {
+        print("probe: PANE INCOHERENT AT FUSE COMPLETION "
+              + "(\(String(describing: doneSnapshot)) vs canvas \(canvas))")
+        exit(1)
+    }
+    print("probe: completion seeds aligned input preview OK")
     // Staleness gate: right after a fuse nothing has changed, so Fuse is
     // disabled; a parameter change re-enables it; reverting disables again;
     // a frame-set change re-enables it too.

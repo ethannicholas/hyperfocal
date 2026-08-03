@@ -289,7 +289,7 @@ public enum WgpuDMap {
                                        frameCount: frameCount, log: log)
                 }
                 if source.transforms != nil,
-                   options.normalizeExposure || spill != nil {
+                   options.normalizeExposure || spill != nil || progress != nil {
                     warpedHost = [Float16](repeating: 0, count: pixelCount * 4)
                 }
             }
@@ -304,7 +304,9 @@ public enum WgpuDMap {
             // before the rest of the frame encodes. Unwarped frames skip the
             // round trip — the decoded pixels are the warped pixels.
             var hostPixels: [Float16]? = nil  // aligned frame on the host, when needed
-            let needHost = options.normalizeExposure || spill != nil
+            // `progress` counts as a host consumer: the source preview must
+            // show the *warped* frame (the FusionProgress aligned contract).
+            let needHost = options.normalizeExposure || spill != nil || progress != nil
             let didWarp = source.transforms?[fi] != nil
             let batch: WgpuEngine.Batch
             let input: WgpuEngine.Buffer
@@ -470,13 +472,25 @@ public enum WgpuDMap {
             luminancePlanes.append(lumPlane)
             log?("depth pass \(fi + 1)/\(frameCount)")
             if let progress {
+                // When the frame warped, `warpedHost` holds the aligned
+                // pixels (downloaded above — `needHost` includes progress),
+                // so the source preview shows the frame on the fused canvas.
+                let sourcePreview = didWarp
+                    ? warpedHost.withUnsafeBufferPointer {
+                        ImageBuffer.downsampledNearest(fromRGBA: $0.baseAddress!,
+                                                       width: width, height: height,
+                                                       maxSide: 1200)
+                    }
+                    : img.downsampledNearest(maxSide: 1200)
                 progress(FusionProgress(stage: .depth,
                                         fraction: Double(fi + 1) / Double(frameCount),
                                         preview: try downloadPreview(),
                                         previewFullWidth: width, previewFullHeight: height,
                                         sourceFrameIndex: fi,
-                                        sourcePreview: img.downsampledNearest(maxSide: 1200),
-                                        sourceFullWidth: img.width, sourceFullHeight: img.height))
+                                        sourcePreview: sourcePreview,
+                                        sourceFullWidth: didWarp ? width : img.width,
+                                        sourceFullHeight: didWarp ? height : img.height,
+                                        sourceAligned: didWarp))
             }
         }
 
@@ -582,7 +596,6 @@ public enum WgpuDMap {
             let fi: Int
             let input: WgpuEngine.Buffer
             var sourcePreview: ImageBuffer?
-            var sourceW = 0, sourceH = 0
             if let spill {
                 fi = renderIndices[step]
                 let t0 = now()
@@ -605,18 +618,15 @@ public enum WgpuDMap {
                             fromRGBA: $0.baseAddress!,
                             width: width, height: height, maxSide: 1200)
                     }
-                    sourceW = width
-                    sourceH = height
                 }
             } else {
                 let (idx, img) = try renderPrefetcher!.next()
                 fi = idx
                 input = try encodeUploadAndWarp(img, frameIndex: fi, batch: batch)
-                if progress != nil {
-                    sourcePreview = img.downsampledNearest(maxSide: 1200)
-                    sourceW = img.width
-                    sourceH = img.height
-                }
+                // No spill: the warp this batch encodes lands only on the
+                // GPU — the source preview downloads from `input` after the
+                // batch runs (below), honoring the aligned contract. The old
+                // path showed the raw decode here.
             }
 
             try batch.dispatch("tent_accumulate",
@@ -641,13 +651,28 @@ public enum WgpuDMap {
             log?("render pass \(fi + 1)/\(frameCount)")
             renderedCount += 1
             if let progress {
+                if sourcePreview == nil {  // no-spill path: warp just ran
+                    if warpedHost.isEmpty {
+                        warpedHost = [Float16](repeating: 0, count: pixelCount * 4)
+                    }
+                    try warpedHost.withUnsafeMutableBufferPointer {
+                        try downloadHalves(input, into: $0.baseAddress!,
+                                           count: pixelCount * 4)
+                    }
+                    sourcePreview = warpedHost.withUnsafeBufferPointer {
+                        ImageBuffer.downsampledNearest(
+                            fromRGBA: $0.baseAddress!,
+                            width: width, height: height, maxSide: 1200)
+                    }
+                }
                 progress(FusionProgress(stage: .render,
                                         fraction: Double(renderedCount) / Double(renderIndices.count),
                                         preview: try downloadPreview(),
                                         previewFullWidth: width, previewFullHeight: height,
                                         sourceFrameIndex: fi,
                                         sourcePreview: sourcePreview,
-                                        sourceFullWidth: sourceW, sourceFullHeight: sourceH))
+                                        sourceFullWidth: width, sourceFullHeight: height,
+                                        sourceAligned: source.transforms != nil))
             }
         }
         if spill != nil {

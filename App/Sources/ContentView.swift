@@ -714,11 +714,10 @@ struct ContentView: View {
         model.phase.isRunning && model.processingSource != nil
     }
 
+    // Composed in the model (shared with the Qt shell via hf_input_title) so
+    // the aligned marker can never diverge between shells or code paths.
     private var inputPaneTitle: String {
-        if showProcessingSource, let label = model.processingSourceLabel { return label }
-        guard let url = model.inputPreviewURL else { return UIStrings.inputTitle }
-        return url.lastPathComponent
-            + (model.inputPreviewAligned ? String(localized: " (aligned)") : "")
+        model.inputPaneTitle ?? UIStrings.inputTitle
     }
 
     private var inputPaneImage: CGImage? {

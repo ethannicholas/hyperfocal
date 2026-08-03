@@ -1,6 +1,5 @@
 {
 "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.":"\n\n제외된 프레임은 체크가 해제된 채 스택 목록에 남습니다. 다시 체크하고 재합성하면 다시 포함됩니다.",
-" (aligned)":" (정렬됨)",
 " and %lld more":" 외 %lld개",
 " depth":" 깊이",
 "%.1f× brighter than the stack":"스택보다 %.1f배 밝음",
