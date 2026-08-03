@@ -31,7 +31,9 @@ private struct InfoTipTracker: NSViewRepresentable {
 private final class InfoTipTrackerView: NSView {
     var text = ""
     private var delayTimer: Timer?
+    private var watchdog: Timer?
     private var panel: NSPanel?
+    private var resignKeyObserver: NSObjectProtocol?
 
     override func updateTrackingAreas() {
         trackingAreas.forEach(removeTrackingArea)
@@ -58,16 +60,41 @@ private final class InfoTipTrackerView: NSView {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         // The sidebar rebuilds its rows; a tip must never outlive its icon.
         if newWindow == nil { dismiss() }
+        if let resignKeyObserver {
+            NotificationCenter.default.removeObserver(resignKeyObserver)
+        }
+        resignKeyObserver = nil
         super.viewWillMove(toWindow: newWindow)
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        // .activeInKeyWindow tracking deactivates WITHOUT a synthetic
+        // mouseExited when the window resigns key with the cursor on the
+        // icon (Cmd-Tab, a click in another app, a sheet) — which stranded
+        // a visible tip: the panel floats at .popUpMenu level, so it sat on
+        // top of other applications until the icon was re-hovered.
+        resignKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: window,
+            queue: .main) { [weak self] _ in self?.dismiss() }
+    }
+
     deinit {
+        if let resignKeyObserver {
+            NotificationCenter.default.removeObserver(resignKeyObserver)
+        }
         delayTimer?.invalidate()
+        watchdog?.invalidate()
         panel?.orderOut(nil)
     }
 
     private func show() {
-        guard panel == nil, let window, !text.isEmpty else { return }
+        // isKeyWindow: the delay timer can outlive the hover's window state —
+        // arm on hover, Cmd-Tab away 250 ms later, and the timer would pop
+        // the tip over the other app.
+        guard panel == nil, let window, window.isKeyWindow, !text.isEmpty
+        else { return }
 
         // Measure with the default sizingOptions (fittingSize reports zero
         // without them), THEN neuter the sizing and wrap in a plain
@@ -130,11 +157,30 @@ private final class InfoTipTrackerView: NSView {
         tip.setFrameOrigin(origin)
         tip.orderFront(nil)
         panel = tip
+
+        // Backstop for every other way an exit event can go missing (the
+        // icon scrolling or the window dragging out from under a stationary
+        // cursor): while a tip is up, verify the hover still holds. .common
+        // so it keeps firing during scroll/drag event-tracking loops.
+        let watchdog = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.dismissUnlessHovering()
+        }
+        RunLoop.main.add(watchdog, forMode: .common)
+        self.watchdog = watchdog
+    }
+
+    private func dismissUnlessHovering() {
+        guard let window, window.isKeyWindow else { dismiss(); return }
+        let point = convert(window.convertPoint(fromScreen: NSEvent.mouseLocation),
+                            from: nil)
+        if !bounds.contains(point) { dismiss() }
     }
 
     private func dismiss() {
         delayTimer?.invalidate()
         delayTimer = nil
+        watchdog?.invalidate()
+        watchdog = nil
         panel?.orderOut(nil)
         panel = nil
     }
