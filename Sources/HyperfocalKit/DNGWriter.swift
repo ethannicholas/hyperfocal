@@ -96,9 +96,12 @@ public enum DNGWriter {
     /// EXIF carries into the DNG; if it's a raw file, the as-shot white balance
     /// is divided back out of the pixels and declared via AsShotNeutral, so raw
     /// processors show the shot's real temperature/tint instead of a generic
-    /// neutral.
+    /// neutral. `previewTone` bakes into the embedded preview only — the raw
+    /// data stays linear (tone rides as XMP; see XMPSidecar), but the preview
+    /// is what Finder/Explorer/browsers show, so it must carry the same look.
     public static func write(_ image: ImageBuffer, to url: URL,
-                             sourceFrame: URL? = nil) throws {
+                             sourceFrame: URL? = nil,
+                             previewTone: ToneSettings = ToneSettings()) throws {
         let w = image.width, h = image.height
         let meta = sourceFrame.map { sourceMetadata(from: $0) } ?? SourceMetadata()
 
@@ -127,16 +130,7 @@ public enum DNGWriter {
 
         let rgb = linearRGB16(from: image, channelFactors: channelFactors)
 
-        let scale = 256.0 / Double(max(w, h))
-        let pw = max(1, Int(Double(w) * scale)), ph = max(1, Int(Double(h) * scale))
-        let preview = Filters.resizeBilinear(image, toWidth: pw, toHeight: ph)
-        var previewRGB = [UInt8](repeating: 0, count: pw * ph * 3)
-        for i in 0..<(pw * ph) {
-            for c in 0..<3 {
-                previewRGB[i * 3 + c] =
-                    UInt8(min(max(Float(preview.pixels[i * 4 + c]), 0), 1) * 255 + 0.5)
-            }
-        }
+        let (previewRGB, pw, ph) = previewSRGB8(from: image, tone: previewTone)
 
         var cMeta = hyperfocal_dng_metadata()
         cMeta.exposureTime = meta.exposureTime ?? 0
@@ -171,7 +165,7 @@ public enum DNGWriter {
             let message = String(cString: errbuf)
             FileHandle.standardError.write(Data(
                 "warning: DNG SDK write failed (\(message)); falling back to uncompressed writer\n".utf8))
-            try writeUncompressed(image, to: url)
+            try writeUncompressed(image, to: url, previewTone: previewTone)
         }
     }
 
@@ -189,6 +183,43 @@ public enum DNGWriter {
         defer { duped.forEach { $0.map { free($0) } } }
         return body(duped.map { $0.map { UnsafePointer($0) } })
     }
+
+    /// 8-bit sRGB preview payload, longest side ≤ 256: downscale, apply the
+    /// tone the embedded XMP carries (the DNG spec wants previews to show the
+    /// *rendered* appearance, and until 2026-08 they showed the untoned linear
+    /// look), and convert Display P3 → sRGB — both writers declare the preview
+    /// as sRGB (PreviewColorSpace), so working-space bytes written verbatim
+    /// were slightly desaturated everywhere the tag is honored.
+    static func previewSRGB8(from image: ImageBuffer, tone: ToneSettings)
+        -> (pixels: [UInt8], width: Int, height: Int) {
+        let scale = 256.0 / Double(max(image.width, image.height))
+        let pw = max(1, Int(Double(image.width) * scale))
+        let ph = max(1, Int(Double(image.height) * scale))
+        var preview = Filters.resizeBilinear(image, toWidth: pw, toHeight: ph)
+        ToneCurve.apply(settings: tone, to: &preview)
+        let m = p3ToSRGB
+        var out = [UInt8](repeating: 0, count: pw * ph * 3)
+        for i in 0..<(pw * ph) {
+            var lin = (Float(0), Float(0), Float(0))
+            lin.0 = ToneCurve.srgbLinearize(min(max(Float(preview.pixels[i * 4]), 0), 1))
+            lin.1 = ToneCurve.srgbLinearize(min(max(Float(preview.pixels[i * 4 + 1]), 0), 1))
+            lin.2 = ToneCurve.srgbLinearize(min(max(Float(preview.pixels[i * 4 + 2]), 0), 1))
+            for c in 0..<3 {
+                let v = m[c * 3] * lin.0 + m[c * 3 + 1] * lin.1 + m[c * 3 + 2] * lin.2
+                out[i * 3 + c] =
+                    UInt8(ToneCurve.srgbEncode(min(max(v, 0), 1)) * 255 + 0.5)
+            }
+        }
+        return (out, pw, ph)
+    }
+
+    // Linear Display P3 → linear sRGB (shared D65 white, so no adaptation) —
+    // the preview declares sRGB while the pipeline works in P3.
+    static let p3ToSRGB: [Float] = [
+        1.2249402, -0.2249402, 0,
+        -0.0420570, 1.0420570, 0,
+        -0.0196376, -0.0786360, 1.0982736,
+    ]
 
     /// Full-range 16-bit linear RGB from the pipeline's working-space floats
     /// (Display P3 shares the sRGB transfer curve, so the same EOTF applies),
@@ -223,10 +254,17 @@ public enum DNGWriter {
     // XYZ (D65) → linear Display P3. In DNG terms: ColorMatrix1 maps XYZ to
     // camera coordinates, and our camera coordinates *are* the pipeline's
     // linear working primaries (Display P3). Must match dng_shim.cpp.
+    //
+    // The values are pre-normalized the way the DNG SDK normalizes on write
+    // (scaled so PCS white D50 → camera has max component 1 — a uniform scale,
+    // rendering-neutral): the SDK path always emitted this form, and the
+    // fallback writer must emit the *same bytes* so both writers' "Hyperfocal
+    // Linear P3" profiles share one content fingerprint (raw processors match
+    // profiles by name + digest together).
     static let xyzToCamera: [Double] = [
-        2.4934969, -0.9313836, -0.4027108,
-        -0.8294890, 1.7626641, 0.0236247,
-        0.0358458, -0.0761724, 0.9568845,
+        2.1857324, -0.8164258, -0.3530055,
+        -0.7271078, 1.5451040, 0.0207088,
+        0.0314215, -0.0667707, 0.8387792,
     ]
 
     // ForwardMatrix1: white-balanced camera → XYZ (D50), i.e.
@@ -243,23 +281,14 @@ public enum DNGWriter {
 
     /// Fallback: canonical DNG structure (preview IFD0 + LinearRaw SubIFD)
     /// written by hand, uncompressed.
-    public static func writeUncompressed(_ image: ImageBuffer, to url: URL) throws {
+    public static func writeUncompressed(_ image: ImageBuffer, to url: URL,
+                                         previewTone: ToneSettings = ToneSettings()) throws {
         let w = image.width, h = image.height
         precondition(w > 0 && h > 0)
 
         let rawPayload = linearRGB16(from: image)
 
-        // Preview payload: 8-bit sRGB RGB, longest side ≤ 256.
-        let scale = 256.0 / Double(max(w, h))
-        let pw = max(1, Int(Double(w) * scale)), ph = max(1, Int(Double(h) * scale))
-        let preview = Filters.resizeBilinear(image, toWidth: pw, toHeight: ph)
-        var previewPayload = [UInt8](repeating: 0, count: pw * ph * 3)
-        for i in 0..<(pw * ph) {
-            for c in 0..<3 {
-                previewPayload[i * 3 + c] =
-                    UInt8(min(max(Float(preview.pixels[i * 4 + c]), 0), 1) * 255 + 0.5)
-            }
-        }
+        let (previewPayload, pw, ph) = previewSRGB8(from: image, tone: previewTone)
 
         // Layout: header, preview data, raw data, IFD0 (+values), raw IFD (+values).
         let headerSize = 8
@@ -322,13 +351,19 @@ public enum DNGWriter {
                 })),                                                // ColorMatrix1
                 Entry(tag: 50728, value: .rational([(1, 1), (1, 1), (1, 1)])),
                 Entry(tag: 50778, value: .short([21])),             // CalibrationIlluminant1: D65
+                // Same profile name + content as the SDK path (see the
+                // xyzToCamera note): the two writers must present one profile,
+                // not two profiles sharing a name.
+                Entry(tag: 50936, value: .ascii("Hyperfocal Linear P3")),
                 // Explicit linear ProfileToneCurve + DefaultBlackRender=None:
                 // a profile with no tone curve gets ACR's default S-curve and
                 // shadow mapping instead of a linear render (see dng_shim.cpp).
                 Entry(tag: 50940, value: .float32([0, 0, 0.5, 0.5, 1, 1])),
+                Entry(tag: 50941, value: .long([0])),               // ProfileEmbedPolicy: allow copying
                 Entry(tag: 50964, value: .srational(forwardMatrix.map {
                     (Int32(($0 * 10000).rounded()), Int32(10000))
                 })),                                                // ForwardMatrix1
+                Entry(tag: 50970, value: .long([2])),               // PreviewColorSpace: sRGB
                 Entry(tag: 51110, value: .long([1])),               // DefaultBlackRender: None
             ]
         }

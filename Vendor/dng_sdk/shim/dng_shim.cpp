@@ -1,6 +1,6 @@
 // C shim over the Adobe DNG SDK: write a Linear DNG (demosaiced 16-bit linear
-// RGB, LinearRaw) whose camera space is declared as linear sRGB, with lossless
-// JPEG compression and an embedded preview.
+// RGB, LinearRaw) whose camera space is declared as linear Display P3, with
+// lossless JPEG compression and an embedded preview.
 
 #include "dng_shim.h"
 
@@ -181,14 +181,19 @@ extern "C" int hyperfocal_write_linear_dng(const uint16_t *rgb,
 		// fingerprint together — if either matrix ever changes after DNGs
 		// have been distributed, RENAME the profile (…"v2"), or catalogs
 		// holding older exports show "profile missing" style warnings.
+		//
+		// xyzToCamera is pre-normalized exactly the way the SDK normalizes
+		// on write (PCS white D50 → max camera component 1), so what we set
+		// here is what lands in the file — and the Swift fallback writer can
+		// emit the identical bytes (one profile fingerprint, not two).
 
 		AutoPtr<dng_camera_profile> profile (new dng_camera_profile);
 
 		profile->SetName ("Hyperfocal Linear P3");
 
-		dng_matrix_3by3 xyzToCamera ( 2.4934969, -0.9313836, -0.4027108,
-									 -0.8294890,  1.7626641,  0.0236247,
-									  0.0358458, -0.0761724,  0.9568845);
+		dng_matrix_3by3 xyzToCamera ( 2.1857324, -0.8164258, -0.3530055,
+									 -0.7271078,  1.5451040,  0.0207088,
+									  0.0314215, -0.0667707,  0.8387792);
 
 		dng_matrix_3by3 forwardMatrix ( 0.5150749,  0.2919397,  0.1571791,
 										0.2411702,  0.6922355,  0.0665900,
@@ -251,6 +256,8 @@ extern "C" int hyperfocal_write_linear_dng(const uint16_t *rgb,
 
 			AutoPtr<dng_preview> preview (new dng_image_preview);
 
+			// Contract with DNGWriter.previewSRGB8: previewRGB arrives
+			// already toned and converted P3 → sRGB to match this tag.
 			preview->fInfo.fColorSpace = previewColorSpace_sRGB;
 
 			preview->SetImage (host, previewImage);

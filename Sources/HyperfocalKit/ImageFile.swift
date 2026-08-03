@@ -338,14 +338,18 @@ public enum ImageFile {
     /// EXIF capture time ("YYYY:MM:DD HH:MM:SS" — `StackSplitter.exifFormatter`);
     /// used by SynthStack to make synth stacks splittable, ignored for DNG.
     /// `colorSpace` converts the export out of the working space (nil keeps
-    /// Display P3; DNG always declares P3 and ignores it).
+    /// Display P3; DNG always declares P3 and ignores it). `dngPreviewTone`
+    /// is DNG-only: the raw data stays linear, but the embedded preview bakes
+    /// this tone so thumbnails match the look the DNG's XMP carries.
     public static func save(_ image: ImageBuffer, to url: URL,
                             sourceFrame: URL? = nil,
                             dateTimeOriginal: String? = nil,
-                            colorSpace: CGColorSpace? = nil) throws {
+                            colorSpace: CGColorSpace? = nil,
+                            dngPreviewTone: ToneSettings = ToneSettings()) throws {
         let ext = url.pathExtension.lowercased()
         if ext == "dng" {
-            try DNGWriter.write(image, to: url, sourceFrame: sourceFrame)
+            try DNGWriter.write(image, to: url, sourceFrame: sourceFrame,
+                                previewTone: dngPreviewTone)
             return
         }
         let type: UTType
@@ -568,14 +572,18 @@ public enum ImageFile {
     /// raster exports EXIF carry-over is not yet wired on this platform.
     /// `dateTimeOriginal` stamps an EXIF capture time ("YYYY:MM:DD HH:MM:SS" —
     /// `StackSplitter.exifFormatter`); TIFF only, matching where SynthStack
-    /// needs it, and ignored for DNG.
+    /// needs it, and ignored for DNG. `dngPreviewTone` is DNG-only: the raw
+    /// data stays linear, but the embedded preview bakes this tone so
+    /// thumbnails match the look the DNG's XMP carries.
     public static func save(_ image: ImageBuffer, to url: URL,
                             sourceFrame: URL? = nil,
                             dateTimeOriginal: String? = nil,
-                            colorSpaceName: String? = nil) throws {
+                            colorSpaceName: String? = nil,
+                            dngPreviewTone: ToneSettings = ToneSettings()) throws {
         let ext = url.pathExtension.lowercased()
         if ext == "dng" {
-            try DNGWriter.write(image, to: url, sourceFrame: sourceFrame)
+            try DNGWriter.write(image, to: url, sourceFrame: sourceFrame,
+                                previewTone: dngPreviewTone)
             return
         }
         let cs = colorSpaceName ?? "p3"

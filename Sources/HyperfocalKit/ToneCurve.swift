@@ -6,8 +6,10 @@ import Foundation
 /// These are *inspection/output* adjustments, not fusion parameters: the app
 /// applies them to previews (so a fuse can be judged in deep shadow without a
 /// round-trip through a raw developer) and bakes them into display-referred
-/// exports (TIFF/PNG/JPEG). Linear DNG deliberately ignores them — that
-/// format exists to hand unmodified linear data to a real raw developer.
+/// exports (TIFF/PNG/JPEG). Linear DNG deliberately keeps them out of the
+/// raw data — that format exists to hand unmodified linear data to a real
+/// raw developer — carrying them instead as Camera Raw XMP and baked into
+/// the embedded preview (XMPSidecar, DNGWriter.previewSRGB8).
 public struct ToneSettings: Equatable, Codable, Sendable {
     /// Stops, ±5. Applied in linear light, so +2 EV genuinely quadruples
     /// energy rather than sliding gamma-encoded values.

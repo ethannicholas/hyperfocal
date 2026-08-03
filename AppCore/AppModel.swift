@@ -180,13 +180,16 @@ public final class AppModel: ObservableObject {
     /// carry it without touching the model.
     nonisolated static func saveImage(_ image: ImageBuffer, to url: URL,
                                       sourceFrame: URL?,
-                                      colorSpace: ExportColorSpace) throws {
+                                      colorSpace: ExportColorSpace,
+                                      dngPreviewTone: ToneSettings = ToneSettings()) throws {
         #if canImport(CoreGraphics)
         try ImageFile.save(image, to: url, sourceFrame: sourceFrame,
-                           colorSpace: colorSpace.cgColorSpace)
+                           colorSpace: colorSpace.cgColorSpace,
+                           dngPreviewTone: dngPreviewTone)
         #else
         try ImageFile.save(image, to: url, sourceFrame: sourceFrame,
-                           colorSpaceName: colorSpace.portableName)
+                           colorSpaceName: colorSpace.portableName,
+                           dngPreviewTone: dngPreviewTone)
         #endif
     }
 
@@ -2406,7 +2409,7 @@ public final class AppModel: ObservableObject {
                     var toned = image
                     ToneCurve.apply(settings: tone, to: &toned)
                     try Self.saveImage(toned, to: dest, sourceFrame: sourceFrame,
-                                       colorSpace: space)
+                                       colorSpace: space, dngPreviewTone: stackTone)
                     if wantsSidecar {
                         try XMPSidecar.embed(tone: stackTone, inDNGAt: dest)
                     }
@@ -2488,7 +2491,7 @@ public final class AppModel: ObservableObject {
                                              angle: angle)
                     ToneCurve.apply(settings: bakedTone, to: &image)
                     try Self.saveImage(image, to: dest, sourceFrame: url,
-                                       colorSpace: space)
+                                       colorSpace: space, dngPreviewTone: sidecarTone)
                     if wantsSidecar {
                         try XMPSidecar.embed(tone: sidecarTone, inDNGAt: dest)
                     }
@@ -3782,13 +3785,16 @@ public final class AppModel: ObservableObject {
         let image = Self.cropped(raw, to: cropRect, angle: cropAngle)
         do {
             // Tone bakes into display-referred formats only: DNG stays
-            // linear for raw development, and the depth map is data.
+            // linear for raw development (its embedded preview still carries
+            // the tone — that's what thumbnailers show), and the depth map
+            // is data.
             var toned = image
             if outputMode != .depth, exportFormat != .dng {
                 ToneCurve.apply(settings: tone, to: &toned)
             }
             try Self.saveImage(toned, to: url, sourceFrame: fuseURLs.first,
-                               colorSpace: exportColorSpace)
+                               colorSpace: exportColorSpace,
+                               dngPreviewTone: outputMode == .depth ? ToneSettings() : tone)
             if outputMode != .depth, exportFormat == .dng, !tone.isNeutral {
                 // DNG stays linear; the tone rides along as embedded Camera
                 // Raw XMP, which Lightroom/ACR read as develop settings.

@@ -1682,8 +1682,86 @@ Task { @MainActor in
           hasLinearRenderTags(fallbackData) else {
         print("probe: FALLBACK DNG MISSING LINEAR RENDER TAGS"); exit(1)
     }
-    try? FileManager.default.removeItem(at: dngDir)
     print("probe: dng linear render tags OK")
+
+    // The embedded preview must bake the export's tone (the raw data stays
+    // linear — the preview is what Finder/Explorer thumbnails show) and must
+    // genuinely be the sRGB its PreviewColorSpace tag declares: P3
+    // working-space bytes written verbatim read desaturated. Tone plumbing is
+    // checked end-to-end on the SDK exports above; the pixel-exact P3→sRGB
+    // expectation on the fallback writer (both share previewSRGB8).
+    func ifd0Preview(_ data: Data) -> [UInt8]? {
+        func u16(_ o: Int) -> Int { Int(data[o]) | Int(data[o + 1]) << 8 }
+        func u32(_ o: Int) -> Int { u16(o) | u16(o + 2) << 16 }
+        guard data.count > 8, data[0] == 0x49 else { return nil }
+        let ifd = u32(4)
+        var offset = -1, count = -1
+        for i in 0..<u16(ifd) {
+            let o = ifd + 2 + i * 12
+            // Previews (≤ 256 rows) fit one strip, so both tags are single LONGs.
+            if u16(o) == 273 { offset = u32(o + 8) }
+            if u16(o) == 279 { count = u32(o + 8) }
+        }
+        guard offset >= 0, count > 0, offset + count <= data.count else { return nil }
+        return [UInt8](data[offset..<(offset + count)])
+    }
+    func mean(_ bytes: [UInt8]) -> Double {
+        bytes.reduce(0.0) { $0 + Double($1) } / Double(max(1, bytes.count))
+    }
+    guard let tonedPreview = ifd0Preview(dngData),
+          let neutralPreview = ifd0Preview(neutralData) else {
+        print("probe: DNG PREVIEW STRIPS UNREADABLE"); exit(1)
+    }
+    guard mean(tonedPreview) > mean(neutralPreview) + 5 else {
+        print("probe: DNG PREVIEW NOT TONED (toned mean \(mean(tonedPreview)), "
+              + "neutral mean \(mean(neutralPreview)))"); exit(1)
+    }
+    // Flat P3 (0.5, 0.25, 0.75) must land on sRGB (137, 59, 198); the old
+    // verbatim working-space bytes were (128, 64, 191).
+    var flat = ImageBuffer(width: 8, height: 8)
+    for i in 0..<64 {
+        flat.pixels[i * 4] = 0.5
+        flat.pixels[i * 4 + 1] = 0.25
+        flat.pixels[i * 4 + 2] = 0.75
+        flat.pixels[i * 4 + 3] = 1
+    }
+    let flatURL = dngDir.appendingPathComponent("flat.dng")
+    try? DNGWriter.writeUncompressed(flat, to: flatURL)
+    guard let flatData = try? Data(contentsOf: flatURL),
+          let flatPreview = ifd0Preview(flatData), flatPreview.count >= 3,
+          (0..<3).allSatisfy({ abs(Int(flatPreview[$0]) - [137, 59, 198][$0]) <= 2 })
+    else {
+        print("probe: DNG PREVIEW NOT CONVERTED TO SRGB"); exit(1)
+    }
+    print("probe: dng preview toned + sRGB OK")
+
+    // One profile, not two sharing a name: the fallback writer's ColorMatrix1
+    // bytes and ProfileName must equal the SDK path's (the pre-normalized
+    // constants), or the two writers' files resolve to different profile
+    // fingerprints in raw processors.
+    func ifd0TagBytes(_ data: Data, _ tag: Int) -> [UInt8]? {
+        func u16(_ o: Int) -> Int { Int(data[o]) | Int(data[o + 1]) << 8 }
+        func u32(_ o: Int) -> Int { u16(o) | u16(o + 2) << 16 }
+        let sizes = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8]
+        let ifd = u32(4)
+        for i in 0..<u16(ifd) {
+            let o = ifd + 2 + i * 12
+            guard u16(o) == tag else { continue }
+            let size = sizes[u16(o + 2)] * u32(o + 4)
+            let start = size > 4 ? u32(o + 8) : o + 8
+            guard start + size <= data.count else { return nil }
+            return [UInt8](data[start..<(start + size)])
+        }
+        return nil
+    }
+    guard let sdkMatrix = ifd0TagBytes(neutralData, 50721),
+          ifd0TagBytes(fallbackData, 50721) == sdkMatrix,
+          let sdkName = ifd0TagBytes(neutralData, 50936),
+          ifd0TagBytes(fallbackData, 50936) == sdkName else {
+        print("probe: DNG PROFILE CONTENT DIVERGES BETWEEN WRITERS"); exit(1)
+    }
+    try? FileManager.default.removeItem(at: dngDir)
+    print("probe: dng profile parity sdk↔fallback OK")
 
     // Portable simd shim: Float3x3 (the non-Apple stand-in for simd_float3x3,
     // used on Windows/Linux) must match Apple's simd here, entry for entry,
