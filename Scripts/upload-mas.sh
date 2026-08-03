@@ -34,7 +34,13 @@ done
 VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo 1.0.0)}"
 VERSION="${VERSION#v}"  # tags are v1.0.0; CFBundleShortVersionString must be bare integers
 BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 1)
-TEAM_ID=$(sed -n 's/.*DEVELOPMENT_TEAM: *//p' App/project.yml)
+# project.yml sets DEVELOPMENT_TEAM once per target; they must all agree, and
+# teamID below needs exactly one value.
+TEAM_ID=$(sed -n 's/.*DEVELOPMENT_TEAM: *//p' App/project.yml | sort -u)
+if [ "$(printf '%s\n' "$TEAM_ID" | wc -l)" -ne 1 ]; then
+    echo "ambiguous DEVELOPMENT_TEAM values in App/project.yml: $TEAM_ID" >&2
+    exit 1
+fi
 
 if [ ! -d App/Hyperfocal.xcodeproj ] || [ ! -f App/Hyperfocal.entitlements ]; then
     (cd App && xcodegen generate)
