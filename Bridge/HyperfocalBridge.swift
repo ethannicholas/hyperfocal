@@ -1135,6 +1135,15 @@ public func hf_project_path(_ buffer: UnsafeMutablePointer<CChar>?,
     }
 }
 
+/// Bumped whenever the whole project context is replaced (new project,
+/// open, close) — the shell resets list scroll positions on this edge.
+@_cdecl("hf_project_generation")
+public func hf_project_generation() -> Int32 {
+    MainActor.assumeIsolated {
+        Int32(truncatingIfNeeded: Bridge.model?.projectGeneration ?? 0)
+    }
+}
+
 /// Anything worth saving since the last save? (quit gate, dirty marker)
 @_cdecl("hf_has_unsaved_work")
 public func hf_has_unsaved_work() -> Int32 {

@@ -80,6 +80,11 @@ class Shell : public QObject {
     Q_PROPERTY(QString fusionAlgorithm READ fusionAlgorithm WRITE setFusionAlgorithm NOTIFY changed)
     Q_PROPERTY(bool hasDisplay READ hasDisplay NOTIFY changed)
     Q_PROPERTY(QString projectPath READ projectPath NOTIFY changed)
+    // Bumped when the whole project context is replaced (new project,
+    // open, close) — its own NOTIFY so the stack panel can reset scroll
+    // on exactly that edge (stacksChanged also fires for content edits).
+    Q_PROPERTY(int projectGeneration READ projectGeneration
+               NOTIFY projectGenerationChanged)
     Q_PROPERTY(bool hasUnsavedWork READ hasUnsavedWork NOTIFY changed)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY changed)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY changed)
@@ -282,6 +287,7 @@ public:
     Q_INVOKABLE bool closeStack();
     Q_INVOKABLE bool closeProject();
     QString projectPath() const;
+    int projectGeneration() const;
     bool hasUnsavedWork() const;
     Q_INVOKABLE void toneEditing(bool editing);
     Q_INVOKABLE void noiseFloorEditing(bool editing);
@@ -301,6 +307,10 @@ signals:
     void framesChanged();
     /// The stack list (selection, statuses, pending count) actually changed.
     void stacksChanged();
+    /// The project context was replaced (new project, open, close).
+    /// Emitted after stacksChanged/framesChanged in the same refresh, so
+    /// handlers see the new project's lists.
+    void projectGenerationChanged();
     /// Anything else (tone, crop, project, undo state, …) moved.
     void changed();
 
@@ -323,6 +333,7 @@ private:
     QList<int> cachedSelectedFrames_;
     int cachedPending_ = 0;
     bool cachedCanFuse_ = false;
+    int cachedProjectGeneration_ = 0;
 };
 
 #endif // SHELL_H

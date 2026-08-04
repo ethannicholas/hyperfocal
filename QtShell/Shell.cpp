@@ -182,6 +182,13 @@ void Shell::refreshFromBridge() {
         cachedCanFuse_ = fuseable;
         emit stacksChanged();
     }
+    // After the list signals: generation handlers reset scroll, so they
+    // must see the replacing project's stacks/frames already published.
+    const int generation = hf_project_generation();
+    if (generation != cachedProjectGeneration_) {
+        cachedProjectGeneration_ = generation;
+        emit projectGenerationChanged();
+    }
     QVariantList print = fingerprint();
     if (print != cachedFingerprint_) {
         cachedFingerprint_ = std::move(print);
@@ -850,6 +857,8 @@ QString Shell::projectPath() const {
     const int n = hf_project_path(buffer, sizeof buffer);
     return QString::fromUtf8(buffer, n);
 }
+
+int Shell::projectGeneration() const { return hf_project_generation(); }
 
 bool Shell::hasUnsavedWork() const { return hf_has_unsaved_work() != 0; }
 

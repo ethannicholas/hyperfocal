@@ -251,6 +251,27 @@ struct ContentView: View {
                             proxy.scrollTo(stackID, anchor: .top)
                         }
                     }
+                    .onChange(of: model.projectGeneration) {
+                        // A replaced project must not inherit the previous
+                        // one's scroll offset (the List survives the swap, so
+                        // a new import used to arrive scrolled wherever the
+                        // old project left it). Same targeting as onAppear —
+                        // a restored selection's header, else the first row —
+                        // but unconditional: the list may sit anywhere.
+                        // Deferred a tick for the same layout reason, which
+                        // also lets this outrank the selection-driven
+                        // scrollTo firing in the same update.
+                        DispatchQueue.main.async {
+                            if model.stacks.count > 1 {
+                                if let stackID = model.selectedStackID
+                                    ?? model.stacks.first?.id {
+                                    proxy.scrollTo(stackID, anchor: .top)
+                                }
+                            } else if let first = model.frames.first {
+                                proxy.scrollTo(first, anchor: .top)
+                            }
+                        }
+                    }
                 }
             }
         }

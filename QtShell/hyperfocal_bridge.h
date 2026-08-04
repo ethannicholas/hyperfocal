@@ -210,6 +210,10 @@ int hf_export_animation(const char *path);
 // confirm destructive cases through the dialog seam.
 int hf_save_project(const char *path);
 int hf_project_path(char *buf, int cap);
+// Bumped whenever the whole project context is replaced (new project,
+// open, close) — the shell resets list scroll positions on this edge,
+// like the native sidebar keying off the same counter.
+int hf_project_generation(void);
 int hf_has_unsaved_work(void);
 int hf_close_stack(void);
 int hf_close_project(void);

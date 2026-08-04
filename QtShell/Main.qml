@@ -411,10 +411,27 @@ ApplicationWindow {
             frameList.positionViewAtIndex(frameIndex, ListView.Contain)
         }
     }
+    // A replaced project (New Project, Open, Close) must not inherit the
+    // previous one's scroll offset — reset the stack panel to its start,
+    // anchoring a restored selection's stack like native's generation-
+    // keyed scroll. Deferred a tick so the fresh model's delegates exist,
+    // which also queues this after scrollSelectedFrameIntoView's own
+    // callLater from the same refresh — the project reset wins.
+    function scrollToProjectStart() {
+        Qt.callLater(function() {
+            if (stackList.count > 1 && Shell.selectedStack > 0)
+                stackList.positionViewAtIndex(Shell.selectedStack,
+                                              ListView.Beginning)
+            else
+                stackList.positionViewAtBeginning()
+            frameList.positionViewAtBeginning()
+        })
+    }
     Connections {
         target: Shell
         function onFramesChanged() { scrollSelectedFrameIntoView() }
         function onStacksChanged() { scrollSelectedFrameIntoView() }
+        function onProjectGenerationChanged() { scrollToProjectStart() }
     }
 
     // The native ⌘Z family; menu entries with the mode-scoped titles arrive

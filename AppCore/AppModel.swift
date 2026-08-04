@@ -2241,7 +2241,7 @@ public final class AppModel: ObservableObject {
     /// close, open). The sidebar keys its settings form off this so scroll
     /// position resets to the top instead of surviving into an unrelated
     /// project.
-    @Published private(set) var projectGeneration = 0
+    @Published public private(set) var projectGeneration = 0
 
     private func resetForNewProject() {
         projectGeneration += 1
