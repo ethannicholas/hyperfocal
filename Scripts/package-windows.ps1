@@ -18,10 +18,14 @@
 # or the environment: HYPERFOCAL_MSIX_{IDENTITY,PUBLISHER,PUBLISHER_NAME}.
 #
 # The package satisfies the Qt LGPL-3.0 checklist in ROADMAP: Qt ships as
-# replaceable DLLs (never static), the GPL-3.0 + LGPL-3.0 texts ride along,
-# the GPLv3-only `qsb` build tool is NOT redistributed (asserted below), and
-# the same build is published off-Store so a user can substitute a modified
-# Qt - which the locked WindowsApps copy would otherwise prevent.
+# separate DLLs (never static), the GPL-3.0 + LGPL-3.0 texts ride along, and
+# the GPLv3-only `qsb` build tool is NOT redistributed (asserted below). The
+# section 4(d)(0) relinking right is satisfied by SOURCE - the app is MIT and public
+# with a reproducible build, so anyone can rebuild it against a modified Qt.
+# There is deliberately no off-Store binary: Hyperfocal ships through the
+# Mac App Store and Microsoft Store, or you build it yourself. Do not add one,
+# and do not describe the dist\*.zip below as a distribution channel - it is a
+# local build artifact for testing and archival.
 #
 # ASCII ONLY, deliberately. Windows PowerShell 5.1 decodes a BOM-less .ps1 as
 # the ANSI codepage, where the last byte of a UTF-8 em dash lands on CP1252's
@@ -48,12 +52,37 @@ try {
 # A release must ship what is committed: verify the checked-in derived
 # artifacts (the staged notices slice, the i18n catalogs) match their
 # masters instead of silently packaging stale or uncommitted content.
-$py = Get-Command python3, python -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-if (-not $py) { throw "python not found (needed to verify generated artifacts)" }
-& $py.Source (Join-Path $root 'Scripts\gen-notices.py') --check
+# Finding Python on Windows needs the same care as Scripts/python-interpreter.sh:
+# a python.org/winget install ships python.exe and py.exe but NO python3.exe,
+# while Windows 11 puts an "app execution alias" STUB at
+# WindowsApps\python3.exe. The stub is on PATH, so Get-Command finds it, and
+# then it prints "Python was not found..." and exits non-zero. Testing that a
+# candidate actually runs is the only reliable check.
+#
+# The probe must tolerate a candidate that fails, and on PS 5.1 that means
+# NOT redirecting its stderr with 2>$null: redirecting a native command's
+# stderr raises NativeCommandError all by itself, which -ErrorAction Stop
+# turns into a terminating error - the stub's own "Python was not found"
+# message would abort the release. Merge the stream instead (2>&1 into
+# Out-Null) with the preference relaxed for the length of the probe.
+$py = $null
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+foreach ($cand in @('python3', 'python', 'py')) {
+    foreach ($cmd in @(Get-Command $cand -All -ErrorAction SilentlyContinue)) {
+        & $cmd.Source -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $py = $cmd.Source; break }
+    }
+    if ($py) { break }
+}
+$ErrorActionPreference = $prevEAP
+if (-not $py) {
+    throw "no working Python 3 found (tried python3, python, py) - needed to verify generated artifacts"
+}
+Write-Host "== python: $py"
+& $py (Join-Path $root 'Scripts\gen-notices.py') --check
 if ($LASTEXITCODE) { throw "per-platform notices are stale - run Scripts/gen-notices.py and commit" }
-& $py.Source (Join-Path $root 'Scripts\gen-translations.py') --check
+& $py (Join-Path $root 'Scripts\gen-translations.py') --check
 if ($LASTEXITCODE) { throw "generated translations are stale - run Scripts/gen-translations.py and commit" }
 
 # ---------------------------------------------------------------- version --
@@ -169,7 +198,10 @@ while ($queue.Count -gt 0) {
 Write-Host "== $($copied.Count) runtime DLLs resolved from swift/vcpkg"
 
 # Qt, via windeployqt - the supported way, and the one that keeps every Qt
-# library a separate replaceable DLL (LGPL-3.0 section 4(d)(1)).
+# library a separate DLL rather than statically linked. That is not on its own
+# the compliance route (see the header: section 4(d)(0) is satisfied by public MIT
+# source), but a static Qt would put the whole app under section 4's relinking
+# duty in a form the release model cannot absorb, so it stays asserted below.
 #
 # --no-compiler-runtime: windeployqt otherwise drops an 11 MB
 # vc_redist.<arch>.exe INSTALLER into the package (it does this by default,
@@ -200,13 +232,13 @@ if ($forbidden) {
 # Qt must be dynamically linked; a static Qt would put the whole app under
 # LGPL section 4's relinking duty, which the release model cannot absorb.
 if (-not (Test-Path (Join-Path $stage 'Qt6Core.dll'))) {
-    throw "Qt6Core.dll not staged - Qt must ship as replaceable DLLs, never static"
+    throw "Qt6Core.dll not staged - Qt must ship as separate DLLs, never static"
 }
 
 # --------------------------------------------------------------- notices ---
 # The notices and license texts must travel with the binary, not only in the
 # source tree. The staged NOTICE.md is the Windows/Linux slice of the master
-# (Scripts/gen-notices.py) — this package should not list macOS-only detail.
+# (Scripts/gen-notices.py) - this package should not list macOS-only detail.
 Copy-Item (Join-Path $root 'Packaging\notices\windows-linux\NOTICE.md') $stage
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $stage 'LICENSE.txt')
 New-Item -ItemType Directory -Force (Join-Path $stage 'licenses') | Out-Null
@@ -223,7 +255,8 @@ standard licenses are in ``licenses\``.
 
 This package uses the Qt framework under the **GNU Lesser General Public
 License, version 3**. Qt is unmodified and dynamically linked: every Qt
-library in this folder is a separate, replaceable DLL.
+library in this folder is a separate DLL, never statically linked into the
+executable.
 
 - The LGPL-3.0 and GPL-3.0 texts are bundled in ``licenses\``.
 - **Corresponding source.** The exact Qt source this build links against is
@@ -232,24 +265,28 @@ library in this folder is a separate, replaceable DLL.
   that exact source on request at no more than the cost of distribution.
   (A bare vendor link is not on its own sufficient under the LGPL, hence the
   standing written offer.)
-- **Replacing Qt.** You may substitute modified, interface-compatible Qt
-  libraries and relink simply by replacing the DLLs in this folder. If you
-  obtained Hyperfocal from the Microsoft Store, its installed copy lives under
-  a write-protected ``WindowsApps`` directory; the identical build is published
-  outside the Store as a plain archive for exactly this purpose, and the source
-  is public (MIT) with a reproducible build.
+- **Using a modified Qt.** Hyperfocal's own source is MIT-licensed and public
+  at https://github.com/ethannicholas/hyperfocal, and its build is
+  reproducible, so you may rebuild the application against a modified,
+  interface-compatible Qt and run the result - the relinking right under
+  LGPL-3.0 section 4(d)(0), satisfied by source rather than by shipping object
+  files. Build instructions are in the repository's README.
+  (Hyperfocal is distributed as a Microsoft Store package, whose installed copy
+  lives under a write-protected ``WindowsApps`` directory, so replacing DLLs
+  in place is not the supported route; rebuilding from source is.)
 - The ``qsb`` shader compiler (GPL-3.0-only) is a build tool and is **not**
   redistributed here. Only its compiled shader output ships, inside the
   executable's own resources.
 
-## Microsoft DirectX shader compiler
+## Microsoft DirectX shader compilers
 
-``dxcompiler.dll`` and ``dxil.dll`` are Microsoft binaries, copied from the
-Windows SDK's ``Redist\D3D`` directory and loaded at runtime by Qt's Direct3D 12
-backend. They are **not** covered by Hyperfocal's MIT license: they are
-redistributed as "Distributable Code" under the Microsoft Software License Terms
-for the Windows Software Development Kit, unmodified and with their copyright,
-trademark and patent notices intact.
+``dxcompiler.dll``, ``dxil.dll`` and ``d3dcompiler_47.dll`` are Microsoft
+binaries, copied from the Windows SDK's ``Redist\D3D`` directory and loaded at
+runtime by Qt's Direct3D backends (the first two for Direct3D 12, the third for
+HLSL compilation on Direct3D 11). They are **not** covered by Hyperfocal's MIT
+license: they are redistributed as "Distributable Code" under the Microsoft
+Software License Terms for the Windows Software Development Kit, unmodified and
+with their copyright, trademark and patent notices intact.
 
 ``dxcompiler.dll`` is built from Microsoft's DirectX Shader Compiler, which
 incorporates LLVM and Clang under the University of Illinois/NCSA Open Source
@@ -260,6 +297,26 @@ License. Microsoft's notice for those components is reproduced verbatim in
 
 Hyperfocal's MIT license covers Hyperfocal's own code. Every third-party
 component bundled here remains under its own license, listed in ``NOTICE.md``.
+
+## Mesa 3D - llvmpipe software OpenGL
+
+``opengl32sw.dll`` is Mesa's llvmpipe software rasterizer (MIT, embedding LLVM
+under Apache-2.0 WITH LLVM-exception), staged by ``windeployqt`` and used by Qt
+only when a machine offers no usable hardware OpenGL. It is unmodified, and kept
+deliberately so the package still runs on GPU-less machines. See ``NOTICE.md``.
+
+## Microsoft Visual C++ runtime
+
+``MSVCP140.dll``, ``VCRUNTIME140.dll``, ``VCRUNTIME140_1.dll`` and
+``CONCRT140.dll`` ship app-locally as "Distributable Code" under the Microsoft
+Software License Terms for Visual Studio.
+
+## Swift runtime and ICU
+
+The Swift runtime redistributable ships beside the executable (Apache-2.0 WITH
+Runtime Library Exception). It carries ICU (``_FoundationICU.dll``,
+``icuuc.dll``), which is under the Unicode License and is **not** covered by that
+exception; its required attribution is in ``NOTICE.md``.
 
 ## Adobe DNG SDK
 

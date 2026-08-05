@@ -300,16 +300,22 @@ builds:
    `Packaging/windows/AppxManifest.xml.in`, generated logo assets, and a `-Msix`
    switch that runs `makeappx` — but it writes **placeholder identity**, because
    the real values come from a Store reservation. Remaining: reserve the package
-   name, supply `-Identity` / `-Publisher` (the `CN=…` matching the signing
-   cert) / `-PublisherDisplayName`, sign, and submit; then publish the same
-   build off-Store. The LGPL-3.0 checklist the package was built to is settled
-   and enforced in the script — Qt ships as replaceable DLLs (asserted), the
-   GPLv3-only `qsb`/`lupdate`/`lrelease` tools are asserted absent, and the
-   GPL-3.0 + LGPL-3.0 texts plus the written 3-year source offer ride in
-   `COMPLIANCE.md`. The off-Store build stays load-bearing: it is the mitigation
-   for the one genuinely-unsettled point (MSIX vs LGPL §4(d)(1)
-   DLL-replaceability, since the `WindowsApps` copy is locked) and it also
-   covers the small static `libQt6QmlBuiltins.a` fragment (Qt 6.7+).
+   name, supply `-Identity` / `-Publisher` (the `CN=…` from the reservation) /
+   `-PublisherDisplayName`, and submit. Store submissions are signed by the
+   Store, so no code-signing certificate is needed for this path. The LGPL-3.0
+   checklist the package was built to is settled and enforced in the script —
+   Qt ships as separate (never static) DLLs, the GPLv3-only
+   `qsb`/`lupdate`/`lrelease` tools are asserted absent, and the GPL-3.0 +
+   LGPL-3.0 texts plus the written 3-year source offer ride in `COMPLIANCE.md`.
+   **The §4(d)(0) relinking right is satisfied by source** — the app is MIT and
+   public with a reproducible build, so a user rebuilds against their own
+   modified Qt. That is also what covers the small static `libQt6QmlBuiltins.a`
+   fragment (Qt 6.7+), which no DLL-replacement story ever could.
+   **There is no off-Store binary, and there will not be one:** Hyperfocal ships
+   through the Mac App Store and Microsoft Store, or from source. The
+   `dist/*.zip` is a local build artifact for testing and archival — never
+   describe it as a distribution channel, and never propose a side-loadable
+   build to satisfy an LGPL obligation.
 
 2. **Store-listing media: the language sweep and the Windows side.**
    `Scripts/store-media.py` captures Mac App Store media in one shot — the

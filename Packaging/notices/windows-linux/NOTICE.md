@@ -40,30 +40,41 @@ Compression for the DNG SDK. License: `Zlib`.
 
 ### Qt 6 — LGPL-3.0
 
-The Windows/Linux GUI (`QtShell/`) uses the Qt framework (modules: Qt Core, Gui,
-Widgets, QML, Quick, ShaderTools) under the **GNU Lesser General Public License,
-version 3**.
+The Windows/Linux GUI (`QtShell/`) uses the Qt framework under the **GNU Lesser
+General Public License, version 3**. The shell links Qt Core, Gui, Widgets, Qml,
+Quick and ShaderTools directly; `windeployqt` additionally stages the modules
+those pull in at runtime — Network, OpenGL, Svg, QuickControls2 (with its Basic,
+Fusion, Imagine, Material, Universal and FluentWinUI3 styles), QuickDialogs2,
+QuickEffects, QuickLayouts, QuickShapes, QuickTemplates2, QmlMeta, QmlModels,
+QmlWorkerScript and LabsFolderListModel — all under the same license.
 
 > Copyright © The Qt Company Ltd and other Qt contributors.
 
-Qt is used as unmodified, dynamically-linked libraries. In accordance with
-LGPL-3.0 §4, the corresponding source for the exact Qt version shipped is
-available on request and from https://download.qt.io; the LGPL-3.0 and GPL-3.0
-license texts are bundled in `licenses/`. Users may replace the Qt libraries
-with modified, interface-compatible versions; a locally-deployable build (the
-same one distributed outside any app store) is provided for that purpose. The
-`qsb` build tool (GPL-3.0-only) is **not** redistributed — only the compiled
-`.qsb` shader output and the LGPL-3.0 runtime libraries ship.
+Qt is used as unmodified, dynamically-linked libraries — every Qt library ships
+as a separate DLL/shared object, never statically linked into the executable.
+The corresponding source for the exact Qt version shipped is available from
+https://download.qt.io and, for three years from the date of this distribution,
+on request from the maintainer at no more than the cost of distribution; the
+LGPL-3.0 and GPL-3.0 license texts are bundled in `licenses/`.
 
-### DirectX shader compiler — Microsoft Windows SDK Distributable Code
+The relinking right under LGPL-3.0 §4(d)(0) is satisfied by source: the whole of
+Hyperfocal is MIT-licensed and public at
+https://github.com/ethannicholas/hyperfocal, with a reproducible build, so
+anyone may rebuild the application against a modified, interface-compatible Qt
+and run the result. The `qsb` build tool (GPL-3.0-only) is **not** redistributed
+— only the compiled `.qsb` shader output and the LGPL-3.0 runtime libraries
+ship.
 
-The Windows package ships `dxcompiler.dll` and `dxil.dll`, copied by
-`windeployqt` from `Windows Kits\10\Redist\D3D\<arch>\`. Qt loads them at
-runtime for its Direct3D 12 RHI backend. They are **Microsoft binaries, not
-covered by Hyperfocal's MIT license**, redistributed as "Distributable Code"
-under the Microsoft Software License Terms for the Windows Software Development
-Kit — which list `Redist\D3D\x64\` and `Redist\D3D\x86\` `dxcompiler.dll` and
-`dxil.dll` as redistributable with Classic Windows applications.
+### DirectX shader compilers — Microsoft Windows SDK Distributable Code
+
+The Windows package ships `dxcompiler.dll`, `dxil.dll` and `d3dcompiler_47.dll`,
+copied by `windeployqt` from `Windows Kits\10\Redist\D3D\<arch>\`. Qt loads them
+at runtime for its Direct3D RHI backends — the first two for Direct3D 12, and
+`d3dcompiler_47.dll` for HLSL compilation on the Direct3D 11 path. They are
+**Microsoft binaries, not covered by Hyperfocal's MIT license**, redistributed as
+"Distributable Code" under the Microsoft Software License Terms for the Windows
+Software Development Kit — which list the `Redist\D3D\x64\` and `Redist\D3D\x86\`
+copies of all three as redistributable with Classic Windows applications.
 
 > Copyright © Microsoft Corporation. All rights reserved.
 
@@ -191,3 +202,74 @@ dynamically. License: `MIT`.
 `ObservableObject`/`@Published` on non-Apple platforms. License: `MIT`.
 
 > Copyright © 2019 Sergej Jaskiewicz and OpenCombine contributors.
+
+### XZ Utils (liblzma)
+
+LZMA decompression, linked by libtiff for its LZMA codec. License: `0BSD`.
+
+> Copyright © The Tukaani Project (https://tukaani.org/xz/). Permission to use,
+> copy, modify, and/or distribute this software for any purpose with or without
+> fee is hereby granted.
+
+### Mesa 3D — llvmpipe software OpenGL
+
+The Windows package ships `opengl32sw.dll`, staged by `windeployqt`: Mesa's
+llvmpipe software rasterizer, which Qt falls back to when a machine offers no
+usable hardware OpenGL. It is kept deliberately — the package targets arbitrary
+Store machines, including virtual ones with no GPU driver — and is unmodified.
+License: `MIT`. Mesa embeds LLVM (`Apache-2.0 WITH LLVM-exception`) as
+llvmpipe's JIT.
+
+> Copyright © 1999–2016 Brian Paul and the Mesa 3D contributors. All Rights
+> Reserved.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of
+> this software and associated documentation files (the "Software"), to deal in
+> the Software without restriction … The above copyright notice and this
+> permission notice shall be included in all copies or substantial portions of
+> the Software.
+
+### Swift runtime — Apache-2.0 WITH Runtime Library Exception
+
+The Windows package ships the Swift runtime redistributable beside the
+executable (`swiftCore.dll`, `swift_Concurrency.dll`, `swift_RegexParser.dll`,
+`swift_StringProcessing.dll`, `swiftCRT.dll`, `swiftDispatch.dll`,
+`swiftWinSDK.dll`, `Foundation.dll`, `FoundationEssentials.dll`,
+`FoundationInternationalization.dll`, `dispatch.dll`, `BlocksRuntime.dll`), the
+supported way to run a Swift binary on a machine without a toolchain.
+
+> Copyright © Apple Inc. and the Swift project authors.
+
+The Runtime Library Exception waives the attribution requirement for compiled
+forms of the runtime, so this entry is courtesy rather than obligation — the
+same reasoning the swift-argument-parser entry records. It is listed because a
+reader inspecting the package should be able to account for every binary in it.
+
+### International Components for Unicode (ICU)
+
+`_FoundationICU.dll` and `icuuc.dll` ship as part of the Swift runtime above;
+Foundation uses them for collation, normalization and locale data. ICU is **not**
+covered by the Swift Runtime Library Exception and carries its own attribution
+requirement. License: `Unicode-3.0` (Unicode License v3).
+
+> Copyright © 1991–2024 Unicode, Inc. All rights reserved.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of
+> the Unicode data files and any associated documentation (the "Data Files") or
+> Unicode software and any associated documentation (the "Software") to deal in
+> the Data Files or Software without restriction … provided that either (a) this
+> copyright and permission notice appear with all copies of the Data Files or
+> Software, or (b) this copyright and permission notice appear in associated
+> Documentation.
+
+### Microsoft Visual C++ runtime — Distributable Code
+
+`MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and `CONCRT140.dll`
+ship app-locally (they arrive with the Swift runtime redistributable, and
+`Scripts/package-windows.ps1` asserts their presence rather than letting
+`windeployqt` drop a `vc_redist` installer into the payload). They are
+**Microsoft binaries, not covered by Hyperfocal's MIT license**, redistributed
+as "Distributable Code" under the Microsoft Software License Terms for Visual
+Studio, which permit app-local deployment of the C++ runtime files.
+
+> Copyright © Microsoft Corporation. All rights reserved.

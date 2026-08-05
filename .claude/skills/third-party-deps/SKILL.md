@@ -81,8 +81,12 @@ Not a follow-up. Part of the commit that adds the dependency:
   to both About dialogs (`App/Sources/HyperfocalAppMain.swift`,
   `QtShell/Main.qml`); and follow the packaging checklist in ROADMAP's
   **"Release & licensing compliance"** (bundle GPL+LGPL texts, host exact source
-  or written offer, don't ship GPL-only build tools, provide an off-Store
-  relinkable build).
+  or written offer, don't ship GPL-only build tools). The relinking obligation
+  (LGPL-3.0 §4(d)(0)) is met by this repo's **public MIT source and reproducible
+  build** — a user rebuilds the combined work against their own modified Qt.
+  **Never propose an off-Store or side-loadable binary to satisfy it:** binaries
+  ship through the Mac App Store and Microsoft Store or not at all, and building
+  from source is the only other channel. That is settled, not a gap to fill.
 - **Build wiring, everywhere it's referenced:** `Package.swift` (Windows
   `winImagingLibs` + Linux `imagingPkgs`), the vcpkg install lists in `README.md`
   **and** `.github/workflows/windows.yml`, the apt lists in `README.md`,
