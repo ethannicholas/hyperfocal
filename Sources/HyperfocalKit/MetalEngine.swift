@@ -381,29 +381,6 @@ public final class MetalEngine {
         out[gid] = 0.2126f * p.x + 0.7152f * p.y + 0.0722f * p.z;
     }
 
-    // Per-pixel despill floor accumulators: running two-smallest + max of the
-    // gain-corrected full-res luminance across the stack, alpha-masked like
-    // the depth vote. Must match the CPU accumulation in
-    // DMapFusion.fuseWithDepth (two-smallest selection is order-independent
-    // and exact in float, so the engines agree bit-for-bit given equal
-    // luminance planes).
-    kernel void minmax_update(device const float* lum [[buffer(0)]],
-                              device const half4* img [[buffer(1)]],
-                              device float* min1 [[buffer(2)]],
-                              device float* min2 [[buffer(3)]],
-                              device float* maxL [[buffer(4)]],
-                              constant uint& count [[buffer(5)]],
-                              constant float& gain [[buffer(6)]],
-                              uint gid [[thread_position_in_grid]]) {
-        if (gid >= count) return;
-        if (float(img[gid].w) <= 0.5f) return;
-        float l = lum[gid] * gain;
-        float m1 = min1[gid];
-        if (l < m1) { min2[gid] = m1; min1[gid] = l; }
-        else if (l < min2[gid]) { min2[gid] = l; }
-        if (l > maxL[gid]) maxL[gid] = l;
-    }
-
     struct PreviewParams { uint srcW; uint srcH; uint dstW; uint dstH; };
 
     // Preview threshold 0.01: above anything the tent floor alone can

@@ -245,7 +245,8 @@ number that moves when depth selection fails.
     decorrelated bokeh mottle averages real scene texture away (measured
     0.36× the liveliest registered source frame, vs the reference render's
     honest 0.95×). Not tuning: peak-concentration, noise-floor, guided/median
-    radius, blend radius, and despill sweeps all move it ≤1 point. The fix is
+    radius, blend radius, and (since-removed) despill sweeps all move it ≤1
+    point. The fix is
     regional frame *commitment* in no-confidence regions — the same
     frame-governed-background direction as the PMax hybrid renderer
     (`Docs/research/2026-07-28-pmax-hybrid-background-renderer.md`), which is
@@ -459,24 +460,6 @@ stack before quoting a new ledger.
   and re-measure before trusting any of this: an earlier run of the same
   benchmark on a loaded machine reported pmax GPU at 171 s vs CPU 135 s and
   inverted the ordering entirely.
-- **PMax despill inputs on Metal + wgpu.** `--despill --method pmax` currently
-  forces the CPU engine: the pass needs the per-frame grid luminance plane and
-  the per-cell max of the grit-blurred level-0 focus, and only
-  `PyramidFusion`'s CPU streaming loop retains them (`prepareDespill` →
-  `Despill.DespillInputs`). Porting means computing both reductions on-device in
-  `GPUPyramid`/`WgpuPyramid` and reading back at grid resolution, gated on
-  CPU↔GPU parity of the despill inputs (DMap's equivalent measured ~74 dB).
-  The stakes rose since this was written: DMap's render cleanup (despill +
-  self-gated black point, `StackPipeline.applyRenderCleanup`) is now always-on
-  in the pipeline and the CLI, but PMax only gets the black-point half — its
-  despill stays opt-in-and-CPU until these inputs exist on the GPU, so PMax
-  results keep their rim glow at default settings. The GPU pmax path measures
-  ~1.6-1.9x faster than the CPU one, so forcing CPU is a real cost. The
-  debloom near-black gate's port (git history) is the worked example — shared
-  mask/statistics code called by every backend, with only the buffer plumbing
-  per engine. Done = the pipeline turns despill on for PMax on every engine
-  and the rim profiles (see `Docs/research/2026-07-25-rim-quality-measurement.md`)
-  match the DMap result on the same stack.
 - **Research-informed fusion follow-ons** — full findings, evidence, sources, and
   refuted claims: `Docs/research/2026-07-12-focus-stacking-research.md` (consult
   before revisiting). The regularizer is `DepthRegularize.swift` (ablation

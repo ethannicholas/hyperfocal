@@ -1,15 +1,14 @@
 import Foundation
 
 /// Export black-point: the uniform backdrop *veil* — real ambient light on the
-/// background, present ±3% in every source frame — is not a fusion artifact, so
-/// the rim despill leaves it. Helicon crushes it with a flat subtraction; this
-/// does the same, auto-measured per channel. It is independent of the despill
-/// (either can run alone), but together they take the background to Helicon-black
-/// while the despill removes the structured glow.
+/// background, present ±3% in every source frame — is not a fusion artifact.
+/// Commercial stackers crush it with a flat subtraction; this does the same,
+/// auto-measured per channel.
 ///
-/// Like the despill, this operates in LINEAR light (the veil is additive light;
-/// the working buffer is sRGB-encoded — see `Despill`), so it linearizes,
-/// subtracts the per-channel veil, clips at zero, and re-encodes.
+/// The veil is additive light and the working buffer is sRGB-encoded
+/// (display-referred), so the pass operates in LINEAR light: it linearizes,
+/// subtracts the per-channel veil, clips at zero, and re-encodes. (An
+/// encoded-space subtraction rings at the silhouette; don't.)
 public enum BlackPoint {
 
     /// Auto-measures the per-channel veil (a low percentile of each channel,
@@ -44,7 +43,7 @@ public enum BlackPoint {
                          gateLo + 1e-6)
         let veilEnc = max(ToneCurve.srgbEncode(veil.x),
                           ToneCurve.srgbEncode(veil.y), ToneCurve.srgbEncode(veil.z))
-        let gate = 1 - Despill.smoothstep(gateLo, gateHi, veilEnc)
+        let gate = 1 - PlaneMath.smoothstep(gateLo, gateHi, veilEnc)
         guard gate > 0.001 else {
             log?(String(format: "black point: skipped — measured floor %.1f%% encoded "
                         + "is not a dark-backdrop veil", veilEnc * 100))

@@ -724,31 +724,6 @@ public final class WgpuEngine {
         lp_out[gid.x] = 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z;
     }
 
-    struct MinMaxParams { count: u32, gain: f32, pad1: u32, pad2: u32 }
-
-    @group(0) @binding(0) var<storage, read> mm_lum: array<f32>;
-    @group(0) @binding(1) var<storage, read> mm_img: array<vec4f>;
-    @group(0) @binding(2) var<storage, read_write> mm_min1: array<f32>;
-    @group(0) @binding(3) var<storage, read_write> mm_min2: array<f32>;
-    @group(0) @binding(4) var<storage, read_write> mm_max: array<f32>;
-    @group(0) @binding(5) var<uniform> mm_p: MinMaxParams;
-
-    // Per-pixel despill floor accumulators: running two-smallest + max of the
-    // gain-corrected full-res luminance across the stack, alpha-masked like
-    // the depth vote. Must match the CPU accumulation in
-    // DMapFusion.fuseWithDepth and the Metal minmax_update.
-    @compute @workgroup_size(256)
-    fn minmax_update(@builtin(global_invocation_id) gidRaw: vec3u) {
-        let gid = flatten1D(gidRaw);
-        if (gid.x >= mm_p.count) { return; }
-        if (mm_img[gid.x].w <= 0.5) { return; }
-        let l = mm_lum[gid.x] * mm_p.gain;
-        let m1 = mm_min1[gid.x];
-        if (l < m1) { mm_min2[gid.x] = m1; mm_min1[gid.x] = l; }
-        else if (l < mm_min2[gid.x]) { mm_min2[gid.x] = l; }
-        if (l > mm_max[gid.x]) { mm_max[gid.x] = l; }
-    }
-
     struct PreviewParams { srcW: u32, srcH: u32, dstW: u32, dstH: u32 }
 
     @group(0) @binding(0) var<storage, read> pv_accum: array<vec4f>;

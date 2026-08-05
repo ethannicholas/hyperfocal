@@ -107,8 +107,7 @@ public enum PyramidFusion {
     /// merge chooses per cell between the darkest and the brightest
     /// unfocused rendition — whichever luminance lands closer to the
     /// **clean-field plane** this function reconstructs (push-pull from the
-    /// component's uncontaminated pixels, the luminance analog of despill's
-    /// backdrop reconstruction). Keep-darkest alone is only "least
+    /// component's uncontaminated pixels). Keep-darkest alone is only "least
     /// contaminated" when the contamination is additive; where a *dark*
     /// subject spreads into a brighter background the sign inverts, and
     /// keep-darkest paints the band beside the silhouette *below the darkest
@@ -149,14 +148,14 @@ public enum PyramidFusion {
         // (measured 0.058 on Azurite against a p99 of 0.418) and drags the
         // thresholds onto the physical rim tail — gating debloom off in exactly
         // the band it is needed.
-        let scale = max(Despill.percentileLow(lumMin0, pct), 1e-6)
+        let scale = max(PlaneMath.percentileLow(lumMin0, pct), 1e-6)
         let lo = lo0 * scale, hi = hi0 * scale
         var m0 = [Float](repeating: 1, count: lumMin0.count)
         var bg0: [Float] = []
         var cleanGrid: (plane: [Float], gw: Int, gh: Int)? = nil
         var bgFraction: Float = 0
         if !off {
-            for i in m0.indices { m0[i] = 1 - Despill.smoothstep(lo, hi, lumMin0[i]) }
+            for i in m0.indices { m0[i] = 1 - PlaneMath.smoothstep(lo, hi, lumMin0[i]) }
             // Texture veto (see `nearBlackTextureVeto`): where the darkest
             // rendition provably isn't the true background — live defocused
             // texture — the cell leaves the membership and falls to the
@@ -261,7 +260,7 @@ public enum PyramidFusion {
         let texLo = Float(env["HYPERFOCAL_PMAX_TEX_LO"] ?? "") ?? (1 + 0.25 * spread)
         let texHi = Float(env["HYPERFOCAL_PMAX_TEX_HI"] ?? "") ?? (1 + 0.45 * spread)
         let alpha = Float(env["HYPERFOCAL_PMAX_BG_ALPHA"] ?? "") ?? 0.15
-        let t = alpha * max(Despill.percentileLow(focusMax0, 0.99), 1e-6)
+        let t = alpha * max(PlaneMath.percentileLow(focusMax0, 0.99), 1e-6)
         let focusPool = maxPool(focusMax0, width: width, height: height, factor: f)
         // Energy floor on the MIN rendition: the ratio is meaningless where
         // the darkest rendition's energy is quantization junk (a
@@ -312,7 +311,7 @@ public enum PyramidFusion {
         var nVeto = 0
         for (i, ratio) in eligible
             where env0Min[i] > floor && envMax0[i] > visFloor {
-            let w = Despill.smoothstep(texLo, texHi, ratio)
+            let w = PlaneMath.smoothstep(texLo, texHi, ratio)
             if w > 0 {
                 grid[i] = w
                 nVeto += 1
@@ -379,7 +378,7 @@ public enum PyramidFusion {
                                    burtExpand: Bool, env: [String: String],
                                    log: ((String) -> Void)?) {
         let alpha = Float(env["HYPERFOCAL_PMAX_BG_ALPHA"] ?? "") ?? 0.15
-        let t = alpha * max(Despill.percentileLow(focusMax0, 0.99), 1e-6)
+        let t = alpha * max(PlaneMath.percentileLow(focusMax0, 0.99), 1e-6)
         let (w0, h0) = (out.width, out.height)
         guard focusMin0.count == focusMax0.count,
               focusMax0.count == w0 * h0 else { return }
@@ -401,8 +400,8 @@ public enum PyramidFusion {
                     DispatchQueue.concurrentPerform(iterations: h0) { y in
                         for i in (y * w0)..<((y + 1) * w0) {
                             wp[i] = fn[i] > minValid
-                                ? 1 - Despill.smoothstep(rLo, rHi, fx[i] / fn[i])
-                                : 1 - Despill.smoothstep(0.5 * t, t, fx[i])
+                                ? 1 - PlaneMath.smoothstep(rLo, rHi, fx[i] / fn[i])
+                                : 1 - PlaneMath.smoothstep(0.5 * t, t, fx[i])
                         }
                     }
                 }
@@ -456,7 +455,7 @@ public enum PyramidFusion {
                     let ni = min(gy, nfh - 1) * nfw + min(gx, nfw - 1)
                     // Sharpened at cell level: a mixed cell (subject edge)
                     // leans protected, a solidly never-focused cell engages.
-                    let wNf = Despill.smoothstep(0.3, 0.7, nfCell[ni])
+                    let wNf = PlaneMath.smoothstep(0.3, 0.7, nfCell[ni])
                     guard wNf > 0 else { continue }
                     let fe = outPool[i], ee = envMax[l][i]
                     guard ee > 0, fe > ee, fe > 1e-12 else { continue }
@@ -464,7 +463,7 @@ public enum PyramidFusion {
                     // ramp keeps cells just past the envelope continuous
                     // with untouched neighbours (full correction from 1.4x).
                     let r = fe / ee
-                    let w = Despill.smoothstep(1.0, 1.4, r) * wNf
+                    let w = PlaneMath.smoothstep(1.0, 1.4, r) * wNf
                     guard w > 0 else { continue }
                     scale[i] = 1 + ((1 / r).squareRoot() - 1) * w
                     minScale = min(minScale, scale[i])
@@ -617,7 +616,7 @@ public enum PyramidFusion {
         let ratioCut = Float(env["HYPERFOCAL_PMAX_BG_RATIO"] ?? "")
             ?? neverFocusRatioCut(frameCount: frameCount)
         let logCut = log2(ratioCut)
-        let t = alpha * max(Despill.percentileLow(focusMax0, 0.99), 1e-6)
+        let t = alpha * max(PlaneMath.percentileLow(focusMax0, 0.99), 1e-6)
         let r = max(4, Int((closeFrac * Float(min(width, height))).rounded()))
         var sharp = [Bool](repeating: false, count: width * height)
         if governance {
@@ -749,7 +748,7 @@ public enum PyramidFusion {
                 guard comps.labels[i] > 0,
                       candidate[Int(comps.labels[i]) - 1] else { continue }
                 let r = lumMax0[i] - lumMin0[i]
-                let w = 1 - Despill.smoothstep(rLo, rHi, r)
+                let w = 1 - PlaneMath.smoothstep(rLo, rHi, r)
                 guard w > 0 else { continue }
                 let gi = gy * gw + x / f
                 vw[gi] += (lumMin0[i] + lumMax0[i]) * 0.5 * w
@@ -995,7 +994,7 @@ public enum PyramidFusion {
         // and the map was per-cell patchwork instead of regional commitment.
         let ratioCut = Float(env["HYPERFOCAL_PMAX_GOV_RATIO"] ?? "") ?? 4
         let floorFrac = Float(env["HYPERFOCAL_PMAX_GOV_FLOOR"] ?? "") ?? 0.002
-        let maxP99 = max(Despill.percentileLow(cellMax, 0.99), 1e-7)
+        let maxP99 = max(PlaneMath.percentileLow(cellMax, 0.99), 1e-7)
         let absFloor = floorFrac * maxP99
         var isConfident = [Bool](repeating: false, count: cells)
         for i in 0..<cells {
@@ -1215,8 +1214,8 @@ public enum PyramidFusion {
             for i in 0..<cells where cellMax[i] > absFloor {
                 ratios.append(cellMax[i] / max(cellMin[i], 1e-7))
             }
-            let p50 = Despill.percentileLow(ratios, 0.5)
-            let p90 = Despill.percentileLow(ratios, 0.9)
+            let p50 = PlaneMath.percentileLow(ratios, 0.5)
+            let p90 = PlaneMath.percentileLow(ratios, 0.9)
             FileHandle.standardError.write(String(
                 format: "pmax gov: cell ratio p50 %.2f p90 %.2f (cut %.2f), "
                     + "abs floor %.3g (p99 %.3g), member px %d\n",
@@ -1509,8 +1508,6 @@ public enum PyramidFusion {
                             progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
                             options: Options = Options(),
-                            prepareDespill: Bool = false,
-                            onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil,
                             onSharpness: ((FrameSharpness) -> Void)? = nil)
         throws -> ImageBuffer {
         let warp = source.transforms.map {
@@ -1522,8 +1519,6 @@ public enum PyramidFusion {
                         cancellation: cancellation,
                         decodeWorkers: FramePrefetcher.workers(for: source.urls),
                         options: options,
-                        prepareDespill: prepareDespill,
-                        onDespillInputs: onDespillInputs,
                         onSharpness: onSharpness) { i in
             var img = try ImageFile.load(url: source.urls[i])
             if let gain = source.gains?[i], gain != SIMD3(repeating: 1) {
@@ -1553,8 +1548,6 @@ public enum PyramidFusion {
                             decodeWorkers: Int? = nil,
                             decodeLookahead: Int? = nil,
                             options: Options = Options(),
-                            prepareDespill: Bool = false,
-                            onDespillInputs: ((Despill.DespillInputs) -> Void)? = nil,
                             onSharpness: ((FrameSharpness) -> Void)? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
@@ -1600,31 +1593,26 @@ public enum PyramidFusion {
             && (env["HYPERFOCAL_PMAX_ENV_CLAMP"].map { $0 != "0" } ?? true)
         let texVeto = envClamp
             && (env["HYPERFOCAL_PMAX_NB_TEX_VETO"].map { $0 != "0" } ?? true)
-        // Despill needs the per-frame grid luminance and focus planes, which only
-        // the CPU loop retains today — stay on the CPU when it is requested. The
-        // GPU port is a follow-up, exactly as the focus gate's was. The textured
-        // base and the squared-luma energy ablation force the CPU the same way —
-        // silently taking a GPU path that ignores them would measure the wrong
-        // configuration. Smoothed selection, the Burt expand and the envelope
-        // discipline run on every engine (ported 2026-07-28), configured once
-        // here via GPUSelect.
-        if prepareDespill { log?("pmax: despill inputs requested — CPU engine") }
+        // The textured base and the squared-luma energy ablation force the
+        // CPU path — silently taking a GPU path that ignores them would
+        // measure the wrong configuration. Smoothed selection, the Burt
+        // expand and the envelope discipline run on every engine (ported
+        // 2026-07-28), configured once here via GPUSelect.
         if texBase { log?("pmax: textured base on — CPU engine") }
         if smoothSq { log?("pmax: squared-luma energy ablation — CPU engine") }
         // Background governance (see Options.backgroundGovernanceRadius): the
         // env override is the experimental surface while there is no UI —
         // same precedent as HYPERFOCAL_PMAX_NEARBLACK_OFF, so the dual-UI
         // invariant isn't tripped before the ship-on decision. CPU-only the
-        // same way despill inputs are (its second pass touches ≤ 8 frames;
-        // the GPU story is measure-first, per the design note's parity
-        // section).
+        // (its second pass touches ≤ 8 frames; the GPU story is
+        // measure-first, per the design note's parity section).
         let govRadius = Int(env["HYPERFOCAL_PMAX_GOV_RADIUS"] ?? "")
             ?? options.backgroundGovernanceRadius
         let governance = govRadius > 0 && focusGateEnabled
         if governance {
             log?("pmax: background governance on (radius \(govRadius) cells) — CPU engine")
         }
-        let preferGPU = preferGPU && !prepareDespill && !texBase && !smoothSq
+        let preferGPU = preferGPU && !texBase && !smoothSq
             && !governance
         let gpuSelect = GPUSelect(smoothed: smoothSel, burt: expand5,
                                   clamp: envClamp, veto: texVeto)
@@ -1718,12 +1706,6 @@ public enum PyramidFusion {
         var govBlockEnergy: [Float] = []
         var govGw = 0, govBw = 0
         let govBlockCells = max(Int(env["HYPERFOCAL_PMAX_GOV_BLOCK"] ?? "") ?? 8, 1)
-        // Despill inputs (only when asked): per-frame grid luminance for the
-        // dark floor, and the running per-cell max of this frame's fine-scale
-        // focus — the "did any frame ever resolve detail here" confidence proxy
-        // that stands in for DMap's noise-floor×concentration plane.
-        var luminancePlanes: [[Float]] = []
-        var focusMax: [Float] = []
         var sharpnessPlanes: [[Float]] = []
         // Wall-clock phase buckets, reported through `log` at the end — the
         // GPU path's discipline: optimization here must start from
@@ -1935,42 +1917,15 @@ public enum PyramidFusion {
                     govBlockEnergy[b * frameCount + fi] += grid[i]
                 }
             }
-            if prepareDespill || onSharpness != nil {
-                // Reductions of buffers that are live right here and nowhere
-                // else: gauss[0] is this frame warped onto the canvas (gains
-                // already applied by the source closure, so the luminance is
-                // gain-corrected as DMap's is), and `energy` is the
-                // grit-blurred level-0 focus `level0BandEnergy` just wrote —
-                // the same per-frame measurement the despill gate consumes
-                // and, retained per frame, the sharpness planes retouch's
-                // space auto-pick queries (a PMax primary has no DMap pass
-                // to retain them from).
+            if onSharpness != nil {
+                // Reduction of a buffer that is live right here and nowhere
+                // else: `energy` is the grit-blurred level-0 focus
+                // `level0BandEnergy` just wrote — retained per frame, the
+                // sharpness planes retouch's space auto-pick queries (a PMax
+                // primary has no DMap pass to retain them from).
                 let f = DMapFusion.sharpnessDownsample
-                let focusGrid = DMapFusion.boxDownsample(ws.energy, width: cw, height: ch,
-                                                         factor: f)
-                if onSharpness != nil { sharpnessPlanes.append(focusGrid) }
-                if prepareDespill {
-                    var lum = [Float](repeating: 0, count: cw * ch)
-                    ws.gauss[0].withUnsafeBufferPointer { gpBuf in
-                        let gp = gpBuf.baseAddress!
-                        lum.withUnsafeMutableBufferPointer { lp in
-                            DispatchQueue.concurrentPerform(iterations: ch) { y in
-                                for x in 0..<cw {
-                                    let g = hfLoadRGBA(gp, (y * cw + x) * 4)
-                                    lp[y * cw + x] = 0.2126 * g.x + 0.7152 * g.y
-                                        + 0.0722 * g.z
-                                }
-                            }
-                        }
-                    }
-                    luminancePlanes.append(DMapFusion.boxDownsample(lum, width: cw, height: ch,
-                                                                    factor: f))
-                    if focusMax.isEmpty {
-                        focusMax = focusGrid
-                    } else {
-                        for i in focusMax.indices { focusMax[i] = max(focusMax[i], focusGrid[i]) }
-                    }
-                }
+                sharpnessPlanes.append(DMapFusion.boxDownsample(
+                    ws.energy, width: cw, height: ch, factor: f))
             }
             tBuild += now() - t0
             t0 = now()
@@ -2171,23 +2126,6 @@ public enum PyramidFusion {
                         }
                     }
                 }
-            }
-        }
-        if prepareDespill, let onDespillInputs, let ws = workspace {
-            let (w, h) = ws.sizes[0]
-            let f = DMapFusion.sharpnessDownsample
-            let gw = (w + f - 1) / f, gh = (h + f - 1) / f
-            if let strength = Despill.spillStrength(luminancePlanes: luminancePlanes,
-                                                    confidence: focusMax,
-                                                    gridWidth: gw, gridHeight: gh),
-               let inputs = Despill.computeInputs(luminancePlanes: luminancePlanes,
-                                                  spillStrength: strength,
-                                                  spillWidth: gw, spillHeight: gh,
-                                                  width: w, height: h, factor: f, log: log) {
-                DMapFusion.dumpPlane(strength, env: "HYPERFOCAL_DUMP_SPILLW")
-                onDespillInputs(inputs)
-            } else {
-                log?("pmax: despill inputs unavailable (need > 2 frames)")
             }
         }
         if let onSharpness, let ws = workspace, !sharpnessPlanes.isEmpty {

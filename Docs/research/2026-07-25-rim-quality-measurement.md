@@ -6,7 +6,22 @@ despill, the PMax-native despill gate, and the debloom near-black gate — all
 three were decided by these measurements, and two of them were nearly decided
 *wrongly* by skipping the last section.
 
-Read this before touching `Despill.swift`, `BlackPoint.swift`, or the focus gate
+**2026-08-04: the rim despill was removed** (`Despill.swift` and all its
+plumbing — the sections below describing it are history, kept because the
+method and the measured boundaries still govern the surviving passes). Two
+findings ended it, both measured on then-current renders: (1) its subject/glow
+discriminator rests on "a real subject barely swings under defocus", which is
+false for translucent/glossy specimens — a halite stack (dark translucent
+subject, true-black backdrop) showed cell-sized dark blotches that no gate
+tuning could remove without giving up the pass's purpose; and (2) its
+remaining benefit had become marginal — a dense column sweep over the two
+reference stacks found the raw DMap render already at or under the acceptance
+band nearly everywhere, with the despill contributing only a partial trim of
+one glow plume (fluorite/calcite notch, mean 2450 counts over the 3–30 px
+band) and ≤~800 counts elsewhere. The code exists in git history if the
+trade ever reverses.
+
+Read this before touching `BlackPoint.swift` or the focus gate
 in `PyramidFusion.swift`. The env knobs themselves are documented at their call
 sites; this is the method, not the API.
 
@@ -183,6 +198,42 @@ that no pixel got *brighter*, since these passes only ever subtract.
   around them thins. Judged acceptable; revisit if a stack shows it as
   damage. CPU↔GPU cross-check on the real stack: default GPU fuse matches
   the CPU chain within a few counts at every probe point.
+- **Despill veil gate (2026-08-04)** (`HYPERFOCAL_DESPILL_VEIL_GATE_LO`/`_HI`,
+  default 0.008%/0.03% over the *encoded* despill backdrop — the
+  20th-percentile darkest-frames luminance floor, a far darker statistic than
+  the black-point's per-channel veil). The contamination fallback
+  (`CONTAM_LO`/`_HI`) is a ratio to this backdrop, and on a stack whose
+  backdrop is TRUE black it degenerates: a halite stack from 8-bit JPEGs
+  measured backdrop 1e-9 (quantization crushes the backdrop to code value 0),
+  every cell's ratio exploded into the millions, the fallback re-targeted dim
+  subject cells to the reconstructed ~0 backdrop, and the l − target bound
+  stopped protecting them — cell-sized black blotches across the dark
+  translucent specimen and its reflection, invisible at export exposure,
+  ruinous at +4 (2628 subject cells crushed >25%; gating contam to zero cut
+  that to 9, all rim-edge). Findings, each measured on the halite dumps:
+  - The damage was ~entirely the contamination fallback: neutralizing it alone
+    took 2628 → 481 flagged cells (472 of those outside the subject — the halo
+    band being *legitimately* corrected, which the pass keeps doing on this
+    stack). Disabling the rim-scoped `SPILL_LO` relaxation barely moved it
+    (2628 → 2575) — leave it alone.
+  - The pixel path's subject-ness discriminator (l ÷ per-pixel max) does NOT
+    transfer to this failure: on a glossy translucent subject the badly-hurt
+    and gently-touched pixels have identical l/max distributions (median 0.478
+    vs 0.498 — the specimen swings under defocus like glow does). Protecting
+    the grid path with it was evaluated and rejected; the veil gate is the
+    discriminator that actually separates.
+  - Gate calibration anchors: Azurite's despill backdrop is **0.059% encoded**
+    — the dimmest real veil measured, and the reason the band tops out at
+    0.03% (a first cut at 0.05%/0.2%, anchored to the black-point's veil
+    numbers, silently zeroed the gate on Azurite; the two statistics differ
+    ~7×, don't conflate them). 8-bit true black measures exactly 0, and one
+    code value above black is already 0.39% — the band sits in the gap
+    quantization cannot populate.
+  - With the fallback gated off, a glow-flooded concavity merely
+    under-corrects (subtracts to its own darkest-frame glow) — a safe failure.
+  - Verified: halite fixed end-to-end at +4; Fluorite 2 and Azurite despill
+    outputs bit-identical to pre-gate behavior (`compare -metric AE` = 0);
+    probe ALL PASS.
 - **Black-point veil gate** (`HYPERFOCAL_BLACK_POINT_GATE_LO`/`_HI`, default
   0.02/0.06 over the max-channel *encoded* veil): anchor measurements are
   0.4–0.6% for genuine dark-backdrop veils (Azurite R263 G229 B0; Fluorite 2

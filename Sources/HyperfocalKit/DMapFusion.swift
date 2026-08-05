@@ -87,13 +87,6 @@ public enum DMapFusion {
         /// trade). The temp file is width×height×8 bytes per frame, so
         /// users short on disk can turn it off and accept the slower fuse.
         public var spillEnabled: Bool
-        /// Retain the grid planes the render-stage rim despill consumes
-        /// (`Despill.DespillInputs`) on the fused `Output`. Off by default —
-        /// the planes are cheap but pointless work unless a despill pass will
-        /// run. `StackPipeline.fuseResult` forces it on for DMap (the render
-        /// cleanup is always-on there); the `fuse` CLI turns it on when its
-        /// resolved despill amount is > 0 or the input-dump env is set.
-        public var prepareDespill: Bool
         /// Keep the pass-1 warped-frame spill alive on `Output.warpedFrames`
         /// after the fuse instead of reclaiming it, so a follow-on consumer
         /// (the app's background PMax generation) streams already-warped
@@ -106,7 +99,7 @@ public enum DMapFusion {
                     medianRadius: Int = 20, normalizeExposure: Bool = true,
                     peakConcentration: Float = 0.5,
                     guidedRadius: Float = 128, guidedEps: Float = 1e-3,
-                    spillEnabled: Bool = true, prepareDespill: Bool = false,
+                    spillEnabled: Bool = true,
                     focusPreSigma: Float = 1) {
             self.sharpnessSigma = sharpnessSigma
             self.focusPreSigma = focusPreSigma
@@ -118,7 +111,6 @@ public enum DMapFusion {
             self.guidedRadius = guidedRadius
             self.guidedEps = guidedEps
             self.spillEnabled = spillEnabled
-            self.prepareDespill = prepareDespill
         }
 
         /// A copy with the spatial regularization radii resolved for a frame of
@@ -141,9 +133,9 @@ public enum DMapFusion {
     }
 
     public struct Output {
-        /// `var`, not `let`: the pipeline's render cleanup (rim despill +
-        /// black point) rewrites the fused image in place after the engine
-        /// returns — see `StackPipeline.fuseResult`.
+        /// `var`, not `let`: the pipeline's render cleanup (black point)
+        /// rewrites the fused image in place after the engine returns — see
+        /// `StackPipeline.fuseResult`.
         public var image: ImageBuffer
         /// Regularized depth as a grayscale image: white = first frame, black =
         /// last. Stacks are typically shot close-to-far, so near is bright — the
@@ -166,11 +158,6 @@ public enum DMapFusion {
         /// rendering. Retouch sources must apply the same gains or stamps
         /// carry the original flicker into the normalized result.
         public let gains: [SIMD3<Float>]?
-        /// Grid planes the render-stage rim despill consumes, retained only
-        /// when `Options.prepareDespill` is set. Produced by shared code from
-        /// each engine's (≈90 dB-parity) luminance planes + guide, so a
-        /// despilled result inherits that parity rather than re-deriving it.
-        public var despill: Despill.DespillInputs? = nil
         /// The pass-1 warped-frame spill, retained only when
         /// `Options.retainSpill` is set (and the spill actually ran) —
         /// consumed by the app's background PMax generation via
@@ -297,16 +284,6 @@ public enum DMapFusion {
         let wantSpill = FrameSpill.wanted(options.spillEnabled)
         var spill: FrameSpill?
 
-        // Per-pixel despill floor: retain the two darkest and the brightest
-        // gain-corrected luminances per PIXEL across the stack, for
-        // `Despill`'s rim band where the 8-px grid floor is blind (see
-        // `DespillInputs.perPixelFloor`). Three full-res f32 planes (~12 B/px)
-        // while enabled; freed into the inputs after the regularizer runs.
-        let wantPixelFloor = Self.wantsPixelFloor(options)
-        var lumMin1: [Float] = []
-        var lumMin2: [Float] = []
-        var lumMax: [Float] = []
-
         // Wall-clock phase buckets, reported through `log` at the end — the
         // pyramid paths' discipline: optimization here must start from
         // measurements, not vibes. `decode` is time *blocked on* the
@@ -410,36 +387,6 @@ public enum DMapFusion {
                 for i in lumGrid.indices { lumGrid[i] *= gain }
             }
             luminancePlanes.append(lumGrid)
-            if wantPixelFloor {
-                if lumMin1.isEmpty {
-                    lumMin1 = [Float](repeating: .infinity, count: width * height)
-                    lumMin2 = [Float](repeating: .infinity, count: width * height)
-                    lumMax = [Float](repeating: 0, count: width * height)
-                }
-                lum.withUnsafeBufferPointer { lp in
-                    img.pixels.withUnsafeBufferPointer { fpBuf in
-                        let fp = fpBuf.baseAddress!
-                        lumMin1.withUnsafeMutableBufferPointer { m1 in
-                            lumMin2.withUnsafeMutableBufferPointer { m2 in
-                                lumMax.withUnsafeMutableBufferPointer { mx in
-                                    DispatchQueue.concurrentPerform(iterations: height) { y in
-                                        for i in (y * width)..<((y + 1) * width) {
-                                            // Alpha-masked like the depth vote:
-                                            // no floor opinion where the warp
-                                            // left no data.
-                                            guard Float(fp[i * 4 + 3]) > 0.5 else { continue }
-                                            let l = lp[i] * gain
-                                            if l < m1[i] { m2[i] = m1[i]; m1[i] = l }
-                                            else if l < m2[i] { m2[i] = l }
-                                            if l > mx[i] { mx[i] = l }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             tEnergy += now() - t0
             t0 = now()
             let index = Float(fi)
@@ -515,7 +462,6 @@ public enum DMapFusion {
         dumpGuide(guidePlane)
 
         let concentration = peakConcentrationPlane(planes: sharpnessPlanes)
-        var despillInputs: Despill.DespillInputs? = nil
         let depth = regularizeDepth(bestEnergy: bestEnergy, bestIndex: bestIndex,
                                     concentration: concentration,
                                     concentrationWidth: (width + sharpnessDownsample - 1)
@@ -526,20 +472,10 @@ public enum DMapFusion {
                                     guide: guidePlane.isEmpty ? nil : guidePlane,
                                     width: width, height: height,
                                     frameCount: frameCount, options: options, log: log,
-                                    despillOut: { despillInputs = $0 },
                                     progress: {
             progress?(FusionProgress(stage: .regularizing, fraction: $0))
         })
         tRegularize = now() - t0
-
-        if wantPixelFloor, despillInputs != nil, !lumMin1.isEmpty {
-            Self.foldPixelFloor(min1: &lumMin1, min2: lumMin2, width: width, height: height)
-            despillInputs?.perPixelFloor = lumMin1
-            despillInputs?.perPixelMax = lumMax
-        }
-        lumMin1 = []
-        lumMin2 = []
-        lumMax = []
 
         let gains = renderGains(from: gains0, options: options, log: log)
 
@@ -693,7 +629,6 @@ public enum DMapFusion {
                                                       factor: Self.sharpnessDownsample,
                                                       planes: sharpnessPlanes),
                             gains: gains)
-        output.despill = despillInputs
         if options.retainSpill, let spill {
             output.warpedFrames = WarpedFrameCache(spill: spill, width: width,
                                                    height: height,
@@ -706,37 +641,6 @@ public enum DMapFusion {
     /// HYPERFOCAL_DUMP_GUIDE (raw Float32, row-major). Shared by both engines.
     static func dumpGuide(_ guide: [Float]) {
         dumpPlane(guide, env: "HYPERFOCAL_DUMP_GUIDE")
-    }
-
-    /// Whether this fuse retains the per-pixel despill planes (see
-    /// `DespillInputs.perPixelFloor`). On whenever the despill is being
-    /// prepared; `HYPERFOCAL_DESPILL_PIXEL_FLOOR=0` disables for A/B against
-    /// the grid-only pass. Shared by all three engines.
-    static func wantsPixelFloor(_ options: Options) -> Bool {
-        options.prepareDespill
-            && (ProcessInfo.processInfo.environment["HYPERFOCAL_DESPILL_PIXEL_FLOOR"]
-                ?? "1") != "0"
-    }
-
-    /// Folds the two-smallest accumulators into the per-pixel floor plane, in
-    /// place in `min1`: mean of the two darkest frames (the second-smallest
-    /// hardens the floor against 1-px alignment jitter pulling background
-    /// under a bright rim). A pixel only one frame covered keeps its single
-    /// value; a pixel no frame covered reads 0 — `Despill.apply` clamps its
-    /// target up to the reconstructed backdrop anyway. Shared by all three
-    /// engines so the fold stays bit-identical.
-    static func foldPixelFloor(min1: inout [Float], min2: [Float],
-                               width: Int, height: Int) {
-        min1.withUnsafeMutableBufferPointer { m1 in
-            min2.withUnsafeBufferPointer { m2 in
-                DispatchQueue.concurrentPerform(iterations: height) { y in
-                    for i in (y * width)..<((y + 1) * width) {
-                        if m2[i].isFinite { m1[i] = (m1[i] + m2[i]) * 0.5 }
-                        else if !m1[i].isFinite { m1[i] = 0 }
-                    }
-                }
-            }
-        }
     }
 
     /// Writes a raw Float32 row-major plane to the path in the given env var,
@@ -1056,7 +960,6 @@ public enum DMapFusion {
                                        width: Int, height: Int, frameCount: Int,
                                        options: Options, log: ((String) -> Void)? = nil,
                                        isStale: (@Sendable () -> Bool)? = nil,
-                                       despillOut: ((Despill.DespillInputs) -> Void)? = nil,
                                        progress: ((Double) -> Void)? = nil) -> [Float] {
         // Confidence: soft threshold against a noise floor derived from the image's
         // own energy distribution (robust to overall scene contrast), times a
@@ -1168,15 +1071,6 @@ public enum DMapFusion {
                                                consensus: consensus.isEmpty ? nil : consensus,
                                                width: width, height: height,
                                                frameCount: frameCount)
-            if options.prepareDespill, let despillOut,
-               let di = Despill.computeInputs(luminancePlanes: luminancePlanes ?? [],
-                                              spillStrength: coeff.spillStrength,
-                                              spillWidth: coeff.gridWidth,
-                                              spillHeight: coeff.gridHeight,
-                                              width: width, height: height,
-                                              factor: coeff.factor, log: log) {
-                despillOut(di)
-            }
         } else {
             // No guide (caller retained none) or no signal anywhere: keep the
             // median depth, just clamped.

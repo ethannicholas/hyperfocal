@@ -176,12 +176,7 @@ public enum StackPipeline {
         }
         let source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
         var output: DMapFusion.Output
-        var fusionOptions = configuration.dmap
-        // Always retain the despill grid inputs on the DMap path: the render
-        // cleanup below is on by default, and the planes are cheap next to a
-        // fuse. (PMax only retains them on its CPU streaming loop, so its
-        // despill stays opt-in until the GPU port — see ROADMAP.)
-        if configuration.method == .dmap { fusionOptions.prepareDespill = true }
+        let fusionOptions = configuration.dmap
         switch configuration.method {
         case .pmax:
             // PMax (Laplacian-pyramid max-coefficient): image only, no depth.
@@ -269,35 +264,28 @@ public enum StackPipeline {
         return FuseResult(output: output, issues: issues, fusedURLs: fuseURLs)
     }
 
-    /// The always-on render cleanup: rim despill (structured defocus-spill glow
-    /// hugging the silhouette) then black point (uniform backdrop veil,
-    /// self-gated to dark backdrops — see `BlackPoint`). Both passes are
-    /// no-risk by construction on scenes they don't apply to — despill's
-    /// spill-strength gate reads a lit scene as subject, black-point's veil
-    /// gate reads a non-black floor as "no backdrop" — which is why there is
-    /// no user-facing control, matching commercial stackers' default-clean
-    /// output. Applied to every consumer of the fused result, DNG included:
-    /// the glow is baked into fused pixels, so a raw developer downstream
-    /// could never remove it later.
+    /// The always-on render cleanup: black point (uniform backdrop veil,
+    /// self-gated to dark backdrops — see `BlackPoint`). No-risk by
+    /// construction on scenes it doesn't apply to — the veil gate reads a
+    /// non-black floor as "no backdrop" — which is why there is no
+    /// user-facing control, matching commercial stackers' default-clean
+    /// output. Applied to every consumer of the fused result, DNG included.
     ///
-    /// A/B escape hatches (measurement, not user settings):
-    /// `HYPERFOCAL_DESPILL` / `HYPERFOCAL_BLACK_POINT` = 0 disable a pass.
-    /// PMax has no despill inputs off the CPU streaming path (GPU port is a
-    /// ROADMAP item), so only the black point applies there.
+    /// A rim despill pass (structured defocus-spill glow hugging the
+    /// silhouette) used to run here first; it was removed 2026-08-04 — its
+    /// subject/glow discriminator rests on "subject doesn't swing under
+    /// defocus", which is false for translucent/glossy specimens (measured:
+    /// cell-sized dark blotches on a halite stack no gate tuning could fix),
+    /// while its measured benefit had shrunk to a partial trim of one glow
+    /// plume. History and measurements: the rim-quality research doc and the
+    /// removal commit.
+    ///
+    /// A/B escape hatch (measurement, not a user setting):
+    /// `HYPERFOCAL_BLACK_POINT` = 0 disables the pass.
     static func applyRenderCleanup(to output: inout DMapFusion.Output,
                                    log: ((String) -> Void)? = nil) {
         let env = ProcessInfo.processInfo.environment
-        let despill = min(max(Float(env["HYPERFOCAL_DESPILL"] ?? "") ?? 1, 0), 1)
         let blackPoint = min(max(Float(env["HYPERFOCAL_BLACK_POINT"] ?? "") ?? 1, 0), 1)
-        if despill > 0, let inputs = output.despill {
-            Despill.apply(to: &output.image, inputs: inputs, intensity: despill, log: log)
-        }
-        // The despill inputs carry two full-resolution f32 planes (~360 MB at
-        // 45 MP) and nothing downstream of this cleanup reads them — they must
-        // not ride the Output into the app's fuse-completion retention, which
-        // holds the Output alive through retouch prewarm and the secondary
-        // launch.
-        output.despill = nil
         if blackPoint > 0 {
             BlackPoint.applyExport(to: &output.image, intensity: blackPoint, log: log)
         }
