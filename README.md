@@ -166,12 +166,12 @@ swift build -c release
 QtShell\build.ps1 -Run        # build and launch the desktop app
 ```
 
-To produce a redistributable build — the app plus every Qt, Swift and imaging
-DLL it needs, the third-party notices and license texts, and an MSIX-ready
-layout:
+To produce the Microsoft Store package — the app plus every Qt, Swift and
+imaging DLL it needs, the third-party notices and license texts, and the signed-
+by-the-Store MSIX:
 
 ```powershell
-Scripts\package-windows.ps1   # -> dist\Hyperfocal-<version>-<arch>\ and .zip
+Scripts\package-windows.ps1   # -> dist\Hyperfocal-<version>-<arch>\ and .msix
 ```
 
 **High-Efficiency NEFs (and other undecodable raws).** LibRaw can't decode

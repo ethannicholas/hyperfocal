@@ -295,9 +295,9 @@ Notices viewer linked from the About dialog (`Shell::noticesMarkdown` /
 `App/Sources/NoticesWindow.swift`). The one residual before shipping paid
 builds:
 
-1. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1 -Msix`
-   now produces a submission-ready package end to end: the payload, the staged
-   layout, generated logo assets, and `AppxManifest.xml` carrying the reserved
+1. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` now
+   produces a submission-ready package end to end, with no flags: the payload,
+   the staged layout, generated logo assets, and `AppxManifest.xml` carrying the reserved
    Store identity (`EthanNicholas.Hyperfocal`, baked into the script — public
    values, not credentials). Verified 2026-08-05 on x64: stages 213.2 MB /
    1468 files, packs to an 83.3 MB `.msix`, and `Add-AppxPackage -Register` on
@@ -332,10 +332,11 @@ builds:
    modified Qt. That is also what covers the small static `libQt6QmlBuiltins.a`
    fragment (Qt 6.7+), which no DLL-replacement story ever could.
    **There is no off-Store binary, and there will not be one:** Hyperfocal ships
-   through the Mac App Store and Microsoft Store, or from source. The
-   `dist/*.zip` is a local build artifact for testing and archival — never
-   describe it as a distribution channel, and never propose a side-loadable
-   build to satisfy an LGPL obligation.
+   through the Mac App Store and Microsoft Store, or from source. The script
+   emits only the staged layout and the `.msix`; it deliberately no longer
+   archives the layout, because a `Hyperfocal-<version>.zip` in `dist/` reads as
+   a downloadable release. Never propose a side-loadable build to satisfy an
+   LGPL obligation.
 
 2. **Store-listing media: the language sweep and the Windows side.**
    `Scripts/store-media.py` captures Mac App Store media in one shot — the

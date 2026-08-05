@@ -1,14 +1,32 @@
 # Builds a distribution-ready Windows package into dist/ - the Windows
 # analogue of Scripts/package-app.sh.
 #
-#   Scripts\package-windows.ps1                 build + stage + zip
+#   Scripts\package-windows.ps1                 build + stage + pack the .msix
 #   Scripts\package-windows.ps1 -SkipBuild      re-stage an existing build
-#   Scripts\package-windows.ps1 -Msix           ...and pack an .msix
 #
 #   -Version x.y.z    override the marketing version (default: latest git tag)
 #   -QtKit <dir>      Qt kit (default: QT_KIT, else newest matching C:\Qt\6.*)
 #   -OutDir <dir>     output root (default: dist)
-#   -NoZip            skip the archive
+#
+# Two outputs, always both:
+#
+#   dist\Hyperfocal-<version>-<arch>\      the staged layout
+#   dist\Hyperfocal-<version>-<arch>.msix  the Microsoft Store deliverable
+#
+# The layout is not a leftover - it is what a local install test registers
+# (`Add-AppxPackage -Register <layout>\AppxManifest.xml`, developer mode) and
+# what Scripts\store-media.ps1 captures screenshots from. Both want the loose
+# files, and both get them from a normal run; neither needs packing skipped.
+# There is deliberately no flag to skip it: packing measures 6.4 s for this
+# payload (1468 files -> 83.3 MB), which buys nothing worth the risk of
+# leaving dist\ holding a layout and an .msix that disagree - and the .msix is
+# the artifact that gets submitted.
+#
+# There is deliberately NO archive either. An earlier version zipped the layout
+# by default, which produced the one artifact nothing consumes while making the
+# only real deliverable opt-in - and a Hyperfocal-<version>.zip sitting in
+# dist\ reads as a downloadable release, which is exactly the thing this
+# project does not ship.
 #
 # MSIX identity comes from the Store reservation and is baked in below - no
 # need to pass anything for a normal release build. Override with
@@ -22,8 +40,7 @@
 # with a reproducible build, so anyone can rebuild it against a modified Qt.
 # There is deliberately no off-Store binary: Hyperfocal ships through the
 # Mac App Store and Microsoft Store, or you build it yourself. Do not add one,
-# and do not describe the dist\*.zip below as a distribution channel - it is a
-# local build artifact for testing and archival.
+# and do not reintroduce an archive of the staged layout to stand in for one.
 #
 # ASCII ONLY, deliberately. Windows PowerShell 5.1 decodes a BOM-less .ps1 as
 # the ANSI codepage, where the last byte of a UTF-8 em dash lands on CP1252's
@@ -34,8 +51,6 @@ param(
     [string]$OutDir = "dist",
     [string]$QtKit = $env:QT_KIT,
     [switch]$SkipBuild,
-    [switch]$NoZip,
-    [switch]$Msix,
     [string]$Identity,
     [string]$Publisher,
     [string]$PublisherDisplayName
@@ -55,7 +70,7 @@ param(
 # belongs in this repo.
 #
 # Store submissions are signed BY the Store, so no code-signing certificate is
-# needed here; `-Msix` deliberately produces an unsigned package.
+# needed here; the .msix this produces is deliberately unsigned.
 $defaultIdentity = 'EthanNicholas.Hyperfocal'
 $defaultPublisher = 'CN=AE9F9BE8-6C95-400D-8361-0E58C58DAEF9'
 $defaultPublisherDisplayName = 'Ethan Nicholas'
@@ -399,27 +414,20 @@ $manifest = $manifest.
 Set-Content -Path (Join-Path $stage 'AppxManifest.xml') -Value $manifest -Encoding utf8
 Write-Host "== identity $Identity / $Publisher ($PublisherDisplayName)"
 
-if ($Msix) {
-    $makeappx = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter 'makeappx.exe' -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "\\$arch\\" } | Select-Object -First 1
-    if (-not $makeappx) { throw "makeappx.exe not found (install the Windows SDK)" }
-    $msixPath = Join-Path $root "$OutDir\$name.msix"
-    if (Test-Path $msixPath) { Remove-Item $msixPath }
-    # /nv skips signature validation of the payload, which has none - this is
-    # an unsigned package on purpose. Partner Center signs Store submissions
-    # with the Store certificate; uploading a self-signed one is not wanted.
-    & $makeappx.FullName pack /d $stage /p $msixPath /o /nv
-    if ($LASTEXITCODE) { throw "makeappx failed" }
-    Write-Host "== packed $msixPath (unsigned - the Store signs it on submission)"
-}
-
-# ------------------------------------------------------------------- zip ---
-if (-not $NoZip) {
-    $zip = Join-Path $root "$OutDir\$name.zip"
-    if (Test-Path $zip) { Remove-Item $zip }
-    Compress-Archive -Path $stage -DestinationPath $zip
-    Write-Host "== archived $zip"
-}
+# makeappx ships with the Windows SDK, which is already a prerequisite for
+# this script (Scripts\windows-env.ps1 - and dumpbin above comes from the same
+# toolchain install), so packing by default adds no new requirement.
+$msixPath = Join-Path $root "$OutDir\$name.msix"
+$makeappx = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter 'makeappx.exe' -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match "\\$arch\\" } | Select-Object -First 1
+if (-not $makeappx) { throw "makeappx.exe not found (install the Windows SDK)" }
+if (Test-Path $msixPath) { Remove-Item $msixPath }
+# /nv skips signature validation of the payload, which has none - this is
+# an unsigned package on purpose. Partner Center signs Store submissions
+# with the Store certificate; uploading a self-signed one is not wanted.
+& $makeappx.FullName pack /d $stage /p $msixPath /o /nv
+if ($LASTEXITCODE) { throw "makeappx failed" }
+Write-Host "== packed $msixPath (unsigned - the Store signs it on submission)"
 
 $files = Get-ChildItem $stage -Recurse -File
 $size = ($files | Measure-Object -Property Length -Sum).Sum
