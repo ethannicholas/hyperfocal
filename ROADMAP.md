@@ -334,10 +334,35 @@ builds:
    restricts it for testing). English and German are verified; remaining:
    - Run the full sweep and eyeball the results — especially the wide
      languages (de, ru) — for clipped layouts in the captured framings.
-   - The Windows/Qt equivalent: a Shell.cpp-side command channel analog plus a
-     PowerShell driver. Microsoft Store wants PNG screenshots ≥ 1366×768 (up
-     to 4K, ≤ 10 per listing) and optional 1920×1080 MP4 trailers, so the
-     existing sizes/encodes carry over.
+   - **The Windows/Qt equivalent is written but UNVERIFIED — it has never
+     produced a screenshot.** `QtShell/CommandChannel.h` (a file-based command
+     channel, inert unless `HFQT_COMMAND_DIR` is set) plus
+     `Scripts/store-media.ps1`. The channel speaks the same vocabulary as the
+     macOS one (`set-window`/`set-zoom`/`set-slider`/`set-sections`/
+     `set-retouch`/`get-geometry`, plus `set-depth`, `set-hover` and `grab`),
+     so one capture recipe describes both shells. Microsoft Store wants PNG
+     screenshots ≥ 1366×768 (up to 3840×2160, ≤ 10 per listing) and optional
+     1920×1080 MP4 trailers. What is known to work: launch, ingest, and
+     commands executing against the staged package. What is untested:
+     everything from `fuse` onward — the fused/depth/retouch framings, the
+     brush circle via `set-hover`, and the language sweep. Finish by running
+     `Scripts\store-media.ps1 -Frames <stack> -Out <dir> -Lang en` and
+     working through what breaks. Three traps already paid for:
+     - Capture from the **staged package** (`dist\Hyperfocal-*\`), which the
+       driver now prefers. A dev build out of `QtShell\build*\` resolves none
+       of its DLLs unless `Scripts\windows-env.ps1` is dot-sourced in the
+       *launching* shell, and the failure is an instant exit with 0xC0000135,
+       not a message. The shell is a GUI-subsystem binary, so its own logging
+       reaches no console either — hence the channel's `ready` marker file.
+     - Windows are clamped to the desktop work area, so 1920×1080 is
+       unreachable on a 1920×1080 screen (measured: 1920×1061 with a taskbar)
+       — the same clamp the Dock imposes on the macOS driver. Default is
+       1600×900 pt; `get-geometry` reports `availW`/`availH`.
+     - No screen recorder or cursor helper is needed, unlike the macOS side:
+       grabs come from the app's own `grabWindow()`, and the brush circle is
+       a QML overlay that a grab captures, so `set-hover` stands in for
+       parking a real pointer. A trailer would need a real encoder path and
+       is deliberately not attempted — Store trailers are optional.
 
 ## Engine performance
 

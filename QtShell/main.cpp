@@ -12,6 +12,7 @@
 #include <QUrl>
 
 #include "CatalogTranslator.h"
+#include "CommandChannel.h"
 #include "LutImageProvider.h"
 #include "StackThumbProvider.h"
 #include "PaneItem.h"
@@ -803,6 +804,11 @@ int main(int argc, char *argv[]) {
                      &app, [] { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);
     engine.loadFromModule("Hyperfocal", "Main");
+
+    // Store-media capture (HFQT_COMMAND_DIR); inert otherwise. Never during
+    // --selftest: both would drive the same window, and the selftest's
+    // grab comparisons cannot survive a second thing repainting.
+    if (!selftest) CommandChannel::installIfRequested(&engine);
 
     const QStringList args = app.arguments();
     SelfTest state;

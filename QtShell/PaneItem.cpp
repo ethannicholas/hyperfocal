@@ -230,6 +230,17 @@ void PaneItem::fit() {
     setZoom(1);
 }
 
+void PaneItem::centerOn(QPointF image) {
+    // offset_ is image px from the viewport's center, so centering on a
+    // point is just its displacement from that center; clampOffset then
+    // applies the same half-viewport bound a drag would.
+    if (imgW_ <= 0) return;
+    offset_ = image - viewportRect().center();
+    clampOffset();
+    pushViewport();
+    schedule();
+}
+
 void PaneItem::setZoom(double zoom) {
     zoom_ = std::clamp(zoom, 0.2, 64.0);
     clampOffset();
