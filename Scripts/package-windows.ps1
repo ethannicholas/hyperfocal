@@ -10,12 +10,10 @@
 #   -OutDir <dir>     output root (default: dist)
 #   -NoZip            skip the archive
 #
-# MSIX identity (all three required for -Msix; Store submission rejects the
-# placeholders otherwise):
-#   -Identity              package name from the Store reservation
-#   -Publisher             the CN=... subject, matching the signing cert
-#   -PublisherDisplayName  human-readable publisher
-# or the environment: HYPERFOCAL_MSIX_{IDENTITY,PUBLISHER,PUBLISHER_NAME}.
+# MSIX identity comes from the Store reservation and is baked in below - no
+# need to pass anything for a normal release build. Override with
+# -Identity / -Publisher / -PublisherDisplayName, or the environment
+# HYPERFOCAL_MSIX_{IDENTITY,PUBLISHER,PUBLISHER_NAME}.
 #
 # The package satisfies the Qt LGPL-3.0 checklist in ROADMAP: Qt ships as
 # separate DLLs (never static), the GPL-3.0 + LGPL-3.0 texts ride along, and
@@ -38,10 +36,47 @@ param(
     [switch]$SkipBuild,
     [switch]$NoZip,
     [switch]$Msix,
-    [string]$Identity = $env:HYPERFOCAL_MSIX_IDENTITY,
-    [string]$Publisher = $env:HYPERFOCAL_MSIX_PUBLISHER,
-    [string]$PublisherDisplayName = $env:HYPERFOCAL_MSIX_PUBLISHER_NAME
+    [string]$Identity,
+    [string]$Publisher,
+    [string]$PublisherDisplayName
 )
+
+# -------------------------------------------------------- Store identity ----
+# From the Microsoft Store reservation (Partner Center > Product identity).
+#
+# These are PUBLIC values, not credentials, which is why they are checked in
+# rather than passed every time: Identity and PublisherDisplayName are written
+# into every installed package's manifest (readable with Get-AppxPackage, and
+# shown on the Store listing), and Publisher is the subject of the certificate
+# the package is signed with - a certificate subject ships inside the signature
+# by construction. The secrets in this area are the Partner Center account
+# login and, if submission is ever automated, the Azure AD client secret for
+# the Store submission API. Neither is an input to this script, and neither
+# belongs in this repo.
+#
+# Store submissions are signed BY the Store, so no code-signing certificate is
+# needed here; `-Msix` deliberately produces an unsigned package.
+$defaultIdentity = 'EthanNicholas.Hyperfocal'
+$defaultPublisher = 'CN=AE9F9BE8-6C95-400D-8361-0E58C58DAEF9'
+$defaultPublisherDisplayName = 'Ethan Nicholas'
+
+if (-not $Identity) {
+    $Identity = if ($env:HYPERFOCAL_MSIX_IDENTITY) { $env:HYPERFOCAL_MSIX_IDENTITY }
+                else { $defaultIdentity }
+}
+if (-not $Publisher) {
+    $Publisher = if ($env:HYPERFOCAL_MSIX_PUBLISHER) { $env:HYPERFOCAL_MSIX_PUBLISHER }
+                 else { $defaultPublisher }
+}
+if (-not $PublisherDisplayName) {
+    $PublisherDisplayName = if ($env:HYPERFOCAL_MSIX_PUBLISHER_NAME) { $env:HYPERFOCAL_MSIX_PUBLISHER_NAME }
+                            else { $defaultPublisherDisplayName }
+}
+# Catches a typo'd override, which would otherwise surface as a Store rejection
+# long after the build. Identity/Publisher must match the reservation exactly.
+if ($Publisher -notmatch '^CN=') {
+    throw "Publisher must be a distinguished name starting with CN= (got '$Publisher')"
+}
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -332,8 +367,10 @@ enabled in this build.
 Set-Content -Path (Join-Path $stage 'COMPLIANCE.md') -Value $compliance -Encoding utf8
 
 # ------------------------------------------------------------------ MSIX ---
-# The layout is always MSIX-ready: assets + a filled manifest. Packing is
-# opt-in because it needs Store identity and a signing certificate.
+# The layout is always MSIX-ready: assets + a filled manifest. Packing stays
+# opt-in because the loose layout is what a local install test registers
+# (Add-AppxPackage -Register on the AppxManifest.xml, developer mode), while
+# the .msix is only wanted when something is actually going to Partner Center.
 $assets = Join-Path $stage 'Assets'
 New-Item -ItemType Directory -Force $assets | Out-Null
 Add-Type -AssemblyName System.Drawing
@@ -353,10 +390,6 @@ $icon.Dispose()
 # be 0, so the commit count cannot ride there; it stays the build number the
 # About box shows.
 $manifest = Get-Content (Join-Path $root 'Packaging\windows\AppxManifest.xml.in') -Raw
-$placeholders = @()
-if (-not $Identity) { $Identity = 'PUBLISHER-RESERVED-NAME-HERE'; $placeholders += 'Identity' }
-if (-not $Publisher) { $Publisher = 'CN=PUBLISHER-CERTIFICATE-SUBJECT-HERE'; $placeholders += 'Publisher' }
-if (-not $PublisherDisplayName) { $PublisherDisplayName = 'PUBLISHER-DISPLAY-NAME-HERE'; $placeholders += 'PublisherDisplayName' }
 $manifest = $manifest.
     Replace('@MSIX_IDENTITY@', $Identity).
     Replace('@MSIX_PUBLISHER@', $Publisher).
@@ -364,22 +397,20 @@ $manifest = $manifest.
     Replace('@MSIX_VERSION@', "$Version.0").
     Replace('@MSIX_ARCH@', $arch)
 Set-Content -Path (Join-Path $stage 'AppxManifest.xml') -Value $manifest -Encoding utf8
-if ($placeholders) {
-    Write-Host "   AppxManifest.xml written with PLACEHOLDER $($placeholders -join ', ') - supply the Store values before submitting"
-}
+Write-Host "== identity $Identity / $Publisher ($PublisherDisplayName)"
 
 if ($Msix) {
-    if ($placeholders) {
-        throw "-Msix needs real identity: pass -Identity/-Publisher/-PublisherDisplayName (or the HYPERFOCAL_MSIX_* environment variables)"
-    }
     $makeappx = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter 'makeappx.exe' -Recurse -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -match "\\$arch\\" } | Select-Object -First 1
     if (-not $makeappx) { throw "makeappx.exe not found (install the Windows SDK)" }
     $msixPath = Join-Path $root "$OutDir\$name.msix"
     if (Test-Path $msixPath) { Remove-Item $msixPath }
-    & $makeappx.FullName pack /d $stage /p $msixPath /o
+    # /nv skips signature validation of the payload, which has none - this is
+    # an unsigned package on purpose. Partner Center signs Store submissions
+    # with the Store certificate; uploading a self-signed one is not wanted.
+    & $makeappx.FullName pack /d $stage /p $msixPath /o /nv
     if ($LASTEXITCODE) { throw "makeappx failed" }
-    Write-Host "== packed $msixPath (unsigned; sign it with the cert matching $Publisher)"
+    Write-Host "== packed $msixPath (unsigned - the Store signs it on submission)"
 }
 
 # ------------------------------------------------------------------- zip ---

@@ -295,14 +295,34 @@ Notices viewer linked from the About dialog (`Shell::noticesMarkdown` /
 `App/Sources/NoticesWindow.swift`). The one residual before shipping paid
 builds:
 
-1. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1` builds
-   the payload and stages an MSIX-ready layout — `AppxManifest.xml` from
-   `Packaging/windows/AppxManifest.xml.in`, generated logo assets, and a `-Msix`
-   switch that runs `makeappx` — but it writes **placeholder identity**, because
-   the real values come from a Store reservation. Remaining: reserve the package
-   name, supply `-Identity` / `-Publisher` (the `CN=…` from the reservation) /
-   `-PublisherDisplayName`, and submit. Store submissions are signed by the
-   Store, so no code-signing certificate is needed for this path. The LGPL-3.0
+1. **Microsoft Store / MSIX submission.** `Scripts/package-windows.ps1 -Msix`
+   now produces a submission-ready package end to end: the payload, the staged
+   layout, generated logo assets, and `AppxManifest.xml` carrying the reserved
+   Store identity (`EthanNicholas.Hyperfocal`, baked into the script — public
+   values, not credentials). Verified 2026-08-05 on x64: stages 213.2 MB /
+   1468 files, packs to an 83.3 MB `.msix`, and `Add-AppxPackage -Register` on
+   the loose layout installs and launches under the real identity at version
+   `1.0.0.0` (the Store requires the 4th version part to be 0, so the commit
+   count stays the About box's build number). The package is deliberately
+   **unsigned** — Partner Center signs Store submissions, so no code-signing
+   certificate is involved. Remaining, and all of it outside this repo:
+   - Run the Windows App Certification Kit against the package — it needs an
+     **elevated** shell, which is why it has not been run here:
+     `appcert.exe reset`, then `appcert.exe test -apptype windowsstoreapp
+     -packagefullname <name> -reportoutputpath wack.xml` (the kit is at
+     `C:\Program Files (x86)\Windows Kits\10\App Certification Kit\`).
+   - Complete the listing in Partner Center (screenshots — see item 2 —
+     description, age rating, privacy policy at
+     http://ethannicholas.com/hyperfocal/privacy.html) and submit.
+   - An arm64 package is a separate build on arm64 hardware; the script picks
+     its architecture from `PROCESSOR_ARCHITECTURE` and names the output
+     accordingly, so nothing in it needs changing.
+
+   Note the shipped build is **CPU-only**: wgpu is opt-in behind
+   `HYPERFOCAL_WGPU=1` and release builds do not set it, so no GPU fusion path
+   reaches Store users until the f16 WGSL port lands (see Engine performance).
+
+   The LGPL-3.0
    checklist the package was built to is settled and enforced in the script —
    Qt ships as separate (never static) DLLs, the GPLv3-only
    `qsb`/`lupdate`/`lrelease` tools are asserted absent, and the GPL-3.0 +
