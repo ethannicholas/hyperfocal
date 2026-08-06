@@ -40,3 +40,9 @@ fi
 if grep -qE '^(NOTICE\.md|Packaging/notices/)' <<<"$STAGED"; then
     "$(Scripts/python-interpreter.sh)" Scripts/gen-notices.py --check
 fi
+
+# 4. The wgpu attribution bundle is generated from the pinned tag; moving the
+#    pin without regenerating it ships notices for the wrong crate versions.
+if grep -qE '^(Scripts/fetch-wgpu\.sh|licenses/wgpu-native-ThirdPartyNotices\.txt)$' <<<"$STAGED"; then
+    "$(Scripts/python-interpreter.sh)" Scripts/gen-wgpu-notices.py --check
+fi

@@ -753,8 +753,19 @@ public final class AppModel: ObservableObject {
         exportColorSpace = d.string(forKey: "exportColorSpace")
             .flatMap { ExportColorSpace(rawValue: $0) } ?? .srgb
         alignFrames = d.object(forKey: "alignFrames") as? Bool ?? true
+        // Default on wherever an engine exists, and remember the user's
+        // choice. Off Apple that engine is wgpu; this said a flat `false`
+        // until 2026-08-06, which meant a build carrying the whole wgpu
+        // backend still fused on the CPU because the model never asked for it.
+        // `usableForAutoSelection` keeps a software rasterizer from counting —
+        // WARP and llvmpipe run the same kernels on the same cores the CPU
+        // path uses, minus its vectorization, so they are slower than not
+        // using them.
         #if canImport(Metal)
         useGPU = (d.object(forKey: "useGPU") as? Bool ?? true) && MetalEngine.shared != nil
+        #elseif HYPERFOCAL_HAVE_WGPU
+        useGPU = (d.object(forKey: "useGPU") as? Bool ?? true)
+            && (WgpuEngine.shared?.usableForAutoSelection ?? false)
         #else
         useGPU = false
         #endif

@@ -604,11 +604,17 @@ public func hf_set_bool_setting(_ id: UnsafePointer<CChar>?,
 }
 
 /// Whether a GPU engine exists (gates the Use GPU toggle, like the
-/// native settings window's MetalEngine check).
+/// native settings window's MetalEngine check). Off Apple that means a wgpu
+/// adapter the auto-selection would actually take — a software rasterizer
+/// reports as no GPU, because fusing on one is slower than the CPU path.
 @_cdecl("hf_gpu_available")
 public func hf_gpu_available() -> Int32 {
     #if canImport(Metal)
     return MainActor.assumeIsolated { MetalEngine.shared != nil ? 1 : 0 }
+    #elseif HYPERFOCAL_HAVE_WGPU
+    return MainActor.assumeIsolated {
+        (WgpuEngine.shared?.usableForAutoSelection ?? false) ? 1 : 0
+    }
     #else
     return 0
     #endif

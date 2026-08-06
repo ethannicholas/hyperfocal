@@ -229,35 +229,47 @@ public enum StackPipeline {
             output = DMapFusion.Output(image: image, depthMap: ImageBuffer(width: 0, height: 0),
                                        depth: [], sharpness: pmaxSharpness, gains: nil)
         case .dmap:
+        // A GPU failure costs the user a slower fuse, never their export: the
+        // CPU engine is a complete implementation, so fall back to it rather
+        // than fail — the same contract `PyramidFusion.fuse` has always had,
+        // and dmap did not until 2026-08-06. What reaches here as a
+        // `StackError` is a device lost mid-fuse, an allocation the adapter
+        // cannot satisfy at this resolution, or a driver quirk on hardware
+        // nobody has tested on; none of them are worth losing a finished
+        // registration pass over. Cancellation is deliberately NOT caught —
+        // `CancellationToken` throws `CancellationError`, so a cancel
+        // propagates instead of quietly restarting the whole fuse on the CPU.
+        var gpuOutput: DMapFusion.Output? = nil
         #if canImport(Metal)
         if configuration.preferGPU, MetalEngine.shared != nil {
-            output = try GPUDMap.fuseWithDepth(source: source, options: fusionOptions,
-                                               log: log, progress: progress,
-                                               cancellation: cancellation)
-        } else {
-            output = try DMapFusion.fuseWithDepth(source: source,
-                                                  options: fusionOptions, log: log,
-                                                  progress: progress,
-                                                  cancellation: cancellation)
+            do {
+                gpuOutput = try GPUDMap.fuseWithDepth(source: source, options: fusionOptions,
+                                                      log: log, progress: progress,
+                                                      cancellation: cancellation)
+            } catch let error as StackError {
+                log?("GPU dmap failed (\(error)); falling back to CPU")
+            }
         }
         #elseif HYPERFOCAL_HAVE_WGPU
         if configuration.preferGPU, let engine = WgpuEngine.shared,
            engine.usableForAutoSelection {
-            output = try WgpuDMap.fuseWithDepth(source: source, options: fusionOptions,
-                                                log: log, progress: progress,
-                                                cancellation: cancellation)
+            do {
+                gpuOutput = try WgpuDMap.fuseWithDepth(source: source, options: fusionOptions,
+                                                       log: log, progress: progress,
+                                                       cancellation: cancellation)
+            } catch let error as StackError {
+                log?("wgpu dmap failed (\(error)); falling back to CPU")
+            }
+        }
+        #endif
+        if let gpuOutput {
+            output = gpuOutput
         } else {
             output = try DMapFusion.fuseWithDepth(source: source,
                                                   options: fusionOptions, log: log,
                                                   progress: progress,
                                                   cancellation: cancellation)
         }
-        #else
-        output = try DMapFusion.fuseWithDepth(source: source,
-                                              options: fusionOptions, log: log,
-                                              progress: progress,
-                                              cancellation: cancellation)
-        #endif
         }
         applyRenderCleanup(to: &output, log: log)
         progress?(FusionProgress(stage: .finishing, fraction: 1))

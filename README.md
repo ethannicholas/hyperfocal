@@ -33,11 +33,14 @@ result every time.
 
 ## Highlights
 
-- **GPU accelerated.** On macOS, Hyperfocal uses Metal compute shaders to run
-  its algorithms on the GPU wherever possible — registration, warping,
-  sharpness scoring, depth regularization, and both fusion engines. Windows
-  and Linux builds currently fuse on the CPU; a WebGPU backend for them is
-  written and passing parity tests, but isn't switched on by default yet.
+- **GPU accelerated, on every platform.** Hyperfocal runs its algorithms on the
+  GPU wherever possible — warping, sharpness scoring, depth regularization and
+  both fusion engines — through Metal compute shaders on macOS and WebGPU
+  compute shaders on Windows. Each is held to a measured agreement bar against
+  the CPU engine, so the answer doesn't depend on which one ran, and either
+  falls back to the CPU automatically on a machine with no usable GPU, so a
+  fuse always completes. (Linux builds from source can switch the same backend
+  on; the Store package for it isn't built yet.)
 
 - **Two fusion engines.** A depth-map engine with halo-aware regularization
   for clean subjects, and Laplacian-pyramid (PMax) fusion for scenes where
@@ -154,6 +157,11 @@ git clone https://github.com/microsoft/vcpkg.git ..\vcpkg
     "libraw[dng-lossy]" "opencv4[core,calib3d]" --triplet x64-windows
 ```
 
+- **wgpu-native**, for the GPU compute backend — a pinned prebuilt, fetched by
+  `Scripts\fetch-wgpu.sh` (Git Bash; it lands in `..\wgpu-native` by default,
+  or wherever `WGPU_ROOT` points). Optional for a CPU-only development build,
+  **required** to package a release.
+
 Windows **Developer Mode** must be enabled (Settings → System → For
 developers): Swift package checkouts contain symlinks.
 
@@ -166,8 +174,19 @@ swift build -c release
 QtShell\build.ps1 -Run        # build and launch the desktop app
 ```
 
-To produce the Microsoft Store package — the app plus every Qt, Swift and
-imaging DLL it needs, the third-party notices and license texts, and the signed-
+That build fuses on the CPU. To build the GPU backend in, fetch wgpu-native and
+set the opt-in first — `HYPERFOCAL_WGPU` is what compiles it, and release
+packaging sets it for you:
+
+```powershell
+bash Scripts/fetch-wgpu.sh    # Git Bash; -> ..\wgpu-native
+$env:HYPERFOCAL_WGPU = '1'
+swift build -c release
+.build\release\hyperfocal-cli debug-wgpu   # CPU vs GPU parity gates
+```
+
+To produce the Microsoft Store package — the app plus every Qt, Swift, imaging
+and GPU DLL it needs, the third-party notices and license texts, and the signed-
 by-the-Store MSIX:
 
 ```powershell

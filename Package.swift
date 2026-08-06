@@ -188,6 +188,17 @@ appCoreSwiftSettings.append(.unsafeFlags(
     ["-Xcc", "-I\(vcpkgPrefix)\\include", "-L", "\(vcpkgPrefix)\\lib"]))
 #endif
 appCoreSwiftSettings.append(contentsOf: wgpuXcc)
+// The model and the bridge decide whether a GPU engine exists at all (the Use
+// GPU setting, and the toggle the shells gate on it), so they need the same
+// conditional the engine is compiled behind — not just its include path.
+// Without the define, a wgpu build would ship the backend and still answer
+// "no GPU" everywhere the UI asks, which is exactly how it behaved until
+// 2026-08-06.
+var bridgeSwiftSettings: [SwiftSetting] = warningsAsErrors + isaBaseline + wgpuXcc
+if wgpuEnabled {
+    appCoreSwiftSettings.append(.define("HYPERFOCAL_HAVE_WGPU"))
+    bridgeSwiftSettings.append(.define("HYPERFOCAL_HAVE_WGPU"))
+}
 extraTargets.append(
     .target(
         name: "AppCore",
@@ -205,7 +216,7 @@ extraTargets.append(
         name: "HyperfocalBridge",
         dependencies: ["AppCore", "HyperfocalKit"],
         path: "Bridge",
-        swiftSettings: warningsAsErrors + isaBaseline + wgpuXcc
+        swiftSettings: bridgeSwiftSettings
     )
 )
 extraProducts.append(

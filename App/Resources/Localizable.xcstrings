@@ -7557,66 +7557,66 @@
         }
       }
     },
-    "Fuse on the GPU (identical results, several times faster). Turn off to reduce memory pressure on low-RAM machines, free the GPU for other work, or rule out a driver issue.": {
+    "Fuse on the GPU (identical results, usually faster). Turn off to reduce memory pressure on low-RAM machines, free the GPU for other work, or rule out a driver issue.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Auf der GPU fusionieren (identische Ergebnisse, mehrfach schneller). Ausschalten, um auf Rechnern mit wenig RAM den Speicherdruck zu senken, die GPU für andere Arbeit freizugeben oder ein Treiberproblem auszuschließen."
+            "value": "Auf der GPU fusionieren (identische Ergebnisse, meist schneller). Ausschalten, um auf Rechnern mit wenig RAM den Speicherdruck zu senken, die GPU für andere Arbeit freizugeben oder ein Treiberproblem auszuschließen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusiona en la GPU (resultados idénticos, varias veces más rápido). Desactívalo para reducir la presión de memoria en equipos con poca RAM, liberar la GPU para otro trabajo o descartar un problema de controlador."
+            "value": "Fusiona en la GPU (resultados idénticos, normalmente más rápido). Desactívalo para reducir la presión de memoria en equipos con poca RAM, liberar la GPU para otro trabajo o descartar un problema de controlador."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fusionne sur le GPU (résultats identiques, plusieurs fois plus rapide). Désactivez pour réduire la pression mémoire sur les machines à faible RAM, libérer le GPU pour d’autres tâches, ou écarter un problème de pilote."
+            "value": "Fusionne sur le GPU (résultats identiques, généralement plus rapide). Désactivez pour réduire la pression mémoire sur les machines à faible RAM, libérer le GPU pour d’autres tâches, ou écarter un problème de pilote."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fonde sulla GPU (risultati identici, più volte più veloce). Disattiva per ridurre la pressione sulla memoria su macchine con poca RAM, liberare la GPU per altro lavoro o escludere un problema di driver."
+            "value": "Fonde sulla GPU (risultati identici, di solito più veloce). Disattiva per ridurre la pressione sulla memoria su macchine con poca RAM, liberare la GPU per altro lavoro o escludere un problema di driver."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "GPUで合成します（結果は同一で数倍高速）。RAMの少ないマシンでメモリ圧迫を減らす、GPUを他の作業に空ける、ドライバ問題の切り分けをする場合はオフにしてください。"
+            "value": "GPUで合成します（結果は同一で、通常は高速）。RAMの少ないマシンでメモリ圧迫を減らす、GPUを他の作業に空ける、ドライバ問題の切り分けをする場合はオフにしてください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "GPU에서 합성합니다(결과 동일, 몇 배 빠름). RAM이 적은 컴퓨터에서 메모리 압박을 줄이거나, GPU를 다른 작업에 쓰거나, 드라이버 문제를 배제하려면 끄세요."
+            "value": "GPU에서 합성합니다(결과 동일, 대개 더 빠름). RAM이 적은 컴퓨터에서 메모리 압박을 줄이거나, GPU를 다른 작업에 쓰거나, 드라이버 문제를 배제하려면 끄세요."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voegt samen op de GPU (identieke resultaten, meerdere keren sneller). Zet uit om geheugendruk op machines met weinig RAM te verlagen, de GPU vrij te maken voor ander werk, of een stuurprogrammaprobleem uit te sluiten."
+            "value": "Voegt samen op de GPU (identieke resultaten, meestal sneller). Zet uit om geheugendruk op machines met weinig RAM te verlagen, de GPU vrij te maken voor ander werk, of een stuurprogrammaprobleem uit te sluiten."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Funde na GPU (resultados idênticos, várias vezes mais rápido). Desative para reduzir a pressão de memória em máquinas com pouca RAM, liberar a GPU para outro trabalho ou descartar um problema de driver."
+            "value": "Funde na GPU (resultados idênticos, normalmente mais rápido). Desative para reduzir a pressão de memória em máquinas com pouca RAM, liberar a GPU para outro trabalho ou descartar um problema de driver."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Объединяет на GPU (результаты идентичны, в несколько раз быстрее). Отключите, чтобы снизить нагрузку на память на машинах с малым объёмом ОЗУ, освободить GPU для другой работы или исключить проблему с драйвером."
+            "value": "Объединяет на GPU (результаты идентичны, обычно быстрее). Отключите, чтобы снизить нагрузку на память на машинах с малым объёмом ОЗУ, освободить GPU для другой работы или исключить проблему с драйвером."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "在 GPU 上合成（结果完全相同，速度快数倍）。关闭可减轻低内存机器的内存压力、腾出 GPU 做其他工作，或排查驱动问题。"
+            "value": "在 GPU 上合成（结果完全相同，通常更快）。关闭可减轻低内存机器的内存压力、腾出 GPU 做其他工作，或排查驱动问题。"
           }
         }
       }
@@ -10055,66 +10055,66 @@
         }
       }
     },
-    "No Metal device available — fusing runs on the CPU.": {
+    "No usable GPU found — fusing runs on the CPU.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Kein Metal-Gerät verfügbar — die Fusion läuft auf der CPU."
+            "value": "Keine nutzbare GPU gefunden — die Fusion läuft auf der CPU."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "No hay dispositivo Metal disponible: la fusión se ejecuta en la CPU."
+            "value": "No se encontró una GPU utilizable: la fusión se ejecuta en la CPU."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aucun périphérique Metal disponible — la fusion s’exécute sur le CPU."
+            "value": "Aucun GPU utilisable détecté — la fusion s’exécute sur le CPU."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nessun dispositivo Metal disponibile — la fusione gira sulla CPU."
+            "value": "Nessuna GPU utilizzabile trovata — la fusione gira sulla CPU."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Metalデバイスがありません — 合成はCPUで実行されます。"
+            "value": "使用可能なGPUがありません — 合成はCPUで実行されます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "사용 가능한 Metal 장비가 없습니다. 합성은 CPU에서 실행됩니다."
+            "value": "사용 가능한 GPU가 없습니다. 합성은 CPU에서 실행됩니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Geen Metal-apparaat beschikbaar — samenvoegen draait op de CPU."
+            "value": "Geen bruikbare GPU gevonden — samenvoegen draait op de CPU."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nenhum dispositivo Metal disponível — a fusão roda na CPU."
+            "value": "Nenhuma GPU utilizável encontrada — a fusão roda na CPU."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Устройство Metal недоступно — объединение выполняется на CPU."
+            "value": "Подходящий графический процессор не найден — объединение выполняется на CPU."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "没有可用的 Metal 设备 — 合成将在 CPU 上运行。"
+            "value": "未找到可用的 GPU — 合成将在 CPU 上运行。"
           }
         }
       }

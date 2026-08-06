@@ -87,4 +87,11 @@ echo "== translation coverage"
 echo "== per-platform notices"
 "$(Scripts/python-interpreter.sh)" Scripts/gen-notices.py --check
 
+# The shipped wgpu DLL statically links ~140 Rust crates whose attribution is
+# generated, not hand-written. This check is offline — it only asserts the
+# bundle was generated for the tag Scripts/fetch-wgpu.sh currently pins, which
+# is what a wgpu bump would otherwise leave stale.
+echo "== wgpu third-party notices"
+"$(Scripts/python-interpreter.sh)" Scripts/gen-wgpu-notices.py --check
+
 echo "== CI GATE PASSED"

@@ -157,8 +157,39 @@ $stage = Join-Path $root "$OutDir\$name"
 Write-Host "== packaging Hyperfocal $Version ($build) for $arch"
 
 # ------------------------------------------------------------------ build --
+# ------------------------------------------------------------------ wgpu ---
+# The GPU compute backend. This is a RELEASE requirement, not an opt-in: a
+# Store build that quietly fused on the CPU is what shipped before 2026-08-06,
+# and the difference is a 45 MP dmap fuse at 13.9 s instead of 17.9 s and a
+# 100 MP one at 26.5 s instead of 33.7 s, with a third less device memory.
+# Failing loudly beats shipping the slow build by accident, so the tree must
+# be present rather than silently skipped - Scripts\fetch-wgpu.sh puts it
+# where WGPU_ROOT (or the sibling default) points.
+if (-not $env:WGPU_ROOT) {
+    $siblingWgpu = Join-Path $root '..\wgpu-native'
+    if (Test-Path $siblingWgpu) { $env:WGPU_ROOT = (Resolve-Path $siblingWgpu).Path }
+}
+$wgpuLib = if ($env:WGPU_ROOT) { Join-Path $env:WGPU_ROOT 'lib' } else { $null }
+if (-not $wgpuLib -or -not (Test-Path (Join-Path $wgpuLib 'wgpu_native.dll'))) {
+    throw "wgpu-native not found (looked in '$wgpuLib') - run Scripts/fetch-wgpu.sh, or set WGPU_ROOT. The GPU backend is not optional in a release build."
+}
+# Dynamic on purpose: wgpu ships as its own DLL, like every other library in
+# this package. Nothing licensing-related forces it (wgpu is MIT), it just
+# keeps the staged layout honest about what is in it and lets a user swap in
+# their own build. HYPERFOCAL_WGPU_STATIC would fold it into the executable.
+$env:HYPERFOCAL_WGPU = '1'
+Remove-Item Env:\HYPERFOCAL_WGPU_STATIC -ErrorAction SilentlyContinue
+Write-Host "== wgpu-native: $wgpuLib"
+
+# The notices for wgpu's ~140-crate Rust dependency graph are generated, not
+# hand-written (the upstream release archive carries no license text at all).
+# Verify they were generated for the tag actually pinned - a wgpu bump without
+# a regeneration would ship attribution for the wrong versions.
+& $py (Join-Path $root 'Scripts\gen-wgpu-notices.py') --check
+if ($LASTEXITCODE) { throw "wgpu third-party notices are stale - run Scripts/gen-wgpu-notices.py and commit" }
+
 if (-not $SkipBuild) {
-    Write-Host "== building HyperfocalBridge (release)"
+    Write-Host "== building HyperfocalBridge (release, wgpu)"
     swift build -c release --product HyperfocalBridge
     if ($LASTEXITCODE) { throw "bridge build failed" }
 }
@@ -217,7 +248,7 @@ Write-Host "   vcpkg : $vcpkgBin"
 # after a dependency changes: ask the binaries instead. Anything that resolves
 # in our own runtime directories gets copied; everything else (kernel32,
 # user32, the api-ms-win-* set) is a system DLL and deliberately left alone.
-$searchDirs = @($stage, $swiftRuntime, $vcpkgBin) | Where-Object { Test-Path $_ }
+$searchDirs = @($stage, $swiftRuntime, $vcpkgBin, $wgpuLib) | Where-Object { Test-Path $_ }
 function Get-Imports([string]$binary) {
     (& dumpbin /nologo /dependents $binary) |
         ForEach-Object { if ($_ -match '^\s{4}(\S+\.[Dd][Ll][Ll])\s*$') { $Matches[1] } }
@@ -245,7 +276,15 @@ while ($queue.Count -gt 0) {
         $queue.Enqueue($dest)
     }
 }
-Write-Host "== $($copied.Count) runtime DLLs resolved from swift/vcpkg"
+Write-Host "== $($copied.Count) runtime DLLs resolved from swift/vcpkg/wgpu"
+
+# The import walk found wgpu only if the bridge was actually built against it.
+# Without this assertion a release silently reverts to CPU fusion the moment
+# the environment loses WGPU_ROOT - which is exactly how it shipped CPU-only
+# for its whole life before 2026-08-06.
+if (-not (Test-Path (Join-Path $stage 'wgpu_native.dll'))) {
+    throw "wgpu_native.dll not staged - the bridge was not built with the GPU backend (stale .build? drop -SkipBuild)"
+}
 
 # Qt, via windeployqt - the supported way, and the one that keeps every Qt
 # library a separate DLL rather than statically linked. That is not on its own
@@ -378,6 +417,16 @@ under license by Adobe Systems Incorporated. See ``NOTICE.md``.
 Camera-raw decoding uses LibRaw under the **CDDL-1.0** arm of its dual license
 (``licenses\CDDL-1.0.txt``). LibRaw's optional Adobe-DNG-SDK integration is not
 enabled in this build.
+
+## wgpu-native
+
+GPU fusion uses ``wgpu_native.dll``, an unmodified prebuilt of wgpu-native,
+under the **MIT** arm of its ``MIT OR Apache-2.0`` dual license. It is a Rust
+library and statically links its own dependency graph, so the complete
+component list - every crate, its version, its SPDX license and the verbatim
+license texts - is bundled in
+``licenses\wgpu-native-ThirdPartyNotices.txt``. Every component is under a
+permissive license; none is copyleft.
 "@
 Set-Content -Path (Join-Path $stage 'COMPLIANCE.md') -Value $compliance -Encoding utf8
 

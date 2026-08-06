@@ -748,8 +748,8 @@ ApplicationWindow {
                 }
                 SettingCaption {
                     text: Shell.gpuAvailable()
-                        ? qsTr("Fuse on the GPU (identical results, several times faster). Turn off to reduce memory pressure on low-RAM machines, free the GPU for other work, or rule out a driver issue.")
-                        : qsTr("No Metal device available — fusing runs on the CPU.")
+                        ? qsTr("Fuse on the GPU (identical results, usually faster). Turn off to reduce memory pressure on low-RAM machines, free the GPU for other work, or rule out a driver issue.")
+                        : qsTr("No usable GPU found — fusing runs on the CPU.")
                 }
                 CheckBox {
                     id: diskToggle
