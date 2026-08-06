@@ -306,11 +306,56 @@ builds:
    count stays the About box's build number). The package is deliberately
    **unsigned** — Partner Center signs Store submissions, so no code-signing
    certificate is involved. Remaining, and all of it outside this repo:
-   - Run the Windows App Certification Kit against the package — it needs an
-     **elevated** shell, which is why it has not been run here:
-     `appcert.exe reset`, then `appcert.exe test -apptype windowsstoreapp
-     -packagefullname <name> -reportoutputpath wack.xml` (the kit is at
-     `C:\Program Files (x86)\Windows Kits\10\App Certification Kit\`).
+   - **WACK: run 2026-08-05, overall WARNING — 22 PASS, 1 FAIL, 1 WARNING.**
+     Re-run after any packaging change (the kit is at `C:\Program Files
+     (x86)\Windows Kits\10\App Certification Kit\`, and every invocation,
+     including `/?`, requires an **elevated** shell):
+     ```
+     appcert.exe reset
+     appcert.exe test -appxpackagepath dist\Hyperfocal-<ver>-<arch>.msix \
+                      -reportoutputpath wack.xml
+     ```
+     Point it at the **.msix**, not `-packagefullname` of a dev-registered
+     layout: the first attempt did the latter and 22 of 24 tests "failed" with
+     *"The manifest file for this app package could not be found"* — a package
+     registered from loose files has no packaged manifest to extract, so the
+     tests ran with no input. That was a broken method, not a result. Note
+     `-apptype` does **not** apply here at all; it selects between `desktop`
+     and `desktopdevice` for INSTALLER-based apps and is documented as "Not
+     needed for Store app" (the kit detects ours as type *Centennial*).
+     The two non-passes, both assessed and neither believed to be a real
+     defect — but recheck rather than assume if certification bounces:
+     - **FAIL, "Blocked executables."** Flags `CreateProcessW` /
+       `ShellExecuteW` imports in `Qt6Core.dll`, `Foundation.dll` and
+       `platforms\qwindows.dll`, plus "blocked executable" string matches for
+       `cmd`/`reg`/`cdb`/`csi`. The string matches are case-scrambled
+       substrings (`CSi`, `reG`, `Reg`) — i.e. fragments inside unrelated
+       strings, not references to those tools — and they also fire on
+       `d3dcompiler_47.dll` and `dxcompiler.dll`, which are Microsoft's own
+       redistributables copied unmodified from the Windows SDK and cannot be
+       changed. The process-launch imports are real and legitimate: Qt has
+       QProcess, Swift Foundation has Process, and the app genuinely shells
+       out to the Adobe DNG Converter — which is why the manifest declares
+       `runFullTrust`. This test's restrictions target UWP; full-trust
+       Centennial apps are permitted to launch processes. If certification
+       does object, `appcert.exe finalizereport -reportfilepath <xml>` is the
+       waiver path (a `test` exit of 1, rather than the 0 we got, is the kit
+       asking for it).
+     - **WARNING, "DPIAwarenessValidation" — a static-analysis artifact.**
+       The report says the app "is not DPI Aware" because `hyperfocal-qt.exe`
+       declares no `dpiAwareness` in its embedded manifest (it carries only
+       `Scripts/windows-utf8.manifest`'s `activeCodePage`) and imports no DPI
+       API. But Qt 6 sets Per-Monitor v2 at startup through a *dynamically
+       resolved* `SetProcessDpiAwarenessContext`, which a static import scan
+       cannot see. Measured on the running packaged process:
+       `GetProcessDpiAwareness` returns **2 = PROCESS_PER_MONITOR_DPI_AWARE**.
+       So the app is DPI-aware in fact. Optional hardening, not yet done:
+       add `<dpiAwareness>PerMonitorV2</dpiAwareness>` to
+       `Scripts/windows-utf8.manifest` so it applies before process start and
+       the warning goes away — Qt honours an existing manifest declaration
+       rather than overriding it. **Validate on a scaled display**; the
+       machine this was measured on runs at 100%, so a DPI change could not
+       be judged there.
    - Complete the listing in Partner Center (screenshots — see item 2 —
      description, age rating, privacy policy at
      http://ethannicholas.com/hyperfocal/privacy.html) and submit.
