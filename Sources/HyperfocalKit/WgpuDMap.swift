@@ -138,36 +138,17 @@ public enum WgpuDMap {
         // (allocated only when a warp makes the device copy the only one).
         // f16, like `ImageBuffer.pixels` and the spill payload.
         var warpedHost: [Float16] = []
-        // The WGSL kernels are still f32 (the wgpu backend's half-storage port
-        // is a separate ROADMAP item — WGSL reaches f16 through
-        // pack2x16float/unpack2x16float rather than the non-universal
-        // shader-f16 feature). Until then every host↔device RGBA transfer
-        // widens through this scratch, so the wgpu path is correct but does
-        // not yet get the bandwidth or footprint win the Metal path does.
-        var f32Scratch: [Float] = []
-        func ensureScratch(_ count: Int) {
-            if f32Scratch.count < count {
-                f32Scratch = [Float](repeating: 0, count: count)
-            }
-        }
-        /// Widen `count` halves and upload them as f32.
+        // RGBA storage is f16 on both sides (WgpuEngine's `Half4`), so every
+        // host↔device transfer below is a plain copy — no widening pass, and
+        // half the bytes of the f32 staging this path used to carry.
         func uploadHalves(_ src: UnsafePointer<Float16>, count: Int,
                           to buf: WgpuEngine.Buffer) {
-            ensureScratch(count)
-            f32Scratch.withUnsafeMutableBufferPointer { dst in
-                hfWiden(src, dst.baseAddress!, count: count)
-                engine.upload(dst.baseAddress!, byteCount: count * 4, to: buf)
-            }
+            engine.upload(src, byteCount: count * 2, to: buf)
         }
-        /// Download `count` f32 values and narrow them into half storage.
         func downloadHalves(_ buf: WgpuEngine.Buffer,
                             into dst: UnsafeMutablePointer<Float16>,
                             count: Int) throws {
-            ensureScratch(count)
-            try f32Scratch.withUnsafeMutableBufferPointer { tmp in
-                try engine.download(buf, into: tmp.baseAddress!, byteCount: count * 4)
-                hfNarrow(tmp.baseAddress!, dst, count: count)
-            }
+            try engine.download(buf, into: dst, byteCount: count * 2)
         }
 
         let wantSpill = FrameSpill.wanted(options.spillEnabled)
@@ -222,8 +203,8 @@ public enum WgpuDMap {
                 height = source.outputHeight ?? img.height
                 pixelCount = width * height
                 options = options.resolved(width: width, height: height)
-                rawBuf = try engine.makeBuffer(floats: srcWidth * srcHeight * 4)
-                warpedBuf = try engine.makeBuffer(floats: pixelCount * 4)
+                rawBuf = try engine.makeBuffer(halves: srcWidth * srcHeight * 4)
+                warpedBuf = try engine.makeBuffer(halves: pixelCount * 4)
                 lapBuf = try engine.makeBuffer(floats: pixelCount)
                 tmpBuf = try engine.makeBuffer(floats: pixelCount)
                 energyBuf = try engine.makeBuffer(floats: pixelCount)
@@ -239,7 +220,7 @@ public enum WgpuDMap {
                 let previewScale = min(1.0, 1200.0 / Double(max(width, height)))
                 pw = max(1, Int(Double(width) * previewScale))
                 ph = max(1, Int(Double(height) * previewScale))
-                previewBuf = try engine.makeBuffer(floats: pw * ph * 4)
+                previewBuf = try engine.makeBuffer(halves: pw * ph * 4)
                 let factor = DMapFusion.sharpnessDownsample
                 sw = (width + factor - 1) / factor
                 sh = (height + factor - 1) / factor

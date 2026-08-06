@@ -21,23 +21,21 @@ so ~75–80 dB is the arithmetic ceiling for any value near 1.0, and PMax's
 multi-level collapse compounds a few ulps of it. DMap clears 90 because its
 output is a weighted average both engines round identically.
 
-**One exception, and it is the wgpu backend only:** warped dmap on wgpu is
-gated at **≥ 71**, not 90 (`debug-wgpu --dmap-warp-floor`, ≈ 74 measured).
-That is not a property of warped frames — CPU↔**Metal** warped dmap clears 90
-comfortably (≈ 103). It is the unfinished f16 port below: wgpu's WGSL kernels
-are still f32 while storage is f16, so it alone warps in f32 and stores
-through half, and where its result straddles a rounding boundary the argmax
-flips a frame index. The bar should return to 90 when that port lands.
-Derivation, the evidence that it is quantization rather than drift, and a
-refuted one-seam fix: `WgpuParity.runDMap`. Re-measured 2026-07-28 on a
-discrete GPU through wgpu's Vulkan backend: **74.0 dB, unchanged to the
-decimal** from the software-rasterizer figure the floor was set against. The
-number is adapter-independent, which is the strongest evidence yet that it is
-f16 quantization rather than a driver or rasterizer artifact.
+There is no longer an exception for the wgpu backend: warped dmap carried a
+relaxed **≥ 71** floor while its WGSL kernels were f32 under f16 storage, and
+the half-storage port (2026-08-06) took it to **100.1 dB**, back on the same
+90 dB bar as everything else. Why the one-seam fix that preceded it failed and
+the whole-chain one worked: `WgpuParity.runDMap`.
 
 Anything *below* these bars is drift, not quantization — and the
 usual cause is a buffer that should be f32 (an accumulator, or a separable
-filter's intermediate) being stored as half. `retouch-probe` is macOS-only —
+filter's intermediate) being stored as half. On wgpu there is a second cause
+worth knowing: a *store* that narrows with the wrong rounding mode. WGSL's
+`pack2x16float` truncates on the D3D12 backend and rounds-to-nearest on
+Vulkan/Metal, which is why `h4store` rounds explicitly instead (see
+`WgpuEngine`, and `Docs/performance.md` for the 30 dB it costs when it
+doesn't). A parity miss on one adapter and not another points here first —
+run both with `HYPERFOCAL_WGPU_FALLBACK=1`. `retouch-probe` is macOS-only —
 off Apple, gate on the CLI synth→fuse→compare path plus the Qt shell selftest
 matrix.
 
@@ -63,6 +61,34 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
   shaped for it: `RockingAnimation.writeH264` is portable and only the
   `#if !os(Windows)` guard on the "choose a .gif" refusal, plus a non-null
   `hf_video_begin`, stand between Linux and the same path Windows takes.
+- **Ship the GPU path on Windows and Linux — a packaging decision, no longer
+  an engine one.** wgpu is still a build-time opt-in (`HYPERFOCAL_WGPU=1` +
+  `WGPU_ROOT`), and neither `Scripts/package-windows.ps1` nor the Linux
+  packaging sets it, so every shipped non-Mac build fuses on the CPU while the
+  Metal path has had GPU fusion since day one. The engine objections are
+  answered: the backend clears the same parity bars as Metal (kernels ≥ 94.9
+  dB, dmap 112.9 plain / 100.1 warped, fusion 72.5), and on a discrete GPU it
+  is the faster path at the sizes users actually shoot (45 MP dmap fuse 14.2 s
+  vs 17.9 s CPU; 100 MP 26.6 s vs 33.7 s). What is left is everything shipping
+  a second binary implies, and each item can sink it independently:
+  - **Licence + notices.** wgpu-native is MIT/Apache-2.0 dual-licensed, which
+    fits, but it ships as `wgpu_native.dll` (~9 MB) or a ~55 MB static archive
+    and pulls its own transitive Rust crate graph. Run it through the
+    `third-party-deps` skill and land `NOTICE.md` / `licenses/` in the same
+    change — `Scripts/gen-notices.py` currently notices no wgpu at all,
+    because no shipped binary contains it.
+  - **Adapter selection on machines we cannot see.** `usableForAutoSelection`
+    already skips software rasterizers (WARP/llvmpipe are slower than the CPU
+    path — measured), but a shipped build meets old drivers, hybrid laptops,
+    and headless sessions. Decide the fallback contract *before* shipping: a
+    failed adapter request must land on the CPU engine silently, and a
+    mid-fuse device loss must not fail a user's export.
+  - **Static vs dynamic link.** `HYPERFOCAL_WGPU_STATIC=1` drops the DLL from
+    the package (verified on Windows, macOS and Linux) at ~55 MB of archive;
+    the MSIX size budget and the LGPL-adjacent relinking story in
+    `COMPLIANCE.md` both bear on the choice.
+  - Done = a Store package whose `--engine auto` picks the GPU on real
+    hardware, falls back cleanly without one, and whose notices are complete.
 - **HE-NEF decode on Linux/Wine** is still deferred — Windows converts them via
   the Adobe DNG Converter (`RawConverter`), but the Linux/Wine path was punted;
   see `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
@@ -363,9 +389,13 @@ builds:
      its architecture from `PROCESSOR_ARCHITECTURE` and names the output
      accordingly, so nothing in it needs changing.
 
-   Note the shipped build is **CPU-only**: wgpu is opt-in behind
-   `HYPERFOCAL_WGPU=1` and release builds do not set it, so no GPU fusion path
-   reaches Store users until the f16 WGSL port lands (see Engine performance).
+   Note the shipped build is still **CPU-only**: wgpu is opt-in behind
+   `HYPERFOCAL_WGPU=1` and `Scripts/package-windows.ps1` does not set it, so no
+   GPU fusion path reaches Store users. The engine reason for that is gone —
+   the half-storage port (2026-08-06) put the backend on the same parity bars
+   as Metal and made it the faster path on real hardware (a 45 MP dmap fuse
+   14.2 s vs 17.9 s, 100 MP 26.6 s vs 33.7 s) — so what remains is a shipping
+   decision, tracked as its own item below.
 
    The LGPL-3.0
    checklist the package was built to is settled and enforced in the script —
@@ -474,25 +504,6 @@ stack before quoting a new ledger.
   context, or accepting it as the cost of Apple's RAW engine and documenting
   it. Do not chase it below ~2 GB without checking decode throughput — the
   cache exists for a reason.
-- **f16 storage on the wgpu backend (Windows/Linux GPU).** `ImageBuffer` and
-  the Metal kernels are f16 now; the WGSL kernels are still f32, and
-  `WgpuDMap`/`WgpuPyramid` widen through an f32 staging array at every
-  host↔device RGBA transfer to stay correct. So the wgpu path pays a
-  conversion it doesn't need and gets none of the bandwidth or footprint win.
-  Port it via **`pack2x16float` / `unpack2x16float`** — core WGSL, so an RGBA
-  half4 is 2 `u32` words and no `shader-f16` feature is required. That matters:
-  `shader-f16` is not universal, and the only validated surfaces here are WARP
-  and llvmpipe. Mirror the Metal split exactly — accumulators (`tent_accumulate`'s
-  accum, the pyramid base sum) and the separable blur's H→V intermediate stay
-  f32; see `MetalEngine`'s kernel header for why each one does. This port is
-  also what should retire the warped-dmap exception in the header: it exists
-  precisely because these kernels are f32 under f16 storage, and Metal — which
-  has no such asymmetry — clears 90 on the same frames. Done = the staging
-  arrays in `WgpuDMap` are gone, `WgpuParity` passes, and warped dmap parity is
-  back at **90**, not 71. Before starting, read the refuted experiment in
-  `Docs/performance.md`: quantizing *only* the warp output to f16 on-device, to
-  match the CPU's storage, measurably worsened warped dmap parity — so this has
-  to move the whole kernel chain to half, not narrow at one seam.
 - **Depth-map export precision.** `DMapFusion.depthImage` now returns an f16
   `ImageBuffer` like everything else, so a 16-bit depth-map export resolves
   ~2048 levels over its top octave instead of 65535. Far above what a stack can

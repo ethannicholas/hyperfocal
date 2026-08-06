@@ -189,15 +189,12 @@ enum WgpuPyramid {
                     let (w, h) = sizes[previewLevel]
                     var img = ImageBuffer(width: w, height: h)
                     try bucket(&tPreview) {
-                        // WGSL kernels are still f32 here (see WgpuDMap's note
-                        // on the deferred half-storage port), so RGBA crosses
-                        // the host boundary through an f32 staging array.
-                        var tmp = [Float](repeating: 0, count: w * h * 4)
-                        try tmp.withUnsafeMutableBufferPointer {
+                        // Device storage is f16, like ImageBuffer.pixels — the
+                        // readback is a plain copy.
+                        try img.pixels.withUnsafeMutableBufferPointer {
                             try engine.download(buf, into: $0.baseAddress!,
-                                                byteCount: w * h * 16)
+                                                byteCount: w * h * 8)
                         }
-                        img = ImageBuffer(width: w, height: h, floatPixels: tmp)
                     }
                     preview = img
                 }
@@ -221,18 +218,28 @@ enum WgpuPyramid {
                     let p = sizes.last!
                     sizes.append(((p.w + 1) / 2, (p.h + 1) / 2))
                 }
-                for s in sizes {
-                    gauss.append(try engine.makeBuffer(floats: s.w * s.h * 4))
-                    fused.append(try engine.makeBuffer(floats: s.w * s.h * 4))
+                for (l, s) in sizes.enumerated() {
+                    gauss.append(try engine.makeBuffer(halves: s.w * s.h * 4))
+                    // The base level (the last one) is the f32 accumulator;
+                    // every band level is half storage. See pyr_add4.
+                    fused.append(l == levels
+                        ? try engine.makeBuffer(floats: s.w * s.h * 4)
+                        : try engine.makeBuffer(halves: s.w * s.h * 4))
                 }
                 for s in sizes.dropLast() {
                     bestE.append(try engine.makeBuffer(floats: s.w * s.h))
                 }
                 if warp != nil {
-                    uploadBuf = try engine.makeBuffer(floats: srcWidth * srcHeight * 4)
+                    uploadBuf = try engine.makeBuffer(halves: srcWidth * srcHeight * 4)
                 }
+                // scratchA is the separable blur's f32 intermediate (see
+                // pyr_blur5_h) and the f32 upsample target AND, in a later
+                // phase, one half of the collapse's half-storage ping-pong.
+                // Both roles write every element before reading it and never
+                // overlap in time, so the f32 sizing simply leaves the
+                // collapse room to spare.
                 scratchA = try engine.makeBuffer(floats: width * height * 4)
-                scratchB = try engine.makeBuffer(floats: width * height * 4)
+                scratchB = try engine.makeBuffer(halves: width * height * 4)
                 gritA = try engine.makeBuffer(floats: width * height)
                 if onSharpness != nil {
                     let f = DMapFusion.sharpnessDownsample
@@ -245,12 +252,12 @@ enum WgpuPyramid {
                 gritWeights.withUnsafeBytes {
                     engine.upload($0.baseAddress!, byteCount: $0.count, to: gritWeightsBuf)
                 }
-                baseTmp = try engine.makeBuffer(floats: sizes[levels].w * sizes[levels].h * 4)
+                baseTmp = try engine.makeBuffer(halves: sizes[levels].w * sizes[levels].h * 4)
                 previewLevel = sizes.firstIndex { max($0.w, $0.h) <= 1600 } ?? levels
                 if focusGate != nil {
                     for l in 0..<levels {
-                        trackB.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
-                        trackBright.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
+                        trackB.append(gated(l) ? try engine.makeBuffer(halves: sizes[l].w * sizes[l].h * 4) : nil)
+                        trackBright.append(gated(l) ? try engine.makeBuffer(halves: sizes[l].w * sizes[l].h * 4) : nil)
                         hasFocus.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         bestDarkLum.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         bestBrightLum.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
@@ -260,7 +267,7 @@ enum WgpuPyramid {
                     // Track C (plain max-energy over every frame) + the level-0
                     // min-luminance the near-black gate reads.
                     for l in 0..<levels {
-                        plainC.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h * 4) : nil)
+                        plainC.append(gated(l) ? try engine.makeBuffer(halves: sizes[l].w * sizes[l].h * 4) : nil)
                         plainBestE.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         maskBuf.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
                         bgMaskBuf.append(gated(l) ? try engine.makeBuffer(floats: sizes[l].w * sizes[l].h) : nil)
@@ -292,8 +299,8 @@ enum WgpuPyramid {
             } ?? false
             let upload = warp != nil ? uploadBuf! : gauss[0]
             bucket(&tUpload) {
-                img.floatPixels().withUnsafeBufferPointer {
-                    engine.upload($0.baseAddress!, byteCount: srcWidth * srcHeight * 16,
+                img.pixels.withUnsafeBufferPointer {
+                    engine.upload($0.baseAddress!, byteCount: srcWidth * srcHeight * 8,
                                   to: upload)
                 }
             }
@@ -347,7 +354,7 @@ enum WgpuPyramid {
                 // Identity frame in warp mode: device-side copy into level 0
                 // (dimensions match — that's what made the warp skippable).
                 batch.copy(from: uploadBuf, to: gauss[0],
-                           byteCount: srcWidth * srcHeight * 16)
+                           byteCount: srcWidth * srcHeight * 8)
             }
             if needsWarp {
                 let h = warp!.transforms[fi].inverse  // output → source
@@ -652,12 +659,11 @@ enum WgpuPyramid {
                                         scratchA: scratchA, scratchB: scratchB,
                                         upsampleAddName: upsampleAddName)
         batch.submit()
-        var tmp = [Float](repeating: 0, count: width * height * 4)
-        try tmp.withUnsafeMutableBufferPointer {
+        var out = ImageBuffer(width: width, height: height)
+        try out.pixels.withUnsafeMutableBufferPointer {
             try engine.download(result, into: $0.baseAddress!,
-                                byteCount: width * height * 16)
+                                byteCount: width * height * 8)
         }
-        var out = ImageBuffer(width: width, height: height, floatPixels: tmp)
         // Envelope clamp on the collapsed image, via the shared CPU helper —
         // a small full-res pass, same for every engine.
         if envelope, !envMaxArr.isEmpty {
@@ -687,8 +693,10 @@ enum WgpuPyramid {
                                        scratchB: WgpuEngine.Buffer,
                                        upsampleAddName: String) throws -> WgpuEngine.Buffer {
         let (bw, bh) = sizes[levels]
-        batch.copy(from: fused[levels], to: baseTmp, byteCount: bw * bh * 16)
-        try batch.dispatch("pyr_scale4", buffers: [baseTmp],
+        // scale4 divides the f32 base accumulator by the frame count and
+        // narrows it into the half collapse chain in one pass — it needed a
+        // device-side copy of the base first while it scaled in place.
+        try batch.dispatch("pyr_scale4", buffers: [baseTmp, fused[levels]],
                            uniforms: bytes(of: ScaleParams(s: baseScale,
                                                            count: UInt32(bw * bh))),
                            gridW: bw * bh)

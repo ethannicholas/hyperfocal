@@ -5,8 +5,20 @@ import Foundation
 /// wgpu compute backend (cross-platform-plan Phase 4): the Windows/Linux
 /// counterpart of `MetalEngine` — kernels compiled once from WGSL at startup,
 /// pipeline cache, dispatch helpers. Same discipline as Metal: all image
-/// kernels operate on raw Float32 storage buffers (no textures) with taps,
-/// clamps, and luma weights identical to the CPU path.
+/// kernels operate on raw storage buffers (no textures) with taps, clamps,
+/// and luma weights identical to the CPU path.
+///
+/// **Storage is f16, arithmetic is f32** — the same split as `MetalEngine`,
+/// reached differently. WGSL's `f16` *type* needs the `shader-f16` feature,
+/// which is not universal (WARP and llvmpipe, the two software surfaces this
+/// backend is validated on, are exactly the cases that can lack it), so an
+/// RGBA half4 is carried as a `vec2u`: four halves in two `u32` words, laid
+/// out byte-identically to `ImageBuffer.pixels` and to the Metal path's
+/// `half4`, so uploads and downloads are plain copies. See `h4load`/`h4store`
+/// — the store side deliberately does not use `pack2x16float`, whose rounding
+/// mode differs by backend. Scalar PLANES stay f32, and so do the
+/// intermediates that must (`pyr_blur5_h`'s H→V result, `pyr_upsample`'s
+/// output, the tent/base accumulators) — see the kernels for why each does.
 ///
 /// Differences from Metal the callers must respect: buffers are not
 /// host-visible (`upload`/`download` instead of `contents()`), and binding is
@@ -36,6 +48,16 @@ public final class WgpuEngine {
     public var usableForAutoSelection: Bool {
         !isSoftwareAdapter || Self.allowSoftwareAdapter
     }
+    /// HYPERFOCAL_WGPU_FALLBACK=1 asks for the *fallback* adapter (WebGPU's
+    /// `forceFallbackAdapter`: D3D12 WARP here, llvmpipe on Linux) even when a
+    /// real GPU is present. `HYPERFOCAL_WGPU_SOFTWARE` only permits a software
+    /// adapter that was going to be picked anyway, which on a machine with a
+    /// discrete card selects nothing — so without this, the surface CI gates
+    /// on cannot be reproduced on a developer machine, and the surface is not
+    /// incidental: it is why the WGSL carries halves as packed `u32` pairs
+    /// instead of requiring `shader-f16`.
+    private static let forceFallbackAdapter =
+        ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU_FALLBACK"] == "1"
     private let shader: WGPUShaderModule
     private var pipelines: [String: WGPUComputePipeline] = [:]
     private let lock = NSLock()
@@ -53,6 +75,7 @@ public final class WgpuEngine {
         // them from wgpuInstanceProcessEvents, typically on the first pump.
         var adapter: WGPUAdapter? = nil
         var options = WGPURequestAdapterOptions()
+        options.forceFallbackAdapter = WGPUBool(Self.forceFallbackAdapter ? 1 : 0)
         var adapterCB = WGPURequestAdapterCallbackInfo()
         adapterCB.mode = WGPUCallbackMode_AllowProcessEvents
         adapterCB.callback = { status, adapter, _, ud1, _ in
@@ -168,6 +191,24 @@ public final class WgpuEngine {
             throw StackError.metal("cannot allocate \(count * 4) byte wgpu buffer")
         }
         return Buffer(raw: b, byteCount: count * 4)
+    }
+
+    /// Half-precision image storage — the allocation for anything the kernels
+    /// declare as `array<Half4>`, and byte-identical to `ImageBuffer.pixels`,
+    /// so upload and download are plain copies. `count` is halves, as
+    /// `makeBuffer(floats:)` takes floats; both round the allocation up to the
+    /// 4-byte multiple WebGPU requires of buffer copies (RGBA counts are
+    /// multiples of 4 halves anyway, so this only matters for oddly sized
+    /// scratch).
+    func makeBuffer(halves count: Int) throws -> Buffer {
+        var desc = WGPUBufferDescriptor()
+        desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst
+        let byteCount = (count * 2 + 3) & ~3
+        desc.size = UInt64(byteCount)
+        guard let b = wgpuDeviceCreateBuffer(device, &desc) else {
+            throw StackError.metal("cannot allocate \(byteCount) byte wgpu buffer")
+        }
+        return Buffer(raw: b, byteCount: byteCount)
     }
 
     func upload(_ src: UnsafeRawPointer, byteCount: Int, to buffer: Buffer) {
@@ -432,6 +473,63 @@ public final class WgpuEngine {
         return vec3u(g.y * (kTile1D * kWG1D) + g.x, 0u, 0u);
     }
 
+    // RGBA image storage: four halves per pixel, as two u32 words — the exact
+    // bytes of ImageBuffer.pixels and of the MSL kernels' half4. WGSL's f16
+    // TYPE would need the `shader-f16` feature, which WARP and llvmpipe (the
+    // software surfaces this backend is validated on) can lack; nothing here
+    // needs any feature. Widen on load, narrow on store — arithmetic stays
+    // f32 everywhere, as in Metal.
+    alias Half4 = vec2u;
+
+    // Loads use the core builtin: f16→f32 is exact, so every backend agrees.
+    fn h4load(v: Half4) -> vec4f {
+        return vec4f(unpack2x16float(v.x), unpack2x16float(v.y));
+    }
+
+    // Stores do NOT use pack2x16float, and this is not premature caution.
+    // WGSL leaves the narrowing's rounding mode to the backend, and they do
+    // not agree: on Vulkan and Metal it is round-to-nearest-even, matching
+    // Swift's `Float16(x)`, but the D3D12 backend lowers it to HLSL
+    // `f32tof16`, which TRUNCATES toward zero. Every stored pixel then sits up
+    // to one ulp below the CPU's, systematically — measured on WARP, that is
+    // the whole difference between 71 dB and 100+ dB of CPU↔GPU agreement, and
+    // it silently downgrades every kernel that writes a pixel. Rounding
+    // explicitly costs ~10 ALU ops per store on kernels that are memory-bound
+    // anyway (measured: no change in GPU compute time), and it buys the
+    // property the whole half-storage port rests on — both engines holding
+    // byte-identical pixels on every adapter, not just the one this was
+    // developed on.
+    //
+    // The routine is the standard bit-level RTNE narrowing (Giesen's
+    // float_to_half_fast3_rtne): exponent rebias plus a rounding bias for
+    // normals, a magic-add for subnormals (f32 addition is itself
+    // round-to-nearest-even, so the alignment does the rounding), and
+    // saturation to Inf/NaN at the top.
+    fn f16bits(v: f32) -> u32 {
+        var u = bitcast<u32>(v);
+        let sign = u & 0x80000000u;
+        u = u ^ sign;
+        var o: u32;
+        if (u >= 0x47800000u) {
+            // Inf, NaN, or magnitudes half cannot hold (≥ 65536).
+            o = select(0x7c00u, 0x7e00u, u > 0x7f800000u);
+        } else if (u < 0x38800000u) {
+            // Result is a half subnormal (or zero): add 0.5 to shove the
+            // mantissa into place, then subtract the same bias back out.
+            o = bitcast<u32>(bitcast<f32>(u) + 0.5) - 0x3f000000u;
+        } else {
+            let mantOdd = (u >> 13u) & 1u;
+            // ((15 - 127) << 23) + 0xfff, then +1 when the kept mantissa is
+            // odd — that pair is what makes a tie round to even.
+            o = (u + 0xC8000FFFu + mantOdd) >> 13u;
+        }
+        return o | (sign >> 16u);
+    }
+    fn h4store(v: vec4f) -> Half4 {
+        return Half4(f16bits(v.x) | (f16bits(v.y) << 16u),
+                     f16bits(v.z) | (f16bits(v.w) << 16u));
+    }
+
     struct WarpParams {
         r0: vec4f,
         r1: vec4f,
@@ -439,8 +537,8 @@ public final class WgpuEngine {
         dims: vec4u,   // srcW, srcH, dstW, dstH
     }
 
-    @group(0) @binding(0) var<storage, read> warp_src: array<vec4f>;
-    @group(0) @binding(1) var<storage, read_write> warp_dst: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> warp_src: array<Half4>;
+    @group(0) @binding(1) var<storage, read_write> warp_dst: array<Half4>;
     @group(0) @binding(2) var<uniform> warp_p: WarpParams;
 
     // Lanczos-3 via the product form 3·sin(πx)·sin(πx/3)/(πx)² — identical
@@ -482,7 +580,7 @@ public final class WgpuEngine {
             var row = vec4f(0.0);
             for (var kx = 0; kx < 6; kx++) {
                 let tx = clamp(x0 - 2 + kx, 0, sw - 1);
-                row += warp_src[ty * sw + tx] * wx[kx];
+                row += h4load(warp_src[ty * sw + tx]) * wx[kx];
             }
             acc += row * wy[ky];
         }
@@ -491,15 +589,15 @@ public final class WgpuEngine {
         let cx1 = clamp(x0 + 1, 0, sw - 1);
         let cy0 = clamp(y0, 0, sh - 1);
         let cy1 = clamp(y0 + 1, 0, sh - 1);
-        let a = warp_src[cy0 * sw + cx0];
-        let b = warp_src[cy0 * sw + cx1];
-        let c = warp_src[cy1 * sw + cx0];
-        let d = warp_src[cy1 * sw + cx1];
+        let a = h4load(warp_src[cy0 * sw + cx0]);
+        let b = h4load(warp_src[cy0 * sw + cx1]);
+        let c = h4load(warp_src[cy1 * sw + cx0]);
+        let d = h4load(warp_src[cy1 * sw + cx1]);
         sample = clamp(sample, min(min(a, b), min(c, d)), max(max(a, b), max(c, d)));
         let inside = sx >= -0.5 && sx <= f32(sw) - 0.5
                   && sy >= -0.5 && sy <= f32(sh) - 0.5;
         sample.w = select(0.0, sample.w, inside);
-        warp_dst[gid.y * dw + gid.x] = sample;
+        warp_dst[gid.y * dw + gid.x] = h4store(sample);
     }
 
     struct BlurParams {
@@ -559,13 +657,15 @@ public final class WgpuEngine {
         let cx1 = clamp(x0 + 1, 0, sw - 1);
         let cy0 = clamp(y0, 0, sh - 1);
         let cy1 = clamp(y0 + 1, 0, sh - 1);
-        let top = mix(warp_src[cy0 * sw + cx0], warp_src[cy0 * sw + cx1], wx);
-        let bot = mix(warp_src[cy1 * sw + cx0], warp_src[cy1 * sw + cx1], wx);
+        let top = mix(h4load(warp_src[cy0 * sw + cx0]),
+                      h4load(warp_src[cy0 * sw + cx1]), wx);
+        let bot = mix(h4load(warp_src[cy1 * sw + cx0]),
+                      h4load(warp_src[cy1 * sw + cx1]), wx);
         var sample = mix(top, bot, wy);
         let inside = sx >= -0.5 && sx <= f32(sw) - 0.5
                   && sy >= -0.5 && sy <= f32(sh) - 0.5;
         sample.w = select(0.0, sample.w, inside);
-        warp_dst[gid.y * dw + gid.x] = sample;
+        warp_dst[gid.y * dw + gid.x] = h4store(sample);
     }
 
     const kLuma = vec3f(0.2126, 0.7152, 0.0722);
@@ -599,7 +699,7 @@ public final class WgpuEngine {
     struct ArgmaxParams { frameIdx: f32, count: u32, gain: f32, energyGain: f32 }
 
     @group(0) @binding(0) var<storage, read> am_energy: array<f32>;
-    @group(0) @binding(1) var<storage, read> am_frame: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> am_frame: array<Half4>;
     @group(0) @binding(2) var<storage, read_write> am_bestE: array<f32>;
     @group(0) @binding(3) var<storage, read_write> am_bestIdx: array<f32>;
     @group(0) @binding(4) var<storage, read_write> am_guide: array<f32>;
@@ -611,21 +711,24 @@ public final class WgpuEngine {
         if (gid.x >= am_p.count) { return; }
         // energyGain is gain²: the measure is a squared Laplacian, so quadratic
         // in the frame's gain, while the guide luminance below is linear in it.
-        let e = am_energy[gid.x] * am_frame[gid.x].w * am_p.energyGain;
+        let f = h4load(am_frame[gid.x]);
+        let e = am_energy[gid.x] * f.w * am_p.energyGain;
         let wins = e > am_bestE[gid.x];
         if (wins) {
             am_bestE[gid.x] = e;
             am_bestIdx[gid.x] = am_p.frameIdx;
         }
         if (wins || am_p.frameIdx == 0.0) {
-            am_guide[gid.x] = dot(am_frame[gid.x].rgb, kLuma) * am_p.gain;
+            am_guide[gid.x] = dot(f.rgb, kLuma) * am_p.gain;
         }
     }
 
     struct TentParams { gain: vec4f, index: f32, radius: f32, count: u32, pad: u32 }
 
-    @group(0) @binding(0) var<storage, read> ta_frame: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> ta_frame: array<Half4>;
     @group(0) @binding(1) var<storage, read> ta_depth: array<f32>;
+    // The accumulator stays f32: it is a running sum over the whole stack, not
+    // a [0,1] pixel — same reason the MSL kernel declares it float4.
     @group(0) @binding(2) var<storage, read_write> ta_accum: array<vec4f>;
     @group(0) @binding(3) var<storage, read_write> ta_wsum: array<f32>;
     @group(0) @binding(4) var<uniform> ta_p: TentParams;
@@ -634,7 +737,7 @@ public final class WgpuEngine {
     fn tent_accumulate(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= ta_p.count) { return; }
-        let s = ta_frame[gid.x];
+        let s = h4load(ta_frame[gid.x]);
         if (s.w <= 0.0) { return; }
         let tent = max(1.0 - abs(ta_p.index - ta_depth[gid.x]) / ta_p.radius, 0.0);
         let w = (tent + 1e-6) * s.w;
@@ -645,7 +748,7 @@ public final class WgpuEngine {
     struct PlanePreviewParams { srcW: u32, srcH: u32, dstW: u32, dstH: u32, scale: f32, bias: f32, pad0: u32, pad1: u32 }
 
     @group(0) @binding(0) var<storage, read> pp_plane: array<f32>;
-    @group(0) @binding(1) var<storage, read_write> pp_out: array<vec4f>;
+    @group(0) @binding(1) var<storage, read_write> pp_out: array<Half4>;
     @group(0) @binding(2) var<uniform> pp_p: PlanePreviewParams;
 
     @compute @workgroup_size(16, 16)
@@ -654,7 +757,7 @@ public final class WgpuEngine {
         let sx = min(gid.x * pp_p.srcW / pp_p.dstW, pp_p.srcW - 1u);
         let sy = min(gid.y * pp_p.srcH / pp_p.dstH, pp_p.srcH - 1u);
         let v = pp_p.bias + pp_plane[sy * pp_p.srcW + sx] * pp_p.scale;
-        pp_out[gid.y * pp_p.dstW + gid.x] = vec4f(v, v, v, 1.0);
+        pp_out[gid.y * pp_p.dstW + gid.x] = h4store(vec4f(v, v, v, 1.0));
     }
 
     struct BoxDownParams { srcW: u32, srcH: u32, dstW: u32, dstH: u32, factor: u32, pad0: u32, pad1: u32, pad2: u32 }
@@ -712,7 +815,7 @@ public final class WgpuEngine {
 
     struct Count1 { count: u32, pad0: u32, pad1: u32, pad2: u32 }
 
-    @group(0) @binding(0) var<storage, read> lp_img: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> lp_img: array<Half4>;
     @group(0) @binding(1) var<storage, read_write> lp_out: array<f32>;
     @group(0) @binding(2) var<uniform> lp_p: Count1;
 
@@ -720,7 +823,7 @@ public final class WgpuEngine {
     fn luma_plane(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= lp_p.count) { return; }
-        let p = lp_img[gid.x];
+        let p = h4load(lp_img[gid.x]);
         lp_out[gid.x] = 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z;
     }
 
@@ -728,7 +831,7 @@ public final class WgpuEngine {
 
     @group(0) @binding(0) var<storage, read> pv_accum: array<vec4f>;
     @group(0) @binding(1) var<storage, read> pv_wsum: array<f32>;
-    @group(0) @binding(2) var<storage, read_write> pv_out: array<vec4f>;
+    @group(0) @binding(2) var<storage, read_write> pv_out: array<Half4>;
     @group(0) @binding(3) var<uniform> pv_p: PreviewParams;
 
     @compute @workgroup_size(16, 16)
@@ -740,12 +843,12 @@ public final class WgpuEngine {
         let w = pv_wsum[si];
         var v = select(vec4f(0.0), pv_accum[si] / w, w > 0.01);
         v.w = 1.0;
-        pv_out[gid.y * pv_p.dstW + gid.x] = v;
+        pv_out[gid.y * pv_p.dstW + gid.x] = h4store(v);
     }
 
     @group(0) @binding(0) var<storage, read> no_accum: array<vec4f>;
     @group(0) @binding(1) var<storage, read> no_wsum: array<f32>;
-    @group(0) @binding(2) var<storage, read_write> no_out: array<vec4f>;
+    @group(0) @binding(2) var<storage, read_write> no_out: array<Half4>;
     @group(0) @binding(3) var<uniform> no_p: Count1;
 
     @compute @workgroup_size(256)
@@ -755,7 +858,7 @@ public final class WgpuEngine {
         let w = no_wsum[gid.x];
         var v = select(vec4f(0.0), no_accum[gid.x] / w, w > 1e-7);
         v.w = 1.0;
-        no_out[gid.x] = v;
+        no_out[gid.x] = h4store(v);
     }
 
     struct ConfidenceParams {
@@ -963,46 +1066,66 @@ public final class WgpuEngine {
 
     const kPyr5 = array<f32, 5>(1.0 / 16, 4.0 / 16, 6.0 / 16, 4.0 / 16, 1.0 / 16);
 
-    @group(0) @binding(0) var<storage, read> pb_src: array<vec4f>;
-    @group(0) @binding(1) var<storage, read_write> pb_dst: array<vec4f>;
-    @group(0) @binding(2) var<uniform> pb_p: Dims2;
+    @group(0) @binding(0) var<storage, read> pbh_src: array<Half4>;
+    @group(0) @binding(1) var<storage, read_write> pbh_dst: array<vec4f>;
+    @group(0) @binding(2) var<uniform> pbh_p: Dims2;
 
+    // H pass writes FLOAT4. The separable blur's intermediate stays f32
+    // exactly as the CPU's `fusedDownsample` keeps its `rows` scratch in f32,
+    // and as the MSL kernel does: narrowing between H and V puts a second
+    // quantization into every pyramid level, which cost ~40 dB of CPU↔GPU
+    // parity when it was measured on the Metal path.
     @compute @workgroup_size(16, 16)
     fn pyr_blur5_h(@builtin(global_invocation_id) gid: vec3u) {
-        if (gid.x >= pb_p.w || gid.y >= pb_p.h) { return; }
-        let w = i32(pb_p.w);
+        if (gid.x >= pbh_p.w || gid.y >= pbh_p.h) { return; }
+        let w = i32(pbh_p.w);
         let row = i32(gid.y) * w;
         var acc = vec4f(0.0);
         for (var i = -2; i <= 2; i++) {
             let xi = clamp(i32(gid.x) + i, 0, w - 1);
-            acc += pb_src[row + xi] * kPyr5[i + 2];
+            acc += h4load(pbh_src[row + xi]) * kPyr5[i + 2];
         }
-        pb_dst[row + i32(gid.x)] = acc;
+        pbh_dst[row + i32(gid.x)] = acc;
     }
 
+    @group(0) @binding(0) var<storage, read> pbv_src: array<vec4f>;
+    @group(0) @binding(1) var<storage, read_write> pbv_dst: array<Half4>;
+    @group(0) @binding(2) var<uniform> pbv_p: Dims2;
+
+    // V pass consumes the f32 H result and narrows once, on store.
     @compute @workgroup_size(16, 16)
     fn pyr_blur5_v(@builtin(global_invocation_id) gid: vec3u) {
-        if (gid.x >= pb_p.w || gid.y >= pb_p.h) { return; }
-        let w = i32(pb_p.w);
-        let h = i32(pb_p.h);
+        if (gid.x >= pbv_p.w || gid.y >= pbv_p.h) { return; }
+        let w = i32(pbv_p.w);
+        let h = i32(pbv_p.h);
         var acc = vec4f(0.0);
         for (var i = -2; i <= 2; i++) {
             let yi = clamp(i32(gid.y) + i, 0, h - 1);
-            acc += pb_src[yi * w + i32(gid.x)] * kPyr5[i + 2];
+            acc += pbv_src[yi * w + i32(gid.x)] * kPyr5[i + 2];
         }
-        pb_dst[i32(gid.y) * w + i32(gid.x)] = acc;
+        pbv_dst[i32(gid.y) * w + i32(gid.x)] = h4store(acc);
     }
 
-    @group(0) @binding(0) var<storage, read> pr_src: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> pr_src: array<Half4>;
+    // Upsample writes FLOAT4, and every `up` consumer below reads f32. The
+    // band is `fine - up`, a difference of two nearly-equal Gaussians:
+    // rounding `up` to f16 first throws away most of the band's significant
+    // bits — classic catastrophic cancellation. The CPU path never
+    // materializes it at all (`upsampleAt` returns f32 inline), and storing it
+    // as f16 cost ~40 dB of PMax CPU↔GPU parity on the Metal path.
     @group(0) @binding(1) var<storage, read_write> pr_dst: array<vec4f>;
     @group(0) @binding(2) var<uniform> pr_p: PreviewParams;
+
+    // Decimation's own destination is half: it picks a sample, it doesn't
+    // compute one, so this is storage-to-storage and stays exact.
+    @group(0) @binding(1) var<storage, read_write> prd_dst: array<Half4>;
 
     @compute @workgroup_size(16, 16)
     fn pyr_decimate(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= pr_p.dstW || gid.y >= pr_p.dstH) { return; }
         let sx = min(gid.x * 2u, pr_p.srcW - 1u);
         let sy = min(gid.y * 2u, pr_p.srcH - 1u);
-        pr_dst[gid.y * pr_p.dstW + gid.x] = pr_src[sy * pr_p.srcW + sx];
+        prd_dst[gid.y * pr_p.dstW + gid.x] = pr_src[sy * pr_p.srcW + sx];
     }
 
     fn pyr_bilinear_at(sw: i32, sh: i32, gid: vec3u, dstW: u32, dstH: u32) -> vec4f {
@@ -1016,8 +1139,10 @@ public final class WgpuEngine {
         let cx1 = clamp(x0 + 1, 0, sw - 1);
         let cy0 = clamp(y0, 0, sh - 1);
         let cy1 = clamp(y0 + 1, 0, sh - 1);
-        let top = mix(pr_src[cy0 * sw + cx0], pr_src[cy0 * sw + cx1], wx);
-        let bot = mix(pr_src[cy1 * sw + cx0], pr_src[cy1 * sw + cx1], wx);
+        let top = mix(h4load(pr_src[cy0 * sw + cx0]),
+                      h4load(pr_src[cy0 * sw + cx1]), wx);
+        let bot = mix(h4load(pr_src[cy1 * sw + cx0]),
+                      h4load(pr_src[cy1 * sw + cx1]), wx);
         return mix(top, bot, wy);
     }
 
@@ -1049,12 +1174,15 @@ public final class WgpuEngine {
         if ((gid.x & 1u) != 0u) { wx = vec3f(0.5, 0.5, 0.0); }
         var wy = vec3f(0.125, 0.75, 0.125);
         if ((gid.y & 1u) != 0u) { wy = vec3f(0.5, 0.5, 0.0); }
-        let r0 = pr_src[ty.x * sw + tx.x] * wx.x + pr_src[ty.x * sw + tx.y] * wx.y
-               + pr_src[ty.x * sw + tx.z] * wx.z;
-        let r1 = pr_src[ty.y * sw + tx.x] * wx.x + pr_src[ty.y * sw + tx.y] * wx.y
-               + pr_src[ty.y * sw + tx.z] * wx.z;
-        let r2 = pr_src[ty.z * sw + tx.x] * wx.x + pr_src[ty.z * sw + tx.y] * wx.y
-               + pr_src[ty.z * sw + tx.z] * wx.z;
+        let r0 = h4load(pr_src[ty.x * sw + tx.x]) * wx.x
+               + h4load(pr_src[ty.x * sw + tx.y]) * wx.y
+               + h4load(pr_src[ty.x * sw + tx.z]) * wx.z;
+        let r1 = h4load(pr_src[ty.y * sw + tx.x]) * wx.x
+               + h4load(pr_src[ty.y * sw + tx.y]) * wx.y
+               + h4load(pr_src[ty.y * sw + tx.z]) * wx.z;
+        let r2 = h4load(pr_src[ty.z * sw + tx.x]) * wx.x
+               + h4load(pr_src[ty.z * sw + tx.y]) * wx.y
+               + h4load(pr_src[ty.z * sw + tx.z]) * wx.z;
         return r0 * wy.x + r1 * wy.y + r2 * wy.z;
     }
 
@@ -1065,9 +1193,12 @@ public final class WgpuEngine {
             pyr_burt_at(i32(pr_p.srcW), i32(pr_p.srcH), gid);
     }
 
-    @group(0) @binding(0) var<storage, read> pu_src: array<vec4f>;
-    @group(0) @binding(1) var<storage, read> pu_band: array<vec4f>;
-    @group(0) @binding(2) var<storage, read_write> pu_dst: array<vec4f>;
+    // Collapse step: dst = band + upsample(coarser), all three half — the sum
+    // is a reconstructed image, not a band difference, so it carries no
+    // cancellation and narrows on store like every other pixel.
+    @group(0) @binding(0) var<storage, read> pu_src: array<Half4>;
+    @group(0) @binding(1) var<storage, read> pu_band: array<Half4>;
+    @group(0) @binding(2) var<storage, read_write> pu_dst: array<Half4>;
     @group(0) @binding(3) var<uniform> pu_p: PreviewParams;
 
     fn pu_bilinear_at(sw: i32, sh: i32, gid: vec3u, dstW: u32, dstH: u32) -> vec4f {
@@ -1081,8 +1212,10 @@ public final class WgpuEngine {
         let cx1 = clamp(x0 + 1, 0, sw - 1);
         let cy0 = clamp(y0, 0, sh - 1);
         let cy1 = clamp(y0 + 1, 0, sh - 1);
-        let top = mix(pu_src[cy0 * sw + cx0], pu_src[cy0 * sw + cx1], wx);
-        let bot = mix(pu_src[cy1 * sw + cx0], pu_src[cy1 * sw + cx1], wx);
+        let top = mix(h4load(pu_src[cy0 * sw + cx0]),
+                      h4load(pu_src[cy0 * sw + cx1]), wx);
+        let bot = mix(h4load(pu_src[cy1 * sw + cx0]),
+                      h4load(pu_src[cy1 * sw + cx1]), wx);
         return mix(top, bot, wy);
     }
 
@@ -1090,8 +1223,8 @@ public final class WgpuEngine {
     fn pyr_upsample_add(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= pu_p.dstW || gid.y >= pu_p.dstH) { return; }
         let i = gid.y * pu_p.dstW + gid.x;
-        pu_dst[i] = pu_band[i]
-            + pu_bilinear_at(i32(pu_p.srcW), i32(pu_p.srcH), gid, pu_p.dstW, pu_p.dstH);
+        pu_dst[i] = h4store(h4load(pu_band[i])
+            + pu_bilinear_at(i32(pu_p.srcW), i32(pu_p.srcH), gid, pu_p.dstW, pu_p.dstH));
     }
 
     fn pu_burt_at(sw: i32, sh: i32, gid: vec3u) -> vec4f {
@@ -1101,12 +1234,15 @@ public final class WgpuEngine {
         if ((gid.x & 1u) != 0u) { wx = vec3f(0.5, 0.5, 0.0); }
         var wy = vec3f(0.125, 0.75, 0.125);
         if ((gid.y & 1u) != 0u) { wy = vec3f(0.5, 0.5, 0.0); }
-        let r0 = pu_src[ty.x * sw + tx.x] * wx.x + pu_src[ty.x * sw + tx.y] * wx.y
-               + pu_src[ty.x * sw + tx.z] * wx.z;
-        let r1 = pu_src[ty.y * sw + tx.x] * wx.x + pu_src[ty.y * sw + tx.y] * wx.y
-               + pu_src[ty.y * sw + tx.z] * wx.z;
-        let r2 = pu_src[ty.z * sw + tx.x] * wx.x + pu_src[ty.z * sw + tx.y] * wx.y
-               + pu_src[ty.z * sw + tx.z] * wx.z;
+        let r0 = h4load(pu_src[ty.x * sw + tx.x]) * wx.x
+               + h4load(pu_src[ty.x * sw + tx.y]) * wx.y
+               + h4load(pu_src[ty.x * sw + tx.z]) * wx.z;
+        let r1 = h4load(pu_src[ty.y * sw + tx.x]) * wx.x
+               + h4load(pu_src[ty.y * sw + tx.y]) * wx.y
+               + h4load(pu_src[ty.y * sw + tx.z]) * wx.z;
+        let r2 = h4load(pu_src[ty.z * sw + tx.x]) * wx.x
+               + h4load(pu_src[ty.z * sw + tx.y]) * wx.y
+               + h4load(pu_src[ty.z * sw + tx.z]) * wx.z;
         return r0 * wy.x + r1 * wy.y + r2 * wy.z;
     }
 
@@ -1114,13 +1250,13 @@ public final class WgpuEngine {
     fn pyr_upsample_add_burt(@builtin(global_invocation_id) gid: vec3u) {
         if (gid.x >= pu_p.dstW || gid.y >= pu_p.dstH) { return; }
         let i = gid.y * pu_p.dstW + gid.x;
-        pu_dst[i] = pu_band[i]
-            + pu_burt_at(i32(pu_p.srcW), i32(pu_p.srcH), gid);
+        pu_dst[i] = h4store(h4load(pu_band[i])
+            + pu_burt_at(i32(pu_p.srcW), i32(pu_p.srcH), gid));
     }
 
-    @group(0) @binding(0) var<storage, read> ps_fine: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> ps_fine: array<Half4>;
     @group(0) @binding(1) var<storage, read> ps_up: array<vec4f>;
-    @group(0) @binding(2) var<storage, read_write> ps_fused: array<vec4f>;
+    @group(0) @binding(2) var<storage, read_write> ps_fused: array<Half4>;
     @group(0) @binding(3) var<storage, read_write> ps_bestE: array<f32>;
     @group(0) @binding(4) var<uniform> ps_p: Count1;
 
@@ -1128,15 +1264,15 @@ public final class WgpuEngine {
     fn pyr_select(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= ps_p.count) { return; }
-        let band = ps_fine[gid.x] - ps_up[gid.x];
+        let band = h4load(ps_fine[gid.x]) - ps_up[gid.x];
         let e = abs(band.x) + abs(band.y) + abs(band.z);
         if (e > ps_bestE[gid.x]) {
             ps_bestE[gid.x] = e;
-            ps_fused[gid.x] = band;
+            ps_fused[gid.x] = h4store(band);
         }
     }
 
-    @group(0) @binding(0) var<storage, read> pe_fine: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> pe_fine: array<Half4>;
     @group(0) @binding(1) var<storage, read> pe_up: array<vec4f>;
     @group(0) @binding(2) var<storage, read_write> pe_e: array<f32>;
     @group(0) @binding(3) var<uniform> pe_p: Count1;
@@ -1145,13 +1281,13 @@ public final class WgpuEngine {
     fn pyr_band_energy(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= pe_p.count) { return; }
-        let band = pe_fine[gid.x] - pe_up[gid.x];
+        let band = h4load(pe_fine[gid.x]) - pe_up[gid.x];
         pe_e[gid.x] = abs(band.x) + abs(band.y) + abs(band.z);
     }
 
-    @group(0) @binding(0) var<storage, read> pss_fine: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> pss_fine: array<Half4>;
     @group(0) @binding(1) var<storage, read> pss_up: array<vec4f>;
-    @group(0) @binding(2) var<storage, read_write> pss_fused: array<vec4f>;
+    @group(0) @binding(2) var<storage, read_write> pss_fused: array<Half4>;
     @group(0) @binding(3) var<storage, read_write> pss_bestE: array<f32>;
     @group(0) @binding(4) var<storage, read> pss_energy: array<f32>;
     @group(0) @binding(5) var<uniform> pss_p: Count1;
@@ -1163,31 +1299,37 @@ public final class WgpuEngine {
         let e = pss_energy[gid.x];
         if (e > pss_bestE[gid.x]) {
             pss_bestE[gid.x] = e;
-            pss_fused[gid.x] = pss_fine[gid.x] - pss_up[gid.x];
+            pss_fused[gid.x] = h4store(h4load(pss_fine[gid.x]) - pss_up[gid.x]);
         }
     }
 
+    // The base accumulator sums one Gaussian per frame and stays f32 — a sum
+    // over tens of frames leaves [0,1], where f16's steps stop being fine.
     @group(0) @binding(0) var<storage, read_write> pa_dst: array<vec4f>;
-    @group(0) @binding(1) var<storage, read> pa_src: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pa_src: array<Half4>;
     @group(0) @binding(2) var<uniform> pa_p: Count1;
 
     @compute @workgroup_size(256)
     fn pyr_add4(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= pa_p.count) { return; }
-        pa_dst[gid.x] += pa_src[gid.x];
+        pa_dst[gid.x] += h4load(pa_src[gid.x]);
     }
 
     struct ScaleParams { s: f32, count: u32, pad0: u32, pad1: u32 }
 
-    @group(0) @binding(0) var<storage, read_write> psc_dst: array<vec4f>;
-    @group(0) @binding(1) var<uniform> psc_p: ScaleParams;
+    // Divides the f32 base accumulator by the frame count and lands it in the
+    // half buffer the collapse chain runs on, in one pass — hence a separate
+    // source, not a scale in place.
+    @group(0) @binding(0) var<storage, read_write> psc_dst: array<Half4>;
+    @group(0) @binding(1) var<storage, read> psc_src: array<vec4f>;
+    @group(0) @binding(2) var<uniform> psc_p: ScaleParams;
 
     @compute @workgroup_size(256)
     fn pyr_scale4(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= psc_p.count) { return; }
-        psc_dst[gid.x] *= psc_p.s;
+        psc_dst[gid.x] = h4store(psc_src[gid.x] * psc_p.s);
     }
 
     struct FillParams { v: f32, count: u32, pad0: u32, pad1: u32 }
@@ -1208,14 +1350,14 @@ public final class WgpuEngine {
 
     struct PyrFocusParams { count: u32, threshold: f32, pad0: u32, pad1: u32 }
 
-    @group(0) @binding(0) var<storage, read> pfg_fine: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> pfg_fine: array<Half4>;
     @group(0) @binding(1) var<storage, read> pfg_up: array<vec4f>;
     @group(0) @binding(2) var<storage, read> pfg_focus: array<f32>;
-    @group(0) @binding(3) var<storage, read_write> pfg_fused: array<vec4f>;
+    @group(0) @binding(3) var<storage, read_write> pfg_fused: array<Half4>;
     @group(0) @binding(4) var<storage, read_write> pfg_bestE: array<f32>;
-    @group(0) @binding(5) var<storage, read_write> pfg_trackB: array<vec4f>;
+    @group(0) @binding(5) var<storage, read_write> pfg_trackB: array<Half4>;
     @group(0) @binding(6) var<storage, read_write> pfg_bestDarkLum: array<f32>;
-    @group(0) @binding(7) var<storage, read_write> pfg_trackBright: array<vec4f>;
+    @group(0) @binding(7) var<storage, read_write> pfg_trackBright: array<Half4>;
     @group(0) @binding(8) var<storage, read_write> pfg_bestBrightLum: array<f32>;
     @group(0) @binding(9) var<storage, read_write> pfg_hasFocus: array<f32>;
     @group(0) @binding(10) var<uniform> pfg_p: PyrFocusParams;
@@ -1229,36 +1371,36 @@ public final class WgpuEngine {
     fn pyr_select_focus_gated(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= pfg_p.count) { return; }
-        let f = pfg_fine[gid.x];
+        let f = h4load(pfg_fine[gid.x]);
         let band = f - pfg_up[gid.x];
         if (pfg_focus[gid.x] > pfg_p.threshold) {
             let e = abs(band.x) + abs(band.y) + abs(band.z);
             if (e > pfg_bestE[gid.x]) {
                 pfg_bestE[gid.x] = e;
                 pfg_hasFocus[gid.x] = 1.0;
-                pfg_fused[gid.x] = band;
+                pfg_fused[gid.x] = h4store(band);
             }
         } else {
             let lum = 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z;
             if (lum < pfg_bestDarkLum[gid.x]) {
                 pfg_bestDarkLum[gid.x] = lum;
-                pfg_trackB[gid.x] = band;
+                pfg_trackB[gid.x] = h4store(band);
             }
             if (lum > pfg_bestBrightLum[gid.x]) {
                 pfg_bestBrightLum[gid.x] = lum;
-                pfg_trackBright[gid.x] = band;
+                pfg_trackBright[gid.x] = h4store(band);
             }
         }
     }
 
-    @group(0) @binding(0) var<storage, read> pfs_fine: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> pfs_fine: array<Half4>;
     @group(0) @binding(1) var<storage, read> pfs_up: array<vec4f>;
     @group(0) @binding(2) var<storage, read> pfs_focus: array<f32>;
-    @group(0) @binding(3) var<storage, read_write> pfs_fused: array<vec4f>;
+    @group(0) @binding(3) var<storage, read_write> pfs_fused: array<Half4>;
     @group(0) @binding(4) var<storage, read_write> pfs_bestE: array<f32>;
-    @group(0) @binding(5) var<storage, read_write> pfs_trackB: array<vec4f>;
+    @group(0) @binding(5) var<storage, read_write> pfs_trackB: array<Half4>;
     @group(0) @binding(6) var<storage, read_write> pfs_bestDarkLum: array<f32>;
-    @group(0) @binding(7) var<storage, read_write> pfs_trackBright: array<vec4f>;
+    @group(0) @binding(7) var<storage, read_write> pfs_trackBright: array<Half4>;
     @group(0) @binding(8) var<storage, read_write> pfs_bestBrightLum: array<f32>;
     @group(0) @binding(9) var<storage, read_write> pfs_hasFocus: array<f32>;
     @group(0) @binding(10) var<storage, read> pfs_energy: array<f32>;
@@ -1272,31 +1414,31 @@ public final class WgpuEngine {
     fn pyr_select_focus_gated_smoothed(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= pfs_p.count) { return; }
-        let f = pfs_fine[gid.x];
+        let f = h4load(pfs_fine[gid.x]);
         let band = f - pfs_up[gid.x];
         if (pfs_focus[gid.x] > pfs_p.threshold) {
             let e = pfs_energy[gid.x];
             if (e > pfs_bestE[gid.x]) {
                 pfs_bestE[gid.x] = e;
                 pfs_hasFocus[gid.x] = 1.0;
-                pfs_fused[gid.x] = band;
+                pfs_fused[gid.x] = h4store(band);
             }
         } else {
             let lum = 0.2126 * f.x + 0.7152 * f.y + 0.0722 * f.z;
             if (lum < pfs_bestDarkLum[gid.x]) {
                 pfs_bestDarkLum[gid.x] = lum;
-                pfs_trackB[gid.x] = band;
+                pfs_trackB[gid.x] = h4store(band);
             }
             if (lum > pfs_bestBrightLum[gid.x]) {
                 pfs_bestBrightLum[gid.x] = lum;
-                pfs_trackBright[gid.x] = band;
+                pfs_trackBright[gid.x] = h4store(band);
             }
         }
     }
 
     struct PyrEnvParams { srcW: u32, srcH: u32, cell: u32, gw: u32, gh: u32, pad0: u32, pad1: u32, pad2: u32 }
 
-    @group(0) @binding(0) var<storage, read> pep_fine: array<vec4f>;
+    @group(0) @binding(0) var<storage, read> pep_fine: array<Half4>;
     @group(0) @binding(1) var<storage, read> pep_up: array<vec4f>;
     @group(0) @binding(2) var<storage, read_write> pep_envMax: array<f32>;
     @group(0) @binding(3) var<storage, read_write> pep_envMin: array<f32>;
@@ -1319,7 +1461,7 @@ public final class WgpuEngine {
         for (var y = y0; y < y1; y++) {
             for (var x = x0; x < x1; x++) {
                 let i = y * pep_p.srcW + x;
-                let b = pep_fine[i] - pep_up[i];
+                let b = h4load(pep_fine[i]) - pep_up[i];
                 acc += b.x * b.x + b.y * b.y + b.z * b.z;
                 n += 1u;
             }
@@ -1332,7 +1474,7 @@ public final class WgpuEngine {
     }
 
     @group(0) @binding(0) var<storage, read_write> pbd_fused: array<vec4f>;
-    @group(0) @binding(1) var<storage, read> pbd_gauss: array<vec4f>;
+    @group(0) @binding(1) var<storage, read> pbd_gauss: array<Half4>;
     @group(0) @binding(2) var<storage, read_write> pbd_bestLum: array<f32>;
     @group(0) @binding(3) var<uniform> pbd_p: Count1;
 
@@ -1342,7 +1484,7 @@ public final class WgpuEngine {
     fn pyr_base_darkest(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= pbd_p.count) { return; }
-        let g = pbd_gauss[gid.x];
+        let g = h4load(pbd_gauss[gid.x]);
         let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
         if (lum < pbd_bestLum[gid.x]) {
             pbd_bestLum[gid.x] = lum;
@@ -1350,8 +1492,8 @@ public final class WgpuEngine {
         }
     }
 
-    @group(0) @binding(0) var<storage, read_write> pmf_fused: array<vec4f>;
-    @group(0) @binding(1) var<storage, read> pmf_trackB: array<vec4f>;
+    @group(0) @binding(0) var<storage, read_write> pmf_fused: array<Half4>;
+    @group(0) @binding(1) var<storage, read> pmf_trackB: array<Half4>;
     @group(0) @binding(2) var<storage, read> pmf_hasFocus: array<f32>;
     @group(0) @binding(3) var<uniform> pmf_p: Count1;
 
@@ -1367,7 +1509,7 @@ public final class WgpuEngine {
 
     @group(0) @binding(0) var<storage, read_write> plm_min: array<f32>;
     @group(0) @binding(1) var<storage, read_write> plm_max: array<f32>;
-    @group(0) @binding(2) var<storage, read> plm_gauss: array<vec4f>;
+    @group(0) @binding(2) var<storage, read> plm_gauss: array<Half4>;
     @group(0) @binding(3) var<uniform> plm_p: Count1;
 
     // Running per-cell MIN and MAX luminance over all frames, at level 0 — the
@@ -1377,7 +1519,7 @@ public final class WgpuEngine {
     fn pyr_lum_minmax(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= plm_p.count) { return; }
-        let g = plm_gauss[gid.x];
+        let g = h4load(plm_gauss[gid.x]);
         let lum = 0.2126 * g.x + 0.7152 * g.y + 0.0722 * g.z;
         plm_min[gid.x] = min(plm_min[gid.x], lum);
         plm_max[gid.x] = max(plm_max[gid.x], lum);
@@ -1400,13 +1542,13 @@ public final class WgpuEngine {
         pfm_max[gid.x] = max(pfm_max[gid.x], e);
     }
 
-    @group(0) @binding(0) var<storage, read_write> pmg_fused: array<vec4f>;
-    @group(0) @binding(1) var<storage, read> pmg_trackB: array<vec4f>;
+    @group(0) @binding(0) var<storage, read_write> pmg_fused: array<Half4>;
+    @group(0) @binding(1) var<storage, read> pmg_trackB: array<Half4>;
     @group(0) @binding(2) var<storage, read> pmg_bestDarkLum: array<f32>;
-    @group(0) @binding(3) var<storage, read> pmg_trackBright: array<vec4f>;
+    @group(0) @binding(3) var<storage, read> pmg_trackBright: array<Half4>;
     @group(0) @binding(4) var<storage, read> pmg_bestBrightLum: array<f32>;
     @group(0) @binding(5) var<storage, read> pmg_hasFocus: array<f32>;
-    @group(0) @binding(6) var<storage, read> pmg_plainC: array<vec4f>;
+    @group(0) @binding(6) var<storage, read> pmg_plainC: array<Half4>;
     @group(0) @binding(7) var<storage, read> pmg_mask: array<f32>;
     @group(0) @binding(8) var<storage, read> pmg_bgMask: array<f32>;
     @group(0) @binding(9) var<storage, read> pmg_clean: array<f32>;
@@ -1420,18 +1562,18 @@ public final class WgpuEngine {
     fn pyr_merge_focus_gated(@builtin(global_invocation_id) gidRaw: vec3u) {
         let gid = flatten1D(gidRaw);
         if (gid.x >= pmg_p.count) { return; }
-        var d = pmg_fused[gid.x];
+        var d = h4load(pmg_fused[gid.x]);
         if (pmg_hasFocus[gid.x] < 0.5) {
             if (pmg_bgMask[gid.x] > 0.5
                 && abs(pmg_bestBrightLum[gid.x] - pmg_clean[gid.x])
                     < abs(pmg_bestDarkLum[gid.x] - pmg_clean[gid.x])) {
-                d = pmg_trackBright[gid.x];
+                d = h4load(pmg_trackBright[gid.x]);
             } else {
-                d = pmg_trackB[gid.x];
+                d = h4load(pmg_trackB[gid.x]);
             }
         }
-        let c = pmg_plainC[gid.x];
-        pmg_fused[gid.x] = c + (d - c) * pmg_mask[gid.x];
+        let c = h4load(pmg_plainC[gid.x]);
+        pmg_fused[gid.x] = h4store(c + (d - c) * pmg_mask[gid.x]);
     }
     """
 }

@@ -53,14 +53,15 @@ struct DebugWgpu: ParsableCommand {
     @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (unwarped frames).")
     var dmapFloor: Double = 90
 
-    // Warped frames get their own floor: each engine resamples in f32 and then
-    // stores through f16, so the two land on adjacent halves wherever their f32
-    // results straddle a rounding boundary, and dmap's argmax amplifies that
-    // into frame-index flips. 71 sits just under the measured 74.0 dB and
-    // inside f16's 75-80 dB ceiling near 1.0 — see WgpuParity.runDMap for the
-    // full derivation and the refuted on-device-quantization fix.
-    @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (warped frames — lower because f16 storage, not slack).")
-    var dmapWarpFloor: Double = 71
+    // Warped frames used to carry a relaxed floor (71) because the WGSL
+    // kernels were f32 under f16 storage: only this backend resampled in f32
+    // and stored through half, so wherever its result straddled a rounding
+    // boundary the argmax flipped a frame index. The half-storage port removed
+    // that asymmetry and the measured figure went 74.0 → 100.1 dB, so warped
+    // frames are back on the same bar as everything else. See
+    // WgpuParity.runDMap.
+    @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (warped frames).")
+    var dmapWarpFloor: Double = 90
 
     func run() throws {
         let minPSNR = try WgpuParity.run()

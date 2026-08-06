@@ -43,6 +43,29 @@ public enum WgpuParity {
             return out
         }
 
+        /// An RGBA fixture in the storage the kernels actually declare
+        /// (`Half4`). Pair every use with `q16` on the same array for the CPU
+        /// reference: the point of these checks is engine agreement, and
+        /// feeding one side f32 while the device holds f16 would instead
+        /// measure storage quantization (~75-80 dB, the ROADMAP header's
+        /// ceiling) on every RGBA kernel.
+        func bufHalf(_ data: [Float]) throws -> WgpuEngine.Buffer {
+            let b = try engine.makeBuffer(halves: data.count)
+            let halves = data.map { Float16($0) }
+            halves.withUnsafeBytes {
+                engine.upload($0.baseAddress!, byteCount: $0.count, to: b)
+            }
+            return b
+        }
+
+        func readHalf(_ b: WgpuEngine.Buffer, _ count: Int) throws -> [Float] {
+            var out = [Float16](repeating: 0, count: count)
+            try out.withUnsafeMutableBytes {
+                try engine.download(b, into: $0.baseAddress!, byteCount: count * 2)
+            }
+            return out.map { Float($0) }
+        }
+
         func report(_ name: String, _ cpu: [Float], _ gpu: [Float]) {
             precondition(cpu.count == gpu.count)
             var mse = 0.0
@@ -61,6 +84,12 @@ public enum WgpuParity {
     private static func bytes<T>(of value: T) -> [UInt8] {
         withUnsafeBytes(of: value) { Array($0) }
     }
+
+    /// The f16 round-trip every RGBA value takes in storage — applied to a CPU
+    /// reference's inputs (so both engines start from the same numbers) and to
+    /// its outputs (so both narrow the same way on store). Anything left in
+    /// f32 on one side only measures the storage format, not the kernels.
+    static func q16(_ a: [Float]) -> [Float] { a.map { Float(Float16($0)) } }
 
     struct WarpParams {
         var r0: SIMD4<Float>
@@ -117,23 +146,21 @@ public enum WgpuParity {
             dims: SIMD4<UInt32>(UInt32(sw), UInt32(sh), UInt32(dw), UInt32(dh)))
         for (kernel, method) in [("warp_lanczos3", Warp.Method.lanczos3),
                                  ("warp_bilinear", Warp.Method.bilinear)] {
-            let srcBuf = try c.buf(src.floatPixels())
-            let dstBuf = try engine.makeBuffer(floats: dw * dh * 4)
+            // Both sides now hold the same bytes end to end: the source
+            // uploads as the f16 it already is, and the kernel narrows its
+            // result on store exactly as `Warp.apply` does writing into an
+            // ImageBuffer. Comparing an f32 device result against the CPU's
+            // f16 one would measure storage, not agreement.
+            let srcBuf = try engine.makeBuffer(halves: sw * sh * 4)
+            src.pixels.withUnsafeBytes {
+                engine.upload($0.baseAddress!, byteCount: $0.count, to: srcBuf)
+            }
+            let dstBuf = try engine.makeBuffer(halves: dw * dh * 4)
             try engine.run(kernel, buffers: [srcBuf, dstBuf],
                            uniforms: bytes(of: wp), gridW: dw, gridH: dh)
             let cpu = Warp.apply(src, outputToSource: H, outWidth: dw, outHeight: dh,
                                  method: method)
-            // Compare at the precision the pipeline actually retains. These are
-            // the only RGBA cases here: `Warp.apply` returns an ImageBuffer, so
-            // the CPU side is already f16, while the WGSL kernels are still f32
-            // (the deferred half-storage port). Narrowing the download is what
-            // production does — `WgpuDMap.downloadHalves`, `WgpuPyramid`'s
-            // `init(floatPixels:)` — and without it this check measures f16
-            // storage error (~79 dB, the ROADMAP header's ceiling) rather than
-            // engine agreement. The plane kernels below are f32 on both sides.
-            let gpu = ImageBuffer(width: dw, height: dh,
-                                  floatPixels: try c.read(dstBuf, dw * dh * 4))
-            c.report(kernel, cpu.floatPixels(), gpu.floatPixels())
+            c.report(kernel, cpu.floatPixels(), try c.readHalf(dstBuf, dw * dh * 4))
         }
 
         // -- blur_h + blur_v --------------------------------------------------
@@ -183,7 +210,8 @@ public enum WgpuParity {
         // -- argmax_update (two frames) --------------------------------------
         do {
             let e0 = c.rand(n), e1 = c.rand(n)
-            let f0 = c.rand(n * 4), f1 = c.rand(n * 4)
+            // Frames are RGBA (f16 storage) — quantize the reference's copy.
+            let f0 = q16(c.rand(n * 4)), f1 = q16(c.rand(n * 4))
             var bestE = [Float](repeating: 0, count: n)
             var bestIdx = bestE, guide = bestE
             // The vote scales by gain² (squared-Laplacian energy), the guide
@@ -203,7 +231,7 @@ public enum WgpuParity {
                 let p = ArgmaxParams(frameIdx: Float(fi), count: UInt32(n),
                                      gain: g, energyGain: g * g)
                 try engine.run("argmax_update",
-                               buffers: [try c.buf(e), try c.buf(f), bE, bI, gd],
+                               buffers: [try c.buf(e), try c.bufHalf(f), bE, bI, gd],
                                uniforms: bytes(of: p), gridW: n)
             }
             c.report("argmax_update", bestE + bestIdx + guide,
@@ -212,7 +240,7 @@ public enum WgpuParity {
 
         // -- tent_accumulate --------------------------------------------------
         do {
-            let f = c.rand(n * 4), depth = c.rand(n, scale: 5)
+            let f = q16(c.rand(n * 4)), depth = c.rand(n, scale: 5)
             let gain = SIMD4<Float>(1.1, 0.9, 1.05, 0)
             var accum = [Float](repeating: 0, count: n * 4)
             var wsum = [Float](repeating: 0, count: n)
@@ -231,7 +259,7 @@ public enum WgpuParity {
             let wB = try c.buf([Float](repeating: 0, count: n))
             let tp = TentParams(gain: gain, index: 2.3, radius: 1.7, count: UInt32(n))
             try engine.run("tent_accumulate",
-                           buffers: [try c.buf(f), try c.buf(depth), aB, wB],
+                           buffers: [try c.bufHalf(f), try c.buf(depth), aB, wB],
                            uniforms: bytes(of: tp), gridW: n)
             c.report("tent_accumulate", accum + wsum, try c.read(aB, n * 4) + c.read(wB, n))
         }
@@ -247,13 +275,13 @@ public enum WgpuParity {
                 let o = (y * pw + x) * 4
                 cpu[o] = v; cpu[o + 1] = v; cpu[o + 2] = v; cpu[o + 3] = 1
             } }
-            let o = try engine.makeBuffer(floats: pw * ph * 4)
+            let o = try engine.makeBuffer(halves: pw * ph * 4)
             let p = PlanePreviewParams(srcW: UInt32(w), srcH: UInt32(h),
                                        dstW: UInt32(pw), dstH: UInt32(ph),
                                        scale: 0.2, bias: 0.1)
             try engine.run("plane_preview", buffers: [try c.buf(plane), o],
                            uniforms: bytes(of: p), gridW: pw, gridH: ph)
-            c.report("plane_preview", cpu, try c.read(o, pw * ph * 4))
+            c.report("plane_preview", q16(cpu), try c.readHalf(o, pw * ph * 4))
 
             let f = 3, dw2 = (w + f - 1) / f, dh2 = (h + f - 1) / f
             var cpuBox = [Float](repeating: 0, count: dw2 * dh2)
@@ -271,10 +299,10 @@ public enum WgpuParity {
                            uniforms: bytes(of: bp), gridW: dw2, gridH: dh2)
             c.report("box_downsample", cpuBox, try c.read(ob, dw2 * dh2))
 
-            let img = c.rand(n * 4)
+            let img = q16(c.rand(n * 4))
             let cpuLuma = (0..<n).map { luma(img, $0) }
             let ol = try engine.makeBuffer(floats: n)
-            try engine.run("luma_plane", buffers: [try c.buf(img), ol],
+            try engine.run("luma_plane", buffers: [try c.bufHalf(img), ol],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             c.report("luma_plane", cpuLuma, try c.read(ol, n))
 
@@ -305,13 +333,13 @@ public enum WgpuParity {
                 }
                 cpu[o + 3] = 1
             } }
-            let o = try engine.makeBuffer(floats: pw * ph * 4)
+            let o = try engine.makeBuffer(halves: pw * ph * 4)
             let p = PreviewParams(srcW: UInt32(w), srcH: UInt32(h),
                                   dstW: UInt32(pw), dstH: UInt32(ph))
             try engine.run("progressive_preview",
                            buffers: [try c.buf(accum), try c.buf(wsum), o],
                            uniforms: bytes(of: p), gridW: pw, gridH: ph)
-            c.report("progressive_preview", cpu, try c.read(o, pw * ph * 4))
+            c.report("progressive_preview", q16(cpu), try c.readHalf(o, pw * ph * 4))
 
             var cpuNorm = [Float](repeating: 0, count: n * 4)
             for i in 0..<n {
@@ -322,11 +350,11 @@ public enum WgpuParity {
                     cpuNorm[i * 4 + 3] = 1
                 }
             }
-            let on = try engine.makeBuffer(floats: n * 4)
+            let on = try engine.makeBuffer(halves: n * 4)
             try engine.run("normalize_out",
                            buffers: [try c.buf(accum), try c.buf(wsum), on],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
-            c.report("normalize_out", cpuNorm, try c.read(on, n * 4))
+            c.report("normalize_out", q16(cpuNorm), try c.readHalf(on, n * 4))
         }
 
         // -- confidence_map ---------------------------------------------------
@@ -472,7 +500,12 @@ public enum WgpuParity {
         // -- pyramid family ---------------------------------------------------
         let k5: [Float] = [1.0 / 16, 4.0 / 16, 6.0 / 16, 4.0 / 16, 1.0 / 16]
         do {
-            let img = c.rand(n * 4)
+            // Every RGBA fixture from here down is f16 on the device, so the
+            // reference works from `q16` values and narrows its own stores the
+            // same way (see `Ctx.bufHalf`). The two f32 exceptions the kernels
+            // keep — the separable blur's H→V intermediate and the upsampled
+            // coarser level the band subtracts — stay f32 on both sides.
+            let img = q16(c.rand(n * 4))
             var cpuH = [Float](repeating: 0, count: n * 4)
             for y in 0..<h { for x in 0..<w { for ch in 0..<4 {
                 var acc: Float = 0
@@ -489,13 +522,13 @@ public enum WgpuParity {
                 }
                 cpuV[(y * w + x) * 4 + ch] = acc
             } } }
-            let i = try c.buf(img)
+            let i = try c.bufHalf(img)
             let t = try engine.makeBuffer(floats: n * 4)
-            let o = try engine.makeBuffer(floats: n * 4)
+            let o = try engine.makeBuffer(halves: n * 4)
             let d2 = Dims2(w: UInt32(w), h: UInt32(h))
             try engine.run("pyr_blur5_h", buffers: [i, t], uniforms: bytes(of: d2), gridW: w, gridH: h)
             try engine.run("pyr_blur5_v", buffers: [t, o], uniforms: bytes(of: d2), gridW: w, gridH: h)
-            c.report("pyr_blur5_h+v", cpuV, try c.read(o, n * 4))
+            c.report("pyr_blur5_h+v", q16(cpuV), try c.readHalf(o, n * 4))
 
             // decimate (w,h → half)
             let hw = (w + 1) / 2, hh = (h + 1) / 2
@@ -504,15 +537,15 @@ public enum WgpuParity {
                 let si = (min(y * 2, h - 1) * w + min(x * 2, w - 1)) * 4
                 for ch in 0..<4 { cpuDec[(y * hw + x) * 4 + ch] = img[si + ch] }
             } }
-            let od = try engine.makeBuffer(floats: hw * hh * 4)
+            let od = try engine.makeBuffer(halves: hw * hh * 4)
             let rp = PreviewParams(srcW: UInt32(w), srcH: UInt32(h),
                                    dstW: UInt32(hw), dstH: UInt32(hh))
             try engine.run("pyr_decimate", buffers: [i, od], uniforms: bytes(of: rp),
                            gridW: hw, gridH: hh)
-            c.report("pyr_decimate", cpuDec, try c.read(od, hw * hh * 4))
+            c.report("pyr_decimate", cpuDec, try c.readHalf(od, hw * hh * 4))
 
             // upsample (half → w,h) + upsample_add
-            let small = c.rand(hw * hh * 4)
+            let small = q16(c.rand(hw * hh * 4))
             func bilinear(_ p: [Float], _ x: Int, _ y: Int) -> [Float] {
                 let fx = (Float(x) + 0.5) * Float(hw) / Float(w) - 0.5
                 let fy = (Float(y) + 0.5) * Float(hh) / Float(h) - 0.5
@@ -531,7 +564,7 @@ public enum WgpuParity {
                 let v = bilinear(small, x, y)
                 for ch in 0..<4 { cpuUp[(y * w + x) * 4 + ch] = v[ch] }
             } }
-            let sb = try c.buf(small)
+            let sb = try c.bufHalf(small)
             let ou = try engine.makeBuffer(floats: n * 4)
             let up = PreviewParams(srcW: UInt32(hw), srcH: UInt32(hh),
                                    dstW: UInt32(w), dstH: UInt32(h))
@@ -539,12 +572,12 @@ public enum WgpuParity {
                            gridW: w, gridH: h)
             c.report("pyr_upsample", cpuUp, try c.read(ou, n * 4))
 
-            let band = c.rand(n * 4)
-            let cpuUpAdd = (0..<(n * 4)).map { band[$0] + cpuUp[$0] }
-            let oua = try engine.makeBuffer(floats: n * 4)
-            try engine.run("pyr_upsample_add", buffers: [sb, try c.buf(band), oua],
+            let band = q16(c.rand(n * 4))
+            let cpuUpAdd = q16((0..<(n * 4)).map { band[$0] + cpuUp[$0] })
+            let oua = try engine.makeBuffer(halves: n * 4)
+            try engine.run("pyr_upsample_add", buffers: [sb, try c.bufHalf(band), oua],
                            uniforms: bytes(of: up), gridW: w, gridH: h)
-            c.report("pyr_upsample_add", cpuUpAdd, try c.read(oua, n * 4))
+            c.report("pyr_upsample_add", cpuUpAdd, try c.readHalf(oua, n * 4))
 
             // Burt expand + collapse step, against the REAL CPU operator
             // (CPUWorkspace.upsampleBurtAt), on f16-quantized input so both
@@ -564,17 +597,17 @@ public enum WgpuParity {
                     }
                 }
             }
-            let sbq = try c.buf(smallQ)
+            let sbq = try c.bufHalf(smallQ)
             let ob = try engine.makeBuffer(floats: n * 4)
             try engine.run("pyr_upsample_burt", buffers: [sbq, ob],
                            uniforms: bytes(of: up), gridW: w, gridH: h)
             c.report("pyr_upsample_burt", cpuBurt, try c.read(ob, n * 4))
 
-            let cpuBurtAdd = (0..<(n * 4)).map { band[$0] + cpuBurt[$0] }
-            let oba = try engine.makeBuffer(floats: n * 4)
-            try engine.run("pyr_upsample_add_burt", buffers: [sbq, try c.buf(band), oba],
+            let cpuBurtAdd = q16((0..<(n * 4)).map { band[$0] + cpuBurt[$0] })
+            let oba = try engine.makeBuffer(halves: n * 4)
+            try engine.run("pyr_upsample_add_burt", buffers: [sbq, try c.bufHalf(band), oba],
                            uniforms: bytes(of: up), gridW: w, gridH: h)
-            c.report("pyr_upsample_add_burt", cpuBurtAdd, try c.read(oba, n * 4))
+            c.report("pyr_upsample_add_burt", cpuBurtAdd, try c.readHalf(oba, n * 4))
 
             // Envelope pooling, against the REAL CPU pooling
             // (CPUWorkspace.poolBandEnergy) on an f16-quantized band with a
@@ -600,7 +633,7 @@ public enum WgpuParity {
                                       cell: UInt32(cell),
                                       gw: UInt32(gw), gh: UInt32(gh))
                 try engine.run("pyr_env_pool",
-                               buffers: [try c.buf(bandQ), try c.buf(zeros),
+                               buffers: [try c.bufHalf(bandQ), try c.buf(zeros),
                                          gpuMax, gpuMin],
                                uniforms: bytes(of: ep), gridW: gw, gridH: gh)
                 c.report("pyr_env_pool", cpuMax + cpuMin,
@@ -608,10 +641,11 @@ public enum WgpuParity {
             }
 
             // select / band_energy / select_smoothed
-            let fine = c.rand(n * 4), upBuf = c.rand(n * 4)
-            var cpuFused = c.rand(n * 4)
+            // `fine` is half storage, `up` is the f32 upsample output.
+            let fine = q16(c.rand(n * 4)), upBuf = c.rand(n * 4)
+            var cpuFused = q16(c.rand(n * 4))
             var cpuBest = c.rand(n, scale: 0.5)
-            let gpuFused = try c.buf(cpuFused)
+            let gpuFused = try c.bufHalf(cpuFused)
             let gpuBest = try c.buf(cpuBest)
             for i in 0..<n {
                 var e: Float = 0
@@ -622,10 +656,10 @@ public enum WgpuParity {
                 }
             }
             try engine.run("pyr_select",
-                           buffers: [try c.buf(fine), try c.buf(upBuf), gpuFused, gpuBest],
+                           buffers: [try c.bufHalf(fine), try c.buf(upBuf), gpuFused, gpuBest],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
-            c.report("pyr_select", cpuFused + cpuBest,
-                     try c.read(gpuFused, n * 4) + c.read(gpuBest, n))
+            c.report("pyr_select", q16(cpuFused) + cpuBest,
+                     try c.readHalf(gpuFused, n * 4) + c.read(gpuBest, n))
 
             // Explicit loop, not map+reduce: the closure form type-checks
             // too slowly for the compiler's expression budget on some
@@ -638,40 +672,42 @@ public enum WgpuParity {
             }
             let oe = try engine.makeBuffer(floats: n)
             try engine.run("pyr_band_energy",
-                           buffers: [try c.buf(fine), try c.buf(upBuf), oe],
+                           buffers: [try c.bufHalf(fine), try c.buf(upBuf), oe],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             c.report("pyr_band_energy", cpuEnergy, try c.read(oe, n))
 
             let smoothed = c.rand(n)
-            var cpuFused2 = c.rand(n * 4)
+            var cpuFused2 = q16(c.rand(n * 4))
             var cpuBest2 = c.rand(n, scale: 0.5)
-            let gpuFused2 = try c.buf(cpuFused2)
+            let gpuFused2 = try c.bufHalf(cpuFused2)
             let gpuBest2 = try c.buf(cpuBest2)
             for i in 0..<n where smoothed[i] > cpuBest2[i] {
                 cpuBest2[i] = smoothed[i]
                 for ch in 0..<4 { cpuFused2[i * 4 + ch] = fine[i * 4 + ch] - upBuf[i * 4 + ch] }
             }
             try engine.run("pyr_select_smoothed",
-                           buffers: [try c.buf(fine), try c.buf(upBuf), gpuFused2, gpuBest2,
+                           buffers: [try c.bufHalf(fine), try c.buf(upBuf), gpuFused2, gpuBest2,
                                      try c.buf(smoothed)],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
-            c.report("pyr_select_smoothed", cpuFused2 + cpuBest2,
-                     try c.read(gpuFused2, n * 4) + c.read(gpuBest2, n))
+            c.report("pyr_select_smoothed", q16(cpuFused2) + cpuBest2,
+                     try c.readHalf(gpuFused2, n * 4) + c.read(gpuBest2, n))
 
-            // add4 / scale4 / fill
-            let dstA = c.rand(n * 4), srcA = c.rand(n * 4)
+            // add4 / scale4 / fill — the base accumulator is f32 on both ends:
+            // add4 folds a half Gaussian into it, scale4 divides it out into
+            // the half buffer the collapse runs on.
+            let dstA = c.rand(n * 4), srcA = q16(c.rand(n * 4))
             let cpuAdd = (0..<(n * 4)).map { dstA[$0] + srcA[$0] }
             let da = try c.buf(dstA)
-            try engine.run("pyr_add4", buffers: [da, try c.buf(srcA)],
+            try engine.run("pyr_add4", buffers: [da, try c.bufHalf(srcA)],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             c.report("pyr_add4", cpuAdd, try c.read(da, n * 4))
 
-            let cpuScale = dstA.map { $0 * Float(0.375) }
-            let ds = try c.buf(dstA)
-            try engine.run("pyr_scale4", buffers: [ds],
+            let cpuScale = q16(dstA.map { $0 * Float(0.375) })
+            let ds = try engine.makeBuffer(halves: n * 4)
+            try engine.run("pyr_scale4", buffers: [ds, try c.buf(dstA)],
                            uniforms: bytes(of: ScaleParams(s: 0.375, count: UInt32(n))),
                            gridW: n)
-            c.report("pyr_scale4", cpuScale, try c.read(ds, n * 4))
+            c.report("pyr_scale4", cpuScale, try c.readHalf(ds, n * 4))
 
             let df = try c.buf(c.rand(n))
             try engine.run("pyr_fill", buffers: [df],
@@ -688,8 +724,8 @@ public enum WgpuParity {
             // accumulators, so both tracks and hasFocus get exercised. bestE
             // starts at -1, bestDarkLum at +inf (as the orchestration fills).
             let threshold: Float = 0.1
-            let frames = [(c.rand(n * 4), c.rand(n * 4), c.rand(n, scale: 0.2)),
-                          (c.rand(n * 4), c.rand(n * 4), c.rand(n, scale: 0.2))]
+            let frames = [(q16(c.rand(n * 4)), c.rand(n * 4), c.rand(n, scale: 0.2)),
+                          (q16(c.rand(n * 4)), c.rand(n * 4), c.rand(n, scale: 0.2))]
             var cpuFused = [Float](repeating: 0, count: n * 4)
             var cpuBestE = [Float](repeating: -1, count: n)
             var cpuTrackB = [Float](repeating: 0, count: n * 4)
@@ -723,26 +759,27 @@ public enum WgpuParity {
                     }
                 }
             }
-            let gFused = try c.buf(cpuFused.map { _ in Float(0) })
+            let gFused = try c.bufHalf([Float](repeating: 0, count: n * 4))
             let gBestE = try c.buf([Float](repeating: -1, count: n))
-            let gTrackB = try c.buf([Float](repeating: 0, count: n * 4))
+            let gTrackB = try c.bufHalf([Float](repeating: 0, count: n * 4))
             let gBestDark = try c.buf([Float](repeating: .infinity, count: n))
-            let gTrackBr = try c.buf([Float](repeating: 0, count: n * 4))
+            let gTrackBr = try c.bufHalf([Float](repeating: 0, count: n * 4))
             let gBestBright = try c.buf([Float](repeating: -1, count: n))
             let gHasFocus = try c.buf([Float](repeating: 0, count: n))
             for (fine, up, focus) in frames {
                 let p = PyrFocusParams(count: UInt32(n), threshold: threshold)
                 try engine.run("pyr_select_focus_gated",
-                               buffers: [try c.buf(fine), try c.buf(up), try c.buf(focus),
+                               buffers: [try c.bufHalf(fine), try c.buf(up), try c.buf(focus),
                                          gFused, gBestE, gTrackB, gBestDark,
                                          gTrackBr, gBestBright, gHasFocus],
                                uniforms: bytes(of: p), gridW: n)
             }
             c.report("pyr_select_focus_gated",
-                     cpuFused + cpuBestE + cpuTrackB + san(cpuBestDark)
-                         + cpuTrackBr + san(cpuBestBright) + cpuHasFocus,
-                     try c.read(gFused, n * 4) + c.read(gBestE, n) + c.read(gTrackB, n * 4)
-                         + san(c.read(gBestDark, n)) + c.read(gTrackBr, n * 4)
+                     q16(cpuFused) + cpuBestE + q16(cpuTrackB) + san(cpuBestDark)
+                         + q16(cpuTrackBr) + san(cpuBestBright) + cpuHasFocus,
+                     try c.readHalf(gFused, n * 4) + c.read(gBestE, n)
+                         + c.readHalf(gTrackB, n * 4)
+                         + san(c.read(gBestDark, n)) + c.readHalf(gTrackBr, n * 4)
                          + san(c.read(gBestBright, n)) + c.read(gHasFocus, n))
 
             // The smoothed variant: track A's energy from a plane instead of
@@ -780,31 +817,32 @@ public enum WgpuParity {
                     }
                 }
             }
-            let gsFused = try c.buf([Float](repeating: 0, count: n * 4))
+            let gsFused = try c.bufHalf([Float](repeating: 0, count: n * 4))
             let gsBestE = try c.buf([Float](repeating: -1, count: n))
-            let gsTrackB = try c.buf([Float](repeating: 0, count: n * 4))
+            let gsTrackB = try c.bufHalf([Float](repeating: 0, count: n * 4))
             let gsBestDark = try c.buf([Float](repeating: .infinity, count: n))
-            let gsTrackBr = try c.buf([Float](repeating: 0, count: n * 4))
+            let gsTrackBr = try c.bufHalf([Float](repeating: 0, count: n * 4))
             let gsBestBright = try c.buf([Float](repeating: -1, count: n))
             let gsHasFocus = try c.buf([Float](repeating: 0, count: n))
             for (fine, up, focus, energy) in sFrames {
                 let p = PyrFocusParams(count: UInt32(n), threshold: threshold)
                 try engine.run("pyr_select_focus_gated_smoothed",
-                               buffers: [try c.buf(fine), try c.buf(up), try c.buf(focus),
+                               buffers: [try c.bufHalf(fine), try c.buf(up), try c.buf(focus),
                                          gsFused, gsBestE, gsTrackB, gsBestDark,
                                          gsTrackBr, gsBestBright, gsHasFocus,
                                          try c.buf(energy)],
                                uniforms: bytes(of: p), gridW: n)
             }
             c.report("pyr_select_focus_gated_smoothed",
-                     sFused + sBestE + sTrackB + san(sBestDark)
-                         + sTrackBr + san(sBestBright) + sHasFocus,
-                     try c.read(gsFused, n * 4) + c.read(gsBestE, n) + c.read(gsTrackB, n * 4)
-                         + san(c.read(gsBestDark, n)) + c.read(gsTrackBr, n * 4)
+                     q16(sFused) + sBestE + q16(sTrackB) + san(sBestDark)
+                         + q16(sTrackBr) + san(sBestBright) + sHasFocus,
+                     try c.readHalf(gsFused, n * 4) + c.read(gsBestE, n)
+                         + c.readHalf(gsTrackB, n * 4)
+                         + san(c.read(gsBestDark, n)) + c.readHalf(gsTrackBr, n * 4)
                          + san(c.read(gsBestBright, n)) + c.read(gsHasFocus, n))
 
             // pyr_base_darkest: keep the least-luminous Gaussian per cell.
-            let gaussFrames = [c.rand(n * 4), c.rand(n * 4)]
+            let gaussFrames = [q16(c.rand(n * 4)), q16(c.rand(n * 4))]
             var cpuBaseFused = [Float](repeating: 0, count: n * 4)
             var cpuBaseLum = [Float](repeating: .infinity, count: n)
             for g in gaussFrames {
@@ -819,28 +857,28 @@ public enum WgpuParity {
             let gbFused = try c.buf([Float](repeating: 0, count: n * 4))
             let gbLum = try c.buf([Float](repeating: .infinity, count: n))
             for g in gaussFrames {
-                try engine.run("pyr_base_darkest", buffers: [gbFused, try c.buf(g), gbLum],
+                try engine.run("pyr_base_darkest", buffers: [gbFused, try c.bufHalf(g), gbLum],
                                uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             }
             c.report("pyr_base_darkest", cpuBaseFused + san(cpuBaseLum),
                      try c.read(gbFused, n * 4) + san(c.read(gbLum, n)))
 
             // pyr_merge_focus: take track B where no frame was in focus.
-            let mFused = c.rand(n * 4), mTrackB = c.rand(n * 4)
+            let mFused = q16(c.rand(n * 4)), mTrackB = q16(c.rand(n * 4))
             var mHas = c.rand(n)
             for i in stride(from: 0, to: n, by: 3) { mHas[i] = 0 }  // force some no-focus cells
             var cpuMerge = mFused
             for i in 0..<n where mHas[i] < 0.5 {
                 for ch in 0..<4 { cpuMerge[i * 4 + ch] = mTrackB[i * 4 + ch] }
             }
-            let gmFused = try c.buf(mFused)
+            let gmFused = try c.bufHalf(mFused)
             try engine.run("pyr_merge_focus",
-                           buffers: [gmFused, try c.buf(mTrackB), try c.buf(mHas)],
+                           buffers: [gmFused, try c.bufHalf(mTrackB), try c.buf(mHas)],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
-            c.report("pyr_merge_focus", cpuMerge, try c.read(gmFused, n * 4))
+            c.report("pyr_merge_focus", cpuMerge, try c.readHalf(gmFused, n * 4))
 
             // pyr_lum_minmax: running per-cell min/max luminance across frames.
-            let lmFrames = [c.rand(n * 4), c.rand(n * 4)]
+            let lmFrames = [q16(c.rand(n * 4)), q16(c.rand(n * 4))]
             var cpuLumMin = [Float](repeating: .infinity, count: n)
             var cpuLumMax = [Float](repeating: 0, count: n)
             for f in lmFrames {
@@ -854,7 +892,7 @@ public enum WgpuParity {
             let glm = try c.buf([Float](repeating: .infinity, count: n))
             let glx = try c.buf([Float](repeating: 0, count: n))
             for f in lmFrames {
-                try engine.run("pyr_lum_minmax", buffers: [glm, glx, try c.buf(f)],
+                try engine.run("pyr_lum_minmax", buffers: [glm, glx, try c.bufHalf(f)],
                                uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
             }
             c.report("pyr_lum_minmax", san(cpuLumMin) + san(cpuLumMax),
@@ -882,8 +920,8 @@ public enum WgpuParity {
             // pyr_merge_focus_gated: blend the debloom answer (sign-aware
             // track-B choice in open-background cells) toward the plain
             // max-energy selection by the membership.
-            let nbFusedIn = c.rand(n * 4), nbTrackB = c.rand(n * 4)
-            let nbTrackBr = c.rand(n * 4), nbPlain = c.rand(n * 4)
+            let nbFusedIn = q16(c.rand(n * 4)), nbTrackB = q16(c.rand(n * 4))
+            let nbTrackBr = q16(c.rand(n * 4)), nbPlain = q16(c.rand(n * 4))
             let nbDark = c.rand(n), nbBright = c.rand(n), nbClean = c.rand(n)
             var nbHas = c.rand(n)
             for i in stride(from: 0, to: n, by: 3) { nbHas[i] = 0 }
@@ -902,15 +940,15 @@ public enum WgpuParity {
                     nbCPU[i * 4 + ch] = cc + (d - cc) * nbMask[i]
                 }
             }
-            let nbgFused = try c.buf(nbFusedIn)
+            let nbgFused = try c.bufHalf(nbFusedIn)
             try engine.run("pyr_merge_focus_gated",
-                           buffers: [nbgFused, try c.buf(nbTrackB), try c.buf(nbDark),
-                                     try c.buf(nbTrackBr), try c.buf(nbBright),
-                                     try c.buf(nbHas), try c.buf(nbPlain),
+                           buffers: [nbgFused, try c.bufHalf(nbTrackB), try c.buf(nbDark),
+                                     try c.bufHalf(nbTrackBr), try c.buf(nbBright),
+                                     try c.buf(nbHas), try c.bufHalf(nbPlain),
                                      try c.buf(nbMask), try c.buf(nbBg),
                                      try c.buf(nbClean)],
                            uniforms: bytes(of: Count1(count: UInt32(n))), gridW: n)
-            c.report("pyr_merge_focus_gated", nbCPU, try c.read(nbgFused, n * 4))
+            c.report("pyr_merge_focus_gated", q16(nbCPU), try c.readHalf(nbgFused, n * 4))
         }
 
         return c.minPSNR
@@ -1074,52 +1112,34 @@ public enum WgpuParity {
     /// `SynthStack` plane scene in a temp dir — the dmap path streams from
     /// URLs, so the prefetcher and the frame spill run for real, and the
     /// warped variant covers the mid-frame exposure-mean readback (flicker
-    /// keeps the exposure gains non-unity). The bars (≥ 90 dB unwarped, ≥ 75
-    /// warped — see below for why they differ) need a realistic stack either
-    /// way: the pyramid checks' strip frames give dmap's 4-bin
+    /// keeps the exposure gains non-unity). Both bars are ≥ 90 dB, and both
+    /// need a realistic stack: the pyramid checks' strip frames give dmap's 4-bin
     /// argmax broad flat energy curves whose dense near-ties flip whole frame
     /// indices on fp noise. The plane scene's smooth depth gradient is the
     /// regime the regularizer is stable in (and the file-level synth gate
     /// measures). Depth-map agreement is reported but the gate is the fused
     /// image: depth drives the render, so a depth regression shows there.
     ///
-    /// **The two variants carry different bars, and the split is f16 storage,
-    /// not slack.** Unwarped, both engines hold identical decoded halves and
-    /// their weighted averages round to the same half almost everywhere — that
-    /// is why DMap clears 90 (106.3 dB measured on WARP). Warped, each engine
-    /// resamples in f32 and then stores through f16, so wherever the two f32
-    /// results straddle a rounding boundary they land on adjacent halves; the
-    /// argmax turns a full-ulp disagreement into a whole frame-index flip.
-    /// That puts the warped variant at 74.0 dB — inside the 75–80 dB ceiling
-    /// f16 imposes on any value near 1.0, and unreachable by 90 for as long as
-    /// pixel storage is half. Confirmed by experiment rather than assumed:
-    /// quantizing the wgpu warp output to f16 on-device (`pack2x16float`) so
-    /// both engines carry byte-identical halves made it *worse*, 78.2 → 70.7,
-    /// because it converts many small disagreements into fewer full-ulp ones
-    /// that the argmax amplifies. It was reverted.
+    /// **The warped variant used to carry its own relaxed floor, and no longer
+    /// does — worth knowing why, because the fix was the opposite of what one
+    /// measurement predicted.** While the WGSL kernels were f32 under f16
+    /// pixel storage, this backend alone resampled in f32 and stored through
+    /// half, so wherever its f32 result and the CPU's straddled a rounding
+    /// boundary they landed on adjacent halves and the argmax turned that into
+    /// a whole frame-index flip: 74.0 dB against a 90 dB bar, hence a
+    /// documented 71 floor. A narrow fix — quantizing only the *warp output*
+    /// on-device — made it measurably worse (78.2 → 70.7 at the time) and was
+    /// reverted, which is what made the asymmetry look intrinsic to f16.
+    /// It was not: moving the whole kernel chain to half storage (every RGBA
+    /// buffer, both engines then holding byte-identical pixels end to end)
+    /// took the warped figure to **100.1 dB** (depth 103.4) on this scene,
+    /// past the same 90 dB bar the unwarped variant clears at 112.9. The
+    /// lesson the narrow experiment taught was real but local: quantizing at
+    /// one seam leaves the downstream kernels reading values the CPU never
+    /// held, which is worse than a consistent f32 disagreement — only making
+    /// the whole chain agree removes the flips.
     ///
-    /// The figure was 78.2 dB until the focus measure gained its pre-Laplacian
-    /// denoise (`Options.focusPreSigma`, 2026-07-26), which moved it to 74.0.
-    /// That is more of the same mechanism, not new drift, and the evidence for
-    /// saying so is worth keeping because "it's only quantization" is exactly
-    /// what would hide a real regression:
-    ///   * 74.0 dB is an RMSE of 2.0e-4, *below* one f16 ulp near 0.5 (≈4.9e-4)
-    ///     — most pixels agree exactly and a minority sit one half apart, which
-    ///     is the adjacent-halves regime above, not a systematic offset.
-    ///   * The squaring is not the cause. Squared measure with the denoise
-    ///     disabled measures 78.3 dB, i.e. the pre-denoise baseline; it is the
-    ///     blur that moves the number, by smoothing energy curves into more
-    ///     near-ties for the argmax to flip on and by spreading values across
-    ///     neighborhoods so more of them land near a rounding boundary.
-    ///   * The kernels themselves agree — `plane_laplacian_sq` 131 dB,
-    ///     `argmax_update` 154 dB — and CPU↔**Metal** warped dmap *improved*
-    ///     over the same change (90.4 → 102.7 dB on the synth object scene).
-    ///     Metal has no f32-warp/f16-store asymmetry with the CPU path, so an
-    ///     algorithmic divergence would have shown there too. It did not.
-    ///
-    /// So a warped miss below ~71 still means drift and should be chased; the
-    /// gap between 74 and 90 is arithmetic. Returns both figures so the caller
-    /// can gate each against its own floor.
+    /// Returns both figures so the caller can gate each.
     public static func runDMap(log: @escaping (String) -> Void = { print($0) })
         throws -> (plain: Double, warped: Double) {
         let w = 360, h = 240, frameCount = 9  // SynthStack forces an odd count

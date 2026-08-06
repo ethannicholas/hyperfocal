@@ -23,8 +23,9 @@ specs so individual entries don't have to.
   macOS 26.5 as of 2026-07-29. **Not** the plain M1 (~4 P cores, ~68 GB/s)
   older notes had inferred — any bandwidth arithmetic done against that guess
   is off by ~3×.
-- **Windows Desktop** — 8-core / 16-thread Zen 4, 32 GB, discrete NVIDIA GPU,
-  Windows 11. *(Exact CPU and GPU models to be filled in.)*
+- **Windows Desktop** — 8-core / 16-thread Zen 4, 32 GB, Windows 11. GPU:
+  **NVIDIA GeForce RTX 4080 SUPER, 16 GB** (wgpu reaches it through the Vulkan
+  backend), recorded 2026-08-06. *(Exact CPU model still to be filled in.)*
 - **ARM64 dev VM** — Windows-on-ARM VM, 2 cores / 8 GB, no real GPU (WARP
   only). Numbers from it are **relative, not absolute** — perf targets are
   hardware-relative (the bar is commercial-stacker speed on the *same*
@@ -223,6 +224,104 @@ Gotchas for anyone touching this:
   vcpkg libraries that already dispatch at runtime; raising their baseline is
   unmeasured and was left alone.
 
+## Half storage on the wgpu backend (Windows Desktop, 2026-08-06)
+
+The WGSL kernels were f32 while `ImageBuffer` and the Metal kernels were f16,
+so `WgpuDMap`/`WgpuPyramid` widened through an f32 staging array at every
+host↔device RGBA transfer. Porting them to half storage (`pack2x16float` /
+`unpack2x16float` — core WGSL, so no `shader-f16` feature is required, which
+matters because the validated software surfaces can lack it) removes both the
+conversion pass and half the transfer bytes. The f32 exceptions are the ones
+Metal already carries and for the same reasons: the separable blur's H→V
+intermediate, `pyr_upsample`'s output (the band is a difference of two
+near-equal Gaussians — cancellation), and the tent/base accumulators.
+
+**Measure the fuse subtotal, not wall clock**: registration is unchanged by
+this and dominates at these sizes. Synth stacks (TIFF), `-v`, sizes are the
+common-coverage canvas after registration.
+
+| stack | dmap f32 | dmap **f16** | pmax f32 | pmax **f16** |
+|---|---|---|---|---|
+| 45 MP × 11 (8110×5409) | 17.93 s | **13.85 s** | 13.16 s | **12.41 s** |
+| 100 MP × 9 (11881×7920) | 33.66 s | **26.49 s** | 25.15 s | **23.96 s** |
+
+**DMap gains ~21–23%; PMax gains ~5%, and the phase split says why** — PMax's
+upload cost was already hidden behind decode, so removing it just exposes more
+decode wait:
+
+| pmax phase | 45 MP f32 → f16 | 100 MP f32 → f16 |
+|---|---|---|
+| decode-wait | 6.98 → **9.14 s** | 14.87 → **18.33 s** |
+| upload | 3.53 → **0.81 s** | 5.86 → **1.59 s** |
+| GPU compute | 0.46 → 0.51 s | 0.28 → 0.30 s |
+
+Upload dropping ~4× (not 2×) is the widening pass disappearing on top of the
+halved bytes. DMap benefits where PMax doesn't because it round-trips frames
+through the host per frame (exposure mean, spill, previews) rather than
+streaming one way.
+
+**Peak device memory, 100 MP** — sampled device-wide at 200 ms above a 1230 MB
+idle baseline, because WDDM reports no per-process figure through `nvidia-smi`:
+
+| method | f32 | **f16** |
+|---|---|---|
+| pmax | 14705 MB | **9636 MB** |
+| dmap | 9212 MB | **6685 MB** |
+
+That is the result worth keeping: **the f32 path was within ~1.6 GB of filling
+a 16 GB card at 100 MP**, so it was the pixel count, not the algorithm, that
+bounded what this backend could fuse. The drop is 27–34% rather than 50%
+because the f32 planes (winner energies, grit, focus tracks), the f32 upsample
+scratch and the base accumulator don't scale with pixel storage — the device-
+side mirror of the ~25%-not-50% finding host memory showed when `ImageBuffer`
+went f16.
+
+Host peak RSS is unchanged (7.2–7.3 GB at 45 MP, 15.0–15.2 at 100 MP, before
+and after): the staging arrays this removed were never the host peak — decode
+buffers are.
+
+**The store's rounding mode is backend-dependent, and getting it wrong costs
+~30 dB.** `pack2x16float` looks like the obvious way to narrow, and it is on
+Vulkan and Metal (round-to-nearest-even, matching Swift's `Float16(x)`). The
+D3D12 backend lowers it to HLSL `f32tof16`, which **truncates**, so every
+stored pixel lands up to one ulp low — systematically, in every kernel that
+writes a pixel. Measured on WARP (`HYPERFOCAL_WGPU_FALLBACK=1
+HYPERFOCAL_WGPU_SOFTWARE=1 hyperfocal-cli debug-wgpu`), with the load side
+unaffected — a signature worth recognizing, since only store-side kernels move:
+
+| kernel | pack2x16float on D3D12 | explicit RTNE |
+|---|---|---|
+| `warp_lanczos3` | 72.1 dB | **100.3 dB** |
+| `pyr_blur5_h+v` | 71.4 dB | **inf** (bit-identical) |
+| `pyr_select` | 75.0 dB | **inf** |
+| `normalize_out` | 21.3 dB | **inf** |
+| suite minimum | **21.3 dB** (floor 90) | **100.3 dB** |
+
+`normalize_out` is worst because it divides by a small weight sum, so a
+one-ulp store error rides on a large value. `h4store` therefore narrows with
+an explicit round-to-nearest-even routine on every backend rather than the
+builtin — **do not "simplify" it back**. It costs nothing measurable: the
+GPU-compute bucket moved 0.46 → 0.51 s at 45 MP and 0.28 → 0.30 at 100 MP
+(both noise beside a 12–26 s fuse), because these kernels are memory-bound.
+The load side keeps `unpack2x16float`: f16→f32 is exact everywhere.
+
+This is also the reason the software adapter is worth running on purpose. No
+Windows machine with a working Vulkan driver selects D3D12, so a discrete-GPU
+run never sees this; CI's llvmpipe is Vulkan and would not have seen it
+either.
+
+**Quality is unmoved and parity improved.** Against synth truth, f32 vs f16:
+54.51 / 54.51 dB (45 MP dmap), 53.70 / 53.72 (45 MP pmax), 55.91 / 55.92 and
+55.45 / 55.54 (100 MP). The two engines' own outputs agree at 82.2 dB (dmap)
+and 69.6–70.7 (pmax), the band f16 storage implies. In `debug-wgpu` on the
+discrete GPU, warped dmap went **74.0 → 100.1 dB** (depth 66.8 → 103.4) and
+retired its relaxed floor, fusion minimum 69.6 → 72.5, and five kernels became
+bit-identical; the 94.9 dB kernel minimum is unchanged because it is the warp
+kernels, which were already compared as f16 on both sides. On WARP the same
+suite reads 100.3 dB minimum, dmap 118.0 plain / 101.7 warped — *higher* than
+the discrete GPU, because a software rasterizer does not reassociate the way a
+real one does.
+
 ## Apple reference (Mac Studio, 2026-07-29)
 
 The tagged retake of the Apple numbers, same synth shapes as the Windows
@@ -374,26 +473,28 @@ Read against the Mac Studio:
   post-change figures in all four configurations, so this entry was the
   MacBook Pro, and its figures were wall clocks (registration included), not
   fuse subtotals.
-- **Quantizing the wgpu warp output to f16 on-device**, to make the wgpu backend
-  carry byte-identical halves to the CPU (`pack2x16float`/`unpack2x16float`, core
-  WGSL — no `shader-f16` feature needed). Motivated by CPU↔wgpu dmap parity
-  splitting by variant once pixel storage went f16: unwarped 106.3 dB, warped
-  **78.2 dB** against a 90 dB bar (WARP, 9 × 360×240 synth plane scene). The fix
-  made it **worse — 78.2 → 70.7 dB** (pyramid_warp 68.7 → 67.5), because the
-  asymmetry it removes is many *small* disagreements and what it leaves is fewer
-  *full-ulp* ones, which dmap's argmax amplifies into whole frame-index flips.
-  Reverted. The residual gap is arithmetic, not drift: each engine resamples in
-  f32 then stores through f16, so wherever their f32 results straddle a rounding
-  boundary they land on adjacent halves, and 78 dB is inside the 75–80 dB ceiling
-  f16 imposes near 1.0. Hence the warped variant carries its own 75 dB floor
-  (`debug-wgpu --dmap-warp-floor`); a miss *below* that is drift and should be
-  chased. Unwarped keeps 90 because both engines hold identical decoded halves
-  and round their weighted averages the same way. Measured since (Mac Studio,
-  2026-07-29): Metal's warped end-to-end dmap agreement with the CPU engine is
-  95.6 dB at 12 MP / 101.1 dB at 45 MP (aligned synth fuses, so the warp path
-  is exercised) — Metal does not show wgpu's warped-variant depression, which
-  localizes that 78 dB residual to the wgpu backend's resample/store ordering
-  rather than to warping per se.
+- **Quantizing the wgpu warp output to f16 on-device — a dead end that was
+  local, not general, and the distinction cost a bar for a week.** The move was
+  to make the wgpu backend carry byte-identical halves to the CPU
+  (`pack2x16float`/`unpack2x16float`, core WGSL — no `shader-f16` feature
+  needed), motivated by CPU↔wgpu dmap parity splitting by variant once pixel
+  storage went f16: unwarped 106.3 dB, warped **78.2 dB** against a 90 dB bar
+  (WARP, 9 × 360×240 synth plane scene). Quantizing *only the warp output* made
+  it **worse — 78.2 → 70.7 dB** (pyramid_warp 68.7 → 67.5), so it was reverted
+  and the warped variant was given its own relaxed floor. **The conclusion
+  drawn from that — "the residual is intrinsic to f16 storage" — was wrong**,
+  and the full half-storage port (2026-08-06) refuted it: with *every* RGBA
+  buffer in the chain f16, warped dmap measures **100.1 dB** (depth 103.4) on a
+  discrete GPU, past the 90 dB bar, and the relaxed floor is gone. What the
+  narrow experiment actually showed is that quantizing at one seam is worse
+  than not quantizing at all — downstream kernels then read values the CPU
+  never held, and dmap's argmax amplifies a full-ulp disagreement into a whole
+  frame-index flip. Consistency across the chain is the property that matters,
+  not matching the CPU at any single point. Corroborating figure that should
+  have carried more weight at the time (Mac Studio, 2026-07-29): Metal's warped
+  end-to-end dmap agreement is 95.6 dB at 12 MP / 101.1 dB at 45 MP — Metal
+  never had the asymmetry, so its clearing 90 was evidence the gap was
+  removable, not evidence that f16 imposed it.
 - **Metal 4, and "what does Apple-silicon-only unlock?"** — asked when Intel
   support was dropped (2026-07-26), audited, and the answer is *nothing worth
   doing*. Two separate points, often conflated:
@@ -444,6 +545,11 @@ Read against the Mac Studio:
   `HYPERFOCAL_REGISTER_MAXSIDE` (needs `HYPERFOCAL_REGISTER_FULLGRAY=1` to ablate
   above the decode scale) / `HYPERFOCAL_REGISTER_DEBUG` /
   `HYPERFOCAL_DECODE_DEBUG` / `HYPERFOCAL_SPILL_DEBUG`.
+- wgpu adapter selection (`HYPERFOCAL_WGPU=1` builds): `HYPERFOCAL_WGPU_SOFTWARE=1`
+  *permits* auto-selecting a software adapter, and `HYPERFOCAL_WGPU_FALLBACK=1`
+  *requests* one (`forceFallbackAdapter` — D3D12 WARP, llvmpipe) even on a
+  machine with a discrete GPU. Use both together to reproduce the surface CI
+  gates `debug-wgpu` on; software validates correctness, never speed.
 - **Registration scale floor** is `max(1200, longest/5)`: flat-1200 *failed* the
   45 MP Mac A/B, while the 1600 bound + 2000-kp cap verified quality-neutral. The
   gray-decode policy mirrors the `/5` term (see `Aligner.openCVRegisterMaxSide`
