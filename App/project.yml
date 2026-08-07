@@ -138,6 +138,27 @@ targets:
             UTTypeIconFile: DocumentIcon
             UTTypeTagSpecification:
               public.filename-extension: [hyperfocal]
+        # Save-panel types whose *preferred* extension is the one the app
+        # exports. The live save panel normalizes the filename to the
+        # matching allowed type's preferred extension, and the system types
+        # prefer ".jpeg"/".tiff" — so exporting through public.jpeg or
+        # public.tiff renames "foo.jpg" to "foo.jpeg" in the name field.
+        # Imported (not exported) declarations: they describe existing
+        # formats without claiming ownership of them. MacDialogService
+        # resolves these by identifier for the export panels.
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.ethannicholas.hyperfocal.jpeg-jpg
+            UTTypeDescription: JPEG image
+            UTTypeConformsTo: [public.jpeg]
+            UTTypeTagSpecification:
+              public.filename-extension: [jpg, jpeg]
+              public.mime-type: [image/jpeg]
+          - UTTypeIdentifier: com.ethannicholas.hyperfocal.tiff-tif
+            UTTypeDescription: TIFF image
+            UTTypeConformsTo: [public.tiff]
+            UTTypeTagSpecification:
+              public.filename-extension: [tif, tiff]
+              public.mime-type: [image/tiff]
 
   # The Qt shell's C-ABI bridge is NOT built here anymore: it is a SwiftPM
   # dynamic-library product (HyperfocalBridge in ../Package.swift, over the

@@ -129,9 +129,7 @@ final class MacDialogService: DialogService {
     func chooseSaveAnimation(suggestedName: String) -> URL? {
         guard let model else { return nil }
         let panel = NSSavePanel()
-        if let type = UTType(filenameExtension: model.animationFormat.fileExtension) {
-            panel.allowedContentTypes = [type]
-        }
+        panel.retarget(extension: model.animationFormat.fileExtension)
         panel.nameFieldStringValue = suggestedName
         panel.accessoryView = AnimationOptionsView(model: model, panel: panel)
         guard panel.runModal() == .OK else { return nil }
@@ -141,13 +139,41 @@ final class MacDialogService: DialogService {
     func chooseSaveExport(suggestedName: String) -> URL? {
         guard let model else { return nil }
         let panel = NSSavePanel()
-        if let type = UTType(filenameExtension: model.exportFormat.fileExtension) {
-            panel.allowedContentTypes = [type]
-        }
+        panel.retarget(extension: model.exportFormat.fileExtension)
         panel.nameFieldStringValue = suggestedName
         panel.accessoryView = ExportOptionsView(model: model, panel: panel)
         guard panel.runModal() == .OK else { return nil }
         return panel.url
+    }
+}
+
+private extension NSSavePanel {
+    /// The live save panel force-renames its filename to the preferred
+    /// extension of its current content type — on every allowedContentTypes
+    /// change and every programmatic name set alike — so writing ".jpg"
+    /// into the field can never stick while the current type prefers
+    /// ".jpeg" (established live, the hard way: a synchronous rewrite after
+    /// the type change, then a frozen type list with manual renames — the
+    /// panel undid both). The type itself must prefer the spelling the app
+    /// exports: project.yml declares imported JPEG/TIFF types whose
+    /// preferred extensions are "jpg"/"tif", exportType(for:) resolves
+    /// them, and a format switch just installs the matching type and lets
+    /// the panel do the renaming.
+    static func exportType(for ext: String) -> UTType? {
+        switch ext {
+        case "jpg": return UTType("com.ethannicholas.hyperfocal.jpeg-jpg")
+        case "tif": return UTType("com.ethannicholas.hyperfocal.tiff-tif")
+        default: return UTType(filenameExtension: ext)
+        }
+    }
+
+    /// Points the panel at a format: its type becomes the panel's current
+    /// content type, and the panel renames the filename to the type's
+    /// preferred extension itself.
+    func retarget(extension ext: String) {
+        if let type = Self.exportType(for: ext) {
+            allowedContentTypes = [type]
+        }
     }
 }
 
@@ -259,9 +285,7 @@ final class AnimationOptionsView: NSView {
         case formatPopup:
             guard let format = selected(sender, AnimationFormat.self) else { return }
             model.animationFormat = format
-            if let type = UTType(filenameExtension: format.fileExtension) {
-                panel?.allowedContentTypes = [type]
-            }
+            panel?.retarget(extension: format.fileExtension)
         case pathPopup:
             model.animationPath = selected(sender, AnimationPath.self) ?? model.animationPath
         case strengthPopup:
@@ -373,9 +397,7 @@ final class ExportOptionsView: NSView {
         else { return }
         let format = all[formatPopup.indexOfSelectedItem]
         model.exportFormat = format
-        if let type = UTType(filenameExtension: format.fileExtension) {
-            panel?.allowedContentTypes = [type]
-        }
+        panel?.retarget(extension: format.fileExtension)
         refresh()
     }
 

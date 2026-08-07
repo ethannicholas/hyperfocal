@@ -69,5 +69,52 @@
 			</dict>
 		</dict>
 	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.jpeg</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>JPEG image</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.ethannicholas.hyperfocal.jpeg-jpg</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>jpg</string>
+					<string>jpeg</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>image/jpeg</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.tiff</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>TIFF image</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.ethannicholas.hyperfocal.tiff-tif</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>tif</string>
+					<string>tiff</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>image/tiff</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
