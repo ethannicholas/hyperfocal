@@ -5,8 +5,7 @@
 # copies it into the dist folder, and proves the result by running a
 # synth -> fuse -> compare smoke with PATH stripped to the Windows dirs.
 #
-# Usage (after . Scripts\windows-env.ps1, plus HYPERFOCAL_WGPU/WGPU_ROOT
-# if the build used them):
+# Usage (after . Scripts\windows-env.ps1, which resolves WGPU_ROOT):
 #   powershell -File Scripts\deploy-cli.ps1 [-Config release] [-Out dist\cli]
 #
 # Ships everything the exe needs except the OS itself. The VC++ runtime

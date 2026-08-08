@@ -103,10 +103,21 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   macOS, Windows, and Linux. Shared code must not assume Apple APIs — gate them
   `#if canImport(<Framework>)` with a CImaging/portable `#else`. `swift build`
   works on all three (Windows: dot-source `Scripts/windows-env.ps1` first for
-  the Swift + MSVC + vcpkg environment). New dependencies go through the
+  the Swift + MSVC + vcpkg + wgpu environment). New dependencies go through the
   `third-party-deps` skill — confirm the license fits our distribution model
   (MIT source + paid app-store builds) *before* pulling it in, and update
   `NOTICE.md` / `licenses/` in the same change.
+  - **GPU fusion is not opt-in on Windows/Linux.** wgpu *is* the GPU there, so
+    `Package.swift` compiles it into every build and stops with a message
+    naming `Scripts/fetch-wgpu.sh` when the prebuilt is missing — there is no
+    CPU-only configuration to build by accident (the binary still falls back to
+    CPU fusion at runtime when no adapter is usable). The loader needs the
+    library's directory as well: `Scripts/windows-env.ps1` adds it to `PATH`,
+    `QtShell/build.sh` to `LD_LIBRARY_PATH`. macOS is the exception — the GPU
+    there is Metal, and since `App/project.yml` links this package's
+    `HyperfocalKit` product into the shipping app, wgpu stays an explicit
+    `HYPERFOCAL_WGPU=1` opt-in for the parity suite rather than riding into an
+    App Store binary that has no use for it.
 - `swift build && .build/debug/retouch-probe <synth frames…>` must print
   `probe: ALL PASS` before trusting model/engine changes; synth PSNR
   baselines live in ROADMAP's header. **`retouch-probe` is macOS-only** (it

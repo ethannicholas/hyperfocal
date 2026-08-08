@@ -16,9 +16,15 @@ jobs:
       - name: Install system libraries
         run: |
           apt-get update
-          apt-get install -y build-essential pkg-config \
+          apt-get install -y build-essential pkg-config curl unzip \
             libraw-dev liblcms2-dev libjpeg-turbo8-dev libgif-dev \
             libtiff-dev libpng-dev zlib1g-dev libopencv-dev
+
+      # GPU fusion is compiled into every Linux build (Package.swift), so this
+      # job needs the tree even though it runs no parity gates — the wgpu job
+      # below is what exercises the backend, on llvmpipe.
+      - name: Fetch pinned wgpu-native
+        run: Scripts/fetch-wgpu.sh
 
       - name: Cache SwiftPM build
         uses: actions/cache@v4
@@ -27,7 +33,11 @@ jobs:
           key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-
 
+      # No rpath: the binaries the gates run link libwgpu_native.so and cannot
+      # start without its directory on the loader path.
       - name: Build and run regression gates
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/../wgpu-native/lib
         run: Scripts/ci-gate.sh
 
   macos:
@@ -94,9 +104,10 @@ jobs:
       # llvmpipe is a software adapter (wgpu reports adapterType CPU), so the
       # parity run opts in via HYPERFOCAL_WGPU_SOFTWARE — the same pattern as
       # WARP on the Windows VM: software validates correctness, not speed.
+      # (Compiling the backend in needs no flag; only *auto-selecting* a
+      # software adapter does.)
       - name: Build with wgpu and run parity gates
         env:
-          HYPERFOCAL_WGPU: "1"
           HYPERFOCAL_WGPU_SOFTWARE: "1"
         run: |
           swift build

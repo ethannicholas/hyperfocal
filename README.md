@@ -117,6 +117,13 @@ sudo apt install swiftlang build-essential pkg-config \
 [swift.org](https://www.swift.org/install/) and the equivalent `-dev`
 packages.)
 
+The GPU compute backend needs a pinned wgpu-native prebuilt, fetched once. It
+is not an opt-in — the build stops if it is missing:
+
+```sh
+Scripts/fetch-wgpu.sh          # -> ../wgpu-native, or wherever WGPU_ROOT points
+```
+
 Then build and run:
 
 ```sh
@@ -159,8 +166,8 @@ git clone https://github.com/microsoft/vcpkg.git ..\vcpkg
 
 - **wgpu-native**, for the GPU compute backend — a pinned prebuilt, fetched by
   `Scripts\fetch-wgpu.sh` (Git Bash; it lands in `..\wgpu-native` by default,
-  or wherever `WGPU_ROOT` points). Optional for a CPU-only development build,
-  **required** to package a release.
+  or wherever `WGPU_ROOT` points). **Required**: GPU fusion is not an opt-in on
+  Windows, so the build stops if it is missing.
 
 Windows **Developer Mode** must be enabled (Settings → System → For
 developers): Swift package checkouts contain symlinks.
@@ -168,20 +175,18 @@ developers): Swift package checkouts contain symlinks.
 Then, in PowerShell:
 
 ```powershell
-. Scripts\windows-env.ps1     # loads the Swift + MSVC + vcpkg environment
+bash Scripts/fetch-wgpu.sh    # Git Bash, once; -> ..\wgpu-native
+. Scripts\windows-env.ps1     # loads the Swift + MSVC + vcpkg + wgpu environment
 swift build -c release
 .build\release\hyperfocal-cli --help
-QtShell\build.ps1 -Run        # build and launch the desktop app
+Scripts\run.ps1               # build and launch the desktop app
 ```
 
-That build fuses on the CPU. To build the GPU backend in, fetch wgpu-native and
-set the opt-in first — `HYPERFOCAL_WGPU` is what compiles it, and release
-packaging sets it for you:
+GPU fusion is compiled in — there is no CPU-only build to opt out of, and the
+same binary falls back to the CPU at runtime when no usable adapter is present.
+To check the two paths against each other:
 
 ```powershell
-bash Scripts/fetch-wgpu.sh    # Git Bash; -> ..\wgpu-native
-$env:HYPERFOCAL_WGPU = '1'
-swift build -c release
 .build\release\hyperfocal-cli debug-wgpu   # CPU vs GPU parity gates
 ```
 

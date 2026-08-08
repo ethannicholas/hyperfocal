@@ -43,26 +43,55 @@ func pkgExists(_ pkg: String) -> Bool {
     return proc.terminationStatus == 0
 }
 
-// Opt-in wgpu compute backend (cross-platform-plan Phase 4): build with
-// HYPERFOCAL_WGPU=1 and a wgpu-native prebuilt release at WGPU_ROOT
-// (default: a `wgpu-native` checkout beside this repo). Opt-in like the
-// OpenCV A/B: the backend is under construction and must not gate anyone's
-// build. Legal on macOS too (decided 2026-07-21) — production Mac builds
-// keep Metal (this env is never set for them), but the parity suite runs
-// through wgpu's Metal backend, which lets cross-engine WGSL changes be
-// gated on a Mac before they reach Windows/Linux (that run caught the
-// plane_upsample/pyr_upsample binding collision the day it was written).
-// Explicit env opt-in only — no auto-detection, so a merely-present
-// wgpu-native checkout can't contaminate app builds (the OpenCV lesson).
-// Every target that imports HyperfocalKit rebuilds the CWgpu Clang module
-// with its own flags, so the include path rides on all of them (wgpuXcc).
-var wgpuEnabled = false
+// The wgpu compute backend (cross-platform-plan Phase 4), from a wgpu-native
+// prebuilt release at WGPU_ROOT (default: a `wgpu-native` checkout beside this
+// repo — Scripts/fetch-wgpu.sh puts one there).
+//
+// On Windows and Linux this *is* the GPU, so it is compiled in
+// unconditionally and a missing checkout is a hard error rather than a quiet
+// downgrade. It used to be gated on HYPERFOCAL_WGPU=1, which meant an
+// ordinary build produced a CPU-only binary while every shipped package was a
+// GPU one (Scripts/package-windows.ps1 set the variable itself and refused to
+// package without it) — the same shape as the PMax debloom split described in
+// CLAUDE.md, where the app and the CLI disagreed because two switches
+// controlled one concept. It cost a dev-loop session: the shell built, ran,
+// fused on the CPU, and nothing anywhere said so.
+//
+// macOS is the exception, and not for tidiness. The GPU there is Metal, always
+// compiled in, and App/project.yml links this package's HyperfocalKit product
+// into the shipping App Store app — so an unconditional wgpu would put a
+// third-party GPU library inside a sandboxed store binary that has no use for
+// it. wgpu on macOS is the parity harness: it runs the same WGSL through
+// wgpu's Metal backend, which lets cross-engine WGSL changes be gated on a Mac
+// before they reach Windows/Linux (that run caught the
+// plane_upsample/pyr_upsample binding collision the day it was written). So it
+// stays an explicit HYPERFOCAL_WGPU=1 opt-in there, and a merely-present
+// wgpu-native checkout still can't contaminate a Mac app build (the OpenCV
+// lesson). Every target that imports HyperfocalKit rebuilds the CWgpu Clang
+// module with its own flags, so the include path rides on all of them
+// (wgpuXcc).
+#if os(macOS)
+let wgpuEnabled = ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU"] == "1"
+#else
+let wgpuEnabled = true
+#endif
 var wgpuRoot = ""
 var wgpuXcc: [SwiftSetting] = []
-if ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU"] == "1" {
-    wgpuEnabled = true
+if wgpuEnabled {
     wgpuRoot = ProcessInfo.processInfo.environment["WGPU_ROOT"]
         ?? FileManager.default.currentDirectoryPath + "/../wgpu-native"
+    #if !os(macOS)
+    // Checked here rather than left to the linker: without the headers the
+    // failure is a wall of "cannot find 'wgpuCreateInstance' in scope" from
+    // CWgpu, which names neither the missing dependency nor the fetch script.
+    if !FileManager.default.fileExists(atPath: wgpuRoot + "/include/webgpu/webgpu.h") {
+        fatalError("""
+            wgpu-native not found at \(wgpuRoot) — the GPU backend is not \
+            optional on this platform. Run Scripts/fetch-wgpu.sh (Git Bash on \
+            Windows), or point WGPU_ROOT at an existing checkout.
+            """)
+    }
+    #endif
     wgpuXcc = [.unsafeFlags(["-Xcc", "-I\(wgpuRoot)/include"])]
 }
 

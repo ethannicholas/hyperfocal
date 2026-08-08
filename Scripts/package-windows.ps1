@@ -158,12 +158,13 @@ Write-Host "== packaging Hyperfocal $Version ($build) for $arch"
 
 # ------------------------------------------------------------------ build --
 # ------------------------------------------------------------------ wgpu ---
-# The GPU compute backend. This is a RELEASE requirement, not an opt-in: a
-# Store build that quietly fused on the CPU is what shipped before 2026-08-06,
-# and the difference is a 45 MP dmap fuse at 13.9 s instead of 17.9 s and a
-# 100 MP one at 26.5 s instead of 33.7 s, with a third less device memory.
-# Failing loudly beats shipping the slow build by accident, so the tree must
-# be present rather than silently skipped - Scripts\fetch-wgpu.sh puts it
+# The GPU compute backend, now compiled into every Windows build (Package.swift
+# stops the build without it) rather than opted into here. This check stays
+# because it runs earlier and says more: it names the directory it looked in,
+# and the staging below needs $wgpuLib anyway. A Store build that quietly fused
+# on the CPU is what shipped before 2026-08-06, and the difference is a 45 MP
+# dmap fuse at 13.9 s instead of 17.9 s and a 100 MP one at 26.5 s instead of
+# 33.7 s, with a third less device memory - Scripts\fetch-wgpu.sh puts the tree
 # where WGPU_ROOT (or the sibling default) points.
 if (-not $env:WGPU_ROOT) {
     $siblingWgpu = Join-Path $root '..\wgpu-native'
@@ -176,8 +177,8 @@ if (-not $wgpuLib -or -not (Test-Path (Join-Path $wgpuLib 'wgpu_native.dll'))) {
 # Dynamic on purpose: wgpu ships as its own DLL, like every other library in
 # this package. Nothing licensing-related forces it (wgpu is MIT), it just
 # keeps the staged layout honest about what is in it and lets a user swap in
-# their own build. HYPERFOCAL_WGPU_STATIC would fold it into the executable.
-$env:HYPERFOCAL_WGPU = '1'
+# their own build. HYPERFOCAL_WGPU_STATIC would fold it into the executable, so
+# clear an inherited one - the staging step below expects the DLL.
 Remove-Item Env:\HYPERFOCAL_WGPU_STATIC -ErrorAction SilentlyContinue
 Write-Host "== wgpu-native: $wgpuLib"
 

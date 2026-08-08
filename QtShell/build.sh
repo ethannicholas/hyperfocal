@@ -34,5 +34,17 @@ cmake --build QtShell/build --parallel
 
 echo "== built QtShell/build/hyperfocal-qt"
 if [ "${1:-}" = "--run" ]; then
+    # On Linux the bridge links libwgpu_native.so (GPU fusion is compiled in,
+    # not opted into — see Package.swift), and there is no rpath, so the loader
+    # needs the directory or the process dies at start with a missing-library
+    # error before any of our code can report it. macOS links Metal instead and
+    # needs none of this. Scripts/windows-env.ps1 does the same job for
+    # wgpu_native.dll on Windows.
+    if [ "$(uname)" != Darwin ]; then
+        WGPU_LIB="${WGPU_ROOT:-$PWD/../wgpu-native}/lib"
+        if [ -d "$WGPU_LIB" ]; then
+            export LD_LIBRARY_PATH="$WGPU_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        fi
+    fi
     exec QtShell/build/hyperfocal-qt
 fi

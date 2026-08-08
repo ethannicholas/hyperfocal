@@ -545,7 +545,7 @@ Read against the Mac Studio:
   `HYPERFOCAL_REGISTER_MAXSIDE` (needs `HYPERFOCAL_REGISTER_FULLGRAY=1` to ablate
   above the decode scale) / `HYPERFOCAL_REGISTER_DEBUG` /
   `HYPERFOCAL_DECODE_DEBUG` / `HYPERFOCAL_SPILL_DEBUG`.
-- wgpu adapter selection (`HYPERFOCAL_WGPU=1` builds): `HYPERFOCAL_WGPU_SOFTWARE=1`
+- wgpu adapter selection: `HYPERFOCAL_WGPU_SOFTWARE=1`
   *permits* auto-selecting a software adapter, and `HYPERFOCAL_WGPU_FALLBACK=1`
   *requests* one (`forceFallbackAdapter` — D3D12 WARP, llvmpipe) even on a
   machine with a discrete GPU. Use both together to reproduce the surface CI

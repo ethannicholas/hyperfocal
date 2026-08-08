@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fetch the pinned wgpu-native prebuilt (headers + static/dynamic libs) for
-# the wgpu compute backend (HYPERFOCAL_WGPU=1 builds). Same pattern as the
+# the wgpu compute backend, which every Windows and Linux build compiles in
+# (Package.swift stops the build without it). Same pattern as the
 # aqt/vcpkg dependencies: nothing vendored in the repo, the pin and its
 # sha256 live here, and the fetch is idempotent — a destination already on
 # the pinned tag is left untouched (safe for CI caches and repeated runs).
@@ -91,4 +92,4 @@ fi
 rm -rf "$DEST"
 mkdir -p "$(dirname "$DEST")"
 mv "$TMP/unpack" "$DEST"
-echo "fetch-wgpu: done — build with HYPERFOCAL_WGPU=1 WGPU_ROOT=$DEST"
+echo "fetch-wgpu: done — WGPU_ROOT=$DEST (the default; no build flag needed)"
