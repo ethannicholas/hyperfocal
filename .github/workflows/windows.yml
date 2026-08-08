@@ -28,6 +28,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # wgpu is not optional here — Package.swift refuses to even evaluate its
+      # manifest without the tree, so this has to land before anything Swift
+      # touches, and first so a missing asset fails in seconds rather than
+      # after the 40-minute vcpkg step. The platform is passed explicitly:
+      # the runner is pinned arm64, and the script's autodetect keys off which
+      # MSYS flavour Git Bash reports for `uname -s`, which differs between the
+      # x86_64 and arm64 Git for Windows builds.
+      - name: Fetch pinned wgpu-native
+        shell: pwsh
+        run: |
+          & 'C:\Program Files\Git\bin\bash.exe' Scripts/fetch-wgpu.sh '' windows-aarch64-msvc
+          if ($LASTEXITCODE) { throw "fetch-wgpu failed" }
+
       - name: Install Swift toolchain
         shell: pwsh
         run: |
@@ -90,6 +103,14 @@ jobs:
           # vcvarsall exports its own VCPKG_ROOT; see Scripts/windows-env.ps1.)
           if (-not (Test-Path $tiff)) {
             throw "VCPKG_ROOT=$env:VCPKG_ROOT has no arm64-windows tiffio.h - wrong vcpkg tree"
+          }
+          # Same reasoning for wgpu: windows-env.ps1 discovers the sibling
+          # checkout and puts its lib on PATH for the DLL, so an empty
+          # WGPU_ROOT here means the fetch step above did not land where
+          # Package.swift looks — say so, instead of a manifest fatalError.
+          Write-Host "::notice::WGPU_ROOT = $env:WGPU_ROOT"
+          if (-not $env:WGPU_ROOT) {
+            throw "no wgpu-native tree beside the checkout - Package.swift will refuse the manifest"
           }
           & 'C:\Program Files\Git\bin\bash.exe' Scripts/ci-gate.sh 2>&1 |
               Tee-Object -FilePath gate.log
