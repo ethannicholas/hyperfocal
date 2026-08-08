@@ -4,12 +4,23 @@
 # human at the mouse.
 #
 #   Scripts\store-media.ps1 -Frames <stack-dir> -Out <dir>
-#   Scripts\store-media.ps1 -Frames <dir> -Out <dir> -Lang de        # one language
-#   Scripts\store-media.ps1 -Frames <dir> -Out <dir> -Shots retouch  # one framing
+#   Scripts\store-media.ps1 -Frames <dir> -Out <dir> -Lang de     # one language
+#   Scripts\store-media.ps1 -Frames <dir> -Out <dir> -Video       # video only
+#   Scripts\store-media.ps1 -Frames <dir> -Out <dir> -Screenshot  # shot only
+#
+# Produces the same two things per language the macOS driver does: a video of
+# the fusion workflow, and the retouch screenshot.
 #
 # Microsoft Store screenshots: PNG, 1366x768 minimum, 3840x2160 maximum, at
-# most 10 per listing. The script validates what it actually wrote rather than
-# assuming.
+# most 10 per listing. Trailers: MP4 or MOV at exactly 1920x1080, under 2 GB,
+# 60s or less, each with a 1920x1080 PNG thumbnail and a title - and an audio
+# track, because uploads without one are rejected (the same trap App Store
+# Connect sets, so the encode mixes in silence). The script validates what it
+# actually wrote rather than assuming.
+#
+# The video needs ffmpeg and ffprobe on PATH (winget install Gyan.FFmpeg);
+# nothing else on Windows can mux that required audio track. A screenshot-only
+# run does not.
 #
 # -Window is in POINTS and the shot lands at points x devicePixelRatio. The
 # default 1600x900 clears the 1366x768 floor even at dpr 1 while still fitting
@@ -26,9 +37,14 @@
 # brush circle is a QML overlay that a grab captures, so `set-hover` stands in
 # for parking a real pointer.
 #
-# The window is grabbed, not the screen, so the app does NOT need to be
-# frontmost and the run does not take over the machine - but it does open a
-# window per language, so do not fight it for the desktop.
+# Screenshots are grabbed from the window, not the screen, so the app does NOT
+# need to be frontmost for them. The VIDEO is different and there is no way
+# around it: Windows has no window recorder. gdigrab aimed at a window reads
+# the window's GDI surface, and a Qt Quick window is composited by D3D through
+# the RHI, so that route records black. Recording the composited desktop and
+# cropping to the window rect is what works, which means that during a video
+# capture the window is raised and must stay unobscured - the run DOES take
+# over the screen for the length of each fuse. Screenshot-only runs do not.
 #
 # ASCII ONLY, for the reason spelled out at the top of package-windows.ps1:
 # Windows PowerShell 5.1 decodes a BOM-less .ps1 as the ANSI codepage, where
@@ -38,14 +54,24 @@ param(
     [Parameter(Mandatory = $true)][string]$Frames,
     [Parameter(Mandatory = $true)][string]$Out,
     [string]$Lang = "all",
-    [string]$Shots = "fused,retouch,depth",
+    # Which media to capture. Neither switch means both, matching the macOS
+    # driver's --video / --screenshot.
+    [switch]$Video,
+    [switch]$Screenshot,
     [string]$Window = "1600x900",
     [double]$Exposure = 0,
     [double]$Highlights = 0,
     [double]$Shadows = 0,
     [double]$ShotZoom = 1.0,
-    [string]$ShotCenter,
-    [string]$Cursor,
+    # Framing for the capture, in fused-output pixels. Defaults matching the
+    # macOS driver's documented run, so both stores show the same crop of the
+    # same subject rather than whatever the pane happened to be showing.
+    [string]$ShotCenter = "2522,945",
+    [string]$Cursor = "2638,1040",
+    # Seconds. The Store's ceiling is 60; the recording is sped up to land
+    # here, never slowed down.
+    [double]$VideoDuration = 25,
+    [switch]$KeepRaw,
     [string]$Exe,
     [int]$FuseTimeout = 1800
 )
@@ -202,6 +228,178 @@ class Session {
     }
 }
 
+# ------------------------------------------------------------------ video --
+# Raising the window and finding where it actually is on screen. Both are Win32
+# calls with no PowerShell equivalent, and DWM makes the second less obvious
+# than it looks: GetWindowRect includes the invisible resize border Windows 10
+# and 11 put around a window, so cropping to it records a stripe of desktop on
+# three sides. DWMWA_EXTENDED_FRAME_BOUNDS (9) is the visible frame.
+#
+# Guarded: a type can only be added once per PowerShell session, and running
+# this script twice in one shell is the normal case.
+if (-not ('HFStore.Win' -as [type])) {
+    Add-Type -Namespace HFStore -Name Win -MemberDefinition @'
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(
+        IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(
+        IntPtr h, int attr, out RECT r, int size);
+    public struct RECT { public int Left, Top, Right, Bottom; }
+'@
+}
+
+function Require-FFmpeg {
+    foreach ($tool in @('ffmpeg', 'ffprobe')) {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+            throw "$tool not on PATH - the fusion video needs it (winget install Gyan.FFmpeg). Use -Screenshot to skip the video."
+        }
+    }
+}
+
+# The window's visible bounds, raised to the front, moved fully onto its screen
+# and rounded to even pixels (x264 with yuv420p refuses odd dimensions).
+#
+# The move is not optional. gdigrab reads the desktop, so it rejects a capture
+# area extending past the screen - and the frame is wider than the size
+# set-window asked for, because the DWM frame carries a border the client area
+# does not: a 1600x900 window measures 1602x932 here, which at the window's
+# default position ran one pixel past a 1920-wide screen and failed the whole
+# run. Nudging the window beats cropping the rect, which would shave that
+# column off the trailer instead.
+function Get-CaptureRect([System.Diagnostics.Process]$proc) {
+    Add-Type -AssemblyName System.Windows.Forms
+    $proc.Refresh()
+    $h = $proc.MainWindowHandle
+    if ($h -eq [IntPtr]::Zero) { throw "no main window to record" }
+    [HFStore.Win]::ShowWindow($h, 9) | Out-Null   # SW_RESTORE
+    [HFStore.Win]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 600
+
+    $bounds = { param($hw)
+        $r = New-Object HFStore.Win+RECT
+        $hr = [HFStore.Win]::DwmGetWindowAttribute($hw, 9, [ref]$r, 16)
+        if ($hr -ne 0) { throw ("DwmGetWindowAttribute failed (0x{0:X})" -f $hr) }
+        return @{ x = $r.Left; y = $r.Top
+                  w = $r.Right - $r.Left; h = $r.Bottom - $r.Top }
+    }
+    $f = & $bounds $h
+    $screen = [System.Windows.Forms.Screen]::FromHandle($h).Bounds
+    $nx = [Math]::Min([Math]::Max($f.x, $screen.X), $screen.X + $screen.Width - $f.w)
+    $ny = [Math]::Min([Math]::Max($f.y, $screen.Y), $screen.Y + $screen.Height - $f.h)
+    if ($nx -ne $f.x -or $ny -ne $f.y) {
+        # SetWindowPos positions the GetWindowRect rectangle, which includes
+        # the invisible border, while $nx/$ny are in visible-frame coordinates
+        # - the two differ by that border (7px here). Asking for the visible
+        # position directly lands the window a border-width off, which put it
+        # back over the screen edge and left the clamp below shaving pixels off
+        # the recording. Convert through the delta.
+        $raw = New-Object HFStore.Win+RECT
+        [HFStore.Win]::GetWindowRect($h, [ref]$raw) | Out-Null
+        $dx = $f.x - $raw.Left
+        $dy = $f.y - $raw.Top
+        Log "moving window to $nx,$ny so the capture area fits the screen"
+        # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+        [HFStore.Win]::SetWindowPos($h, [IntPtr]::Zero, ($nx - $dx), ($ny - $dy),
+                                    0, 0, 0x15) | Out-Null
+        Start-Sleep -Milliseconds 400
+        $f = & $bounds $h
+    }
+    # Backstop for a window larger than its screen, which no -Window value
+    # should produce but which would otherwise fail the same way.
+    $w = [Math]::Min($f.w, $screen.X + $screen.Width - $f.x)
+    $ht = [Math]::Min($f.h, $screen.Y + $screen.Height - $f.y)
+    return @{ x = $f.x; y = $f.y; w = $w - ($w % 2); h = $ht - ($ht % 2) }
+}
+
+# gdigrab on the composited desktop, cropped to the window. -draw_mouse 0 is
+# why this needs no cursor helper: the macOS driver has to physically park the
+# pointer outside the capture rect, here the recorder simply omits it.
+function Start-Recorder([hashtable]$rect, [string]$raw) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'ffmpeg'
+    $psi.Arguments = "-y -v error -f gdigrab -framerate 30 -draw_mouse 0 " +
+        "-offset_x $($rect.x) -offset_y $($rect.y) " +
+        "-video_size $($rect.w)x$($rect.h) -i desktop " +
+        "-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p `"$raw`""
+    $psi.UseShellExecute = $false
+    # stdin only: 'q' is how ffmpeg is asked to finalize the file. stdout and
+    # stderr stay attached to this console on purpose - redirecting them
+    # without draining is what deadlocked the shell (see Session above), and
+    # -v error keeps them quiet anyway.
+    $psi.RedirectStandardInput = $true
+    $rec = [System.Diagnostics.Process]::Start($psi)
+    # ffmpeg reports a bad capture area by exiting at once. Without this check
+    # the run recorded nothing, fused for a minute, and only complained when
+    # ffprobe found no file - a wasted fuse and an error naming the wrong tool.
+    Start-Sleep -Milliseconds 1500
+    if ($rec.HasExited) {
+        throw "ffmpeg exited immediately (code $($rec.ExitCode)); its error is above"
+    }
+    return $rec
+}
+
+function Stop-Recorder([System.Diagnostics.Process]$rec) {
+    try { $rec.StandardInput.Write('q'); $rec.StandardInput.Flush() } catch { }
+    if (-not $rec.WaitForExit(60000)) {
+        $rec.Kill()
+        throw "ffmpeg did not finalize the recording"
+    }
+}
+
+function Probe-Duration([string]$path) {
+    $json = & ffprobe -v error -show_entries format=duration -of json $path
+    if ($LASTEXITCODE) { throw "ffprobe failed on $path" }
+    return [double]($json | ConvertFrom-Json).format.duration
+}
+
+function Encode-Video([string]$raw, [string]$out, [double]$targetSeconds) {
+    $duration = Probe-Duration $raw
+    # Only ever sped up: a fuse shorter than the target is simply a short
+    # trailer, and stretching it would just be a slideshow.
+    $speed = [Math]::Max($duration / $targetSeconds, 1.0)
+    Log ("raw recording {0:n1}s -> {1:n2}x to fit {2}s" -f $duration, $speed, $targetSeconds)
+    $vf = ("setpts=PTS/{0:n6},fps=30,scale=1920:1080:flags=lanczos,format=yuv420p" -f $speed)
+    & ffmpeg -y -v error -i $raw `
+        -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 `
+        -map 0:v -map 1:a -vf $vf `
+        -c:v libx264 -profile:v high -crf 18 `
+        -c:a aac -b:a 96k -shortest -movflags +faststart $out
+    if ($LASTEXITCODE) { throw "ffmpeg encode failed" }
+}
+
+# The Store wants a 1920x1080 PNG alongside every trailer. Taken a second from
+# the end, so the still shows the finished fusion rather than a half-rendered
+# frame - the video is already 1920x1080, so no rescale is involved.
+function Write-Thumbnail([string]$video, [string]$out) {
+    & ffmpeg -y -v error -sseof -1 -i $video -frames:v 1 -update 1 $out
+    if ($LASTEXITCODE) { throw "ffmpeg thumbnail failed" }
+}
+
+function Validate-Video([string]$path) {
+    $json = & ffprobe -v error -show_entries `
+        "stream=codec_type,codec_name,width,height,channels:format=duration,size" `
+        -of json $path
+    if ($LASTEXITCODE) { throw "ffprobe failed on $path" }
+    $probe = $json | ConvertFrom-Json
+    $video = $probe.streams | Where-Object { $_.codec_type -eq 'video' } | Select-Object -First 1
+    $audio = $probe.streams | Where-Object { $_.codec_type -eq 'audio' }
+    $duration = [double]$probe.format.duration
+    $sizeGB = [double]$probe.format.size / 1GB
+    $problems = @()
+    if ($video.width -ne 1920 -or $video.height -ne 1080) {
+        $problems += "size $($video.width)x$($video.height) != 1920x1080"
+    }
+    if ($video.codec_name -ne 'h264') { $problems += "codec $($video.codec_name) != h264" }
+    if (-not $audio) { $problems += "no audio track (the Store rejects trailers without one)" }
+    elseif ($audio[0].channels -ne 2) { $problems += "audio not stereo" }
+    if ($duration -gt 60) { $problems += ("duration {0:n1}s over the Store's 60s" -f $duration) }
+    if ($sizeGB -gt 2) { $problems += ("size {0:n2} GB over the Store's 2 GB" -f $sizeGB) }
+    if ($problems) { throw "$path - $($problems -join '; ')" }
+    Log ("video OK: 1920x1080 h264 + stereo audio, {0:n1}s  $(Split-Path $path -Leaf)" -f $duration)
+}
+
 function Validate-Shot([string]$path, [int]$w, [int]$h) {
     Add-Type -AssemblyName System.Drawing
     $img = [System.Drawing.Image]::FromFile($path)
@@ -267,18 +465,16 @@ $unknown = $langs | Where-Object { $LANGS -notcontains $_ }
 if ($unknown) {
     throw "unknown language tag(s) $($unknown -join ','); catalog: $($LANGS -join ',')"
 }
-$wanted = $Shots.Split(',') | ForEach-Object { $_.Trim() }
-$knownShots = @('fused', 'retouch', 'depth')
-$badShots = $wanted | Where-Object { $knownShots -notcontains $_ }
-if ($badShots) {
-    throw "unknown shot(s) $($badShots -join ','); known: $($knownShots -join ',')"
-}
+$doVideo = $Video -or -not $Screenshot
+$doShot  = $Screenshot -or -not $Video
+if ($doVideo) { Require-FFmpeg }
 
 New-Item -ItemType Directory -Force $Out | Out-Null
 $stage = Join-Path $env:TEMP 'hyperfocal-store-media'
 Log "exe    : $Exe"
 Log "frames : $Frames ($frameCount files)"
-Log "shots  : $($wanted -join ', ')"
+$media = @(); if ($doVideo) { $media += 'video' }; if ($doShot) { $media += 'retouch shot' }
+Log "media  : $($media -join ', ')"
 Log "langs  : $($langs -join ', ')"
 
 $i = 0
@@ -303,32 +499,52 @@ foreach ($lang in $langs) {
         if ($Highlights) { $session.Require('set-slider', @{ id = 'tone.slider.highlights'; value = $Highlights }) }
         if ($Shadows)    { $session.Require('set-slider', @{ id = 'tone.slider.shadows';    value = $Shadows }) }
 
-        $session.Require('fuse', $null)
-        $session.WaitFor('fuse', { param($g) $g.phase -eq 'done' }, $FuseTimeout) | Out-Null
+        if ($doVideo) {
+            # Zoomed out and every section left expanded: the stack list is the
+            # visual feedback during the fuse, and the Fusion panel is where a
+            # user would just have clicked.
+            # Every section left expanded: the stack list is the visual
+            # feedback during the fuse, and the Fusion panel is where a user
+            # would just have clicked.
+            #
+            # Deliberately NO set-zoom here, unlike the macOS driver's
+            # --video-zoom. The pane already fits the progressive result (0.17
+            # for this stack), which is the framing the video wants and what a
+            # real user sees. Asking for an absolute scale *before* the fuse
+            # instead produces 3%: setAbsoluteScale converts the scale into a
+            # fit-relative zoom factor using the fit scale at that instant
+            # (PaneItem.cpp), and before a fuse there is no output image to
+            # fit, so the ratio is meaningless - then the real result arrives
+            # with its true fit scale and the stale ratio multiplies through.
+            $session.Require('set-sections', @{ collapsed = '' }) | Out-Null
+            Start-Sleep -Seconds 1
+            $rect = Get-CaptureRect $session.Proc
+            $raw = Join-Path $stage "raw-$lang.mkv"
+            Remove-Item $raw -Force -ErrorAction SilentlyContinue
+            Log "recording $($rect.w)x$($rect.h) at $($rect.x),$($rect.y)"
+            $rec = Start-Recorder $rect $raw
+            # A beat of settled window before the work starts, so the trailer
+            # does not open mid-repaint.
+            Start-Sleep -Seconds 2
+            $session.Require('fuse', $null) | Out-Null
+            $session.WaitFor('fuse', { param($g) $g.phase -eq 'done' }, $FuseTimeout) | Out-Null
+            Start-Sleep -Seconds 3   # let the finished result render
+            Stop-Recorder $rec
+            $videoOut = Join-Path $Out "win-$lang-fusion-1920x1080.mp4"
+            Encode-Video $raw $videoOut $VideoDuration
+            Validate-Video $videoOut
+            Write-Thumbnail $videoOut (Join-Path $Out "win-$lang-fusion-thumb-1920x1080.png")
+            if (-not $KeepRaw) { Remove-Item $raw -Force -ErrorAction SilentlyContinue }
+        }
 
         $zoom = @{ scale = $ShotZoom }
         if ($center) { $zoom['cx'] = $center[0]; $zoom['cy'] = $center[1] }
 
-        if ($wanted -contains 'fused') {
-            # The whole sidebar stays expanded: this is the "what the app is"
-            # shot, and the stack list plus the fusion controls are the story.
-            $session.Require('set-sections', @{ collapsed = '' })
-            $session.Require('set-zoom', $zoom)
-            $path = Join-Path $Out "win-$lang-fused-${expectW}x${expectH}.png"
-            $r = $session.Require('grab', @{ path = $path })
-            Validate-Shot $path $r.w $r.h
-        }
-
-        if ($wanted -contains 'depth') {
-            $session.Require('set-depth', @{ on = 1 })
-            $session.Require('set-zoom', $zoom)
-            $path = Join-Path $Out "win-$lang-depth-${expectW}x${expectH}.png"
-            $r = $session.Require('grab', @{ path = $path })
-            Validate-Shot $path $r.w $r.h
-            $session.Require('set-depth', @{ on = 0 })
-        }
-
-        if ($wanted -contains 'retouch') {
+        if ($doShot) {
+            if (-not $doVideo) {   # otherwise the recorded fuse above already ran
+                $session.Require('fuse', $null) | Out-Null
+                $session.WaitFor('fuse', { param($g) $g.phase -eq 'done' }, $FuseTimeout) | Out-Null
+            }
             # Frames Tone + Retouching, like the macOS retouch shot.
             $session.Require('set-sections', @{ collapsed = 'stack,fusion' })
             # Retouch needs the result and its depth plane settled; the

@@ -289,6 +289,27 @@ number that moves when depth selection fails.
   menu items are disabled".
 - Improve the experience of saving a project. It currently beachballs for several
   seconds with a big project.
+- **Investigate: an absolute zoom set before the output image exists survives as
+  a wrong one** (Qt shell, `QtShell/PaneItem.cpp`). `setAbsoluteScale` does not
+  store the scale — it converts it straight into the fit-relative `zoom_` factor
+  by dividing by `fitScale()` *at that instant*. Before a fuse there is no
+  output image to fit, so the divisor is meaningless, and when the real result
+  arrives with its true fit scale the stale ratio multiplies through: asking for
+  0.16 before a fuse renders the finished result at 0.034, with both panes
+  drawn tiny in empty panes and the zoom bar reading 3%. Reproduced through the
+  command channel (`set-zoom` then `fuse`; a control run that never calls
+  `set-zoom` holds the correct 0.17 fit from mid-fuse to done), which is why
+  `Scripts/store-media.ps1` deliberately sets no zoom for its video and lets
+  the pane fit itself.
+  - **Open question, and the reason this is an investigation rather than a
+    fix:** whether a *user* can reach the same state. That depends on whether
+    the zoom control is enabled before a fuse and on what the input pane does
+    while it holds only a decode preview — in the pre-fuse grab the source
+    frame also drew at roughly a fifth of its fit size, which may be the same
+    root cause or a second one.
+  - macOS does not have the bug: its pane keeps the absolute scale and
+    re-derives, which is also the behaviour `set-zoom`'s documented contract
+    ("absolute image scale, 1 = 1:1") describes on both sides.
 
 ## Release & licensing compliance
 
