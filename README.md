@@ -127,7 +127,7 @@ Scripts/fetch-wgpu.sh          # -> ../wgpu-native, or wherever WGPU_ROOT points
 Then build and run:
 
 ```sh
-QtShell/build.sh --run
+Scripts/run.sh --qt
 ```
 
 ### Building on Windows

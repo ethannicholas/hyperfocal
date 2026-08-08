@@ -32,7 +32,7 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   `.xcodeproj` is gitignored); never hand-edit generated files, always
   `project.yml`, then `cd App && xcodegen generate`.
 - `QtShell/` — the Qt/QML shell (C++/`Shell.cpp` + `*.qml`), the Windows/Linux
-  UI. Build with `QtShell/build.sh` (macOS/Linux) or `QtShell/build.ps1`
+  UI. Build with `Scripts/build.sh --qt` (macOS/Linux) or `QtShell/build.ps1`
   (Windows). It drives the shared model through the bridge, never AppCore
   directly.
 - `Bridge/` — `HyperfocalBridge`, a C-ABI dynamic library wrapping `AppCore`
@@ -113,7 +113,7 @@ rejected alternatives, and why). Cross-platform strategy and phases:
     CPU-only configuration to build by accident (the binary still falls back to
     CPU fusion at runtime when no adapter is usable). The loader needs the
     library's directory as well: `Scripts/windows-env.ps1` adds it to `PATH`,
-    `QtShell/build.sh` to `LD_LIBRARY_PATH`. macOS is the exception — the GPU
+    `Scripts/run.sh` to `LD_LIBRARY_PATH`. macOS is the exception — the GPU
     there is Metal, and since `App/project.yml` links this package's
     `HyperfocalKit` product into the shipping app, wgpu stays an explicit
     `HYPERFOCAL_WGPU=1` opt-in for the parity suite rather than riding into an
@@ -288,5 +288,5 @@ comparison technique. Changes should be seen working in the running app, not
 just compiled. The verify skill is macOS-centric; on Windows/Linux, build with
 `swift build` (Windows: via `Scripts/windows-env.ps1`), exercise engine/model
 changes through `hyperfocal-cli`, and build + drive the Qt shell
-(`QtShell/build.{sh,ps1}`). A change that touches both UIs must be verified on
-both.
+(`Scripts/build.sh --qt` on Linux, `QtShell/build.ps1` on Windows). A change
+that touches both UIs must be verified on both.

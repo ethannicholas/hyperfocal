@@ -1,6 +1,6 @@
 # Qt shell (cross-platform-plan Phase 2). Dev build:
 #
-#   QtShell/build.sh          # builds the bridge (SwiftPM), configures, builds
+#   Scripts/build.sh --qt     # builds the bridge (SwiftPM), configures, builds
 #
 # or by hand:
 #   swift build --product HyperfocalBridge
@@ -38,9 +38,9 @@ find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Widgets ShaderTools)
 qt_standard_project_setup(REQUIRES 6.5)
 
 set(HYPERFOCAL_BRIDGE_DIR "" CACHE PATH
-    "Directory containing the SwiftPM-built bridge library (see QtShell/build.sh)")
+    "Directory containing the SwiftPM-built bridge library (see Scripts/build.sh)")
 if(NOT HYPERFOCAL_BRIDGE_DIR)
-    message(FATAL_ERROR "Pass -DHYPERFOCAL_BRIDGE_DIR=<dir with libHyperfocalBridge> (see QtShell/build.sh)")
+    message(FATAL_ERROR "Pass -DHYPERFOCAL_BRIDGE_DIR=<dir with libHyperfocalBridge> (see Scripts/build.sh)")
 endif()
 # SwiftPM names the product libHyperfocalBridge.dylib / .so per platform.
 find_library(HYPERFOCAL_BRIDGE_LIB HyperfocalBridge
