@@ -1,17 +1,16 @@
 #!/bin/bash
 #
-# Build the app from the command line and (re)launch it — the everyday
-# "run the app" loop. Default is the macOS SwiftUI app, built without
-# opening Xcode.app; staying out of Xcode.app also sidesteps its
-# Localizable.xcstrings rewrite (see CLAUDE.md): a plain command-line
-# build leaves the catalog untouched. --qt builds and launches the Qt
-# shell instead (the Windows/Linux UI, built here as a dev/validation
-# target).
+# Build the app and (re)launch it — the everyday "run the app" loop.
+# The build itself is Scripts/build.sh (invoked here with the same
+# arguments); this script only adds the launch. Default is the macOS
+# SwiftUI app; --qt builds and launches the Qt shell instead (the
+# Windows/Linux UI, built here as a dev/validation target).
 #
 #   Scripts/run.sh                 Debug build, then launch
 #   Scripts/run.sh Release         Release build, then launch
-#   Scripts/run.sh --no-run        build only
 #   Scripts/run.sh --qt            build + launch the Qt shell
+#
+# Build without launching: Scripts/build.sh.
 #
 # A running macOS-app instance is asked to quit first (politely, via
 # AppleEvent, so the unsaved-work confirmation still protects a real
@@ -23,35 +22,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Checked-in derived artifacts (per-platform notices, translation catalogs)
-# regenerate on every build so a NOTICE.md or Localizable.xcstrings edit
-# always takes — the same reason xcodegen runs every time below. Both
-# generators rewrite only files whose content changed, so incremental
-# builds see no churn.
-"$(Scripts/python-interpreter.sh)" Scripts/gen-notices.py
-"$(Scripts/python-interpreter.sh)" Scripts/gen-translations.py >/dev/null
-
 CONFIG=Debug
-RUN=1
 QT=0
 for arg in "$@"; do
     case "$arg" in
         Debug|Release) CONFIG="$arg" ;;
-        --no-run) RUN=0 ;;
         --qt) QT=1 ;;
-        *) echo "usage: Scripts/run.sh [--qt] [Debug|Release] [--no-run]" >&2; exit 2 ;;
+        *) echo "usage: Scripts/run.sh [--qt] [Debug|Release]  (build only: Scripts/build.sh)" >&2; exit 2 ;;
     esac
 done
 
+Scripts/build.sh "$@"
+
 if [ "$QT" = 1 ]; then
-    # The Qt shell has a single build configuration (QtShell/build.sh);
-    # an explicit Debug/Release would be silently ignored — refuse it.
-    if [ "$CONFIG" != Debug ]; then
-        echo "run: --qt has no $CONFIG configuration (QtShell/build.sh builds one)" >&2
-        exit 2
-    fi
-    QtShell/build.sh
-    [ "$RUN" = 1 ] || exit 0
     if pgrep -xq hyperfocal-qt; then
         echo "run: a hyperfocal-qt instance is already running — quit it first" \
              "(no polite quit channel exists for the bare executable)." >&2
@@ -62,21 +45,6 @@ if [ "$QT" = 1 ]; then
     disown
     exit 0
 fi
-
-command -v xcodegen >/dev/null 2>&1 || {
-    echo "run: xcodegen not found (brew install xcodegen)" >&2
-    exit 1
-}
-
-# The .xcodeproj and App/Info.plist are generated from App/project.yml (and
-# gitignored) — regenerate every time so project.yml edits always take.
-(cd App && xcodegen generate >/dev/null)
-
-xcodebuild -project App/Hyperfocal.xcodeproj -scheme Hyperfocal \
-    -configuration "$CONFIG" -destination 'platform=macOS' \
-    -quiet build
-
-[ "$RUN" = 1 ] || exit 0
 
 # Resolve the product the build actually produced rather than globbing
 # DerivedData (stale sibling build dirs make the glob ambiguous).

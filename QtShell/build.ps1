@@ -1,5 +1,5 @@
 # Build the Qt shell on Windows against a freshly built bridge DLL — the
-# Windows analogue of build.sh.
+# Windows analogue of Scripts/build.sh --qt.
 #
 #   QtShell\build.ps1           build everything
 #   QtShell\build.ps1 -Run      ...and launch the shell

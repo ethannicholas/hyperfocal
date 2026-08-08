@@ -17,7 +17,7 @@ A marker applies until the next one; the file starts as `all`. Tags: `all`
 only — the CLI-only and build-time sections, which no app bundle ships).
 
 Both outputs are checked in so builds stay hermetic. The dev build entry
-points (Scripts/run.sh, QtShell/build.sh, QtShell/build.ps1) regenerate them
+points (Scripts/build.sh, QtShell/build.ps1) regenerate them
 on every build; the packaging scripts verify them with --check (a release
 ships what is committed, never silent regeneration); Scripts/ci-gate.sh and
 the pre-commit hook fail when they drift.
