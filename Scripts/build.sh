@@ -57,10 +57,13 @@ if [ "$QT" = 1 ]; then
     swift build --product HyperfocalBridge
 
     echo "== configuring + building Qt shell"
+    # One always-non-empty args array: macOS's /bin/bash is 3.2, where
+    # set -u + expanding an EMPTY array ("${A[@]}") dies "unbound
+    # variable" (fixed in bash 4.4, so Linux never sees it).
+    CMAKE_ARGS=(-DHYPERFOCAL_BRIDGE_DIR="$BRIDGE_DIR")
     # Homebrew Qt needs the prefix hint on macOS; Linux distro Qt is found
     # without one.
-    PREFIX_ARGS=()
-    [ "$(uname)" = Darwin ] && PREFIX_ARGS=(-DCMAKE_PREFIX_PATH=/opt/homebrew)
+    [ "$(uname)" = Darwin ] && CMAKE_ARGS+=(-DCMAKE_PREFIX_PATH=/opt/homebrew)
     # On Linux the bridge links libwgpu_native.so (GPU fusion is compiled in,
     # not opted into — see Package.swift), so the shell's link needs the
     # library findable to resolve the bridge's transitive symbols. rpath-link
@@ -68,18 +71,16 @@ if [ "$QT" = 1 ]; then
     # and packaging), and Scripts/run.sh supplies LD_LIBRARY_PATH at launch.
     # macOS links Metal instead; Windows builds via build.ps1, where
     # Scripts/windows-env.ps1 does this job for wgpu_native.dll.
-    LINKER_ARGS=()
     if [ "$(uname)" != Darwin ]; then
         WGPU_LIB="${WGPU_ROOT:-$PWD/../wgpu-native}/lib"
         if [ -d "$WGPU_LIB" ]; then
-            LINKER_ARGS=(-DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,$WGPU_LIB")
+            CMAKE_ARGS+=(-DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,$WGPU_LIB")
         else
             echo "== warning: $WGPU_LIB not found (Scripts/fetch-wgpu.sh," \
                  "or set WGPU_ROOT) — the Qt link will fail on wgpu symbols"
         fi
     fi
-    cmake -S QtShell -B QtShell/build -DHYPERFOCAL_BRIDGE_DIR="$BRIDGE_DIR" \
-        "${PREFIX_ARGS[@]}" "${LINKER_ARGS[@]}" >/dev/null
+    cmake -S QtShell -B QtShell/build "${CMAKE_ARGS[@]}" >/dev/null
     cmake --build QtShell/build --parallel
 
     echo "== built QtShell/build/hyperfocal-qt"
