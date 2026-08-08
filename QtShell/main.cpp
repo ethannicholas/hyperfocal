@@ -785,6 +785,20 @@ int main(int argc, char *argv[]) {
         // by hand: every confirm takes its default button.
         qputenv("HFQT_AUTOCONFIRM", "1");
     }
+    // One decision, both halves. Only this shell's own qsTr()/tr() strings
+    // go through the translator above; everything AppCore owns — the menu
+    // titles, the entire left panel, the pane titles ("Output", "…
+    // (aligned)"), the zoom bar, status text, undo names — arrives through
+    // the bridge, whose Swift side used to resolve a locale of its own. With
+    // HFQT_LANG set that side never heard about it and stayed English, so a
+    // localized run was half translated (found while capturing store media).
+    // hf_set_language hands it the tag settled on here, including the "en"
+    // and no-catalog cases: forcing English is exactly what the selftest
+    // wants, whose assertions compare against English bridge strings and
+    // until now passed only because the machine's locale happened to be
+    // English. It must come before the QML engine, which reads bridge
+    // strings while building the first window.
+    QString language = QStringLiteral("en");
     if (!selftest && forcedLang != QStringLiteral("en")) {
         const QStringList tags = forcedLang.isEmpty()
             ? CatalogTranslator::candidateTags(QLocale::system())
@@ -792,10 +806,12 @@ int main(int argc, char *argv[]) {
         for (const QString &tag : tags) {
             if (translator.loadCatalog(tag)) {
                 app.installTranslator(&translator);
+                language = tag;
                 break;
             }
         }
     }
+    hf_set_language(language.toUtf8().constData());
 
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("hflut"), new LutImageProvider);

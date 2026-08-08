@@ -45,6 +45,19 @@ typedef void (*hf_guide_cb)(const char *message, const char *informative,
 // periodically from the shell's event loop on Linux/Windows.
 void hf_pump_main(void);
 
+// The UI language — a catalog tag ("de", "pt-BR", "zh-Hans") or any
+// locale identifier ("de_DE"). The shell resolves the language once and
+// tells the shared layer here, instead of each half resolving its own:
+// menu titles, the left panel, pane titles, the zoom bar, status text and
+// undo names all come from AppCore, so a shell that translated only its
+// own qsTr() strings showed a half-English window. "en" (or any tag the
+// catalog doesn't ship) forces English rather than the system locale.
+// Call before hf_init and before any string is read — the shared strings
+// are lazy, and keep whatever language was in force when first touched.
+// NULL goes back to following the process locale. Returns 1 when the
+// catalog ships the language, 0 for English.
+int hf_set_language(const char *tag);
+
 // Create the model. Returns 1 (idempotent).
 int hf_init(void);
 

@@ -1854,6 +1854,30 @@ Task { @MainActor in
         guard PortableStrings.localized("no such key ∅") == "no such key ∅" else {
             fail("missing key did not fall back to itself")
         }
+        // The host's language must reach `localizedString` — the seam the Qt
+        // shell drives through hf_set_language. Without it the shell
+        // translated the strings it owns while every string that comes from
+        // AppCore (menu titles, the whole left panel, pane titles, the zoom
+        // bar, status, undo names) stayed English, in the same window.
+        // Checked on Apple too, where the branch is easy to break: this is
+        // the one path that must NOT reach NSLocalizedString.
+        do {
+            defer { PortableStrings.setLanguage(nil) }
+            guard let german = PortableStrings.table(for: "de")?["Fuse Stack"],
+                  PortableStrings.setLanguage("de_DE"),
+                  localizedString("Fuse Stack") == german else {
+                fail("setLanguage did not reach localizedString")
+            }
+            // A language the catalog doesn't ship means English, never
+            // whatever the system locale would otherwise have chosen.
+            PortableStrings.setLanguage("en")
+            guard localizedString("Fuse Stack") == "Fuse Stack" else {
+                fail("setLanguage(en) did not force English")
+            }
+        }
+        guard PortableStrings.explicitTable == nil else {
+            fail("setLanguage(nil) did not restore locale following")
+        }
         print("probe: portable string catalog OK "
               + "(\(PortableStrings.languages.count) languages)")
     }

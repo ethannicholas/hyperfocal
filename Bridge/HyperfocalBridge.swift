@@ -244,6 +244,30 @@ public func hf_ui_string(_ key: UnsafePointer<CChar>?,
     return fillUTF8(value, buffer, cap)
 }
 
+/// The UI language, decided by the shell rather than resolved again here.
+///
+/// The shell picks a language once (`HFQT_LANG`, else the system locale) and
+/// installs a translator for its own `qsTr`/`tr` half. Everything else the
+/// window shows originates in AppCore and arrives through this bridge — menu
+/// titles, the whole left panel, pane titles ("Output", "… (aligned)"), the
+/// zoom bar, status text, undo names — and that half used to resolve its own
+/// locale independently, so it stayed English while the QML around it
+/// translated. This settles both halves from the shell's one decision.
+///
+/// Pass "en" (or any tag the catalog doesn't ship) to force English, which is
+/// what the selftest wants: its assertions compare against English bridge
+/// strings, and until now they only passed because the machine's own locale
+/// happened to be English.
+///
+/// Call before the first string is read (the shared strings are lazy
+/// globals). Returns 1 when the catalog ships the language, 0 when the
+/// process falls through to English.
+/// NULL goes back to following the process locale.
+@_cdecl("hf_set_language")
+public func hf_set_language(_ tag: UnsafePointer<CChar>?) -> Int32 {
+    PortableStrings.setLanguage(tag.map { String(cString: $0) }) ? 1 : 0
+}
+
 /// Hover delay for the (i) info icons' tooltips, shared with the native app
 /// (`UIStrings.infoTipDelayMilliseconds`) so the two shells can't drift
 /// apart. Ordinary tooltips keep the platform default delay.

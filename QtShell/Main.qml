@@ -2449,7 +2449,29 @@ ApplicationWindow {
                         // Fit ↔ percentages swap through. Plain text, not a
                         // custom contentItem — the macOS native style
                         // rejects contentItem customization with a warning.
-                        implicitWidth: 88
+                        //
+                        // Fixed, but measured rather than guessed: 88 fits
+                        // "Fit ⌵" and every percentage, and German's
+                        // "Einpassen" overflowed it — the label elided to
+                        // "Einpassen…", eating the chevron that says this is
+                        // a menu. Sizing to the translation keeps the width
+                        // constant *within* a language, which is all the −/+
+                        // buttons care about (every percentage is shorter
+                        // than the fit label, so it never sets the width).
+                        //
+                        // The slack is not padding taste: ⌵ (U+2335) is
+                        // absent from the mono families, so it renders from a
+                        // fallback face whose advance TextMetrics does not
+                        // account for — measuring alone still elided it. 88
+                        // remains the floor, so English and the languages
+                        // that fit it are pixel-identical to before.
+                        implicitWidth: Math.max(88, zoomFitMetrics.width + 16
+                                                    + leftPadding + rightPadding)
+                        TextMetrics {
+                            id: zoomFitMetrics
+                            font: zoomMenuButton.font
+                            text: Shell.uiString("zoomFit") + " ⌵"
+                        }
                         font.pixelSize: 12
                         font.family: theme.monoFamily
                         text: (outputPane.item.fitted

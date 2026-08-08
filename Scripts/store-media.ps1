@@ -8,6 +8,12 @@
 #   Scripts\store-media.ps1 -Frames <dir> -Out <dir> -Video       # video only
 #   Scripts\store-media.ps1 -Frames <dir> -Out <dir> -Screenshot  # shot only
 #
+# A run PACKAGES FIRST (Scripts\package-windows.ps1) and captures what it just
+# produced - the macOS driver rebuilds the app the same way, and for the same
+# reason: media that does not show the code in the tree is worse than no media,
+# because nothing about it looks wrong. There is deliberately no flag to skip
+# the packaging step; -Exe captures a specific binary.
+#
 # Produces the same two things per language the macOS driver does: a video of
 # the fusion workflow, and the retouch screenshot.
 #
@@ -428,37 +434,41 @@ if (-not (Test-Path $Frames)) { throw "no such frames directory: $Frames" }
 $frameCount = (Get-ChildItem $Frames -File).Count
 if (-not $frameCount) { throw "no files in $Frames" }
 
-# Prefer the STAGED PACKAGE. It is self-contained - Qt, the Swift runtime and
-# the vcpkg imaging DLLs all sit beside the executable - so it launches with no
-# build environment loaded, which a child process started from here does not
-# inherit. A dev build out of QtShell\build*\ resolves none of those unless the
-# caller dot-sourced Scripts\windows-env.ps1 first, and the failure is an
-# instant exit with 0xC0000135 (DLL not found) rather than anything readable.
-# Capturing from the package is also just correct: store media should show the
-# build users install.
+# PACKAGE FIRST, then capture what was just produced - the same order the
+# macOS driver uses (it rebuilds the app unless --skip-build). Discovery alone
+# is not enough: dist\ is a snapshot nothing here refreshes, so an edit made
+# after the last packaging run is invisible and the capture silently ships the
+# previous build. That is not hypothetical - a full localized set was captured
+# from a package predating the fix for the shell's untranslated AppCore
+# strings, and the screenshots came out half-English with nothing about them
+# looking wrong.
+#
+# In a CHILD PowerShell, deliberately. package-windows.ps1 dot-sources
+# Scripts\windows-env.ps1, and $env: edits are process-wide, so packaging in
+# THIS process would leave Qt, the Swift runtime and the vcpkg DLLs on the PATH
+# that the captured app inherits - hiding a package that is missing a DLL,
+# which is precisely the class of bug capturing from the package catches.
+#
+# The capture then runs against the STAGED PACKAGE it just wrote, never a dev
+# build out of QtShell\build*\: the package is self-contained - Qt, the Swift
+# runtime and the vcpkg imaging DLLs all sit beside the executable - so it
+# launches with no build environment, which a child process started from here
+# does not inherit (a dev build exits instantly with 0xC0000135, DLL not
+# found). It is also just what the media should show: the build users install.
 if (-not $Exe) {
-    $staged = Get-ChildItem (Join-Path $root 'dist') -Directory -Filter 'Hyperfocal-*' -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending |
+    Log "packaging (Scripts\package-windows.ps1)"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File `
+        (Join-Path $root 'Scripts\package-windows.ps1')
+    if ($LASTEXITCODE) { throw "package-windows.ps1 failed (exit $LASTEXITCODE)" }
+    # Newest by write time, which is the layout the run above just staged -
+    # not by version name, which would reach for a higher-numbered leftover.
+    $Exe = Get-ChildItem (Join-Path $root 'dist') -Directory -Filter 'Hyperfocal-*' |
+        Sort-Object LastWriteTime -Descending |
         ForEach-Object { Join-Path $_.FullName 'hyperfocal-qt.exe' } |
         Where-Object { Test-Path $_ } | Select-Object -First 1
-    if ($staged) {
-        $Exe = $staged
-    } else {
-        foreach ($cand in @('QtShell\build-release\hyperfocal-qt.exe',
-                            'QtShell\build\hyperfocal-qt.exe')) {
-            $p = Join-Path $root $cand
-            if (Test-Path $p) { $Exe = $p; break }
-        }
-        if ($Exe) {
-            Log "WARNING: no staged package in dist\; using $Exe"
-            Log "         a dev build needs '. Scripts\windows-env.ps1' in THIS shell,"
-            Log "         or it exits immediately with 0xC0000135 (DLL not found)."
-        }
-    }
+    if (-not $Exe) { throw "packaging left no hyperfocal-qt.exe under dist\" }
 }
-if (-not $Exe -or -not (Test-Path $Exe)) {
-    throw "no hyperfocal-qt.exe (run Scripts\package-windows.ps1, or pass -Exe)"
-}
+if (-not (Test-Path $Exe)) { throw "no hyperfocal-qt.exe at $Exe" }
 
 $langs = if ($Lang -eq 'all') { $LANGS } else { $Lang.Split(',') }
 $unknown = $langs | Where-Object { $LANGS -notcontains $_ }

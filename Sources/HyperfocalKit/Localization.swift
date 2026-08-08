@@ -12,9 +12,16 @@ import Foundation
 /// against `GeneratedStrings`, flattened from the same catalog by
 /// `Scripts/gen-translations.py`.
 ///
+/// A language chosen explicitly by the host (`PortableStrings.setLanguage`)
+/// wins on every platform, Apple included: the Qt shell decides the UI
+/// language for its own half and hands the same tag down here, so the two
+/// halves of one window cannot pick differently. Nothing in the macOS app
+/// calls it, so that shell keeps reading its bundle catalog as before.
+///
 /// `comment:` is retained (and ignored) so call sites read like the
 /// `NSLocalizedString` they replaced and stay greppable for the coverage gate.
 public func localizedString(_ key: String, comment: String = "") -> String {
+    if let table = PortableStrings.explicitTable { return table[key] ?? key }
     #if canImport(CoreGraphics)
     return NSLocalizedString(key, comment: comment)
     #else
@@ -94,9 +101,47 @@ public enum PortableStrings {
         return [:]
     }()
 
+    /// The language the host chose for this process, or nil while the
+    /// process is following its locale (`HYPERFOCAL_LANG` / the system).
+    ///
+    /// Set once at startup, before any UI exists, and only read afterwards —
+    /// hence a plain static rather than a lock.
+    private static var explicit: [String: String]?
+
+    /// The explicitly chosen table, for `localizedString`'s Apple branch.
+    public static var explicitTable: [String: String]? { explicit }
+
+    /// Adopt `tag` — a catalog tag or any locale identifier (`de`, `pt-BR`,
+    /// `zh_CN`) — as this process's language, for every `localizedString`
+    /// from here on. Call before the first string is read: the shared
+    /// strings are lazy globals, so whatever language is in force when one is
+    /// first touched is the language it keeps.
+    ///
+    /// Returns false when the catalog ships nothing for the tag. The override
+    /// is installed either way (an empty table means English, every lookup
+    /// falling through to its key): a host that asked for a language must not
+    /// silently end up in a *different* one via the system locale.
+    ///
+    /// A nil `tag` clears the choice and goes back to following the locale.
+    @discardableResult
+    public static func setLanguage(_ tag: String?) -> Bool {
+        guard let tag else {
+            explicit = nil
+            return false
+        }
+        for candidate in candidateTags(for: tag) {
+            if let table = table(for: candidate) {
+                explicit = table
+                return true
+            }
+        }
+        explicit = [:]
+        return false
+    }
+
     /// The localized value, or the key itself — an English word beats an
     /// empty control.
     public static func localized(_ key: String) -> String {
-        current[key] ?? key
+        (explicit ?? current)[key] ?? key
     }
 }

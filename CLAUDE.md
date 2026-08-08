@@ -219,6 +219,18 @@ rejected alternatives, and why). Cross-platform strategy and phases:
     half-English. `PortableStrings` (the resolver + locale-tag matching) is
     compiled on every platform and checked by `retouch-probe`, so it isn't
     exercised only where a regression is hardest to notice.
+  - **One language decision per process, made by the shell.** The Qt shell
+    resolves the language once (`HFQT_LANG`, else the system locale) and hands
+    the tag to the shared layer through `hf_set_language`
+    (`PortableStrings.setLanguage`), which then wins over the locale on every
+    platform, Apple included. Do not let the two halves resolve
+    independently — they did, and the seam was missing entirely: the shell
+    translated its own `qsTr` strings while everything from AppCore stayed
+    English *in the same window* (the menu titles, the whole left panel, pane
+    titles, the zoom bar, status, undo names), which is how a set of store
+    screenshots came out half-translated. The call must come before the QML
+    engine: the shared strings are lazy globals and keep whatever language
+    was in force when first touched. `retouch-probe` checks the seam.
   - Untranslatable by design: accelerators (`Ctrl+Shift+N`), object/accessibility
     identifiers, font families (`Menlo`, `Consolas`), pure format shells, and
     the algorithm names `DMap`/`PMax`. Where the gate can't infer that, mark the
@@ -233,10 +245,13 @@ rejected alternatives, and why). Cross-platform strategy and phases:
     raw list plus a parallel `…Labels` list, selected **by index** via
     `selectRaw()` (`Shell.cpp`) — same for the QML aspect-ratio combo, whose
     model carries `value` (raw) and `display` (translated) columns.
-  - **Testing a language:** `HFQT_LANG=<tag>` for the Qt shell, `HYPERFOCAL_LANG`
-    for the Swift layer; both take a catalog tag (`de`, `pt-BR`, `zh-Hans`).
-    `HFQT_LANG=en` and `--selftest` install no translator — the Qt selftest
-    asserts against English bridge strings, so it must stay untranslated.
+  - **Testing a language:** `HFQT_LANG=<tag>` for the Qt shell — it now drives
+    the shared layer too, so it is the only knob a shell run needs;
+    `HYPERFOCAL_LANG` for the Swift layer alone (the CLI, the probe). Both take
+    a catalog tag (`de`, `pt-BR`, `zh-Hans`). `HFQT_LANG=en` and `--selftest`
+    install no translator and pin the shared layer to English — the Qt selftest
+    asserts against English bridge strings, so it must stay untranslated on a
+    non-English machine too.
     Localization is also a layout test: German and Russian are the widest, and
     they have already caught a hardcoded control width.
   - **Gate:** `Scripts/check-translations.py` must pass — it fails on a bare
