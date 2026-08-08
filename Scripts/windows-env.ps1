@@ -120,8 +120,35 @@ if ($env:VCPKG_ROOT) {
     if (Test-Path $bin) { $env:Path = "$bin;" + $env:Path }
 }
 
+# wgpu_native.dll must be findable at runtime too, and by exactly the same
+# argument as vcpkg's DLLs above: a HYPERFOCAL_WGPU=1 build links the bridge
+# (and hyperfocal-cli) against the import stub, so the loader needs the
+# directory holding the DLL or the process dies at start with "wgpu_native.dll
+# was not found" — before any of our code runs, so nothing can report it
+# usefully. WGPU_ROOT falls back to a checkout beside this repo, matching
+# Package.swift's default and Scripts\package-windows.ps1; resolving it here
+# rather than only in the packaging script is what lets a plain
+# `. Scripts\windows-env.ps1` shell run the executables it just built.
+# Scripts\deploy-cli.ps1 already had to know this for its DLL walk.
+if (-not $env:WGPU_ROOT) {
+    $siblingWgpu = Join-Path (Split-Path $PSScriptRoot -Parent) '..\wgpu-native'
+    if (Test-Path $siblingWgpu) { $env:WGPU_ROOT = (Resolve-Path $siblingWgpu).Path }
+}
+# Added unconditionally, not only when HYPERFOCAL_WGPU is set: the variable is
+# read at *build* time, so a shell that built with it and then dropped it
+# still has wgpu-linked binaries to launch.
+if ($env:WGPU_ROOT) {
+    $wgpuLib = Join-Path $env:WGPU_ROOT 'lib'
+    if (Test-Path (Join-Path $wgpuLib 'wgpu_native.dll')) {
+        $env:Path = "$wgpuLib;" + $env:Path
+    }
+}
+
 Write-Host "swift : $((Get-Command swift -ErrorAction SilentlyContinue).Source)"
 Write-Host "cl    : $((Get-Command cl -ErrorAction SilentlyContinue).Source)"
 Write-Host "cmake : $((Get-Command cmake -ErrorAction SilentlyContinue).Source)"
 Write-Host "ninja : $((Get-Command ninja -ErrorAction SilentlyContinue).Source)"
 Write-Host "vcpkg : $env:VCPKG_ROOT ($env:VCPKG_TRIPLET)"
+$wgpuRootShown = if ($env:WGPU_ROOT) { $env:WGPU_ROOT } else { '(none)' }
+$wgpuGateShown = if ($env:HYPERFOCAL_WGPU) { $env:HYPERFOCAL_WGPU } else { '0' }
+Write-Host "wgpu  : $wgpuRootShown (HYPERFOCAL_WGPU=$wgpuGateShown)"
