@@ -62,8 +62,6 @@ ApplicationWindow {
         readonly property color textFaint: dark ? "#777777" : "#9e9e9e"
         readonly property color warn: dark ? "#e0c04a" : "#8a6d00"
         readonly property color ok: dark ? "#6fbf73" : "#2e7d32"
-        // Destructive-action text (native's role: .destructive red).
-        readonly property color destructive: dark ? "#e57373" : "#c62828"
         // Monospace family per platform (Menlo is macOS-only; its Windows
         // fallback rendered wide).
         readonly property string monoFamily:
@@ -2121,18 +2119,14 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     Button {
                         objectName: "retouch.revert-all"
-                        // Right-aligned, natural width, destructive red —
-                        // the native Revert All treatment (a full-width
-                        // button read as the section's primary action).
-                        // Red via the palette, not a custom contentItem —
-                        // the macOS native style rejects contentItem
-                        // customization with a warning (it may also ignore
-                        // the palette; the dev shell wears native chrome,
-                        // Fusion on Windows/Linux honors it).
+                        // Right-aligned at natural width — full-width would
+                        // read as the section's primary action. Normal button
+                        // colors: the macOS side's destructive role renders
+                        // as a plain button there too (red is for menus and
+                        // alerts), so a red label here would overstate it.
                         id: revertAllButton
                         enabled: Shell.retouchHasEdits
                         text: Shell.uiString("revertAll")
-                        palette.buttonText: theme.destructive
                         onClicked: Shell.revertRetouch()
                     }
                 }
