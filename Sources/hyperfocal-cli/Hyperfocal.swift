@@ -58,8 +58,11 @@ struct DebugWgpu: ParsableCommand {
     // and stored through half, so wherever its result straddled a rounding
     // boundary the argmax flipped a frame index. The half-storage port removed
     // that asymmetry and the measured figure went 74.0 → 100.1 dB, so warped
-    // frames are back on the same bar as everything else. See
-    // WgpuParity.runDMap.
+    // frames are back on the same bar as everything else. Exception: llvmpipe
+    // still measures 74.1 — its warp arithmetic straddles the same boundaries
+    // for its own reasons — so the llvmpipe CI job passes an explicit
+    // --dmap-warp-floor 71 rather than relaxing this default for the adapters
+    // that do clear 90. See WgpuParity.runDMap.
     @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (warped frames).")
     var dmapWarpFloor: Double = 90
 

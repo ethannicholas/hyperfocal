@@ -1139,6 +1139,17 @@ public enum WgpuParity {
     /// held, which is worse than a consistent f32 disagreement — only making
     /// the whole chain agree removes the flips.
     ///
+    /// **llvmpipe is the one adapter that still misses 90** (74.1 dB, depth
+    /// 75.5 — byte-identical on x86_64 LLVM 20 and aarch64 LLVM 21, so it is
+    /// deterministic, not noise). Half storage removed the *storage*
+    /// asymmetry; llvmpipe's warp kernels disagree in the f32 *arithmetic*
+    /// itself — shader `sin()` in the lanczos weights, its own codegen for
+    /// bilinear — which is why they are the only kernels scoring in the
+    /// 95–96 dB band there (everything else ≥ 131 or exact) while WARP's
+    /// minimum is 100.3. The same argmax amplification then turns those
+    /// boundary straddles into frame-index flips. The llvmpipe CI job carries
+    /// an explicit `--dmap-warp-floor 71` for this; the default stays 90.
+    ///
     /// Returns both figures so the caller can gate each.
     public static func runDMap(log: @escaping (String) -> Void = { print($0) })
         throws -> (plain: Double, warped: Double) {

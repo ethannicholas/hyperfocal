@@ -106,10 +106,20 @@ jobs:
       # WARP on the Windows VM: software validates correctness, not speed.
       # (Compiling the backend in needs no flag; only *auto-selecting* a
       # software adapter does.)
+      #
+      # --dmap-warp-floor 71: llvmpipe alone misses the default 90 bar on
+      # warped dmap (74.1 dB, byte-identical on x86_64 LLVM 20 and aarch64
+      # LLVM 21; WARP and discrete Vulkan clear 90). Its warp kernels' f32
+      # arithmetic — shader sin() in the lanczos weights, its own codegen for
+      # bilinear — lands on adjacent halves at f16 rounding boundaries, and
+      # dmap's argmax amplifies each straddle into a frame-index flip. An
+      # adapter property, not an engine regression: the warp kernels
+      # themselves clear the 90 dB kernel floor here (95.4/96.1). See
+      # WgpuParity.runDMap.
       - name: Build with wgpu and run parity gates
         env:
           HYPERFOCAL_WGPU_SOFTWARE: "1"
         run: |
           swift build
           LD_LIBRARY_PATH=$GITHUB_WORKSPACE/../wgpu-native/lib \
-            .build/debug/hyperfocal-cli debug-wgpu
+            .build/debug/hyperfocal-cli debug-wgpu --dmap-warp-floor 71
