@@ -78,6 +78,8 @@ class Session {
     [System.Diagnostics.Process]$Proc
     [string]$Dir
     [int]$Counter = 0
+    hidden [System.IO.FileStream]$OutFile
+    hidden [System.IO.FileStream]$ErrFile
 
     Session([string]$exe, [string]$frames, [string]$dir, [string]$lang,
             [string]$log) {
@@ -98,6 +100,22 @@ class Session {
         # "en" installs no translator, matching the selftest's contract.
         if ($lang -ne 'en') { $psi.EnvironmentVariables['HFQT_LANG'] = $lang }
         $this.Proc = [System.Diagnostics.Process]::Start($psi)
+
+        # Drain both streams to $log, and note what happens if you don't: a
+        # redirected stream is a PIPE, and a pipe nobody reads fills at a few
+        # KB and blocks the writer *forever*. The shell logs a line per frame
+        # per stage - decode, register, depth, render, pyramid - so on any real
+        # stack it froze partway into the fuse, every time, while the driver
+        # sat in WaitFor watching a phase that would never change. It looked
+        # exactly like a slow fuse, which is the worst thing it could look
+        # like. The macOS driver (Scripts/store-media.py) hands Popen a file
+        # object and so never has a pipe at all; this port kept its `log`
+        # parameter and lost the file it named. CopyToAsync gets it back:
+        # nothing here ever has to remember to read.
+        $this.OutFile = [System.IO.File]::Create($log)
+        $this.ErrFile = [System.IO.File]::Create("$log.err")
+        $this.Proc.StandardOutput.BaseStream.CopyToAsync($this.OutFile) | Out-Null
+        $this.Proc.StandardError.BaseStream.CopyToAsync($this.ErrFile) | Out-Null
     }
 
     # Wait for the channel's "ready" marker. Without this a shell that never
@@ -157,6 +175,14 @@ class Session {
     [object] WaitFor([string]$what, [scriptblock]$pred, [int]$timeoutSec) {
         $deadline = (Get-Date).AddSeconds($timeoutSec)
         while ((Get-Date) -lt $deadline) {
+            # Checked before the poll, because the poll's own failure is
+            # swallowed below: a single get-geometry can legitimately time out
+            # while a fuse has the shell busy, but a process that has *exited*
+            # never answers again, and without this the run waited out the
+            # whole FuseTimeout - 30 minutes by default - before saying so.
+            if ($this.Proc.HasExited) {
+                throw "app exited (code $($this.Proc.ExitCode)) while waiting for $what"
+            }
             $geo = $null
             try { $geo = $this.Post('get-geometry', $null, 30) } catch { }
             if ($geo -and $geo.ok -eq 1 -and (& $pred $geo)) { return $geo }
@@ -168,6 +194,11 @@ class Session {
     [void] Quit() {
         try { $this.Post('quit', $null, 5) | Out-Null } catch { }
         if (-not $this.Proc.WaitForExit(10000)) { $this.Proc.Kill() }
+        # After the writer is gone the copies complete on their own; closing
+        # the files flushes what the run captured.
+        foreach ($f in @($this.OutFile, $this.ErrFile)) {
+            if ($f) { try { $f.Dispose() } catch { } }
+        }
     }
 }
 
