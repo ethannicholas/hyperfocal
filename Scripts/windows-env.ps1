@@ -129,7 +129,7 @@ if ($env:VCPKG_ROOT) {
 # default and Scripts\package-windows.ps1; resolving it here rather than only in
 # the packaging script is what lets a plain `. Scripts\windows-env.ps1` shell
 # run the executables it just built. Scripts\deploy-cli.ps1 already had to know
-# this for its DLL walk, and QtShell/build.sh does the same for
+# this for its DLL walk, and Scripts/run.sh does the same for
 # LD_LIBRARY_PATH on Linux.
 if (-not $env:WGPU_ROOT) {
     $siblingWgpu = Join-Path (Split-Path $PSScriptRoot -Parent) '..\wgpu-native'
@@ -142,6 +142,34 @@ if ($env:WGPU_ROOT) {
     }
 }
 
+# Qt: QT_KIT wins; otherwise the newest 6.x kit under C:\Qt whose architecture
+# matches this machine (aqt names them msvc2022_64 on x64, msvc2022_arm64 on
+# ARM64). Hardcoding one of those was an artifact of the ARM64 dev VM and left
+# x64 desktops unable to build without QT_KIT.
+#
+# Resolved here rather than inside the build script because the kit is needed
+# twice over: CMake wants the toolchain file, and the built executable wants
+# the kit's bin on PATH to find the Qt DLLs at all (no rpath on Windows).
+# Keeping it in the build script meant the launch only worked because build and
+# run happened in one process and $env: edits are process-wide — true, but
+# invisible, and it put a runtime concern inside a build step. (The shell also
+# needs HyperfocalBridge.dll from .build\debug, which is build output rather
+# than environment — Scripts\run.ps1 adds that itself.)
+if (-not $env:QT_KIT) {
+    $kitArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'msvc2022_arm64' }
+               else { 'msvc2022_64' }
+    $env:QT_KIT = Get-ChildItem 'C:\Qt' -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^6\.' } |
+        Sort-Object { [version]$_.Name } -Descending |
+        ForEach-Object { Join-Path $_.FullName $kitArch } |
+        Where-Object { Test-Path (Join-Path $_ 'lib\cmake\Qt6\qt.toolchain.cmake') } |
+        Select-Object -First 1
+}
+if ($env:QT_KIT) {
+    $qtBin = Join-Path $env:QT_KIT 'bin'
+    if (Test-Path $qtBin) { $env:Path = "$qtBin;" + $env:Path }
+}
+
 Write-Host "swift : $((Get-Command swift -ErrorAction SilentlyContinue).Source)"
 Write-Host "cl    : $((Get-Command cl -ErrorAction SilentlyContinue).Source)"
 Write-Host "cmake : $((Get-Command cmake -ErrorAction SilentlyContinue).Source)"
@@ -152,3 +180,5 @@ Write-Host "vcpkg : $env:VCPKG_ROOT ($env:VCPKG_TRIPLET)"
 # early warning.
 $wgpuRootShown = if ($env:WGPU_ROOT) { $env:WGPU_ROOT } else { '(none - run Scripts/fetch-wgpu.sh)' }
 Write-Host "wgpu  : $wgpuRootShown"
+$qtKitShown = if ($env:QT_KIT) { $env:QT_KIT } else { '(none - see README, or set QT_KIT)' }
+Write-Host "qt    : $qtKitShown"

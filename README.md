@@ -151,7 +151,7 @@ Prerequisites (installable via winget except vcpkg and Qt):
   ```
 
   On ARM64 use `win64_msvc2022_arm64_cross_compiled` instead.
-  `QtShell\build.ps1` finds the newest `C:\Qt\6.x` kit matching the
+  `Scripts\windows-env.ps1` finds the newest `C:\Qt\6.x` kit matching the
   machine's architecture on its own; set `QT_KIT` to override.
 - **vcpkg**, checked out beside this repo (or point `VCPKG_ROOT` at it),
   with the imaging libraries installed — use `arm64-windows` on ARM64
@@ -180,6 +180,7 @@ bash Scripts/fetch-wgpu.sh    # Git Bash, once; -> ..\wgpu-native
 swift build -c release
 .build\release\hyperfocal-cli --help
 Scripts\run.ps1               # build and launch the desktop app
+Scripts\build.ps1             # ...or build it without launching
 ```
 
 GPU fusion is compiled in — there is no CPU-only build to opt out of, and the

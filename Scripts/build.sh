@@ -6,7 +6,7 @@
 # rewrite (see CLAUDE.md): a plain command-line build leaves the catalog
 # untouched. --qt builds the Qt shell instead (the Windows/Linux UI,
 # also built on macOS as a dev/validation target) — this is the Linux
-# build entry point; Windows builds with QtShell/build.ps1.
+# build entry point; Windows builds with Scripts/build.ps1.
 #
 #   Scripts/build.sh                 Debug build of the macOS app
 #   Scripts/build.sh Release         Release build of the macOS app

@@ -1,13 +1,10 @@
-# Build the Qt shell on Windows against a freshly built bridge DLL — the
-# Windows analogue of Scripts/build.sh --qt.
+# Build Hyperfocal on Windows against a freshly built bridge DLL — the one
+# build entry point here, and the analogue of Scripts/build.sh --qt (the Qt
+# shell is the Windows UI, so there is no app/--qt split to make).
 #
-#   QtShell\build.ps1           build everything
-#   QtShell\build.ps1 -Run      ...and launch the shell
+#   Scripts\build.ps1           build everything
 #
-# Qt: an aqt/online-installer kit with qtbase, qtdeclarative, and
-# qtshadertools (see README "Building on Windows"). Point QT_KIT at the kit
-# directory if it isn't the default below.
-param([switch]$Run)
+# Build-and-launch is Scripts\run.ps1, which delegates the build here.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 
@@ -40,25 +37,13 @@ try {
     if ($LASTEXITCODE) { throw "bridge build failed" }
     $bridgeDir = Join-Path $root '.build\debug'
 
-    # Qt kit: QT_KIT wins; otherwise take the newest 6.x kit under C:\Qt whose
-    # architecture matches this machine (aqt names them msvc2022_64 on x64,
-    # msvc2022_arm64 on ARM64). Hardcoding one of those was an artifact of the
-    # ARM64 dev VM and left x64 desktops unable to build without QT_KIT.
+    # windows-env.ps1 resolved the kit (and put its bin on PATH, which is what
+    # the built executable needs to start) — the same place the Swift, MSVC,
+    # vcpkg and wgpu environments come from.
     $qtKit = $env:QT_KIT
-    if (-not $qtKit) {
-        $kitArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'msvc2022_arm64' }
-                   else { 'msvc2022_64' }
-        $qtKit = Get-ChildItem 'C:\Qt' -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^6\.' } |
-            Sort-Object { [version]$_.Name } -Descending |
-            ForEach-Object { Join-Path $_.FullName $kitArch } |
-            Where-Object { Test-Path (Join-Path $_ 'lib\cmake\Qt6\qt.toolchain.cmake') } |
-            Select-Object -First 1
-    }
     if (-not $qtKit -or -not (Test-Path "$qtKit\lib\cmake\Qt6\qt.toolchain.cmake")) {
         throw "Qt kit not found$(if ($qtKit) { " at $qtKit" }) (set QT_KIT)"
     }
-    Write-Host "== Qt kit: $qtKit"
 
     Write-Host "== configuring + building Qt shell"
     # The shell builds Release: Qt's debug DLLs use the debug CRT, which the
@@ -73,10 +58,6 @@ try {
     if ($LASTEXITCODE) { throw "cmake build failed" }
 
     Write-Host "== built QtShell\build\hyperfocal-qt.exe"
-    # No rpath on Windows: the DLLs (Qt, bridge, Swift runtime, vcpkg) resolve
-    # via PATH — windows-env.ps1 supplies the Swift/vcpkg parts.
-    $env:Path = "$qtKit\bin;$bridgeDir;" + $env:Path
-    if ($Run) { & QtShell\build\hyperfocal-qt.exe }
 } finally {
     Pop-Location
 }

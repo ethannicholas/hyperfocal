@@ -32,9 +32,9 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   `.xcodeproj` is gitignored); never hand-edit generated files, always
   `project.yml`, then `cd App && xcodegen generate`.
 - `QtShell/` — the Qt/QML shell (C++/`Shell.cpp` + `*.qml`), the Windows/Linux
-  UI. Build with `Scripts/build.sh --qt` (macOS/Linux) or `QtShell/build.ps1`
-  (Windows). It drives the shared model through the bridge, never AppCore
-  directly.
+  UI. Build with `Scripts/build.sh --qt` (macOS/Linux) or `Scripts/build.ps1`
+  (Windows); `Scripts/run.{sh,ps1}` build *and* launch. It drives the shared
+  model through the bridge, never AppCore directly.
 - `Bridge/` — `HyperfocalBridge`, a C-ABI dynamic library wrapping `AppCore`
   for the Qt shell (`hyperfocal_bridge.h` is the surface; **never shipped with
   the macOS app**).
@@ -288,5 +288,5 @@ comparison technique. Changes should be seen working in the running app, not
 just compiled. The verify skill is macOS-centric; on Windows/Linux, build with
 `swift build` (Windows: via `Scripts/windows-env.ps1`), exercise engine/model
 changes through `hyperfocal-cli`, and build + drive the Qt shell
-(`Scripts/build.sh --qt` on Linux, `QtShell/build.ps1` on Windows). A change
+(`Scripts/build.sh --qt` on Linux, `Scripts/build.ps1` on Windows). A change
 that touches both UIs must be verified on both.
