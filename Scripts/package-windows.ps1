@@ -224,7 +224,7 @@ if (-not $SkipBuild) {
     cmake --build $qtBuild --parallel
     if ($LASTEXITCODE) { throw "cmake build failed" }
 }
-$exe = Join-Path $qtBuild 'hyperfocal-qt.exe'
+$exe = Join-Path $qtBuild 'Hyperfocal.exe'
 if (-not (Test-Path $exe)) { throw "no shell executable at $exe (drop -SkipBuild)" }
 
 # ------------------------------------------------------------------ stage --
@@ -256,7 +256,7 @@ function Get-Imports([string]$binary) {
 }
 $copied = New-Object 'System.Collections.Generic.HashSet[string]'
 $queue = New-Object 'System.Collections.Generic.Queue[string]'
-$queue.Enqueue((Join-Path $stage 'hyperfocal-qt.exe'))
+$queue.Enqueue((Join-Path $stage 'Hyperfocal.exe'))
 # The bridge is loaded by name from the same directory, so seed it explicitly.
 $bridgeDll = Join-Path $bridgeDir 'HyperfocalBridge.dll'
 if (-not (Test-Path $bridgeDll)) { throw "no bridge DLL at $bridgeDll" }
@@ -303,7 +303,7 @@ if (-not (Test-Path (Join-Path $stage 'wgpu_native.dll'))) {
 Write-Host "== windeployqt"
 & "$QtKit\bin\windeployqt.exe" --release --no-compiler-runtime `
     --qmldir (Join-Path $root 'QtShell') `
-    (Join-Path $stage 'hyperfocal-qt.exe')
+    (Join-Path $stage 'Hyperfocal.exe')
 if ($LASTEXITCODE) { throw "windeployqt failed" }
 foreach ($dll in @('VCRUNTIME140.dll', 'MSVCP140.dll')) {
     if (-not (Test-Path (Join-Path $stage $dll))) {

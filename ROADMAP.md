@@ -70,7 +70,8 @@ Windows, and Linux. Durable strategy and what shipped: `Docs/cross-platform-plan
   the Adobe DNG Converter (`RawConverter`), but the Linux/Wine path was punted;
   see `Docs/research/2026-07-19-lossy-nef-linux.md` before revisiting.
 - **Qt shell polish toward native parity** (`QtShell/`; the shell self-tests via
-  `hyperfocal-qt --selftest <stack-dir> <out.tif> [screenshot.png]`, exit 0 only
+  `hyperfocal-qt --selftest <stack-dir> <out.tif> [screenshot.png]` — the binary
+  is `Hyperfocal.exe` on Windows — exit 0 only
   if the export lands, plus the `HFQT_*` env hooks — the flag REQUIRES its two
   paths and now exits 2 with usage without them, because falling through to a
   normal window read as a hung test):
@@ -366,7 +367,7 @@ builds:
        waiver path (a `test` exit of 1, rather than the 0 we got, is the kit
        asking for it).
      - **WARNING, "DPIAwarenessValidation" — a static-analysis artifact.**
-       The report says the app "is not DPI Aware" because `hyperfocal-qt.exe`
+       The report says the app "is not DPI Aware" because `Hyperfocal.exe`
        declares no `dpiAwareness` in its embedded manifest (it carries only
        `Scripts/windows-utf8.manifest`'s `activeCodePage`) and imports no DPI
        API. But Qt 6 sets Per-Monitor v2 at startup through a *dynamically

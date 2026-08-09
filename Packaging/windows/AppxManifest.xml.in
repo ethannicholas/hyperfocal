@@ -57,7 +57,7 @@
 
   <Applications>
     <Application Id="Hyperfocal"
-                 Executable="hyperfocal-qt.exe"
+                 Executable="Hyperfocal.exe"
                  EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
           DisplayName="Hyperfocal"

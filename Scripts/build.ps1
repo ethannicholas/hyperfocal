@@ -57,7 +57,7 @@ try {
     cmake --build QtShell\build --parallel
     if ($LASTEXITCODE) { throw "cmake build failed" }
 
-    Write-Host "== built QtShell\build\hyperfocal-qt.exe"
+    Write-Host "== built QtShell\build\Hyperfocal.exe"
 } finally {
     Pop-Location
 }

@@ -813,8 +813,13 @@ int main(int argc, char *argv[]) {
     // nothing flashes on screen — since no form of `--selftest` was ever
     // meant to start the GUI.
     if (selftest && argc < 4) {
+        // Named from the running binary rather than a literal: the file is
+        // Hyperfocal.exe on Windows and hyperfocal-qt elsewhere (QtShell/
+        // CMakeLists.txt), and a usage line that names the wrong one is worse
+        // than none.
+        const QString self = QFileInfo(app.applicationFilePath()).fileName();
         qCritical().noquote()
-            << "usage: hyperfocal-qt --selftest <stack-dir> <out.tif> [screenshot.png]\n"
+            << "usage: " + self + " --selftest <stack-dir> <out.tif> [screenshot.png]\n"
                "  <stack-dir>  directory of input frames to open and fuse\n"
                "  <out.tif>    export path; the run passes only if this lands\n"
                "  env: HFQT_STACK2, HFQT_AUTOCONFIRM, HFQT_EXPECT_DISPLAY,\n"

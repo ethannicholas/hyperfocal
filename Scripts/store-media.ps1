@@ -464,11 +464,11 @@ if (-not $Exe) {
     # not by version name, which would reach for a higher-numbered leftover.
     $Exe = Get-ChildItem (Join-Path $root 'dist') -Directory -Filter 'Hyperfocal-*' |
         Sort-Object LastWriteTime -Descending |
-        ForEach-Object { Join-Path $_.FullName 'hyperfocal-qt.exe' } |
+        ForEach-Object { Join-Path $_.FullName 'Hyperfocal.exe' } |
         Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $Exe) { throw "packaging left no hyperfocal-qt.exe under dist\" }
+    if (-not $Exe) { throw "packaging left no Hyperfocal.exe under dist\" }
 }
-if (-not (Test-Path $Exe)) { throw "no hyperfocal-qt.exe at $Exe" }
+if (-not (Test-Path $Exe)) { throw "no Hyperfocal.exe at $Exe" }
 
 $langs = if ($Lang -eq 'all') { $LANGS } else { $Lang.Split(',') }
 $unknown = $langs | Where-Object { $LANGS -notcontains $_ }

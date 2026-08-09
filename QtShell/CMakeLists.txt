@@ -162,3 +162,14 @@ target_link_libraries(hyperfocal-qt PRIVATE
 set_target_properties(hyperfocal-qt PROPERTIES
     BUILD_RPATH "${HYPERFOCAL_BRIDGE_DIR}"
     MACOSX_BUNDLE FALSE)
+
+# On Windows the shell IS the shipping app, and its file name is user-facing:
+# the Start menu entry, Task Manager, the MSIX manifest's Executable=. So the
+# binary is Hyperfocal.exe there; the CMake target keeps its build-tool name.
+# Deliberately Windows-only — off Windows the Qt shell is a dev/validation
+# build that runs beside the macOS app, and naming it Hyperfocal as well would
+# leave `pgrep -x Hyperfocal` (Scripts/run.sh's already-running guard, and the
+# same check for the Qt shell) unable to tell the two shells apart.
+if(WIN32)
+    set_target_properties(hyperfocal-qt PROPERTIES OUTPUT_NAME Hyperfocal)
+endif()

@@ -15,24 +15,30 @@
 param(
     [switch]$Wait,
     [string]$Lang,
-    [Parameter(ValueFromRemainingArguments = $true)]
+    # Position 0 belongs to the pass-through args, not to -Lang. Without it
+    # PowerShell hands -Lang the first positional token, so the documented
+    # `run.ps1 -Wait --selftest <dir> <out>` above set HFQT_LANG=--selftest and
+    # launched an ordinary window instead — the app printed nothing and the run
+    # read as a hung test, which is the exact trap main.cpp's usage check exists
+    # to close, sprung one layer up.
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$AppArgs
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$exe  = Join-Path $root 'QtShell\build\hyperfocal-qt.exe'
+$exe  = Join-Path $root 'QtShell\build\Hyperfocal.exe'
 
 # Checked before the build, not after: Windows holds a running image open, so
-# ninja's relink of hyperfocal-qt.exe (or of the bridge DLL) fails with a
+# ninja's relink of Hyperfocal.exe (or of the bridge DLL) fails with a
 # sharing violation rather than a useful message. The instance is reported
 # rather than killed — the bare executable has no polite quit channel to run
 # the unsaved-work confirmation through, which is the same call Scripts/run.sh
 # makes for the Qt shell, and a second instance also confuses hover/tooltip
 # behavior.
-$running = Get-Process -Name hyperfocal-qt -ErrorAction SilentlyContinue
+$running = Get-Process -Name Hyperfocal -ErrorAction SilentlyContinue
 if ($running) {
-    throw ("a hyperfocal-qt instance is already running (PID " +
+    throw ("a Hyperfocal instance is already running (PID " +
            ($running.Id -join ', ') + ") - quit it first; Windows locks the " +
            "running executable against relink, and there is no polite quit " +
            "channel for the bare executable")
