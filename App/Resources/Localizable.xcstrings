@@ -196,6 +196,71 @@
         }
       }
     },
+    "Converting raw files via Adobe DNG Converter…": {
+      "comment": "Progress shown while transcoding a stack of unsupported raw files to DNG in one batch (Windows raw fallback).",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rohdateien werden mit Adobe DNG Converter konvertiert …"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Convirtiendo los archivos raw con Adobe DNG Converter…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversion des fichiers raw avec Adobe DNG Converter…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversione dei file raw con Adobe DNG Converter…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adobe DNG Converter で RAW ファイルを変換中…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adobe DNG Converter로 RAW 파일 변환 중…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Raw-bestanden converteren met Adobe DNG Converter…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Convertendo os arquivos raw pelo Adobe DNG Converter…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Преобразование raw-файлов через Adobe DNG Converter…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在通过 Adobe DNG Converter 转换 RAW 文件…"
+          }
+        }
+      }
+    },
     "Couldn't align “%@” with the frames around it. Check that the folder holds a single focus stack shot from a steady camera; clearing this frame's checkbox in the Stack list may let the rest fuse.": {
       "comment": "Fuse-failed alert body; %@ is the file name of the frame that would not align.",
       "localizations": {
@@ -13704,6 +13769,71 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在扫描图像…"
+          }
+        }
+      }
+    },
+    "Scanning frames… %1$lld of %2$lld": {
+      "comment": "Progress while reading capture times from the frames being loaded; %1$lld is frames scanned so far, %2$lld the total.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einzelbilder werden erfasst … %1$lld von %2$lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Explorando imágenes… %1$lld de %2$lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyse des images… %1$lld sur %2$lld"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scansione fotogrammi… %1$lld di %2$lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フレームをスキャン中… %2$lld 枚中 %1$lld 枚"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프레임 스캔 중… %2$lld개 중 %1$lld개"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opnamen scannen… %1$lld van %2$lld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Examinando imagens… %1$lld de %2$lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканирование кадров… %1$lld из %2$lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在扫描图像… %2$lld 张中的 %1$lld 张"
           }
         }
       }

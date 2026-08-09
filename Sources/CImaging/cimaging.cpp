@@ -794,13 +794,19 @@ extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, flo
     // High-Efficiency NEFs, or a camera newer than this LibRaw) surfaces as
     // hf_err_format — the signal ImageFile uses to try the DNG-Converter
     // fallback — distinct from a genuine open/decode error.
+    const auto tOpen = std::chrono::steady_clock::now();
     int oc = hfRawOpen(raw, path, rawBytes);
     if (oc == LIBRAW_FILE_UNSUPPORTED) { raw.recycle(); return hf_err_format; }
     if (oc != LIBRAW_SUCCESS) return hf_err_open;
+    const double openMs = msSince(tOpen);
+    const auto tUnpack = std::chrono::steady_clock::now();
     int uc = raw.unpack();
     if (uc == LIBRAW_FILE_UNSUPPORTED) { raw.recycle(); return hf_err_format; }
     if (uc != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
+    const double unpackMs = msSince(tUnpack);
+    const auto tProcess = std::chrono::steady_clock::now();
     if (raw.dcraw_process() != LIBRAW_SUCCESS) { raw.recycle(); return hf_err_decode; }
+    const double processMs = msSince(tProcess);
     int st = 0;
     libraw_processed_image_t* img = raw.dcraw_make_mem_image(&st);
     if (!img || img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3 || img->bits != 16) {
@@ -812,6 +818,7 @@ extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, flo
     const size_t px = (size_t)w * h;
     float* rgba = (float*)std::malloc(px * 4 * sizeof(float));
     if (!rgba) { LibRaw::dcraw_clear_mem(img); raw.recycle(); return hf_err_decode; }
+    const auto tFloat = std::chrono::steady_clock::now();
     const uint16_t* src = (const uint16_t*)img->data;
     for (size_t i = 0; i < px; i++) {
         rgba[i * 4 + 0] = src[i * 3 + 0] / 65535.0f;
@@ -819,14 +826,26 @@ extern "C" hf_status hf_decode_raw(const char* path, int* out_w, int* out_h, flo
         rgba[i * 4 + 2] = src[i * 3 + 2] / 65535.0f;
         rgba[i * 4 + 3] = 1.0f;
     }
+    const double floatMs = msSince(tFloat);
     LibRaw::dcraw_clear_mem(img);
     raw.recycle();
     // The 16-bit values are linear ProPhoto (gamm forced to unity above);
     // convert primaries + white point + transfer into Display P3 in one step.
+    const auto tColor = std::chrono::steady_clock::now();
     cmsHPROFILE pp = makeLinearProPhoto();
     cmsHPROFILE p3 = makeDisplayP3();
     bool ok = convertRGBA(rgba, (int)px, pp, p3);
     cmsCloseProfile(pp); cmsCloseProfile(p3);
+    // HYPERFOCAL_DECODE_DEBUG=1: the per-phase split for raw decode, which is
+    // what a stack's wall clock is mostly made of (the JPEG paths above carry
+    // the same tap). Phases are named for what they cost, not for who owns
+    // them: `open` is reading the file, `unpack`+`process` are LibRaw's, and
+    // `float`+`color` are ours — worth keeping visible, because the last two
+    // are the ones this project can do anything about.
+    if (decodeDebug())
+        fprintf(stderr, "decodeRAW %dx%d: open %.0fms, unpack %.0fms, "
+                "process %.0fms, float %.0fms, color %.0fms\n",
+                w, h, openMs, unpackMs, processMs, floatMs, msSince(tColor));
     if (!ok) { std::free(rgba); return hf_err_color; }
     *out_w = w; *out_h = h; *out_rgba = rgba;
     return hf_ok;
@@ -1550,6 +1569,11 @@ struct ExifMeta {
 // Read up to maxBytes of a file (ACP-aware fopen under the process manifest,
 // like hfRawOpen). EXIF lives in the header — a bounded prefix keeps stack
 // splitting from re-reading whole 45 MP raws per frame.
+//
+// The prefix is still enormous next to what EXIF actually needs, so nothing
+// on the scan path should reach here: see parseExifCaptureTime below, which
+// seeks to the tags instead. This buffered read stays for the full-metadata
+// entry point, which runs once per export rather than once per frame.
 std::vector<uint8_t> readPrefix(const char* path, size_t maxBytes) {
     std::vector<uint8_t> buf;
     FILE* f = fopen(path, "rb");
@@ -1655,10 +1679,37 @@ bool parseTiffTimeTags(const char* path, ExifMeta& out) {
     return !out.dateTimeOriginal.empty() || !out.dateTime.empty();
 }
 
+// Capture time only, as cheaply as the container allows — the scan path.
+//
+// Loading a memory card asks this once per frame, for hundreds of frames, and
+// the answer is a 20-byte string that every camera writes into the first few
+// tens of KB. parseExifMeta below would read a 4 MiB prefix to find it (and
+// for a TIFF-based raw, copy that prefix a second time to prepend the JPEG
+// APP1 marker easyexif wants) — measured on this project's own NEFs, every
+// tag needed sits within the first 34 KB, so the prefix read moves ~126x more
+// bytes than the parse consumes. That is invisible on an SSD and brutal on
+// the card the frames are actually still sitting on: 400 frames x 4 MiB is
+// 1.6 GB of card I/O, tens of seconds at reader speeds, for ~8 KB of dates.
+//
+// So walk the IFDs directly (parseTiffTimeTags seeks to each directory and
+// reads only its entries) and keep the prefix read as the fallback for
+// containers that walk can't handle — JPEG, and non-TIFF raws like CR3.
+bool parseExifMeta(const char* path, ExifMeta& out);
+
+bool parseExifCaptureTime(const char* path, ExifMeta& out) {
+    if (parseTiffTimeTags(path, out)) return true;
+    out = ExifMeta{};   // discard anything the failed walk half-filled
+    return parseExifMeta(path, out);
+}
+
 // Fill `out` from a permissive read. Returns false if nothing could be parsed.
-bool parseExifMeta(const char* path, ExifMeta& out) {
-    static const size_t kPrefix = 4 * 1024 * 1024;
-    std::vector<uint8_t> bytes = readPrefix(path, kPrefix);
+//
+// `prefix` bounds the header read. Callers walk it up: a JPEG's APP1 segment
+// is capped at 64 KB and sits among the first segments, so the small probe
+// answers nearly every file, and only a container that hides its directories
+// further in pays for the big read.
+bool parseExifMetaPrefix(const char* path, ExifMeta& out, size_t prefix) {
+    std::vector<uint8_t> bytes = readPrefix(path, prefix);
     if (bytes.size() < 8) return false;
 
     easyexif::EXIFInfo info;
@@ -1723,11 +1774,29 @@ bool parseExifMeta(const char* path, ExifMeta& out) {
     return true;
 }
 
+bool parseExifMeta(const char* path, ExifMeta& out) {
+    static const size_t kProbePrefix = 256 * 1024;
+    static const size_t kFullPrefix = 4 * 1024 * 1024;
+    // A probe that produced a capture time is the whole answer. One that
+    // produced only make/model is NOT: the LibRaw branch reports success on
+    // identification alone, and a container whose timestamp sits past the
+    // probe would silently become an undated frame — which suppresses the
+    // burst split for the entire load. Re-read before believing that.
+    const bool probed = parseExifMetaPrefix(path, out, kProbePrefix);
+    if (probed && (!out.dateTimeOriginal.empty() || !out.dateTime.empty())) return true;
+    ExifMeta full;
+    if (parseExifMetaPrefix(path, full, kFullPrefix)) {
+        out = full;
+        return true;
+    }
+    return probed;
+}
+
 } // namespace
 
 extern "C" hf_status hf_exif_capture_epoch(const char* path, double* out_epoch) {
     ExifMeta m;
-    if (!parseExifMeta(path, m)) return hf_err_open;
+    if (!parseExifCaptureTime(path, m)) return hf_err_open;
     std::string dt = !m.dateTimeOriginal.empty() ? m.dateTimeOriginal : m.dateTime;
     if (dt.empty()) return hf_err_format;
     // "YYYY:MM:DD HH:MM:SS"

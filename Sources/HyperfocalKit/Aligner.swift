@@ -153,6 +153,10 @@ public enum Aligner {
         guard n > 1 else {
             return RegistrationOutput(transforms: [matrix_identity_float3x3], issues: [])
         }
+        // Registration is the first thing to touch every frame, so it is where
+        // a stack needing the raw transcode fallback discovers it. Name the
+        // list first so that discovery converts the stack in one pass.
+        ImageFile.expectStack(urls: urls)
 
         // Decode + register are the two units of work; report them as one span,
         // handing back the frame just touched so a UI can cycle its preview.

@@ -39,6 +39,22 @@ public enum ImageFile {
         rawExtensions.contains(url.pathExtension.lowercased())
     }
 
+    /// Announces the whole frame list before a stack-wide decode begins.
+    ///
+    /// Off Apple this lets the raw transcode fallback (`RawConverter`) batch:
+    /// when a stack's raws need the Adobe DNG Converter, the first frame to
+    /// discover that converts the entire list in one process instead of
+    /// relaunching the converter per frame — measured 6x on 45 MP NEFs. No-op
+    /// on Apple, where CIRAW decodes these natively and there is no fallback
+    /// to batch. Safe and cheap to call more than once per stack: it only
+    /// records the list, and the batch itself runs at most once because every
+    /// later frame is a cache hit.
+    public static func expectStack(urls: [URL]) {
+        #if !canImport(CoreGraphics)
+        RawConverter.shared.expectStack(urls)
+        #endif
+    }
+
     /// A gray plane decoded for registration, possibly at a reduced scale
     /// (JPEG DCT-domain 1/2 or 1/4 on the CImaging path). `decodeFactor` is
     /// full-resolution pixels per gray pixel (1, 2, or 4 — scaled dims are

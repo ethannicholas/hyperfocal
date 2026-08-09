@@ -2073,14 +2073,41 @@ public final class AppModel: ObservableObject {
         stageText = localizedString("Scanning frames…", comment: "")
         stageFraction = 0
         let orderByCaptureTime = orderByCaptureTime
+        scanToken &+= 1
+        let token = scanToken
         Task.detached(priority: .userInitiated) { [weak self] in
             let groups = Self.scanGroups(urls: urls,
-                                         orderByCaptureTime: orderByCaptureTime)
+                                         orderByCaptureTime: orderByCaptureTime) { done, total in
+                // Card loads are slow enough to look hung — a session is
+                // hundreds of frames and the card is the slowest disk the app
+                // ever reads. Both shells already render stageText/
+                // stageFraction, so the count needs no new UI on either side.
+                //
+                // These hop to main from decode workers, so one can still be
+                // in flight when the scan finishes; `token` keeps a straggler
+                // from painting "Scanning frames…" over the stage that came
+                // after it.
+                Task { @MainActor [weak self] in
+                    guard let self, self.scanToken == token, self.phase.isRunning
+                    else { return }
+                    self.stageText = String(format: localizedString(
+                        "Scanning frames… %1$lld of %2$lld",
+                        comment: "Progress while reading capture times from the frames being loaded; %1$lld is frames scanned so far, %2$lld the total"),
+                        Int64(done), Int64(total))
+                    self.stageFraction = Double(done) / Double(max(total, 1))
+                }
+            }
             await MainActor.run { [weak self] in
-                self?.installScanned(groups, replacing: replacing)
+                guard let self else { return }
+                self.scanToken &+= 1     // retires this scan's stragglers
+                self.installScanned(groups, replacing: replacing)
             }
         }
     }
+
+    /// Identifies the in-flight frame scan, so its progress updates can be
+    /// retired the moment it finishes (see `loadStacks`).
+    private var scanToken: UInt64 = 0
 
     /// Every directory (recursively) that directly contains images becomes a
     /// group; loose files form one group of their own. Each group also carries
@@ -2088,8 +2115,10 @@ public final class AppModel: ObservableObject {
     /// `orderByCaptureTime` picks the frame order within each group/burst
     /// (capture time survives filename-counter rollover; name order when off
     /// or when any frame is undated).
-    nonisolated private static func scanGroups(urls: [URL], orderByCaptureTime: Bool)
-        -> [(name: String, frames: [URL], bursts: [[URL]], dates: [URL: Date])] {
+    nonisolated private static func scanGroups(
+        urls: [URL], orderByCaptureTime: Bool,
+        progress: ((Int, Int) -> Void)? = nil
+    ) -> [(name: String, frames: [URL], bursts: [[URL]], dates: [URL: Date])] {
         let fm = FileManager.default
         var groups = [(name: String, frames: [URL])]()
         var loose = [URL]()
@@ -2125,9 +2154,18 @@ public final class AppModel: ObservableObject {
         }
         // One EXIF pass per group feeds the frame order, the burst split,
         // and the order sanity check (hundreds of header reads on a card
-        // load — don't do it twice).
+        // load — don't do it twice). The reads run concurrently and report
+        // against the whole load's frame count, not each group's, so the
+        // progress a multi-folder drop shows advances once from 0 to done
+        // instead of restarting per folder.
+        let total = groups.reduce(0) { $0 + $1.frames.count }
+        var completedBefore = 0
         return groups.map { group in
-            let dates = group.frames.map(StackSplitter.captureDate(of:))
+            let base = completedBefore
+            completedBefore += group.frames.count
+            let dates = StackSplitter.captureDates(of: group.frames) { done, _ in
+                progress?(base + done, total)
+            }
             var dated = [URL: Date]()
             for (url, date) in zip(group.frames, dates) {
                 if let date { dated[url] = date }
