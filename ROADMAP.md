@@ -458,6 +458,27 @@ builds:
        parking a real pointer. A trailer would need a real encoder path and
        is deliberately not attempted — Store trailers are optional.
 
+3. **Translate the documentation site's main pages (blocked on a content
+   pass).** The site now has the localized-page structure: per-language
+   subdirectories named by catalog tag (`Site/de/…` through `Site/zh-Hans/`,
+   same ten tags as `Localizable.xcstrings`), each page carrying the full
+   `hreflang` alternate block (absolute URLs, `x-default` → English) and a
+   `.langs` switcher footer (style in `Site/style.css`; current language is an
+   unlinked `<span class="current">`). `privacy.html` exists in all eleven
+   languages under that scheme — use it as the template. `index.html` and
+   `tutorial.html` are English-only **on purpose**: they need an editorial
+   content pass first, and translating them before it would mean redoing all
+   ten translations. After the content pass, translate both pages into all ten
+   languages (the translation rules in CLAUDE.md apply: the agent authors the
+   translations, no deferral), place them at `Site/<tag>/{index,tutorial}.html`,
+   flip the localized privacy pages' nav links (currently `../index.html` /
+   `../tutorial.html`) to the sibling localized pages, and extend each page's
+   hreflang block. Style notes that match the app's catalog: de/es/it are
+   informal (du/tú/tu), fr formal (vous), nl formal (u/uw), es says «equipo»
+   not «ordenador», ru uses «ё», zh-Hans avoids second-person pronouns, ja is
+   です/ます. Done looks like: every page reachable in every language with a
+   consistent switcher, and no mixed-language page pairs.
+
 ## Engine performance
 
 Throughput breakdowns, measured dead-ends, ablation taps, and the per-pixel

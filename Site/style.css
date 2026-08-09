@@ -276,6 +276,18 @@ td:first-child { white-space: nowrap; }
   color: var(--text);
 }
 
+/* Language switcher (localized pages) */
+
+.langs {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 0.85em;
+  color: var(--text-dim);
+}
+
+.langs .current { color: var(--text); font-weight: 600; }
+
 /* Footer */
 
 footer {
