@@ -367,6 +367,23 @@ ApplicationWindow {
     // scrolled elsewhere on purpose.
     property int trackedSelectedFrame: -1
     property int trackedSelectedStack: -1
+    // Minimal adjustment for a frame row the tree has already realized:
+    // nothing moves while the row is fully visible, which is the whole of
+    // the plain-click case. Returns false when the row isn't instantiated
+    // (collapsed stack, or a delegate too far offscreen to exist yet), so
+    // the caller can fall back to bringing its stack on screen first.
+    function nudgeFrameRowIntoView(stackIndex, frameIndex) {
+        var stackItem = stackList.itemAtIndex(stackIndex)
+        var rowItem = stackItem && stackItem.frameRepeater
+            ? stackItem.frameRepeater.itemAt(frameIndex) : null
+        if (!rowItem) return false
+        var pos = rowItem.mapToItem(stackList.contentItem, 0, 0)
+        if (pos.y < stackList.contentY)
+            stackList.contentY = pos.y
+        else if (pos.y + rowItem.height > stackList.contentY + stackList.height)
+            stackList.contentY = pos.y + rowItem.height - stackList.height
+        return true
+    }
     function scrollSelectedFrameIntoView() {
         // Multi-selection (fusion progress selects the in-flight working
         // set): anchor on its LAST frame — the list is ascending, and a
@@ -389,21 +406,23 @@ ApplicationWindow {
             // screen — reach into its frame Repeater for the exact row.
             var stackIndex = Shell.selectedStack
             if (stackIndex < 0) return
+            // Row already realized: adjust from wherever the list sits, so
+            // clicking a visible row scrolls nothing. positionViewAtIndex
+            // is deliberately NOT the first move — it aims at the whole
+            // STACK delegate, header and disclosed frames together, and
+            // ListView.Contain drags that entire block into view whenever
+            // any of it is off screen (a delegate taller than the 300px
+            // viewport snaps to its header outright). The fine adjustment
+            // below then had to push back down until the clicked row sat
+            // at the bottom edge — so clicking a row already in plain
+            // sight jumped the list and parked that row at the bottom.
+            if (nudgeFrameRowIntoView(stackIndex, frameIndex)) return
+            // Not instantiated: bring the stack on screen, then fine-adjust
+            // once layout settles, like native's dispatch-after-layout
+            // comment on its own scrollTo call.
             stackList.positionViewAtIndex(stackIndex, ListView.Contain)
-            // The stack's delegate (and its nested frame Repeater) may not
-            // be instantiated until layout settles after the scroll above —
-            // finish the fine adjustment next tick, like native's dispatch
-            // -after-layout comment on its own scrollTo call.
             Qt.callLater(function() {
-                var stackItem = stackList.itemAtIndex(stackIndex)
-                var rowItem = stackItem && stackItem.frameRepeater
-                    ? stackItem.frameRepeater.itemAt(frameIndex) : null
-                if (!rowItem) return
-                var pos = rowItem.mapToItem(stackList.contentItem, 0, 0)
-                if (pos.y < stackList.contentY)
-                    stackList.contentY = pos.y
-                else if (pos.y + rowItem.height > stackList.contentY + stackList.height)
-                    stackList.contentY = pos.y + rowItem.height - stackList.height
+                nudgeFrameRowIntoView(stackIndex, frameIndex)
             })
         } else {
             frameList.positionViewAtIndex(frameIndex, ListView.Contain)
