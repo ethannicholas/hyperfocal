@@ -10,6 +10,44 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Prepend a directory to PATH unless it is already on it. Every load used to
+# prepend another copy of everything it resolved, and the vcvarsall import
+# below re-emits the WHOLE PATH on top of that, so each load grew it by ~500
+# characters. Scripts\build.ps1 dot-sources this file, so a terminal that runs
+# Scripts\run.ps1 a dozen times crosses ~8000 characters - and there the
+# `cmd /c vcvarsall && set` round-trip comes back truncated, so the import
+# silently installs a half-initialized environment. The tail of PATH is what
+# gets cut, which is exactly where the toolchains live: cl goes first, then
+# swift, and the build dies with "The term 'swift' is not recognized" in a
+# shell that worked ten minutes earlier. Idempotent loads keep PATH bounded
+# however many times the build runs from one terminal.
+function Add-PathDir {
+    param([string]$Dir)
+    if (-not $Dir) { return }
+    $trimmed = $Dir.TrimEnd('\')
+    foreach ($entry in ($env:Path -split ';')) {
+        if ($entry -and $entry.TrimEnd('\') -ieq $trimmed) { return }
+    }
+    $env:Path = "$Dir;" + $env:Path
+}
+
+# The Windows core directories, put back when the shell has lost them. No
+# build should have to think about these - but PATH is process state that
+# anything in a long-lived terminal can overwrite, and once System32 is gone
+# `cmd.exe` cannot be resolved, which is how vcvarsall is invoked below. The
+# error that produces ("The term 'cmd' is not recognized") names the build
+# script rather than the environment, and the shell cannot repair itself
+# because the repair needs cmd. Restoring them is the same move the Swift and
+# winget blocks below make, one layer down. Added in reverse so System32 ends
+# up foremost.
+$coreDirs = @("$env:SystemRoot\System32\WindowsPowerShell\v1.0",
+              "$env:SystemRoot\System32\Wbem",
+              $env:SystemRoot,
+              "$env:SystemRoot\System32")
+foreach ($core in $coreDirs) {
+    if ($core -and (Test-Path $core)) { Add-PathDir $core }
+}
+
 # Swift: the installer records its PATH additions in the registry — the user
 # hive for a per-user install, the machine hive for an elevated/CI install —
 # which an already-running shell won't have picked up. Check both.
@@ -20,9 +58,13 @@ if (-not (Get-Command swift -ErrorAction SilentlyContinue)) {
     )
     foreach ($regPath in $regPaths) {
         if (-not $regPath) { continue }
-        $swiftDirs = ($regPath -split ';') | Where-Object { $_ -match 'Swift' }
+        $swiftDirs = @(($regPath -split ';') | Where-Object { $_ -match 'Swift' })
         if ($swiftDirs) {
-            $env:Path = ($swiftDirs -join ';') + ';' + $env:Path
+            # Added back to front so the registry's own order survives the
+            # prepend.
+            for ($i = $swiftDirs.Count - 1; $i -ge 0; $i--) {
+                Add-PathDir $swiftDirs[$i]
+            }
             break
         }
     }
@@ -50,12 +92,12 @@ function Add-BuildTool {
     if (Get-Command $Name -ErrorAction SilentlyContinue) { return }
     foreach ($dir in $FallbackDirs) {
         if ($dir -and (Test-Path (Join-Path $dir "$Name.exe"))) {
-            $env:Path = "$dir;" + $env:Path
+            Add-PathDir $dir
             return
         }
     }
     if (Test-Path (Join-Path $wingetLinks "$Name.exe")) {
-        $env:Path = "$wingetLinks;" + $env:Path
+        Add-PathDir $wingetLinks
         return
     }
     # Last resort: the package directory itself. Nested arbitrarily deep (CMake
@@ -64,7 +106,7 @@ function Add-BuildTool {
                -ErrorAction SilentlyContinue |
            Where-Object { $_.FullName -like "*$PackagePrefix*" } |
            Select-Object -First 1
-    if ($exe) { $env:Path = "$($exe.Directory.FullName);" + $env:Path }
+    if ($exe) { Add-PathDir $exe.Directory.FullName }
 }
 
 Add-BuildTool -Name cmake -PackagePrefix 'Kitware.CMake' `
@@ -90,20 +132,61 @@ $chosenVcpkgRoot = $env:VCPKG_ROOT
 # MSVC + Windows SDK via vcvarsall for the native arch. vcvarsall locates the
 # toolset with vswhere.exe and silently produces a half-initialized
 # environment when that isn't on PATH — put the Installer dir there first.
+#
+# Skipped when vcvarsall has already run in this process FOR THIS TARGET ARCH
+# (VSCMD_VER + VSCMD_ARG_TGT_ARCH, which it sets itself): the import copies
+# every variable the batch file emits, PATH included, so re-running it
+# concatenates the toolchain directories onto a PATH that already has them.
+# That is the growth Add-PathDir cannot prevent - the duplicate comes from
+# vcvarsall's own output, not from us - and it is what eventually truncates.
+# Matching on the arch too keeps a Developer PowerShell that was opened for a
+# different target (x86) from being mistaken for an environment we can reuse.
 $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
-if (Test-Path "$installer\vswhere.exe") {
-    $env:Path = "$installer;" + $env:Path
+$arch = switch ($env:PROCESSOR_ARCHITECTURE) { 'ARM64' { 'arm64' } default { 'x64' } }
+$vcvarsDone = $env:VSCMD_VER -and $env:VSCMD_ARG_TGT_ARCH -eq $arch
+if ((Test-Path "$installer\vswhere.exe") -and -not $vcvarsDone) {
+    Add-PathDir $installer
     $vsRoot = & "$installer\vswhere.exe" -products * -latest `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath
     if (-not $vsRoot) { $vsRoot = & "$installer\vswhere.exe" -products * -latest -property installationPath }
-    $arch = switch ($env:PROCESSOR_ARCHITECTURE) { 'ARM64' { 'arm64' } default { 'x64' } }
     $vcvars = "$vsRoot\VC\Auxiliary\Build\vcvarsall.bat"
     if (Test-Path $vcvars) {
-        foreach ($line in (cmd /c "`"$vcvars`" $arch > nul 2>&1 && set")) {
-            if ($line -match '^([^=]+)=(.*)$') {
-                [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+        # cmd.exe by absolute path (ComSpec), never as a bare `cmd`: this line
+        # runs against whatever PATH the calling shell has, and if that PATH
+        # has lost System32 - which is precisely the state a bad import below
+        # leaves behind - a bare `cmd` cannot be resolved. The shell then fails
+        # with "The term 'cmd' is not recognized" from a build script, with no
+        # hint that its own PATH is the casualty, and cannot repair itself
+        # because repairing it needs this very call.
+        $comSpec = if ($env:ComSpec) { $env:ComSpec }
+                   else { Join-Path $env:SystemRoot 'System32\cmd.exe' }
+        $emitted = & $comSpec /c "`"$vcvars`" $arch > nul 2>&1 && set"
+        # Nothing is applied unless what came back is a *complete* environment.
+        # The import copies every line verbatim, so a partial or truncated
+        # `set` dump used to be installed as-is - replacing PATH with one that
+        # has neither System32 nor the toolchains on it. That shell then failed
+        # every later build ("the term 'swift' is not recognized", then 'cmd'),
+        # and nothing said the environment had been overwritten. System32 is
+        # the canary: vcvarsall always emits it, so its absence means the dump
+        # is not one to trust.
+        $system32 = (Join-Path $env:SystemRoot 'System32').TrimEnd('\')
+        $emittedPath = @($emitted | Where-Object { $_ -match '^Path=' } |
+                         Select-Object -First 1) -replace '^Path=', ''
+        $complete = $emittedPath -and
+            @($emittedPath -split ';' |
+              Where-Object { $_ -and $_.TrimEnd('\') -ieq $system32 }).Count -gt 0
+        if ($complete) {
+            foreach ($line in $emitted) {
+                if ($line -match '^([^=]+)=(.*)$') {
+                    [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+                }
             }
+        } else {
+            Write-Warning ("vcvarsall returned an incomplete environment " +
+                           "(no System32 on the Path it emitted); keeping this " +
+                           "shell's environment instead of overwriting it - " +
+                           "MSVC will be missing, so open a fresh terminal")
         }
     }
 }
@@ -117,7 +200,7 @@ if ($env:VCPKG_ROOT) {
                else { 'x64-windows' }
     $env:VCPKG_TRIPLET = $triplet
     $bin = Join-Path $env:VCPKG_ROOT "installed\$triplet\bin"
-    if (Test-Path $bin) { $env:Path = "$bin;" + $env:Path }
+    if (Test-Path $bin) { Add-PathDir $bin }
 }
 
 # wgpu_native.dll must be findable at runtime too, and by exactly the same
@@ -138,7 +221,7 @@ if (-not $env:WGPU_ROOT) {
 if ($env:WGPU_ROOT) {
     $wgpuLib = Join-Path $env:WGPU_ROOT 'lib'
     if (Test-Path (Join-Path $wgpuLib 'wgpu_native.dll')) {
-        $env:Path = "$wgpuLib;" + $env:Path
+        Add-PathDir $wgpuLib
     }
 }
 
@@ -167,7 +250,7 @@ if (-not $env:QT_KIT) {
 }
 if ($env:QT_KIT) {
     $qtBin = Join-Path $env:QT_KIT 'bin'
-    if (Test-Path $qtBin) { $env:Path = "$qtBin;" + $env:Path }
+    if (Test-Path $qtBin) { Add-PathDir $qtBin }
 }
 
 Write-Host "swift : $((Get-Command swift -ErrorAction SilentlyContinue).Source)"
