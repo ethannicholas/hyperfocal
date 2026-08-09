@@ -1587,11 +1587,48 @@ final class RetouchEventView: PanZoomEventView {
     }
 
 
+    /// The paint cursor. `NSCursor.crosshair` is a solid black cross, which
+    /// disappears over the dark parts of an image — for a stacked subject on
+    /// a black backdrop, most of the frame. This is the same cross under a
+    /// white halo, so whichever the background, one of the two contrasts with
+    /// it; the centre stays transparent so the cursor never covers the pixel
+    /// it aims at. The Qt shell draws the same glyph at the same measurements
+    /// (Shell.cpp's `crosshairCursor()`) — one cursor, two shells.
+    /// A 24pt grid of 1pt cells, so every edge lands on a device pixel at 1x
+    /// and 2x alike — a 1pt line centred on a 24pt cursor would straddle two
+    /// pixels at 1x and blur the core into its halo, which is what the Qt
+    /// shell's first attempt did on a 1x screen (grey arms, white tips). The
+    /// core is the cell at 12, half a point off the hotspot: invisible, and
+    /// the price of an odd-width line on an even grid.
+    static let paintCursor: NSCursor = {
+        let size = NSSize(width: 24, height: 24)
+        // White first and 1pt proud of the black on every side, so what is
+        // left once the core is drawn down its middle is the halo.
+        let arms: [(from: CGFloat, to: CGFloat, edge: CGFloat, width: CGFloat,
+                    color: NSColor)] =
+            [(1, 11, 11, 3, .white), (2, 10, 12, 1, .black)]
+        let image = NSImage(size: size, flipped: false) { _ in
+            for arm in arms {
+                arm.color.setFill()
+                let length = arm.to - arm.from
+                // The opposite arm, reflected through the core's centre line
+                // at cell 12.5: a span [from, to) becomes [25 - to, 25 - from).
+                let mirror = 25 - arm.to
+                NSRect(x: arm.from, y: arm.edge, width: length, height: arm.width).fill()
+                NSRect(x: mirror, y: arm.edge, width: length, height: arm.width).fill()
+                NSRect(x: arm.edge, y: arm.from, width: arm.width, height: length).fill()
+                NSRect(x: arm.edge, y: mirror, width: arm.width, height: length).fill()
+            }
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: 12, y: 12))
+    }()
+
     /// Painting happens at a point; the arrow cursor obscures it, the brush
     /// circle only shows the radius. In drag mode it becomes a hand, open
     /// until the pan is actually under way.
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: panModifierHeld ? .openHand : .crosshair)
+        addCursorRect(bounds, cursor: panModifierHeld ? .openHand : Self.paintCursor)
     }
 
     /// ⌘ held: the next left-drag pans instead of painting. Ctrl is not
@@ -1613,7 +1650,7 @@ final class RetouchEventView: PanZoomEventView {
     }
 
     private func setCursorForModifier() {
-        (panModifierHeld ? NSCursor.openHand : NSCursor.crosshair).set()
+        (panModifierHeld ? NSCursor.openHand : Self.paintCursor).set()
     }
 
     override func flagsChanged(with event: NSEvent) {

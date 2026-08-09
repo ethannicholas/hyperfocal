@@ -152,8 +152,10 @@ inline QJsonObject geometry(State *state) {
     r["brushRadius"] = shell->retouchBrushRadius();
     // Retouch drag mode shows up as nothing but a cursor, and a cursor is
     // the one thing a window grab does not capture — so the shape is
-    // reported as a number (Qt::CursorShape: 2 cross, 17 open hand, 18
-    // closed hand) rather than screenshotted.
+    // reported as a number (Qt::CursorShape: 17 open hand, 18 closed hand,
+    // 24 BitmapCursor = the drawn paint crosshair, which is an image rather
+    // than a shape because the system cross is solid black and vanishes over
+    // a dark image — see Shell::setCrosshairCursor) rather than screenshotted.
     r["panModifier"] = shell->panModifierHeld() ? 1 : 0;
     if (QQuickItem *canvas = itemOf(state->engine,
                                     QStringLiteral("retouch.canvas"))) {

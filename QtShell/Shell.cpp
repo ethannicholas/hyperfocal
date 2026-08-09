@@ -25,6 +25,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QQuickItem>
+#include <QQuickWindow>
 #include <QTransform>
 #include <QUrl>
 #include <QVector>
@@ -578,6 +579,63 @@ const QVector<QCursor> &rotateCursors() {
     return cursors;
 }
 
+// The retouch paint cursor. Qt::CrossCursor is the platform's own, and on
+// Windows that is a solid black cross with no outline — invisible over the
+// dark parts of an image, which for a stacked subject on a black backdrop is
+// most of the frame. Drawn here instead as a thin black cross under a white
+// halo, so whichever the background is, one of the two contrasts with it; the
+// centre is left transparent so the cursor never covers the pixel it aims at.
+// The Mac app draws the same glyph at the same measurements
+// (ContentView.swift's RetouchEventView.paintCursor) — one cursor, two shells.
+// Built per integer scale, NOT once at 2x. Qt hands the platform plugin a
+// pixmap and a device pixel ratio, and QWindowsCursor rescales it by
+// screenDpr / pixmapDpr — so a 2x glyph on a 1x screen is resampled 2:1 with
+// smoothing, which averages the 1pt black core into its white halo. The
+// result is a cursor with grey arms and white tips: every part of the design
+// blurred into the part next to it. Drawing at the scale the screen actually
+// uses is what keeps it a black cross with a white outline.
+//
+// The measurements are a 24pt grid of 1pt cells, so every edge lands on a
+// device pixel at any integer scale (a 1pt line centred on a 24pt cursor
+// would straddle two pixels at 1x, which is the same blur by another route).
+// The cross's core is the cell at 12, half a point off the hotspot at 12 —
+// invisible, and the price of an odd-width line on an even grid.
+QCursor buildCrosshairCursor(int scale) {
+    const int s = scale;
+    QPixmap pm(24 * s, 24 * s);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    // White first and 1pt proud of the black on every side, so what is left
+    // once the core is drawn down its middle is the halo.
+    struct Arm { int from, to, edge, width; QColor color; };
+    const Arm arms[2] = {{1, 11, 11, 3, Qt::white}, {2, 10, 12, 1, Qt::black}};
+    for (const Arm &a : arms) {
+        const int length = (a.to - a.from) * s;
+        // The opposite arm, reflected through the core's centre line at cell
+        // 12.5: a span [from, to) becomes [25 - to, 25 - from).
+        const int mirror = (25 - a.to) * s;
+        const int edge = a.edge * s, width = a.width * s;
+        p.fillRect(a.from * s, edge, length, width, a.color);
+        p.fillRect(mirror, edge, length, width, a.color);
+        p.fillRect(edge, a.from * s, width, length, a.color);
+        p.fillRect(edge, mirror, width, length, a.color);
+    }
+    p.end();
+    pm.setDevicePixelRatio(s);
+    return QCursor(pm, 12, 12);                 // hotspot: centre, in points
+}
+
+QCursor crosshairCursor(qreal dpr) {
+    // Rounded to an integer: 1 and 2 are the ratios that matter and both come
+    // out pixel-exact. A fractional scale (Windows at 125%) still leaves Qt a
+    // little rescaling to do, but from 1.25x rather than from 2:1.
+    const int scale = qBound(1, qRound(dpr), 4);
+    static QHash<int, QCursor> cache;
+    const auto cached = cache.constFind(scale);
+    if (cached != cache.constEnd()) return cached.value();
+    return *cache.insert(scale, buildCrosshairCursor(scale));
+}
+
 } // namespace
 
 void Shell::setCursorShape(QQuickItem *item, int shape) {
@@ -593,6 +651,15 @@ void Shell::setRotateCursor(QQuickItem *item, int sector) {
         return;
     }
     item->setCursor(cursors.at(((sector % 8) + 8) % 8));
+}
+
+void Shell::setCrosshairCursor(QQuickItem *item) {
+    if (!item) return;
+    // The item's own window, not the primary screen: on a mixed-DPI desk the
+    // glyph has to match the screen this canvas is actually on.
+    const qreal dpr = item->window() ? item->window()->devicePixelRatio()
+                                     : qGuiApp->devicePixelRatio();
+    item->setCursor(crosshairCursor(dpr));
 }
 
 bool Shell::beginCrop() { return hf_begin_crop() != 0; }

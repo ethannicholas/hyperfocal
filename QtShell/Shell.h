@@ -247,6 +247,9 @@ public:
     /// eight orientation-matched rotate glyphs (0 = top-left, clockwise).
     Q_INVOKABLE void setCursorShape(QQuickItem *item, int shape);
     Q_INVOKABLE void setRotateCursor(QQuickItem *item, int sector);
+    /// The retouch overlay's paint cursor — a drawn crosshair rather than
+    /// Qt::CrossCursor, whose solid black disappears over a dark image.
+    Q_INVOKABLE void setCrosshairCursor(QQuickItem *item);
 
     Q_INVOKABLE bool beginCrop();
     Q_INVOKABLE bool acceptCrop();

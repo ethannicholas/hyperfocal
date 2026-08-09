@@ -58,9 +58,22 @@ Item {
         // modifier, so a middle-drag (the other pan route, no modifier at
         // all) gets the closed hand too. A paint stroke never reaches the
         // pane, so `dragging` cannot mean painting.
-        cursorShape: overlay.pane.dragging ? Qt.ClosedHandCursor
-                     : Shell.panModifierHeld ? Qt.OpenHandCursor
-                                             : Qt.CrossCursor
+        //
+        // Driven imperatively rather than by a cursorShape binding, as the
+        // crop overlay's rotate cursors are: the crosshair is a drawn image
+        // (Shell::setCrosshairCursor — the system one is solid black and
+        // vanishes over a dark image), which QML's shape enum cannot name.
+        readonly property int cursorKind: overlay.pane.dragging ? 0
+                                          : Shell.panModifierHeld ? 1 : 2
+        onCursorKindChanged: updateCursor()
+        Component.onCompleted: updateCursor()
+        function updateCursor() {
+            if (cursorKind === 2)
+                Shell.setCrosshairCursor(mouse)
+            else
+                Shell.setCursorShape(mouse, cursorKind === 0
+                                     ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
+        }
 
         onPressed: function(mouse) {
             // Ctrl+drag pans instead of painting: refusing the press hands
