@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 #if canImport(ImageIO)
 import ImageIO
 #else
@@ -40,6 +41,39 @@ public enum StackSplitter {
         #endif
     }
 
+    /// Capture times for a whole list, read concurrently.
+    ///
+    /// This is the memory-card load: hundreds of files, each a header read off
+    /// the slowest disk the app ever touches, and every one of them
+    /// independent. Serially it is long enough to look like a hang; the reads
+    /// overlap perfectly. `progress` is called as files complete (from
+    /// whichever worker finished, so callers must hop to their own actor) with
+    /// the number done and the total.
+    public static func captureDates(of urls: [URL],
+                                    progress: ((Int, Int) -> Void)? = nil) -> [Date?] {
+        let total = urls.count
+        guard total > 1 else {
+            let dates = urls.map(captureDate(of:))
+            progress?(total, total)
+            return dates
+        }
+        var dates = [Date?](repeating: nil, count: total)
+        let counter = NSLock()
+        var done = 0
+        dates.withUnsafeMutableBufferPointer { out in
+            DispatchQueue.concurrentPerform(iterations: total) { i in
+                out[i] = captureDate(of: urls[i])
+                guard let progress else { return }
+                counter.lock()
+                done += 1
+                let n = done
+                counter.unlock()
+                progress(n, total)
+            }
+        }
+        return dates
+    }
+
     /// Fusion frame order for a stack: capture time (name as tiebreaker),
     /// because filename order breaks when the camera's file counter rolls
     /// over mid-stack (DSC_9999 → DSC_0001). Name order when
@@ -47,7 +81,7 @@ public enum StackSplitter {
     /// split(), a wrong reorder is worse than none.
     public static func ordered(urls: [URL], byCaptureTime: Bool) -> [URL] {
         ordered(urls: urls,
-                dates: byCaptureTime ? urls.map { captureDate(of: $0) } : [],
+                dates: byCaptureTime ? captureDates(of: urls) : [],
                 byCaptureTime: byCaptureTime)
     }
 
@@ -103,7 +137,7 @@ public enum StackSplitter {
     /// wrong split is worse than no split.
     public static func split(urls: [URL], gap: TimeInterval = defaultGap,
                              orderByCaptureTime: Bool = true) -> [[URL]] {
-        split(urls: urls, dates: urls.map { captureDate(of: $0) }, gap: gap,
+        split(urls: urls, dates: captureDates(of: urls), gap: gap,
               orderByCaptureTime: orderByCaptureTime)
     }
 

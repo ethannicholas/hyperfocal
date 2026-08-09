@@ -358,7 +358,7 @@ struct Fuse: ParsableCommand {
         // times disagree with that order, say so — a shuffled or interleaved
         // list fuses to garbage silently. Header reads only; cheap next to
         // the fuse itself.
-        let captureDates = urls.map(StackSplitter.captureDate(of:))
+        let captureDates = StackSplitter.captureDates(of: urls)
         if !captureDates.contains(nil),
            StackSplitter.ordered(urls: urls, dates: captureDates,
                                  byCaptureTime: true) != urls {

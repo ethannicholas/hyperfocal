@@ -309,6 +309,10 @@ public enum StackPipeline {
     /// there are far out of focus), so they don't belong in the output at all.
     public static func makeSource(urls: [URL], transforms: [simd_float3x3]?,
                                   log: ((String) -> Void)? = nil) -> StackSource {
+        // Every fusion path decodes through the source, and alignment may have
+        // been cached or turned off — so name the stack here too, for the raw
+        // transcode fallback's batching (no-op on Apple, idempotent).
+        ImageFile.expectStack(urls: urls)
         guard let transforms, let dims = ImageFile.pixelSize(url: urls[0]) else {
             return StackSource(urls: urls, transforms: transforms)
         }
