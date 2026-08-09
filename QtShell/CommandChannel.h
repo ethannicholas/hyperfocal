@@ -39,6 +39,7 @@
 #include <QSet>
 #include <QString>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include "PaneItem.h"
 #include "Shell.h"
@@ -128,6 +129,7 @@ inline QJsonObject geometry(State *state) {
     r["sourceLoading"] = shell->retouchSourceLoading() ? 1 : 0;
     r["sourceName"] = shell->retouchSourceName();
     r["sourceStatus"] = shell->retouchSourceStatus();
+    r["brushRadius"] = shell->retouchBrushRadius();
     if (PaneItem *pane = paneOf(state->engine,
                                 QStringLiteral("outputPaneItem"))) {
         const QPointF origin = pane->mapToScene(QPointF(0, 0));
@@ -279,6 +281,39 @@ inline QJsonObject execute(State *state, const QJsonObject &cmd) {
         shell->retouchHoverClear();
         QJsonObject r;
         r["ok"] = 1;
+        return r;
+    }
+
+    if (action == QLatin1String("wheel")) {
+        // A wheel notch delivered to the scene the way the platform plugin
+        // delivers a real one, at a point in output-pane logical points
+        // (default: the pane's centre). "modifiers" takes any of
+        // alt/ctrl/shift. This exists because the modifier gestures over the
+        // panes - alt-wheel resizes the retouch brush - are otherwise only
+        // reachable by taking over the machine's real mouse, and a remote
+        // session is exactly where they were first reported broken.
+        PaneItem *pane = paneOf(state->engine,
+                                QStringLiteral("outputPaneItem"));
+        if (!pane) return fail("no output pane");
+        const QPointF local(num("x", pane->width() / 2),
+                            num("y", pane->height() / 2));
+        const QPointF scene = pane->mapToScene(local);
+        const QString mods = cmd.value(QStringLiteral("modifiers")).toString();
+        Qt::KeyboardModifiers km;
+        if (mods.contains(QLatin1String("alt"))) km |= Qt::AltModifier;
+        if (mods.contains(QLatin1String("ctrl"))) km |= Qt::ControlModifier;
+        if (mods.contains(QLatin1String("shift"))) km |= Qt::ShiftModifier;
+        const QPoint angle(int(num("dx")), int(num("dy", 120)));
+        const QPoint pixels(int(num("px")), int(num("py")));
+        QWheelEvent ev(scene, window->mapToGlobal(scene),
+                       pixels, angle, Qt::NoButton, km,
+                       Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(window, &ev);
+        QCoreApplication::processEvents();
+        QJsonObject r;
+        r["ok"] = 1;
+        r["accepted"] = ev.isAccepted() ? 1 : 0;
+        r["brushRadius"] = shell->retouchBrushRadius();
         return r;
     }
 

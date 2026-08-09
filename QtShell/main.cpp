@@ -8,8 +8,11 @@
 #include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
+#include <QKeyEvent>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
+#include <QWheelEvent>
 
 #include "CatalogTranslator.h"
 #include "CommandChannel.h"
@@ -18,6 +21,65 @@
 #include "PaneItem.h"
 #include "Shell.h"
 #include "hyperfocal_bridge.h"
+
+// HFQT_WHEEL_LOG=<path>: append one line per wheel and per modifier-key event
+// the application receives, with the modifiers as Qt resolved them. Remote
+// sessions (VNC, RDP) synthesise scroll and modifier keys as separate streams,
+// and from inside the app a modifier that never rides along with the wheel is
+// indistinguishable from one that was never pressed - so the modifier gestures
+// over the panes (alt-scroll resizes the retouch brush) can fail there with
+// nothing visible to debug. Inert unless the variable names a path.
+namespace {
+class InputLogger : public QObject {
+public:
+    InputLogger(const QString &path, QObject *parent)
+        : QObject(parent), path_(path) {}
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override {
+        const QEvent::Type t = event->type();
+        if (t == QEvent::Wheel) {
+            auto *w = static_cast<QWheelEvent *>(event);
+            write(QStringLiteral("wheel  mods=%1 angle=%2,%3 pixel=%4,%5 "
+                                 "phase=%6 pos=%7,%8 to=%9")
+                      .arg(names(w->modifiers()))
+                      .arg(w->angleDelta().x()).arg(w->angleDelta().y())
+                      .arg(w->pixelDelta().x()).arg(w->pixelDelta().y())
+                      .arg(int(w->phase()))
+                      .arg(int(w->position().x())).arg(int(w->position().y()))
+                      .arg(QString::fromLatin1(obj->metaObject()->className())));
+        } else if (t == QEvent::KeyPress || t == QEvent::KeyRelease) {
+            auto *k = static_cast<QKeyEvent *>(event);
+            write(QStringLiteral("key    %1 key=0x%2 mods=%3")
+                      .arg(t == QEvent::KeyPress ? QStringLiteral("down")
+                                                 : QStringLiteral("up  "))
+                      .arg(k->key(), 0, 16)
+                      .arg(names(k->modifiers())));
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    static QString names(Qt::KeyboardModifiers m) {
+        QStringList out;
+        if (m & Qt::ShiftModifier) out << QStringLiteral("shift");
+        if (m & Qt::ControlModifier) out << QStringLiteral("ctrl");
+        if (m & Qt::AltModifier) out << QStringLiteral("alt");
+        if (m & Qt::MetaModifier) out << QStringLiteral("meta");
+        if (m & Qt::KeypadModifier) out << QStringLiteral("keypad");
+        if (m & Qt::GroupSwitchModifier) out << QStringLiteral("altgr");
+        return out.isEmpty() ? QStringLiteral("none") : out.join(QLatin1Char('+'));
+    }
+
+    void write(const QString &line) {
+        QFile f(path_);
+        if (!f.open(QIODevice::Append | QIODevice::Text)) return;
+        QTextStream(&f) << line << "\n";
+    }
+
+    QString path_;
+};
+}  // namespace
 
 // --selftest <stack-dir> <out.tif> [screenshot.png]
 //
@@ -825,6 +887,11 @@ int main(int argc, char *argv[]) {
     // --selftest: both would drive the same window, and the selftest's
     // grab comparisons cannot survive a second thing repainting.
     if (!selftest) CommandChannel::installIfRequested(&engine);
+
+    const QString wheelLog = QString::fromLocal8Bit(qgetenv("HFQT_WHEEL_LOG"));
+    if (!wheelLog.isEmpty()) {
+        app.installEventFilter(new InputLogger(wheelLog, &app));
+    }
 
     const QStringList args = app.arguments();
     SelfTest state;
