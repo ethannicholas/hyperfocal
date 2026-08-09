@@ -1135,6 +1135,59 @@ ApplicationWindow {
         color: theme.cardBorder
     }
 
+    // Wheel handling for a bounded list nested inside the sidebar's own
+    // ScrollView, replacing Flickable's — which leaks between the two.
+    // Flickable decides *per wheel event* whether it can act on it, and
+    // hands the ones it declines to the parent; the sidebar then scrolls
+    // too. Chaining at a boundary is right (AppKit does the same), but
+    // the handoff also fires with the list sitting squarely in its
+    // middle: scroll a long tree slowly and only the tree moves, scroll
+    // it fast and the tree and the whole sidebar move together, well
+    // before either end of the list. Per-event acceptance has several
+    // ways to come out wrong under a fast burst — a wheel notch becomes
+    // a momentum flick whose animated position is what the next notch is
+    // judged against, and a tree of variable-height rows reports a
+    // contentHeight that is an *estimate*, revised as rows realize, so
+    // the reachable range moves under the gesture.
+    //
+    // So don't play that game at all: move the content per notch, no
+    // momentum (1:1 with a trackpad's pixelDelta, which is what a wheel
+    // gesture should feel like anyway), and decide the handoff from the
+    // one thing that actually settles it — whether this list still has
+    // somewhere to go in the direction asked for. Nothing is inferred
+    // from velocity, and no animation is in flight to be judged against
+    // a stale position, so the middle of a list is never mistaken for
+    // its end. Keep scrolling once the list *is* parked at its end and
+    // the sidebar takes over, mid-gesture, on the very next notch: the
+    // handoff is what the user expects at a boundary, it was only ever
+    // wrong before one.
+    component WheelScroll: MouseArea {
+        required property Flickable flick
+        // Pixels per wheel notch (Qt's own flick averaged ~70 here).
+        property real notchPixels: 60
+        // Wheel-only overlay: with no accepted buttons, presses and hover
+        // fall straight through to the rows underneath.
+        acceptedButtons: Qt.NoButton
+        onWheel: function(wheel) {
+            var minY = flick.originY
+            var maxY = minY + Math.max(0, flick.contentHeight - flick.height)
+            var dy = wheel.pixelDelta.y !== 0
+                ? wheel.pixelDelta.y
+                : wheel.angleDelta.y / 120 * notchPixels
+            var target = Math.max(minY, Math.min(maxY, flick.contentY - dy))
+            // Nowhere left to go this way: hand the event on, and the
+            // sidebar scrolls instead.
+            if (target === flick.contentY) {
+                wheel.accepted = false
+                return
+            }
+            // A drag-flick still in flight would otherwise fight the
+            // assignment below and win.
+            flick.cancelFlick()
+            flick.contentY = target
+        }
+    }
+
     // Native sectionHeader: chevron + title as one toggle for the
     // model-persisted collapse state; trailing children (Reset, All/
     // None…) stay outside the toggle's effect but inside the row.
@@ -1333,6 +1386,14 @@ ApplicationWindow {
                     opacity: active ? 0.8 : 0
                     visible: opacity > 0
                     Behavior on opacity { NumberAnimation { duration: 200 } }
+                }
+                // Parented to the view, not its contentItem (a Flickable
+                // adopts declared children into the content), so it stays
+                // put over the viewport instead of scrolling away.
+                WheelScroll {
+                    parent: stackList
+                    anchors.fill: stackList
+                    flick: stackList
                 }
                 model: Shell.stacks
                 delegate: ColumnLayout {
@@ -1650,6 +1711,11 @@ ApplicationWindow {
                     opacity: active ? 0.8 : 0
                     visible: opacity > 0
                     Behavior on opacity { NumberAnimation { duration: 200 } }
+                }
+                WheelScroll {
+                    parent: frameList
+                    anchors.fill: frameList
+                    flick: frameList
                 }
                 model: Shell.frames
                 // Row anatomy mirrors native's List rows: selection band,
