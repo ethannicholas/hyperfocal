@@ -32,6 +32,8 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPointF>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
@@ -67,6 +69,21 @@ inline PaneItem *paneOf(QQmlApplicationEngine *engine, const QString &name) {
     const auto roots = engine->rootObjects();
     if (roots.isEmpty()) return nullptr;
     return roots.first()->findChild<PaneItem *>(name);
+}
+
+inline QQuickItem *itemOf(QQmlApplicationEngine *engine, const QString &name) {
+    const auto roots = engine->rootObjects();
+    if (roots.isEmpty()) return nullptr;
+    return roots.first()->findChild<QQuickItem *>(name);
+}
+
+inline Qt::KeyboardModifiers modifiersOf(const QJsonObject &cmd) {
+    const QString mods = cmd.value(QStringLiteral("modifiers")).toString();
+    Qt::KeyboardModifiers km;
+    if (mods.contains(QLatin1String("alt"))) km |= Qt::AltModifier;
+    if (mods.contains(QLatin1String("ctrl"))) km |= Qt::ControlModifier;
+    if (mods.contains(QLatin1String("shift"))) km |= Qt::ShiftModifier;
+    return km;
 }
 
 inline QJsonObject fail(const QString &why) {
@@ -126,10 +143,22 @@ inline QJsonObject geometry(State *state) {
     r["retouch"] = shell->retouchMode() ? 1 : 0;
     r["canRetouch"] = shell->canRetouch() ? 1 : 0;
     r["canPaint"] = shell->retouchCanPaint() ? 1 : 0;
+    // Whether anything has actually been painted — how a driver tells a
+    // stroke apart from a drag that only moved the view.
+    r["hasEdits"] = shell->retouchHasEdits() ? 1 : 0;
     r["sourceLoading"] = shell->retouchSourceLoading() ? 1 : 0;
     r["sourceName"] = shell->retouchSourceName();
     r["sourceStatus"] = shell->retouchSourceStatus();
     r["brushRadius"] = shell->retouchBrushRadius();
+    // Retouch drag mode shows up as nothing but a cursor, and a cursor is
+    // the one thing a window grab does not capture — so the shape is
+    // reported as a number (Qt::CursorShape: 2 cross, 17 open hand, 18
+    // closed hand) rather than screenshotted.
+    r["panModifier"] = shell->panModifierHeld() ? 1 : 0;
+    if (QQuickItem *canvas = itemOf(state->engine,
+                                    QStringLiteral("retouch.canvas"))) {
+        r["retouchCursor"] = int(canvas->cursor().shape());
+    }
     if (PaneItem *pane = paneOf(state->engine,
                                 QStringLiteral("outputPaneItem"))) {
         const QPointF origin = pane->mapToScene(QPointF(0, 0));
@@ -298,11 +327,7 @@ inline QJsonObject execute(State *state, const QJsonObject &cmd) {
         const QPointF local(num("x", pane->width() / 2),
                             num("y", pane->height() / 2));
         const QPointF scene = pane->mapToScene(local);
-        const QString mods = cmd.value(QStringLiteral("modifiers")).toString();
-        Qt::KeyboardModifiers km;
-        if (mods.contains(QLatin1String("alt"))) km |= Qt::AltModifier;
-        if (mods.contains(QLatin1String("ctrl"))) km |= Qt::ControlModifier;
-        if (mods.contains(QLatin1String("shift"))) km |= Qt::ShiftModifier;
+        const Qt::KeyboardModifiers km = modifiersOf(cmd);
         const QPoint angle(int(num("dx")), int(num("dy", 120)));
         const QPoint pixels(int(num("px")), int(num("py")));
         QWheelEvent ev(scene, window->mapToGlobal(scene),
@@ -314,6 +339,84 @@ inline QJsonObject execute(State *state, const QJsonObject &cmd) {
         r["ok"] = 1;
         r["accepted"] = ev.isAccepted() ? 1 : 0;
         r["brushRadius"] = shell->retouchBrushRadius();
+        return r;
+    }
+
+    if (action == QLatin1String("key")) {
+        // A modifier press/release, delivered the way the platform plugin
+        // delivers one. Retouch drag mode is entered by holding Ctrl with no
+        // mouse motion at all, so no pointer command can reach it — and its
+        // whole effect is a cursor, which a grab cannot see either.
+        // "key" takes ctrl/alt/shift, "down" 1 (default) or 0.
+        const QString name = cmd.value(QStringLiteral("key")).toString();
+        const bool down = num("down", 1) != 0;
+        struct Named { const char *name; int key; Qt::KeyboardModifier mod; };
+        static const Named kKeys[] = {
+            {"ctrl", Qt::Key_Control, Qt::ControlModifier},
+            {"alt", Qt::Key_Alt, Qt::AltModifier},
+            {"shift", Qt::Key_Shift, Qt::ShiftModifier},
+        };
+        for (const Named &k : kKeys) {
+            if (name != QLatin1String(k.name)) continue;
+            // Qt reports a modifier as part of its own press and not of its
+            // own release, which is what the shell's tracking reads.
+            QKeyEvent ev(down ? QEvent::KeyPress : QEvent::KeyRelease, k.key,
+                         down ? Qt::KeyboardModifiers(k.mod)
+                              : Qt::KeyboardModifiers());
+            QCoreApplication::sendEvent(window, &ev);
+            QCoreApplication::processEvents();
+            QJsonObject r;
+            r["ok"] = 1;
+            r["panModifier"] = shell->panModifierHeld() ? 1 : 0;
+            return r;
+        }
+        return fail("key must be ctrl/alt/shift");
+    }
+
+    if (action == QLatin1String("mouse")) {
+        // press / move / release at a point in output-pane logical points
+        // (default: the pane's centre), with "modifiers" as for wheel. This
+        // is the other half of what "key" cannot do alone: with ctrl held a
+        // press over the retouch canvas must fall through to the pane and
+        // pan it rather than paint, and the reported image point under the
+        // pane's centre is how far it actually moved.
+        PaneItem *pane = paneOf(state->engine,
+                                QStringLiteral("outputPaneItem"));
+        if (!pane) return fail("no output pane");
+        const QString kind = cmd.value(QStringLiteral("kind")).toString();
+        const QEvent::Type type =
+            kind == QLatin1String("press")     ? QEvent::MouseButtonPress
+            : kind == QLatin1String("release") ? QEvent::MouseButtonRelease
+            : kind == QLatin1String("move")    ? QEvent::MouseMove
+                                               : QEvent::None;
+        if (type == QEvent::None)
+            return fail("mouse kind must be press/move/release");
+        const QPointF local(num("x", pane->width() / 2),
+                            num("y", pane->height() / 2));
+        const QPointF scene = pane->mapToScene(local);
+        // The button is named on press/release and is NoButton on a move;
+        // what's *held* is separate, and a move mid-drag has to say so or
+        // the grabbing item never sees a drag at all.
+        const bool held = num("held", type != QEvent::MouseButtonRelease) != 0;
+        const Qt::MouseButton button =
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+        QMouseEvent ev(type, scene, window->mapToGlobal(scene), button,
+                       held ? Qt::LeftButton : Qt::NoButton,
+                       modifiersOf(cmd));
+        QCoreApplication::sendEvent(window, &ev);
+        QCoreApplication::processEvents();
+        const QPointF centre =
+            pane->mapToImage(QPointF(pane->width() / 2, pane->height() / 2));
+        QJsonObject r;
+        r["ok"] = 1;
+        r["accepted"] = ev.isAccepted() ? 1 : 0;
+        r["dragging"] = pane->isDragging() ? 1 : 0;
+        r["centreX"] = centre.x();
+        r["centreY"] = centre.y();
+        if (QQuickItem *canvas = itemOf(state->engine,
+                                        QStringLiteral("retouch.canvas"))) {
+            r["retouchCursor"] = int(canvas->cursor().shape());
+        }
         return r;
     }
 

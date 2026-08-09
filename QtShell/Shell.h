@@ -64,6 +64,13 @@ class Shell : public QObject {
     Q_PROPERTY(bool retouchSourceLoading READ retouchSourceLoading NOTIFY changed)
     Q_PROPERTY(QString retouchSourceError READ retouchSourceError NOTIFY changed)
     Q_PROPERTY(QString retouchSourceStatus READ retouchSourceStatus NOTIFY changed)
+    // Ctrl held — the retouch canvas's drag mode: a press falls through to
+    // the pane and pans instead of painting (RetouchOverlay.qml), so the
+    // cursor becomes a hand. Tracked here, off key events, because pressing
+    // a modifier moves no mouse: the overlay's own events cannot see Ctrl go
+    // down under a stationary cursor, which is exactly how it is used.
+    Q_PROPERTY(bool panModifierHeld READ panModifierHeld
+               NOTIFY panModifierChanged)
     Q_PROPERTY(bool canCrop READ canCrop NOTIFY changed)
     Q_PROPERTY(QString cropAspect READ cropAspect WRITE setCropAspect NOTIFY changed)
     Q_PROPERTY(double cropAspectRatio READ cropAspectRatio NOTIFY changed)
@@ -228,6 +235,12 @@ public:
     Q_INVOKABLE void retouchTogglePmax();
     Q_INVOKABLE void retouchToggleDmap();
     Q_INVOKABLE void retouchToggleResult();
+    bool panModifierHeld() const;
+    /// The overlay reporting the modifiers a real mouse event carried. Key
+    /// events alone are not enough: Ctrl can go down while another window
+    /// has focus, and then the first move over the canvas is the only
+    /// evidence it is held — while a press there would already pan.
+    Q_INVOKABLE void notePanModifier(bool held);
     /// Crop-overlay cursors. QML's cursorShape only names the built-in
     /// shapes, and Qt has no rotate cursor at all, so the overlay drives
     /// both through here: `shape` is a Qt::CursorShape, `sector` indexes the
@@ -313,6 +326,13 @@ signals:
     void projectGenerationChanged();
     /// Anything else (tone, crop, project, undo state, …) moved.
     void changed();
+    /// The drag-mode modifier went down or up (cursor-only; deliberately
+    /// not folded into changed(), which no key press should ever re-fire).
+    void panModifierChanged();
+
+protected:
+    /// Application-wide, so a modifier is seen wherever focus sits.
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 public:
     /// One pass per bridge callback (queued to the next turn): rebuild
@@ -321,6 +341,8 @@ public:
     void refreshFromBridge();
 
 private:
+    void setPanModifierHeld(bool held);
+
     QVariantList buildStacks() const;
     QVariantList buildFrames() const;
     QVariantList fingerprint() const;
@@ -334,6 +356,7 @@ private:
     int cachedPending_ = 0;
     bool cachedCanFuse_ = false;
     int cachedProjectGeneration_ = 0;
+    bool panModifierHeld_ = false;
 };
 
 #endif // SHELL_H

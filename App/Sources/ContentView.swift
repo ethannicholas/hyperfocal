@@ -807,7 +807,8 @@ struct RetouchPreviewArea: View {
                                    imageSize: nominal,
                                    session: session,
                                    cropOrigin: crop?.origin ?? .zero,
-                                   cropAngle: cropAngle)),
+                                   cropAngle: cropAngle,
+                                   panModifierHeld: $panModifierHeld)),
                 canvas: AnyView(RetouchCanvas(session: session, viewport: viewport,
                                               tone: tone,
                                               showDepth: outputMode == .depth,
@@ -828,12 +829,17 @@ struct RetouchPreviewArea: View {
         }
     }
 
+    /// Drag mode (⌘ held): the next drag pans, so nothing would paint and
+    /// the hand cursor says so — a brush ring under it would say the
+    /// opposite. View-layer state, like the pan it describes.
+    @State private var panModifierHeld = false
+
     /// Only offered when a stroke would actually paint — no circle over a
     /// still-loading source, and none for the rest of a drag that started
     /// before the source arrived. The session cursor is a full-image point;
     /// the panes draw in displayed (crop) space.
     private var brushCursor: (point: CGPoint, radius: CGFloat)? {
-        guard session.canPaint else { return nil }
+        guard session.canPaint, !panModifierHeld else { return nil }
         return session.cursor.map { (displayedPoint(from: $0), CGFloat(session.brushRadius)) }
     }
 
@@ -1482,6 +1488,33 @@ class PanZoomEventView: NSView {
                      imageSize: imageSize, paneSize: bounds.size)
     }
 
+    /// Middle-drag pans in every mode — including retouch, where left-drag
+    /// is painting and a mouse user would otherwise have only the wheel.
+    /// The Qt shell's panes already accept it (`PaneItem` takes
+    /// `LeftButton | MiddleButton`); side buttons are left alone.
+    static func isMiddleButton(_ event: NSEvent) -> Bool {
+        event.buttonNumber == 2
+    }
+
+    /// Claiming the press is what makes the drag events follow: the default
+    /// implementation hands them to the next responder instead.
+    override func otherMouseDown(with event: NSEvent) {
+        guard Self.isMiddleButton(event) else {
+            super.otherMouseDown(with: event)
+            return
+        }
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        guard Self.isMiddleButton(event) else {
+            super.otherMouseDragged(with: event)
+            return
+        }
+        guard let viewport, imageSize != .zero else { return }
+        viewport.pan(by: CGSize(width: event.deltaX, height: event.deltaY),
+                     imageSize: imageSize, paneSize: bounds.size)
+    }
+
     override func magnify(with event: NSEvent) {
         guard let viewport, imageSize != .zero else { return }
         let location = convert(event.locationInWindow, from: nil)
@@ -1555,9 +1588,37 @@ final class RetouchEventView: PanZoomEventView {
 
 
     /// Painting happens at a point; the arrow cursor obscures it, the brush
-    /// circle only shows the radius.
+    /// circle only shows the radius. In drag mode it becomes a hand, open
+    /// until the pan is actually under way.
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
+        addCursorRect(bounds, cursor: panModifierHeld ? .openHand : .crosshair)
+    }
+
+    /// ⌘ held: the next left-drag pans instead of painting. Ctrl is not
+    /// available for this on macOS (Ctrl-click is the system secondary
+    /// click) and space is already auto-pick, so ⌘ is the free modifier —
+    /// and it is what the Qt shell's Ctrl-drag already resolves to here, so
+    /// the two shells describe one gesture.
+    var onPanModifier: ((Bool) -> Void)?
+    private var isPanning = false
+    private var panModifierHeld = false {
+        didSet {
+            guard panModifierHeld != oldValue else { return }
+            onPanModifier?(panModifierHeld)
+            window?.invalidateCursorRects(for: self)
+            // Cursor rects are only re-run on the next mouse-moved event,
+            // and drag mode is entered with the pointer standing still.
+            if !isPanning { setCursorForModifier() }
+        }
+    }
+
+    private func setCursorForModifier() {
+        (panModifierHeld ? NSCursor.openHand : NSCursor.crosshair).set()
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        panModifierHeld = event.modifierFlags.contains(.command)
+        super.flagsChanged(with: event)
     }
 
     private var lastImagePoint: CGPoint?
@@ -1575,6 +1636,10 @@ final class RetouchEventView: PanZoomEventView {
 
     override func mouseEntered(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        // flagsChanged only reaches the first responder, so ⌘ going down
+        // over another window leaves nothing behind; the current flags are
+        // the only evidence it is held, and a press would already pan.
+        panModifierHeld = NSEvent.modifierFlags.contains(.command)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -1582,12 +1647,19 @@ final class RetouchEventView: PanZoomEventView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        panModifierHeld = event.modifierFlags.contains(.command)
         let location = convert(event.locationInWindow, from: nil)
         onHover?(imagePoint(from: location).map(fullImagePoint(from:)))
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        panModifierHeld = event.modifierFlags.contains(.command)
+        if panModifierHeld {
+            isPanning = true
+            NSCursor.closedHand.set()
+            return
+        }
         let location = convert(event.locationInWindow, from: nil)
         guard let point = imagePoint(from: location).map(fullImagePoint(from:))
         else { return }
@@ -1596,7 +1668,16 @@ final class RetouchEventView: PanZoomEventView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        // Left-drag paints; panning stays on two-finger scroll / pinch.
+        // Left-drag paints, unless ⌘ put the canvas in drag mode; panning
+        // is otherwise two-finger scroll / pinch (or middle-drag).
+        if isPanning {
+            // Cursor rects are suspended for the length of a drag, so the
+            // closed hand has to be set rather than declared.
+            NSCursor.closedHand.set()
+            super.mouseDragged(with: event)
+            refreshHover(with: event)
+            return
+        }
         let location = convert(event.locationInWindow, from: nil)
         guard let point = imagePoint(from: location).map(fullImagePoint(from:))
         else { return }
@@ -1608,8 +1689,36 @@ final class RetouchEventView: PanZoomEventView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if isPanning {
+            isPanning = false
+            panModifierHeld = event.modifierFlags.contains(.command)
+            setCursorForModifier()
+            window?.invalidateCursorRects(for: self)
+            return
+        }
         lastImagePoint = nil
         onStrokeEnded?()
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        super.otherMouseDown(with: event)
+        if Self.isMiddleButton(event) { NSCursor.closedHand.set() }
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        super.otherMouseDragged(with: event)
+        guard Self.isMiddleButton(event) else { return }
+        NSCursor.closedHand.set()
+        refreshHover(with: event)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        guard Self.isMiddleButton(event) else {
+            super.otherMouseUp(with: event)
+            return
+        }
+        setCursorForModifier()
+        window?.invalidateCursorRects(for: self)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -1868,6 +1977,8 @@ struct RetouchOverlay: NSViewRepresentable {
     let session: RetouchSession
     var cropOrigin: CGPoint = .zero
     var cropAngle: Double = 0
+    /// Drag mode (⌘ held) — the panes hide the brush circle while it is on.
+    @Binding var panModifierHeld: Bool
 
     func makeNSView(context: Context) -> RetouchEventView {
         let view = RetouchEventView()
@@ -1894,6 +2005,10 @@ struct RetouchOverlay: NSViewRepresentable {
         view.imageSize = imageSize
         view.cropOrigin = cropOrigin
         view.cropAngle = cropAngle
+        // Reassigned rather than set once in makeNSView: the binding is a
+        // value, and only the current one writes to live state.
+        let held = $panModifierHeld
+        view.onPanModifier = { held.wrappedValue = $0 }
         if view.bounds.size != .zero {
             viewport.lastPaneSize = view.bounds.size
         }

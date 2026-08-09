@@ -9,10 +9,13 @@
 #include <QCursor>
 #include <QDesktopServices>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QHash>
+#include <QKeyEvent>
 #include <QImage>
 #include <QLabel>
 #include <QMutex>
@@ -145,7 +148,45 @@ Shell::Shell(QObject *parent) : QObject(parent) {
     hf_set_changed_callback(bridgeChanged, nullptr);
     hf_set_dialog_callbacks(shellConfirm, shellNotify, nullptr);
     hf_set_guide_callback(shellGuideDownload, nullptr);
+    if (qApp) qApp->installEventFilter(this);
     refreshFromBridge();
+}
+
+bool Shell::panModifierHeld() const { return panModifierHeld_; }
+
+void Shell::notePanModifier(bool held) { setPanModifierHeld(held); }
+
+void Shell::setPanModifierHeld(bool held) {
+    if (held == panModifierHeld_) return;
+    panModifierHeld_ = held;
+    emit panModifierChanged();
+}
+
+bool Shell::eventFilter(QObject *obj, QEvent *event) {
+    switch (event->type()) {
+    case QEvent::KeyPress:
+    case QEvent::KeyRelease: {
+        auto *key = static_cast<QKeyEvent *>(event);
+        // Ctrl's own press/release is decisive; any other key event just
+        // re-reads what Qt resolved. Deliberately not
+        // queryKeyboardModifiers(): mid-release the platform's key state has
+        // already dropped the bit on some stacks and not others, while the
+        // event itself says which transition this is.
+        setPanModifierHeld(
+            key->key() == Qt::Key_Control
+                ? event->type() == QEvent::KeyPress
+                : bool(key->modifiers() & Qt::ControlModifier));
+        break;
+    }
+    case QEvent::WindowDeactivate:
+        // A release that lands in another window never reaches us, and a
+        // flag left set would strand the hand cursor on the canvas.
+        setPanModifierHeld(false);
+        break;
+    default:
+        break;
+    }
+    return QObject::eventFilter(obj, event);
 }
 
 void Shell::refreshFromBridge() {

@@ -17,7 +17,11 @@ Item {
         id: circle
         anchors.fill: parent
         pane: overlay.pane
-        active: overlay.visible
+        // Held Ctrl means the next press pans, so no stroke would paint —
+        // the same rule that hides the circle when the session can't paint.
+        // The hand cursor says drag mode; a brush ring under it would say
+        // the opposite.
+        active: overlay.visible && !Shell.panModifierHeld
     }
     onVisibleChanged: if (!visible) Shell.retouchHoverClear()
 
@@ -43,10 +47,20 @@ Item {
 
     MouseArea {
         id: mouse
+        objectName: "retouch.canvas"
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
-        cursorShape: Qt.CrossCursor
+        // Crosshair while a press would paint (painting happens at a point,
+        // and the brush circle only shows the radius); a hand once Ctrl puts
+        // the canvas in drag mode — the open/closed pair the crop overlay's
+        // move handle uses. Keyed on the pane's own drag rather than on the
+        // modifier, so a middle-drag (the other pan route, no modifier at
+        // all) gets the closed hand too. A paint stroke never reaches the
+        // pane, so `dragging` cannot mean painting.
+        cursorShape: overlay.pane.dragging ? Qt.ClosedHandCursor
+                     : Shell.panModifierHeld ? Qt.OpenHandCursor
+                                             : Qt.CrossCursor
 
         onPressed: function(mouse) {
             // Ctrl+drag pans instead of painting: refusing the press hands
@@ -55,9 +69,11 @@ Item {
             // (pixel deltas never arrive through the wheel path there) —
             // this is the retouch-mode pan gesture for them.
             if (mouse.modifiers & Qt.ControlModifier) {
+                Shell.notePanModifier(true)
                 mouse.accepted = false
                 return
             }
+            Shell.notePanModifier(false)
             var p = pane.mapToImage(Qt.point(mouse.x, mouse.y))
             overlay.lastPoint = p
             Shell.retouchHover(p.x, p.y)
@@ -65,6 +81,9 @@ Item {
             circle.sync()
         }
         onPositionChanged: function(mouse) {
+            // A real event's modifiers are the one reading that survives the
+            // app not having had focus when Ctrl went down.
+            Shell.notePanModifier((mouse.modifiers & Qt.ControlModifier) !== 0)
             var p = pane.mapToImage(Qt.point(mouse.x, mouse.y))
             Shell.retouchHover(p.x, p.y)
             if (pressed) {

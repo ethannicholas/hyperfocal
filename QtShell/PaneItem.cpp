@@ -538,6 +538,7 @@ bool PaneItem::event(QEvent *event) {
 
 void PaneItem::mousePressEvent(QMouseEvent *event) {
     lastPos_ = event->position();
+    setDragging(true);
     event->accept();
 }
 
@@ -548,4 +549,22 @@ void PaneItem::mouseMoveEvent(QMouseEvent *event) {
     clampOffset();
     pushViewport();
     schedule();
+}
+
+void PaneItem::mouseReleaseEvent(QMouseEvent *event) {
+    setDragging(false);
+    event->accept();
+}
+
+// A grab can also end without a release ever reaching us (a popup opens, the
+// window loses the pointer); a stuck flag would strand a closed-hand cursor.
+void PaneItem::mouseUngrabEvent() {
+    setDragging(false);
+    QQuickItem::mouseUngrabEvent();
+}
+
+void PaneItem::setDragging(bool dragging) {
+    if (dragging == dragging_) return;
+    dragging_ = dragging;
+    emit draggingChanged();
 }

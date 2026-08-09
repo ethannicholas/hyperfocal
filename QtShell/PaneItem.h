@@ -39,6 +39,10 @@ class PaneItem : public QQuickItem {
     // Fit is a MODE (zoom 1, centered — it re-fits on resize); the zoom
     // bar reads "Fit" while it holds, a percentage once zoomed/panned.
     Q_PROPERTY(bool fitted READ fitted NOTIFY viewportChanged)
+    // A pan is under way (press held on this pane). The retouch overlay
+    // reads it to close its drag-mode hand cursor, the way the crop
+    // overlay's move handle closes on its own drag.
+    Q_PROPERTY(bool dragging READ isDragging NOTIFY draggingChanged)
 
 public:
     explicit PaneItem(QQuickItem *parent = nullptr);
@@ -78,9 +82,11 @@ public:
     Q_INVOKABLE void centerOn(QPointF image);
     double displayScale() const { return fitScale() * zoom_; }
     bool fitted() const { return zoom_ == 1.0 && offset_.isNull(); }
+    bool isDragging() const { return dragging_; }
 
 signals:
     void viewportChanged();
+    void draggingChanged();
 
 protected:
     bool event(QEvent *event) override;
@@ -92,8 +98,12 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseUngrabEvent() override;
 
 private:
+    void setDragging(bool dragging);
+
     struct Tile {
         QImage image;
         QRectF rect;    // covered rect, full-res image coordinates
@@ -153,6 +163,7 @@ private:
     double zoom_ = 1.0;
     QPointF offset_;    // image px from viewport center
     QPointF lastPos_;
+    bool dragging_ = false;
 
     QHash<quint64, Tile> tiles_;    // keyed by (level, tx, ty)
     // Tiles whose pixels changed since the last paint (dirty-rect
