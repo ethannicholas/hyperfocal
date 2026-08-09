@@ -29,6 +29,22 @@
     <a href="../tutorial.html">Tutorial</a>
     <a href="https://apps.apple.com/app/hyperfocal-focus-stacker/id6789574802">App Store</a>
     <a href="https://github.com/ethannicholas/hyperfocal">GitHub</a>
+    <details class="lang">
+      <summary title="Português"><img src="../images/flags/pt-BR.svg" alt="Português"></summary>
+      <nav class="lang-menu" aria-label="Idioma">
+        <a href="../privacy.html" lang="en"><img src="../images/flags/en.svg" alt=""> English</a>
+        <a href="../de/privacy.html" lang="de"><img src="../images/flags/de.svg" alt=""> Deutsch</a>
+        <a href="../es/privacy.html" lang="es"><img src="../images/flags/es.svg" alt=""> Español</a>
+        <a href="../fr/privacy.html" lang="fr"><img src="../images/flags/fr.svg" alt=""> Français</a>
+        <a href="../it/privacy.html" lang="it"><img src="../images/flags/it.svg" alt=""> Italiano</a>
+        <a href="../ja/privacy.html" lang="ja"><img src="../images/flags/ja.svg" alt=""> 日本語</a>
+        <a href="../ko/privacy.html" lang="ko"><img src="../images/flags/ko.svg" alt=""> 한국어</a>
+        <a href="../nl/privacy.html" lang="nl"><img src="../images/flags/nl.svg" alt=""> Nederlands</a>
+        <span class="current"><img src="../images/flags/pt-BR.svg" alt=""> Português</span>
+        <a href="../ru/privacy.html" lang="ru"><img src="../images/flags/ru.svg" alt=""> Русский</a>
+        <a href="../zh-Hans/privacy.html" lang="zh-Hans"><img src="../images/flags/zh-Hans.svg" alt=""> 简体中文</a>
+      </nav>
+    </details>
   </nav>
 </header>
 
@@ -43,20 +59,6 @@ pessoal. Tudo o que ele faz acontece inteiramente no seu computador, e nem
 suas imagens nem quaisquer outros dados são jamais armazenados ou
 transmitidos para outro lugar.</p>
 
-<nav class="langs" aria-label="Idioma">
-  <a href="../privacy.html" lang="en">English</a> ·
-  <a href="../de/privacy.html" lang="de">Deutsch</a> ·
-  <a href="../es/privacy.html" lang="es">Español</a> ·
-  <a href="../fr/privacy.html" lang="fr">Français</a> ·
-  <a href="../it/privacy.html" lang="it">Italiano</a> ·
-  <a href="../ja/privacy.html" lang="ja">日本語</a> ·
-  <a href="../ko/privacy.html" lang="ko">한국어</a> ·
-  <a href="../nl/privacy.html" lang="nl">Nederlands</a> ·
-  <span class="current">Português (Brasil)</span> ·
-  <a href="../ru/privacy.html" lang="ru">Русский</a> ·
-  <a href="../zh-Hans/privacy.html" lang="zh-Hans">简体中文</a>
-</nav>
-
 </main>
 
 <footer>
@@ -65,6 +67,19 @@ transmitidos para outro lugar.</p>
     <a href="https://github.com/ethannicholas/hyperfocal">Código-fonte no GitHub</a>
   </div>
 </footer>
+
+<script>
+// Dismiss the language dropdown on an outside click or Escape.
+addEventListener('click', function (e) {
+  var d = document.querySelector('details.lang[open]');
+  if (d && !d.contains(e.target)) d.open = false;
+});
+addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  var d = document.querySelector('details.lang[open]');
+  if (d) d.open = false;
+});
+</script>
 
 </body>
 </html>

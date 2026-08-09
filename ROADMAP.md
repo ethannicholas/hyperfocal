@@ -463,8 +463,13 @@ builds:
    subdirectories named by catalog tag (`Site/de/…` through `Site/zh-Hans/`,
    same ten tags as `Localizable.xcstrings`), each page carrying the full
    `hreflang` alternate block (absolute URLs, `x-default` → English) and a
-   `.langs` switcher footer (style in `Site/style.css`; current language is an
-   unlinked `<span class="current">`). `privacy.html` exists in all eleven
+   language dropdown at the end of the nav (`details.lang`, a `<details>`
+   whose summary shows the current flag only — the native name rides in
+   `title`/`alt`; rows are flag + native name, current one an unlinked
+   `<span class="current">`; style in `Site/style.css`, plus a small inline
+   dismiss-on-outside-click/Escape script at the end of each page's body —
+   the site's only JavaScript). Flags are SVG files in `Site/images/flags/<tag>.svg` —
+   no emoji flags, Windows renders those as letter pairs. `privacy.html` exists in all eleven
    languages under that scheme — use it as the template. `index.html` and
    `tutorial.html` are English-only **on purpose**: they need an editorial
    content pass first, and translating them before it would mean redoing all

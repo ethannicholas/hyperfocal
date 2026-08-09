@@ -276,17 +276,66 @@ td:first-child { white-space: nowrap; }
   color: var(--text);
 }
 
-/* Language switcher (localized pages) */
+/* Language dropdown (nav, localized pages). A <details> so it needs no JS:
+   the summary shows the current flag + name, the panel lists the rest. */
 
-.langs {
-  margin-top: 48px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  font-size: 0.85em;
+.lang { position: relative; }
+
+.lang summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.lang summary::-webkit-details-marker { display: none; }
+.lang summary::after { content: "▾"; font-size: 0.75em; }
+.lang summary:hover, .lang[open] summary { color: var(--text); }
+
+.lang img {
+  display: block;
+  width: 21px;
+  height: 14px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+}
+
+.lang-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 15px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.lang-menu a, .lang-menu .current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.92em;
+  white-space: nowrap;
   color: var(--text-dim);
 }
 
-.langs .current { color: var(--text); font-weight: 600; }
+.lang-menu a:hover {
+  background: var(--bg);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.lang-menu .current { color: var(--text); font-weight: 600; }
 
 /* Footer */
 
