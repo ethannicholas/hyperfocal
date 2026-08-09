@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hyperfocal — Soporte</title>
+<meta name="description" content="Soporte de Hyperfocal: informa de errores en GitHub o envía tus preguntas y comentarios por correo.">
+<link rel="icon" href="../images/icon.png">
+<link rel="stylesheet" href="../style.css">
+<link rel="alternate" hreflang="en" href="https://ethannicholas.com/hyperfocal/support.html">
+<link rel="alternate" hreflang="de" href="https://ethannicholas.com/hyperfocal/de/support.html">
+<link rel="alternate" hreflang="es" href="https://ethannicholas.com/hyperfocal/es/support.html">
+<link rel="alternate" hreflang="fr" href="https://ethannicholas.com/hyperfocal/fr/support.html">
+<link rel="alternate" hreflang="it" href="https://ethannicholas.com/hyperfocal/it/support.html">
+<link rel="alternate" hreflang="ja" href="https://ethannicholas.com/hyperfocal/ja/support.html">
+<link rel="alternate" hreflang="ko" href="https://ethannicholas.com/hyperfocal/ko/support.html">
+<link rel="alternate" hreflang="nl" href="https://ethannicholas.com/hyperfocal/nl/support.html">
+<link rel="alternate" hreflang="pt-BR" href="https://ethannicholas.com/hyperfocal/pt-BR/support.html">
+<link rel="alternate" hreflang="ru" href="https://ethannicholas.com/hyperfocal/ru/support.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://ethannicholas.com/hyperfocal/zh-Hans/support.html">
+<link rel="alternate" hreflang="x-default" href="https://ethannicholas.com/hyperfocal/support.html">
+</head>
+<body>
+
+<header>
+  <nav class="nav">
+    <a class="brand" href="../index.html"><img src="../images/icon.png" alt=""> Hyperfocal</a>
+    <a href="../index.html">Descripción general</a>
+    <a href="../tutorial.html">Tutorial</a>
+    <a href="https://apps.apple.com/app/hyperfocal-focus-stacker/id6789574802">App Store</a>
+    <a href="https://github.com/ethannicholas/hyperfocal">GitHub</a>
+    <details class="lang">
+      <summary title="Español"><img src="../images/flags/es.svg" alt="Español"></summary>
+      <nav class="lang-menu" aria-label="Idioma">
+        <a href="../support.html" lang="en"><img src="../images/flags/en.svg" alt=""> English</a>
+        <a href="../de/support.html" lang="de"><img src="../images/flags/de.svg" alt=""> Deutsch</a>
+        <span class="current"><img src="../images/flags/es.svg" alt=""> Español</span>
+        <a href="../fr/support.html" lang="fr"><img src="../images/flags/fr.svg" alt=""> Français</a>
+        <a href="../it/support.html" lang="it"><img src="../images/flags/it.svg" alt=""> Italiano</a>
+        <a href="../ja/support.html" lang="ja"><img src="../images/flags/ja.svg" alt=""> 日本語</a>
+        <a href="../ko/support.html" lang="ko"><img src="../images/flags/ko.svg" alt=""> 한국어</a>
+        <a href="../nl/support.html" lang="nl"><img src="../images/flags/nl.svg" alt=""> Nederlands</a>
+        <a href="../pt-BR/support.html" lang="pt-BR"><img src="../images/flags/pt-BR.svg" alt=""> Português</a>
+        <a href="../ru/support.html" lang="ru"><img src="../images/flags/ru.svg" alt=""> Русский</a>
+        <a href="../zh-Hans/support.html" lang="zh-Hans"><img src="../images/flags/zh-Hans.svg" alt=""> 简体中文</a>
+      </nav>
+    </details>
+  </nav>
+</header>
+
+<main>
+
+<h1>Soporte</h1>
+
+<p>¿Has encontrado un error? Infórmalo en la
+<a href="https://github.com/ethannicholas/hyperfocal/issues">página de issues del
+proyecto en GitHub</a>: una descripción de lo ocurrido y los pasos para
+reproducirlo son de gran ayuda.</p>
+
+<p>Para preguntas, comentarios o cualquier otra cosa, escribe a
+<a href="mailto:ethan@ethannicholas.com">ethan@ethannicholas.com</a>.</p>
+
+</main>
+
+<footer>
+  <div class="inner">
+    Hyperfocal es un proyecto de código abierto con licencia MIT creado por Ethan Nicholas ·
+    <a href="https://github.com/ethannicholas/hyperfocal">Código fuente en GitHub</a>
+  </div>
+</footer>
+
+<script>
+// Dismiss the language dropdown on an outside click or Escape.
+addEventListener('click', function (e) {
+  var d = document.querySelector('details.lang[open]');
+  if (d && !d.contains(e.target)) d.open = false;
+});
+addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  var d = document.querySelector('details.lang[open]');
+  if (d) d.open = false;
+});
+</script>
+
+</body>
+</html>

@@ -292,7 +292,7 @@ td:first-child { white-space: nowrap; }
 }
 
 .lang summary::-webkit-details-marker { display: none; }
-.lang summary::after { content: "▾"; font-size: 0.75em; }
+.lang summary::after { content: "▾"; font-size: 1em; }
 .lang summary:hover, .lang[open] summary { color: var(--text); }
 
 .lang img {
