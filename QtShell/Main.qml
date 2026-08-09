@@ -1451,138 +1451,157 @@ ApplicationWindow {
                         InfoTip { parent: enabledCheckBox; visible: enabledHover.hovered; text: Shell.uiString("includeStackTip") }
                     }
                     Item {
-                        // Middle-frame thumbnail, like native's stack rows.
-                        // The 60×42 cell is always present: a placeholder
-                        // glyph holds it while the thumbnail decodes, so
-                        // the row doesn't reflow when the image lands
-                        // (native holds the cell with square.stack.3d.up).
-                        // thumbToken is 0 until the background generation
-                        // lands, and cache-busts the URL when the source
-                        // frame changes.
-                        Layout.preferredWidth: 60
-                        Layout.preferredHeight: 42
-                        Canvas {
-                            // Three stacked plates — the placeholder glyph
-                            // (no SF Symbols off macOS, so it's drawn).
-                            id: thumbPlaceholder
-                            anchors.centerIn: parent
-                            width: 24
-                            height: 22
-                            // Holds the cell until the image has really
-                            // decoded — a failed or in-flight provider
-                            // load must show the glyph, not a blank.
-                            visible: thumbImage.status !== Image.Ready
-                            property color glyphColor: theme.textFaint
-                            onGlyphColorChanged: requestPaint()
-                            onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.reset()
-                                ctx.strokeStyle = String(glyphColor)
-                                ctx.lineWidth = 1.2
-                                ctx.lineJoin = "round"
-                                for (var i = 0; i < 3; ++i) {
-                                    var y = 5 + i * 6
-                                    ctx.beginPath()
-                                    ctx.moveTo(2, y)
-                                    ctx.lineTo(12, y - 5)
-                                    ctx.lineTo(22, y)
-                                    ctx.lineTo(12, y + 5)
-                                    ctx.closePath()
-                                    ctx.stroke()
-                                }
-                            }
-                        }
-                        Image {
-                            id: thumbImage
-                            anchors.fill: parent
-                            visible: false
-                            source: stackDelegate.modelData.thumbToken !== 0
-                                    ? "image://hfthumb/" + stackDelegate.index
-                                      + "?" + stackDelegate.modelData.thumbToken
-                                    : ""
-                            sourceSize.width: 60
-                            sourceSize.height: 42
-                            fillMode: Image.PreserveAspectCrop
-                            asynchronous: true
-                        }
-                        MultiEffect {
-                            // Rounds the image's corners (native's 3pt
-                            // clipShape) — QML can't clip to a radius
-                            // without a mask pass.
-                            anchors.fill: parent
-                            visible: thumbImage.status === Image.Ready
-                            source: thumbImage
-                            maskEnabled: true
-                            maskSource: thumbMask
-                        }
-                        Rectangle {
-                            id: thumbMask
-                            anchors.fill: parent
-                            radius: 3
-                            visible: false
-                            layer.enabled: true
-                        }
-                        Rectangle {
-                            // Native's hairline border over the rounding.
-                            anchors.fill: parent
-                            visible: thumbImage.status === Image.Ready
-                            radius: 3
-                            color: "transparent"
-                            border.color: theme.cardBorder
-                            border.width: 1
-                        }
-                    }
-                    Label {
-                        text: modelData.name
+                        // Everything from the thumbnail rightwards selects the
+                        // stack, matching native, where the same run of content
+                        // is the label of one plain Button. Wrapping it is what
+                        // makes that true: a TapHandler on the name Label alone
+                        // left the thumbnail — the biggest target in the row —
+                        // inert, so clicking the picture did nothing. The
+                        // chevron and the checkbox stay outside: they are
+                        // separate controls with their own actions.
+                        id: stackSelectRow
                         objectName: "stack.row." + stackDelegate.modelData.name
                         Accessible.role: Accessible.Button
                         Accessible.name: qsTr("Stack %1")
                                          .arg(stackDelegate.modelData.name)
                         Accessible.onPressAction: Shell.selectStack(stackDelegate.index)
-                        // Native: the title alone dims when the stack
-                        // is excluded from batch fuse; glyphs, count,
-                        // and chevron keep their normal colors.
-                        color: !modelData.enabled ? theme.textFaint
-                             : index === Shell.selectedStack
-                               ? theme.textPrimary : theme.textSecondary
-                        font.bold: index === Shell.selectedStack
-                        elide: Text.ElideMiddle
                         Layout.fillWidth: true
+                        implicitHeight: stackSelectContent.implicitHeight
                         TapHandler {
                             enabled: !Shell.isRunning
-                            onTapped: Shell.selectStack(index)
+                            onTapped: Shell.selectStack(stackDelegate.index)
                         }
-                    }
-                    Label {
-                        id: orderBadge
-                        // Load-time frame-order warning badge.
-                        text: "△"
-                        visible: modelData.orderWarning !== ""
-                        color: theme.warn
-                        HoverHandler { id: orderHover }
-                        InfoTip { parent: orderBadge; visible: orderHover.hovered; text: modelData.orderWarning }
-                    }
-                    Label {
-                        id: statusBadge
-                        // The native tree's status glyph, textified:
-                        // fusing / fused / failed (hover = message).
-                        text: modelData.status === 1 ? "…"
-                            : modelData.status === 2 ? "✓"
-                            : modelData.status === 3 ? "⚠" : ""
-                        color: modelData.status === 3 ? theme.warn : theme.ok
-                        HoverHandler { id: hover }
-                        InfoTip {
-                            parent: statusBadge
-                            visible: (modelData.status === 3 || modelData.status === 2)
-                                     && hover.hovered
-                            text: modelData.status === 3 ? modelData.failure
-                                                          : Shell.uiString("fusedStatusTip")
+                        RowLayout {
+                            id: stackSelectContent
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            spacing: 6
+                            Item {
+                                // Middle-frame thumbnail, like native's stack rows.
+                                // The 60×42 cell is always present: a placeholder
+                                // glyph holds it while the thumbnail decodes, so
+                                // the row doesn't reflow when the image lands
+                                // (native holds the cell with square.stack.3d.up).
+                                // thumbToken is 0 until the background generation
+                                // lands, and cache-busts the URL when the source
+                                // frame changes.
+                                Layout.preferredWidth: 60
+                                Layout.preferredHeight: 42
+                                Canvas {
+                                    // Three stacked plates — the placeholder glyph
+                                    // (no SF Symbols off macOS, so it's drawn).
+                                    id: thumbPlaceholder
+                                    anchors.centerIn: parent
+                                    width: 24
+                                    height: 22
+                                    // Holds the cell until the image has really
+                                    // decoded — a failed or in-flight provider
+                                    // load must show the glyph, not a blank.
+                                    visible: thumbImage.status !== Image.Ready
+                                    property color glyphColor: theme.textFaint
+                                    onGlyphColorChanged: requestPaint()
+                                    onPaint: {
+                                        var ctx = getContext("2d")
+                                        ctx.reset()
+                                        ctx.strokeStyle = String(glyphColor)
+                                        ctx.lineWidth = 1.2
+                                        ctx.lineJoin = "round"
+                                        for (var i = 0; i < 3; ++i) {
+                                            var y = 5 + i * 6
+                                            ctx.beginPath()
+                                            ctx.moveTo(2, y)
+                                            ctx.lineTo(12, y - 5)
+                                            ctx.lineTo(22, y)
+                                            ctx.lineTo(12, y + 5)
+                                            ctx.closePath()
+                                            ctx.stroke()
+                                        }
+                                    }
+                                }
+                                Image {
+                                    id: thumbImage
+                                    anchors.fill: parent
+                                    visible: false
+                                    source: stackDelegate.modelData.thumbToken !== 0
+                                            ? "image://hfthumb/" + stackDelegate.index
+                                              + "?" + stackDelegate.modelData.thumbToken
+                                            : ""
+                                    sourceSize.width: 60
+                                    sourceSize.height: 42
+                                    fillMode: Image.PreserveAspectCrop
+                                    asynchronous: true
+                                }
+                                MultiEffect {
+                                    // Rounds the image's corners (native's 3pt
+                                    // clipShape) — QML can't clip to a radius
+                                    // without a mask pass.
+                                    anchors.fill: parent
+                                    visible: thumbImage.status === Image.Ready
+                                    source: thumbImage
+                                    maskEnabled: true
+                                    maskSource: thumbMask
+                                }
+                                Rectangle {
+                                    id: thumbMask
+                                    anchors.fill: parent
+                                    radius: 3
+                                    visible: false
+                                    layer.enabled: true
+                                }
+                                Rectangle {
+                                    // Native's hairline border over the rounding.
+                                    anchors.fill: parent
+                                    visible: thumbImage.status === Image.Ready
+                                    radius: 3
+                                    color: "transparent"
+                                    border.color: theme.cardBorder
+                                    border.width: 1
+                                }
+                            }
+                            Label {
+                                text: modelData.name
+                                // Native: the title alone dims when the stack
+                                // is excluded from batch fuse; glyphs, count,
+                                // and chevron keep their normal colors.
+                                color: !modelData.enabled ? theme.textFaint
+                                     : index === Shell.selectedStack
+                                       ? theme.textPrimary : theme.textSecondary
+                                font.bold: index === Shell.selectedStack
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                id: orderBadge
+                                // Load-time frame-order warning badge.
+                                text: "△"
+                                visible: modelData.orderWarning !== ""
+                                color: theme.warn
+                                HoverHandler { id: orderHover }
+                                InfoTip { parent: orderBadge; visible: orderHover.hovered; text: modelData.orderWarning }
+                            }
+                            Label {
+                                id: statusBadge
+                                // The native tree's status glyph, textified:
+                                // fusing / fused / failed (hover = message).
+                                text: modelData.status === 1 ? "…"
+                                    : modelData.status === 2 ? "✓"
+                                    : modelData.status === 3 ? "⚠" : ""
+                                color: modelData.status === 3 ? theme.warn : theme.ok
+                                HoverHandler { id: hover }
+                                InfoTip {
+                                    parent: statusBadge
+                                    visible: (modelData.status === 3 || modelData.status === 2)
+                                             && hover.hovered
+                                    text: modelData.status === 3 ? modelData.failure
+                                                                  : Shell.uiString("fusedStatusTip")
+                                }
+                            }
+                            Label {
+                                text: stackDelegate.modelData.frameCount
+                                color: theme.textDim
+                                font.pixelSize: 11
+                            }
                         }
-                    }
-                    Label {
-                        text: stackDelegate.modelData.frameCount
-                        color: theme.textDim
-                        font.pixelSize: 11
                     }
                     }
                     // Nested frame rows while disclosed; dimmed and
