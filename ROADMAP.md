@@ -149,6 +149,21 @@ number that moves when depth selection fails.
   chroma-subsampled JPEG round-trip to mimic the reference stacks' artifacts)
   and gate on a noisy scene alongside the clean one. Done: a change that
   degrades real-stack sharpness can no longer pass CI on the synth number.
+- **Corpus harness: the validity mask hides low-energy damage.** The per-tile
+  score drops tiles whose reference energy sits below 2% of the p90 — added so
+  featureless-backdrop ratios wouldn't read as noise — but that discards
+  exactly the tiles where low-contrast *real* detail lives: the far stripes of
+  a receding tabletop, dim backdrop texture, translucent interiors. Measured
+  failure mode (2026-08-09, experiment never committed): a frame-exclusion
+  change *improved every reported column* on the mineral-on-marble stack while
+  visibly softening the far table and adding silhouette halos — the damage sat
+  entirely in masked tiles, and manual 1:1 inspection was the only thing that
+  caught it. Add a companion column over the masked-but-not-black tiles
+  (absolute fine-energy retention vs the best registered source frame, with
+  its own floor) so a change cannot polish the scoreboard by destroying what
+  the mask ignores. The harness lives with the private corpus — ask the
+  maintainer. Done = a render that softens that stack's far tabletop moves a
+  reported number; today it doesn't.
 - **Close the PMax gap — the biggest open quality item.** PMax trails the
   commercial reference on nearly every stack where both tools consume identical
   input pixels (contrast-normalized, worst ≈ −13%), while DMap is at parity on
@@ -270,6 +285,36 @@ number that moves when depth selection fails.
     only remaining quality item is the texture-flattening lead above. (The
     same registered run confirms the PMax background gap is real, which is
     the hybrid-background design note's problem, not this item's.)
+- **Halo guards on generously bracketed stacks: tune, don't exclude.** A
+  100-frame stack of a glossy botryoidal mineral on black acrylic (private
+  corpus) fuses with scalloped dark fringes and echoed rims along its
+  silhouette — roughly 70 frames are focused entirely off the subject, and
+  their defocus-halo rims register as weak sharpness smeared across many frame
+  indices, dragging the edge-band depth through the stack's tail (a commercial
+  stacker fails the same stack the same way). Measured 2026-08-09: raising the
+  existing guards to `--noise-floor 0.15 --peak-concentration 0.75` produced
+  the cleanest render of every variant tried — silhouette-band Laplacian RMS
+  5.10 → 4.19, versus 3.92 for hand-trimming the stack to its in-focus window,
+  with subject-interior sharpness within 1% — so the machinery already
+  suffices; the defaults (0.05 / 0.5) are simply too permissive when most of a
+  stack is halo. **Do not reach for frame exclusion instead.** A
+  registration-time "completely out of focus" auto-exclusion was built,
+  corpus-scored, and killed the same day (never committed): the tails of
+  generously bracketed stacks routinely carry sole-source low-contrast detail
+  — each late frame owns one in-focus stripe of a receding tabletop, and
+  glossy-surface reflections focus late and virtual-deep — and no per-frame
+  sharpness scalar separates that from halo. Any exclusion would need
+  per-region domination analysis on aligned frames (fusion-level machinery),
+  which is not this item. The sound shapes here: (a) an adaptive schedule —
+  scale `noiseFloor`/`peakConcentration` up only when the sharpness pass sees
+  a large no-signal frame fraction; or (b) revalidated higher defaults.
+  Either way `DMapFusion.Options` stays the single source of the numbers
+  (both are user-facing sliders in both shells), and the translucent-subject
+  stack is the sensitivity case — soft interior glow is what over-eager
+  guards eat first. Score against the corpus *including* the masked-tile
+  companion metric above; without it the harness cannot see this item's
+  failure mode. Done = the bead stack's silhouette is clean at defaults, no
+  corpus stack regresses, and the probe still passes.
 - **Verify the regularization radii above the reference resolution.**
   `DMapFusion.regularizationScale` scales `medianRadius`/`guidedRadius` by the
   frame diagonal against a 9780 px reference but is **clamped to 1**: it only
