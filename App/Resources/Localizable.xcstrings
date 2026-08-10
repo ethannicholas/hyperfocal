@@ -4012,66 +4012,66 @@
         }
       }
     },
-    "Capture order and filename order disagree. Frames fuse in capture order — right for a rolled-over file counter, but if this folder mixes frames from different stacks, split them before fusing.": {
+    "Capture timestamps and filename order disagree. Frames will be fused in order of their capture timestamps.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aufnahmereihenfolge und Namensreihenfolge stimmen nicht überein. Fusioniert wird in Aufnahmereihenfolge — richtig bei übergelaufenem Dateizähler; falls dieser Ordner aber Bilder verschiedener Stapel mischt, trenne sie vor der Fusion."
+            "value": "Aufnahmezeiten und Namensreihenfolge stimmen nicht überein. Die Bilder werden in der Reihenfolge ihrer Aufnahmezeiten fusioniert."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El orden de captura y el orden de los nombres no coinciden. Las imágenes se fusionan en orden de captura, lo correcto si el contador de archivos se reinició; pero si esta carpeta mezcla imágenes de distintas pilas, sepáralas antes de fusionar."
+            "value": "Las horas de captura y el orden de los nombres no coinciden. Las imágenes se fusionarán en el orden de sus horas de captura."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L’ordre de capture et l’ordre des noms de fichiers ne concordent pas. Les images fusionnent dans l’ordre de capture — correct pour un compteur de fichiers ayant rebouclé, mais si ce dossier mélange des images de piles différentes, séparez-les avant de fusionner."
+            "value": "Les heures de capture et l’ordre des noms de fichiers ne concordent pas. Les images seront fusionnées dans l’ordre de leurs heures de capture."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "L’ordine di scatto e l’ordine dei nomi non coincidono. I fotogrammi si fondono in ordine di scatto — corretto se il contatore dei file è ripartito da zero, ma se questa cartella mescola fotogrammi di pile diverse, separali prima di fondere."
+            "value": "Le ore di scatto e l’ordine dei nomi non coincidono. I fotogrammi saranno fusi nell’ordine delle ore di scatto."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "撮影順とファイル名順が一致しません。合成は撮影順に行われます。ファイル番号が一巡した場合はこれで正しいのですが、このフォルダに別々のスタックのフレームが混在している場合は、合成前に分けてください。"
+            "value": "撮影時刻とファイル名順が一致しません。フレームは撮影時刻の順に合成されます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "촬영 순서와 파일 이름 순서가 일치하지 않습니다. 프레임은 촬영 순서로 합성됩니다. 파일 번호가 한 바퀴 돈 경우라면 이것이 맞지만, 이 폴더에 서로 다른 스택의 프레임이 섞여 있다면 합성 전에 분리하세요."
+            "value": "촬영 시각과 파일 이름 순서가 일치하지 않습니다. 프레임은 촬영 시각 순으로 합성됩니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Opnamevolgorde en naamvolgorde komen niet overeen. Opnamen worden in opnamevolgorde samengevoegd — juist bij een doorgeslagen bestandsteller, maar als deze map opnamen van verschillende stapels mengt, splits ze dan vóór het samenvoegen."
+            "value": "Opnametijden en naamvolgorde komen niet overeen. Opnamen worden samengevoegd in volgorde van hun opnametijden."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A ordem de captura e a ordem dos nomes divergem. As imagens fundem na ordem de captura — correto para um contador de arquivos que zerou, mas se esta pasta mistura imagens de pilhas diferentes, separe-as antes de fundir."
+            "value": "As horas de captura e a ordem dos nomes divergem. As imagens serão fundidas na ordem de suas horas de captura."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Порядок съёмки и порядок имён файлов не совпадают. Кадры объединяются в порядке съёмки — это правильно при переполнении счётчика файлов, но если в папке смешаны кадры разных стеков, разделите их перед объединением."
+            "value": "Время съёмки и порядок имён файлов не совпадают. Кадры будут объединены в порядке времени съёмки."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "拍摄顺序与文件名顺序不一致。图像按拍摄顺序合成 — 对于文件计数器归零的情况这是正确的；但如果此文件夹混杂了不同堆栈的图像，请先拆分再合成。"
+            "value": "拍摄时间与文件名顺序不一致。图像将按拍摄时间的顺序合成。"
           }
         }
       }
@@ -15823,66 +15823,66 @@
         }
       }
     },
-    "These frames carry no capture times, so they fuse in filename order. Make sure filenames follow focus order.": {
+    "These frames carry no capture times, so they will be fused in filename order. Make sure filename ordering is correct.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Diese Bilder tragen keine Aufnahmezeiten und werden daher in Namensreihenfolge fusioniert. Stelle sicher, dass die Dateinamen der Fokusreihenfolge folgen."
+            "value": "Diese Bilder tragen keine Aufnahmezeiten und werden daher in Namensreihenfolge fusioniert. Stelle sicher, dass die Reihenfolge der Dateinamen stimmt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Estas imágenes no llevan hora de captura, así que se fusionan en orden de nombre de archivo. Asegúrate de que los nombres sigan el orden de enfoque."
+            "value": "Estas imágenes no llevan hora de captura, así que se fusionarán en orden de nombre de archivo. Asegúrate de que el orden de los nombres sea correcto."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ces images ne portent pas d’heure de capture ; elles fusionnent donc dans l’ordre des noms de fichiers. Vérifiez que les noms suivent l’ordre de mise au point."
+            "value": "Ces images ne portent pas d’heure de capture ; elles seront donc fusionnées dans l’ordre des noms de fichiers. Vérifiez que cet ordre est correct."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Questi fotogrammi non hanno l’ora di scatto, quindi si fondono in ordine di nome file. Assicurati che i nomi seguano l’ordine di messa a fuoco."
+            "value": "Questi fotogrammi non hanno l’ora di scatto, quindi saranno fusi in ordine di nome file. Assicurati che l’ordine dei nomi sia corretto."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "これらのフレームには撮影時刻がないため、ファイル名順に合成されます。ファイル名がフォーカス順になっていることを確認してください。"
+            "value": "これらのフレームには撮影時刻がないため、ファイル名順に合成されます。ファイル名の順序が正しいことを確認してください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이 프레임들에는 촬영 시각이 없어 파일 이름 순으로 합성됩니다. 파일 이름이 초점 순서를 따르는지 확인하세요."
+            "value": "이 프레임들에는 촬영 시각이 없어 파일 이름 순으로 합성됩니다. 파일 이름 순서가 올바른지 확인하세요."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Deze opnamen hebben geen opnametijden en worden dus in naamvolgorde samengevoegd. Zorg dat de bestandsnamen de scherpstelvolgorde volgen."
+            "value": "Deze opnamen hebben geen opnametijden en worden dus in naamvolgorde samengevoegd. Zorg dat de volgorde van de bestandsnamen klopt."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Estas imagens não trazem hora de captura, então fundem na ordem dos nomes de arquivo. Verifique se os nomes seguem a ordem de foco."
+            "value": "Estas imagens não trazem hora de captura, então serão fundidas na ordem dos nomes de arquivo. Verifique se a ordem dos nomes está correta."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "У этих кадров нет времени съёмки, поэтому они объединяются в порядке имён файлов. Убедитесь, что имена следуют порядку фокусировки."
+            "value": "У этих кадров нет времени съёмки, поэтому они будут объединены в порядке имён файлов. Убедитесь, что порядок имён файлов правильный."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这些图像没有拍摄时间，因此按文件名顺序合成。请确保文件名遵循对焦顺序。"
+            "value": "这些图像没有拍摄时间，因此将按文件名顺序合成。请确保文件名顺序正确。"
           }
         }
       }

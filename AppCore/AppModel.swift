@@ -2256,11 +2256,11 @@ public final class AppModel: ObservableObject {
                                         byCaptureTime: byCaptureTime) {
         case .mismatch:
             return localizedString(
-                "Capture order and filename order disagree. Frames fuse in capture order — right for a rolled-over file counter, but if this folder mixes frames from different stacks, split them before fusing.",
+                "Capture timestamps and filename order disagree. Frames will be fused in order of their capture timestamps.",
                 comment: "")
         case .undated:
             return localizedString(
-                "These frames carry no capture times, so they fuse in filename order. Make sure filenames follow focus order.",
+                "These frames carry no capture times, so they will be fused in filename order. Make sure filename ordering is correct.",
                 comment: "")
         case nil:
             return nil
