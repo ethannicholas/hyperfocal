@@ -1949,7 +1949,10 @@ public final class AppModel: ObservableObject {
     /// In-mode changes skip this — the live canvas already shows the tiles.
     private func presentRetouchChangeOutsideMode() {
         guard !retouchMode, let session = retouch else { return }
-        if let snapshot = session.makeSnapshotImage() { outputPreview = snapshot }
+        if let snapshot = session.makeSnapshotImage() {
+            outputPreview = snapshot
+            session.markRevertPresented()
+        }
         mergeRetouchDepth()
     }
 
@@ -3737,10 +3740,15 @@ public final class AppModel: ObservableObject {
 
     public func exitRetouch() {
         retouchMode = false
-        // Reflect the edits in the normal output view (and export).
-        if let session = retouch, session.hasEdits,
+        // Reflect the edits in the normal output view (and export) — and a
+        // Revert All from this or an earlier visit equally: the pane may
+        // still be showing a snapshot of the discarded edits, while the
+        // export path reads the (reverted) working pixels. A session that
+        // never had edits skips the snapshot cost.
+        if let session = retouch, session.hasEdits || session.didRevert,
            let snapshot = session.makeSnapshotImage() {
             outputPreview = snapshot
+            session.markRevertPresented()
         }
         mergeRetouchDepth()
     }
@@ -3774,6 +3782,9 @@ public final class AppModel: ObservableObject {
         retouch?.resetAll(to: dmapResult)
         // resetAll cleared both stroke stacks — clear their markers too.
         purgeStrokeMarkers()
+        // A revert driven while the canvas is closed must show up right
+        // away — there is no Done coming to present it.
+        if retouch?.didRevert == true { presentRetouchChangeOutsideMode() }
     }
 
     // MARK: - Export

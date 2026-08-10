@@ -1164,6 +1164,39 @@ Task { @MainActor in
     }
     print("probe: unified undo timeline OK")
 
+    // 3a4. Revert All must never leave the output pane showing discarded
+    // edits: Done resnapshots after a revert (this visit or an earlier
+    // one), an out-of-mode revert re-presents immediately, and a pristine
+    // Done still skips the snapshot (identity-stable pane).
+    model.enterRetouch()
+    session3.beginStroke(at: strokePoint); session3.endStroke()
+    model.exitRetouch()  // pane snapshots the stroke
+    let editedPane = model.outputPreview
+    model.enterRetouch()
+    model.resetRetouch()  // revert on a later visit, canvas up
+    model.exitRetouch()
+    guard model.outputPreview !== editedPane else {
+        print("probe: REVERT THEN DONE KEPT THE EDITED PANE"); exit(1)
+    }
+    let pristinePane = model.outputPreview
+    model.enterRetouch()
+    model.exitRetouch()  // nothing changed — no snapshot churn
+    guard model.outputPreview === pristinePane else {
+        print("probe: PRISTINE DONE RESNAPSHOTTED"); exit(1)
+    }
+    model.enterRetouch()
+    session3.beginStroke(at: strokePoint); session3.endStroke()
+    model.exitRetouch()
+    let editedPane2 = model.outputPreview
+    model.resetRetouch()  // revert with the canvas closed
+    guard model.outputPreview !== editedPane2 else {
+        print("probe: OUT-OF-MODE REVERT KEPT THE EDITED PANE"); exit(1)
+    }
+    guard !model.undoHistory.contains(where: { $0.isStroke }) else {
+        print("probe: REVERT PRESENTATION LEFT STROKE MARKERS"); exit(1)
+    }
+    print("probe: revert-all presentation OK")
+
     let model2 = AppModel()
     // The probe's project has no bookmarks, but every frame is readable
     // (unsandboxed) — the access re-grant prompt firing here would be a

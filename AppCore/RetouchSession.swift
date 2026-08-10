@@ -812,7 +812,15 @@ public final class RetouchSession: ObservableObject {
         return snapshot
     }
 
+    /// Set when Revert All discards real edits: the output pane may still
+    /// be showing a snapshot of them (exit with edits, revert on a later
+    /// visit), so the model must re-present the reverted pixels even
+    /// though `hasEdits` is false again. Cleared once a snapshot goes out.
+    private(set) var didRevert = false
+    func markRevertPresented() { didRevert = false }
+
     func resetAll(to original: ImageBuffer) {
+        if hasEdits { didRevert = true }
         working = original
         workingDepth = originalDepth
         undoStack = []
