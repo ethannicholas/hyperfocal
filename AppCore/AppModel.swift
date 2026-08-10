@@ -988,6 +988,10 @@ public final class AppModel: ObservableObject {
         toneEditBaseline = nil
         retouch = nil
         retouchMode = false
+        // The incoming stack's stroke history died when it was stashed
+        // (sessions are per selection; prepareRetouch rebuilds one with
+        // empty stroke stacks) — its markers must not outlive the tiles.
+        purgeStrokeMarkers()
         noiseFloorPreview = nil
         noiseFloorPreviewData = nil
         MemoryFootprint.mark("stack installed")
@@ -1840,7 +1844,7 @@ public final class AppModel: ObservableObject {
         return Self.validCrop(cropRect, width: dmapResult.width, height: dmapResult.height)
     }
 
-    // MARK: - Undo history (non-stroke edits)
+    // MARK: - Undo history (one timeline: strokes and model edits)
 
     /// A reversible model edit. Value snapshots, not closures: applying one
     /// writes the stored values through the same paths the UI uses, and a
@@ -1852,12 +1856,26 @@ public final class AppModel: ObservableObject {
         case crop(fromRect: CGRect?, fromAngle: Double,
                   toRect: CGRect?, toAngle: Double)
         case included(from: Set<URL>, to: Set<URL>)
+        /// A retouch stroke's place in the timeline. The pixels live in the
+        /// session's tile snapshots (`RetouchSession.undo/redo`); the marker
+        /// only keeps the ordering, so ⌘Z interleaves strokes with tone and
+        /// inclusion edits instead of scoping by mode (tone changes made
+        /// during a retouch session used to be unreachable until Done).
+        /// Markers and the session's stroke stacks move in lockstep: each
+        /// recorded stroke appends one (`onStrokeRecorded`), cap evictions
+        /// drop one from whichever side hit its cap, and the purge seams
+        /// (re-fuse, stack install, Revert All) clear them wherever the
+        /// tile snapshots die.
+        case stroke
+
+        var isStroke: Bool { if case .stroke = self { return true } else { return false } }
 
         var noun: String {
             switch self {
             case .tone: return localizedString("Tone Adjustment", comment: "")
             case .crop: return localizedString("Crop", comment: "")
             case .included: return localizedString("Frame Selection", comment: "")
+            case .stroke: return localizedString("Stroke", comment: "")
             }
         }
     }
@@ -1865,42 +1883,82 @@ public final class AppModel: ObservableObject {
     @Published private(set) var redoHistory: [ModelEdit] = []
     static let maxUndoEdits = 50
 
-    /// ⌘Z is mode-scoped: inside retouch it drives stroke undo (as ever);
-    /// everywhere else it walks the model-edit history. Crop mode has its
-    /// own transaction (⎋ cancels), so history stays out of its way.
-    public var canUndoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !undoHistory.isEmpty }
-    public var canRedoEdit: Bool { retouchMode ? retouch != nil : !cropMode && !redoHistory.isEmpty }
+    /// ⌘Z walks the shared timeline newest-first, whatever mode recorded
+    /// the entry. Crop mode has its own transaction (⎋ cancels), so
+    /// history stays out of its way while the handles are up.
+    public var canUndoEdit: Bool { !cropMode && !undoHistory.isEmpty }
+    public var canRedoEdit: Bool { !cropMode && !redoHistory.isEmpty }
     public var undoMenuTitle: String {
-        retouchMode ? localizedString("Undo Stroke", comment: "")
-            : undoHistory.last.map {
-                String(format: localizedString("Undo %@", comment: ""), $0.noun)
-            } ?? localizedString("Undo", comment: "")
+        undoHistory.last.map {
+            String(format: localizedString("Undo %@", comment: ""), $0.noun)
+        } ?? localizedString("Undo", comment: "")
     }
     public var redoMenuTitle: String {
-        retouchMode ? localizedString("Redo Stroke", comment: "")
-            : redoHistory.last.map {
-                String(format: localizedString("Redo %@", comment: ""), $0.noun)
-            } ?? localizedString("Redo", comment: "")
+        redoHistory.last.map {
+            String(format: localizedString("Redo %@", comment: ""), $0.noun)
+        } ?? localizedString("Redo", comment: "")
     }
 
     public func undoEdit() {
-        if retouchMode { retouch?.undo(); return }
         guard !cropMode, let edit = undoHistory.popLast() else { return }
+        if edit.isStroke {
+            // The marker delegates to the session's tile undo. A stale
+            // marker (the purge seams missed a session teardown) drops
+            // silently to the next edit rather than eating the keystroke.
+            guard let session = retouch, session.canUndo else { return undoEdit() }
+            session.undo()
+            redoHistory.append(edit)
+            presentRetouchChangeOutsideMode()
+            return
+        }
         redoHistory.append(edit)
         apply(edit, forward: false)
     }
 
     public func redoEdit() {
-        if retouchMode { retouch?.redo(); return }
         guard !cropMode, let edit = redoHistory.popLast() else { return }
+        if edit.isStroke {
+            guard let session = retouch, session.canRedo else { return redoEdit() }
+            session.redo()
+            undoHistory.append(edit)
+            presentRetouchChangeOutsideMode()
+            return
+        }
         undoHistory.append(edit)
         apply(edit, forward: true)
     }
 
     private func recordEdit(_ edit: ModelEdit) {
         undoHistory.append(edit)
-        if undoHistory.count > Self.maxUndoEdits { undoHistory.removeFirst() }
+        if undoHistory.count > Self.maxUndoEdits,
+           undoHistory.removeFirst().isStroke {
+            // The evicted slot was a stroke — the session sheds its oldest
+            // snapshot too, or marker and stroke counts drift.
+            retouch?.dropOldestUndo()
+        }
         redoHistory = []
+        // One timeline: a new edit of either kind starts a fresh branch,
+        // so the stroke half of the redo state clears with the model half
+        // (endStroke already cleared it when the edit IS a stroke).
+        retouch?.clearRedo()
+    }
+
+    /// Strokes undone/redone while the retouch canvas is closed must show
+    /// up in the normal output pane and the export path, the same way Done
+    /// does: refresh the snapshot and fold the co-painted depth back in.
+    /// In-mode changes skip this — the live canvas already shows the tiles.
+    private func presentRetouchChangeOutsideMode() {
+        guard !retouchMode, let session = retouch else { return }
+        if let snapshot = session.makeSnapshotImage() { outputPreview = snapshot }
+        mergeRetouchDepth()
+    }
+
+    /// Stroke markers die with the tile snapshots they stand for: a
+    /// re-fuse discards the session, a stack switch rebuilds it empty, and
+    /// Revert All clears its stacks. Each of those calls this seam.
+    private func purgeStrokeMarkers() {
+        undoHistory.removeAll(where: { $0.isStroke })
+        redoHistory.removeAll(where: { $0.isStroke })
     }
 
     private func apply(_ edit: ModelEdit, forward: Bool) {
@@ -1913,6 +1971,10 @@ public final class AppModel: ObservableObject {
             viewport.reset()  // the panes refit to the (un)cropped canvas
         case .included(let from, let to):
             included = forward ? to : from
+        case .stroke:
+            // Never applied here: undoEdit/redoEdit route markers to the
+            // session's tile undo before reaching this switch.
+            break
         }
     }
 
@@ -2863,6 +2925,7 @@ public final class AppModel: ObservableObject {
         fuseFirstAlignedSource = nil
         retouch = nil
         retouchMode = false
+        purgeStrokeMarkers()  // the tile snapshots died with the session
         savedWorking = nil
         savedSourceIndex = nil
         noiseFloorPreview = nil
@@ -3654,6 +3717,16 @@ public final class AppModel: ObservableObject {
                       session.urls.indices.contains(index) else { return }
                 self.selection = [session.urls[index]]
             }
+            // Each recorded stroke takes its place in the shared edit
+            // timeline; cap evictions on the session side drop the
+            // matching (oldest) marker. See ModelEdit.stroke.
+            retouch?.onStrokeRecorded = { [weak self] in self?.recordEdit(.stroke) }
+            retouch?.onOldestStrokeEvicted = { [weak self] in
+                guard let self,
+                      let index = self.undoHistory.firstIndex(where: { $0.isStroke })
+                else { return }
+                self.undoHistory.remove(at: index)
+            }
         }
         // A session can come up already waiting on the other algorithm's
         // source (its saved source index): that request fired inside the
@@ -3699,6 +3772,8 @@ public final class AppModel: ObservableObject {
     public func resetRetouch() {
         guard let dmapResult else { return }
         retouch?.resetAll(to: dmapResult)
+        // resetAll cleared both stroke stacks — clear their markers too.
+        purgeStrokeMarkers()
     }
 
     // MARK: - Export

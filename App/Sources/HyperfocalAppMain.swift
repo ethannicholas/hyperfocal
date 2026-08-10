@@ -182,14 +182,12 @@ struct HyperfocalApp: App {
                 Button(UIStrings.exportRockingAnimation) { model.exportAnimation() }
                     .disabled(!model.canAnimate)
             }
-            // Edit > Undo/Redo, mode-scoped (we don't use NSUndoManager):
-            // inside retouch it drives stroke undo — enabled whenever a
-            // session exists; empty-stack invocations no-op, since the
-            // session's canUndo/canRedo changes aren't republished through
-            // the model, deliberately, to keep cursor-move updates from
-            // re-rendering the whole scene. Everywhere else it walks the
-            // per-stack history of non-stroke edits (tone, crop, frame
-            // selection).
+            // Edit > Undo/Redo (we don't use NSUndoManager): one shared
+            // timeline per stack — strokes, tone, crop, and frame
+            // selection interleaved in the order they happened (strokes
+            // ride the history as markers; see AppModel.ModelEdit.stroke).
+            // Enablement and titles come off the model's @Published
+            // histories, which change once per edit, not per cursor move.
             CommandGroup(replacing: .undoRedo) {
                 Button(model.undoMenuTitle) { model.undoEdit() }
                     .keyboardShortcut("z", modifiers: .command)

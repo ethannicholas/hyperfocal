@@ -127,6 +127,15 @@ public final class RetouchSession: ObservableObject {
     /// completion). Harmless when the pass is already running: the model
     /// ignores the cue and `provideOtherResult` resolves the pane as usual.
     var onOtherSourceNeeded: (() -> Void)?
+    /// Fired when `endStroke` actually records a stroke (empty drags don't).
+    /// The model mirrors each recorded stroke as a `.stroke` marker in its
+    /// edit history, so ⌘Z walks strokes and tone/crop/inclusion edits as
+    /// one timeline — the marker count and `undoStack.count` must stay in
+    /// lockstep (see AppModel's undo section).
+    var onStrokeRecorded: (() -> Void)?
+    /// Fired when the stroke cap evicts the oldest snapshot — the model
+    /// drops its oldest `.stroke` marker to keep the counts in step.
+    var onOldestStrokeEvicted: (() -> Void)?
 
     // Aligned source frames: float pixels for painting, CGImage for the pane.
     // Published because `canPaint` derives from it (the result layer is
@@ -738,12 +747,14 @@ public final class RetouchSession: ObservableObject {
             undoStack.append(currentStrokeTiles)
             if undoStack.count > Self.maxUndoStrokes {
                 undoStack.removeFirst()
+                onOldestStrokeEvicted?()
             }
             redoStack = []
             canUndo = true
             canRedo = false
             hasEdits = true
             onEdited?()
+            onStrokeRecorded?()
         }
         currentStrokeTiles = [:]
     }
@@ -772,6 +783,23 @@ public final class RetouchSession: ObservableObject {
         hasEdits = true
         depthDirty = true
         onEdited?()
+    }
+
+    /// A new *model* edit (tone drag, inclusion toggle) starts a fresh
+    /// branch of the shared timeline: it clears the model's redo history,
+    /// and this clears the stroke half so the two stay one stack.
+    func clearRedo() {
+        redoStack = []
+        canRedo = false
+    }
+
+    /// The model's edit-history cap evicted a `.stroke` marker — shed the
+    /// matching (oldest) snapshot so marker and stroke counts stay equal.
+    /// Silent: re-notifying the model would drop a second marker.
+    func dropOldestUndo() {
+        guard !undoStack.isEmpty else { return }
+        undoStack.removeFirst()
+        canUndo = !undoStack.isEmpty
     }
 
     private func captureTiles<S: Sequence>(_ tiles: S) -> [Int: TileSnapshot]

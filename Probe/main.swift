@@ -1055,6 +1055,115 @@ Task { @MainActor in
     }
     print("probe: edit undo/redo OK")
 
+    // 3a3. One undo timeline: strokes ride the edit history as markers, so
+    // ⌘Z walks strokes and tone edits in the order they happened — during a
+    // retouch session AND after Done (where a stroke undo must resnapshot
+    // the output pane). Markers and the session's tile snapshots stay in
+    // lockstep through the stroke cap's evictions and Revert All.
+    model.enterRetouch()
+    guard let session3 = model.retouch else {
+        print("probe: TIMELINE ENTER RETOUCH FAILED"); exit(1)
+    }
+    let strokePoint = CGPoint(x: mw / 2, y: mh / 2)
+    // 21 strokes against the 20-stroke cap: the eviction must shed the
+    // oldest marker too, and undoing every remaining stroke empties the
+    // marker and snapshot sides together.
+    for _ in 0..<21 { session3.beginStroke(at: strokePoint); session3.endStroke() }
+    let strokeMarkers = model.undoHistory.filter({ $0.isStroke }).count
+    guard strokeMarkers == 20, session3.canUndo else {
+        print("probe: STROKE CAP EVICTION DESYNC (\(strokeMarkers) markers)"); exit(1)
+    }
+    var walked = 0
+    while model.undoHistory.contains(where: { $0.isStroke }) { model.undoEdit(); walked += 1 }
+    guard walked == 20, !session3.canUndo else {
+        print("probe: EVICTION WALK WRONG (walked \(walked))"); exit(1)
+    }
+    model.resetRetouch()  // purge the 20 redo markers with their tiles
+    guard !model.redoHistory.contains(where: { $0.isStroke }) else {
+        print("probe: REVERT ALL LEFT REDO MARKERS"); exit(1)
+    }
+    // Interleave: stroke, tone drag, stroke — undo unwinds newest-first
+    // across the kinds, redo replays the same order. Counts are relative:
+    // earlier sections may legitimately leave non-stroke edits beneath.
+    let timelineBase = model.undoHistory.count
+    session3.beginStroke(at: strokePoint); session3.endStroke()
+    guard model.canUndoEdit, model.undoMenuTitle == "Undo Stroke" else {
+        print("probe: STROKE DID NOT JOIN THE TIMELINE (\(model.undoMenuTitle))"); exit(1)
+    }
+    model.toneEditing(true)
+    model.tone.exposure = 0.75
+    model.toneEditing(false)
+    session3.beginStroke(at: strokePoint); session3.endStroke()
+    guard model.undoHistory.count == timelineBase + 3 else {
+        print("probe: TIMELINE COUNT WRONG (\(model.undoHistory.count - timelineBase))"); exit(1)
+    }
+    model.undoEdit()
+    guard model.undoMenuTitle == "Undo Tone Adjustment", model.tone.exposure == 0.75 else {
+        print("probe: NEWEST STROKE DID NOT UNDO FIRST (\(model.undoMenuTitle))"); exit(1)
+    }
+    model.undoEdit()
+    guard model.tone == tone0, model.undoMenuTitle == "Undo Stroke" else {
+        print("probe: TONE DID NOT UNDO BETWEEN STROKES"); exit(1)
+    }
+    model.undoEdit()
+    guard model.undoHistory.count == timelineBase, !session3.canUndo else {
+        print("probe: OLDEST STROKE DID NOT UNDO"); exit(1)
+    }
+    model.redoEdit()
+    guard session3.canUndo, model.tone == tone0 else {
+        print("probe: REDO DID NOT REPLAY THE OLDEST STROKE"); exit(1)
+    }
+    model.redoEdit()
+    guard model.tone.exposure == 0.75 else {
+        print("probe: REDO DID NOT REPLAY THE TONE EDIT"); exit(1)
+    }
+    model.redoEdit()
+    guard !model.canRedoEdit else { print("probe: REDO OVERRAN"); exit(1) }
+    // A fresh edit after an undo abandons BOTH redo halves — the model's
+    // history and the session's stroke tiles are one stack.
+    model.undoEdit()
+    guard model.canRedoEdit, session3.canRedo else {
+        print("probe: TIMELINE REDO SETUP MISSING"); exit(1)
+    }
+    model.toneEditing(true)
+    model.tone.contrast = 10
+    model.toneEditing(false)
+    guard !model.canRedoEdit, !session3.canRedo else {
+        print("probe: NEW EDIT KEPT A STALE REDO BRANCH"); exit(1)
+    }
+    model.undoEdit()  // contrast back
+    model.undoEdit()  // exposure back — a stroke tops the history again
+    model.exitRetouch()
+    guard model.undoMenuTitle == "Undo Stroke" else {
+        print("probe: TIMELINE LOST ON RETOUCH EXIT (\(model.undoMenuTitle))"); exit(1)
+    }
+    // After Done, a stroke undo must reach the session AND refresh the
+    // output pane (the canvas isn't up to show the tiles restore).
+    let previewBeforeUndo = model.outputPreview
+    model.undoEdit()
+    guard !session3.canUndo, model.undoHistory.count == timelineBase else {
+        print("probe: OUT-OF-MODE STROKE UNDO MISSED THE SESSION"); exit(1)
+    }
+    guard model.outputPreview !== previewBeforeUndo else {
+        print("probe: OUT-OF-MODE STROKE UNDO KEPT A STALE PANE"); exit(1)
+    }
+    model.redoEdit()
+    guard session3.canUndo else {
+        print("probe: OUT-OF-MODE STROKE REDO MISSED THE SESSION"); exit(1)
+    }
+    // Leave the model as 3a2 left it: no strokes, neutral tone.
+    model.enterRetouch()
+    model.resetRetouch()
+    guard !model.undoHistory.contains(where: { $0.isStroke }),
+          !model.redoHistory.contains(where: { $0.isStroke }) else {
+        print("probe: REVERT ALL LEFT STROKE MARKERS"); exit(1)
+    }
+    model.exitRetouch()
+    guard model.tone == tone0 else {
+        print("probe: TIMELINE CHECKS LEFT TONE DIRTY"); exit(1)
+    }
+    print("probe: unified undo timeline OK")
+
     let model2 = AppModel()
     // The probe's project has no bookmarks, but every frame is readable
     // (unsandboxed) — the access re-grant prompt firing here would be a

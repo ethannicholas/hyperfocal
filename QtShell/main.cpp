@@ -564,9 +564,9 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                     && state->changedCount > state->changedAtRetouch;
                 // A short diagonal stroke through the center must mark
                 // edits, bump the display epoch through the dirty-rect
-                // channel, and scope undo to strokes; undo takes the
-                // stroke back (edits stay marked), Revert All clears,
-                // and Done exits the mode.
+                // channel, and top the shared undo timeline ("Undo
+                // Stroke"); undo takes the stroke back (edits stay
+                // marked), Revert All clears, and Done exits the mode.
                 const double rcx = shell->displayWidth() / 2.0;
                 const double rcy = shell->displayHeight() / 2.0;
                 state->strokePre = grab();
