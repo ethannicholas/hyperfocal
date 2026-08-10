@@ -1662,6 +1662,22 @@ final class RetouchEventView: PanZoomEventView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// Retouch keys (P/D/R, arrows, space) reach only the first responder,
+    /// and until this view holds it they beep. Mouse entry claims it below,
+    /// but entering retouch mode from a button click leaves the pointer
+    /// outside the canvas — claim it the moment the overlay joins the
+    /// window, async so it lands after SwiftUI finishes installing the
+    /// hierarchy. (The Qt shell needs no equivalent: its retouch keys are
+    /// window-level Shortcuts, active regardless of focus.)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.makeFirstResponder(self)
+        }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
