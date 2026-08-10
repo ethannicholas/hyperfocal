@@ -2598,28 +2598,40 @@ ApplicationWindow {
                             MenuItem { text: "400%"; onTriggered: outputPane.item.setAbsoluteScale(4) }
                         }
                     }
+                    // Native draws these as the minus/plus magnifying-glass
+                    // symbols, not as the bare characters, and sizes them to
+                    // the glyph. Drawn SVGs for the same reason as the crop
+                    // orientation button (SF Symbols can't ship in a
+                    // cross-platform shell; the style tints them). padding 0
+                    // + an explicit implicitWidth is what makes them square:
+                    // a styled Button's default minimum width is sized for a
+                    // text label and left them several times wider than the
+                    // icon. Icon-only controls, so the spoken name is set
+                    // explicitly.
                     Button {
                         objectName: "zoom.out"
                         Accessible.name: qsTr("Zoom out")
                         flat: true
-                        text: "−"
-                        font.pixelSize: 14
-                        leftPadding: 8
-                        rightPadding: 8
-                        topPadding: 0
-                        bottomPadding: 0
+                        display: AbstractButton.IconOnly
+                        icon.source: "zoom-out.svg"
+                        icon.width: 16
+                        icon.height: 16
+                        padding: 0
+                        implicitWidth: 24
+                        implicitHeight: 24
                         onClicked: outputPane.item.zoomBy(1 / 1.5)
                     }
                     Button {
                         objectName: "zoom.in"
                         Accessible.name: qsTr("Zoom in")
                         flat: true
-                        text: "+"
-                        font.pixelSize: 14
-                        leftPadding: 8
-                        rightPadding: 8
-                        topPadding: 0
-                        bottomPadding: 0
+                        display: AbstractButton.IconOnly
+                        icon.source: "zoom-in.svg"
+                        icon.width: 16
+                        icon.height: 16
+                        padding: 0
+                        implicitWidth: 24
+                        implicitHeight: 24
                         onClicked: outputPane.item.zoomBy(1.5)
                     }
                     Item { Layout.fillWidth: true }

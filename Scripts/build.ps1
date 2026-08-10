@@ -8,6 +8,25 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 
+# Windows holds a running image open, so ninja's relink of Hyperfocal.exe (or
+# of HyperfocalBridge.dll) fails against a live instance with a sharing
+# violation - LNK1104 "cannot open file", which names neither the cause nor the
+# cure. Checked here rather than in run.ps1 because it is the *build* that
+# can't proceed: run.ps1 delegates its build here and so inherits the guard,
+# and it fires before any work (and before windows-env's tool table) so the
+# message isn't buried under a page of output.
+#
+# The instance is reported rather than killed - the bare executable has no
+# polite quit channel to run the unsaved-work confirmation through, which is
+# the same call Scripts/run.sh makes for the Qt shell.
+$running = Get-Process -Name Hyperfocal -ErrorAction SilentlyContinue
+if ($running) {
+    throw ("a Hyperfocal instance is already running (PID " +
+           ($running.Id -join ', ') + ") - quit it first; Windows locks the " +
+           "running executable against relink, and there is no polite quit " +
+           "channel for the bare executable")
+}
+
 . (Join-Path $root 'Scripts\windows-env.ps1')
 Push-Location $root
 try {

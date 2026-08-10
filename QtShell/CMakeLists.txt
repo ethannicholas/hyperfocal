@@ -72,7 +72,7 @@ qt_add_qml_module(hyperfocal-qt
     URI Hyperfocal
     VERSION 1.0
     QML_FILES Main.qml CropOverlay.qml RetouchOverlay.qml BrushCircle.qml
-    RESOURCES crop-landscape.svg crop-portrait.svg
+    RESOURCES crop-landscape.svg crop-portrait.svg zoom-in.svg zoom-out.svg
     SOURCES Shell.h Shell.cpp PaneItem.h PaneItem.cpp LutImageProvider.h
             CatalogTranslator.h CommandChannel.h
 )
@@ -162,6 +162,23 @@ target_link_libraries(hyperfocal-qt PRIVATE
 set_target_properties(hyperfocal-qt PROPERTIES
     BUILD_RPATH "${HYPERFOCAL_BRIDGE_DIR}"
     MACOSX_BUNDLE FALSE)
+
+# Windows: delay-load the bridge, so that a missing HyperfocalBridge.dll can be
+# *reported*. Statically imported, it is bound by the Windows loader before
+# main() runs, and an absent copy kills the process with STATUS_DLL_NOT_FOUND
+# (0xC0000135) — no window, no stderr, no dialog, nothing to read. Delay-loading
+# defers the bind to the first bridge call, which lets main.cpp's startup probe
+# run and say what is missing. There is no rpath on Windows and the bridge is
+# build output rather than an installed file, so this is the everyday failure
+# for anyone launching QtShell\build\Hyperfocal.exe outside Scripts\run.ps1.
+#
+# Scoped to the bridge deliberately: Qt's own DLLs fail the same way, but
+# windows-env.ps1 puts the kit on PATH and a Store install ships them beside the
+# executable, so the bridge is the one that goes missing in practice.
+if(MSVC)
+    target_link_options(hyperfocal-qt PRIVATE /DELAYLOAD:HyperfocalBridge.dll)
+    target_link_libraries(hyperfocal-qt PRIVATE delayimp)
+endif()
 
 # On Windows the shell IS the shipping app, and its file name is user-facing:
 # the Start menu entry, Task Manager, the MSIX manifest's Executable=. So the

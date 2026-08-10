@@ -14,6 +14,16 @@
 #include <QUrl>
 #include <QWheelEvent>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include "CatalogTranslator.h"
 #include "CommandChannel.h"
 #include "LutImageProvider.h"
@@ -21,6 +31,58 @@
 #include "PaneItem.h"
 #include "Shell.h"
 #include "hyperfocal_bridge.h"
+
+#ifdef Q_OS_WIN
+namespace {
+
+// Is the bridge DLL loadable? HyperfocalBridge.dll is delay-loaded (see
+// QtShell/CMakeLists.txt) for the sake of this one check: statically imported,
+// it is bound by the Windows loader before main() is entered, so a missing copy
+// terminates the process with STATUS_DLL_NOT_FOUND (0xC0000135) and prints
+// nothing at all. That reads as "the app started and vanished", and it is the
+// ordinary outcome of launching QtShell\build\Hyperfocal.exe directly: the
+// bridge is build output in .build\debug, there is no rpath on Windows, and
+// only Scripts\run.ps1 puts that directory on PATH.
+//
+// The handle is deliberately never freed — the delay-load thunks bind against
+// this same module on the first bridge call, so keeping it resident is the
+// point, not a leak.
+bool bridgeLoadable() {
+    return ::LoadLibraryW(L"HyperfocalBridge.dll") != nullptr;
+}
+
+// Plain ASCII: this goes to a console whose code page is not ours to assume,
+// and a diagnostic that arrives as mojibake is barely better than none. English
+// only, like the usage text below — Scripts/check-translations.py does not scan
+// main.cpp because its literals are env-var names and bootstrap diagnostics,
+// printed before the UI (and the catalog) exist.
+void reportMissingBridge() {
+    const QDir exeDir(QCoreApplication::applicationDirPath());
+    QString message =
+        QStringLiteral("Hyperfocal: cannot load HyperfocalBridge.dll, the "
+                       "shared model layer this shell drives.\n"
+                       "  searched: ")
+        + QDir::toNativeSeparators(exeDir.path())
+        + QStringLiteral(", then the directories on PATH");
+    // A dev build's bridge is build output, not an installed file, so name the
+    // copy that actually exists when it is where SwiftPM leaves it
+    // (QtShell\build\Hyperfocal.exe, so the repo root is two levels up).
+    const QString devDir = QDir::cleanPath(
+        exeDir.absoluteFilePath(QStringLiteral("../../.build/debug")));
+    if (QFile::exists(devDir + QStringLiteral("/HyperfocalBridge.dll"))) {
+        message += QStringLiteral("\n  there is one at ")
+            + QDir::toNativeSeparators(devDir)
+            + QStringLiteral(" - launch through Scripts\\run.ps1, which puts "
+                             "it on PATH, or add that directory to PATH.");
+    } else {
+        message += QStringLiteral("\n  build it with Scripts\\build.ps1, or "
+                                  "launch through Scripts\\run.ps1.");
+    }
+    qCritical().noquote() << message;
+}
+
+}  // namespace
+#endif
 
 // HFQT_WHEEL_LOG=<path>: append one line per wheel and per modifier-key event
 // the application receives, with the modifiers as Qt resolved them. Remote
@@ -777,6 +839,16 @@ int main(int argc, char *argv[]) {
     if (qEnvironmentVariableIsEmpty("HYPERFOCAL_SETTINGS_SUITE"))
         qputenv("HYPERFOCAL_SETTINGS_SUITE", "org.hyperfocal.qtshell-settings");
     QApplication app(argc, argv);  // QtWidgets: modal QMessageBox dialogs
+#ifdef Q_OS_WIN
+    // Before anything can reach a delay-loaded bridge symbol: past this point a
+    // missing DLL is a structured exception raised by the delay-load helper,
+    // which is no more readable than the loader's silent kill. Exit 23, clear
+    // of the usage code (2) and of every selftest verdict (3-21).
+    if (!bridgeLoadable()) {
+        reportMissingBridge();
+        return 23;
+    }
+#endif
     app.setWindowIcon(QIcon(QStringLiteral(":/AppIcon.png")));
     // The OS light/dark appearance is the source of truth (never force a
     // scheme): the QML theme object derives every chrome color from

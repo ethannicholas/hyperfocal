@@ -29,25 +29,12 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe  = Join-Path $root 'QtShell\build\Hyperfocal.exe'
 
-# Checked before the build, not after: Windows holds a running image open, so
-# ninja's relink of Hyperfocal.exe (or of the bridge DLL) fails with a
-# sharing violation rather than a useful message. The instance is reported
-# rather than killed — the bare executable has no polite quit channel to run
-# the unsaved-work confirmation through, which is the same call Scripts/run.sh
-# makes for the Qt shell, and a second instance also confuses hover/tooltip
-# behavior.
-$running = Get-Process -Name Hyperfocal -ErrorAction SilentlyContinue
-if ($running) {
-    throw ("a Hyperfocal instance is already running (PID " +
-           ($running.Id -join ', ') + ") - quit it first; Windows locks the " +
-           "running executable against relink, and there is no polite quit " +
-           "channel for the bare executable")
-}
-
 # build.ps1 throws on any failure, so a failed build terminates here without an
 # exit-code check. It also dot-sources windows-env.ps1, which is what puts Qt,
 # the Swift runtime, vcpkg and wgpu on PATH — $env: edits are process-wide, so
-# they are in place for the launch below.
+# they are in place for the launch below. Its already-running guard covers the
+# launch too: a second instance confuses hover/tooltip behavior, and nothing
+# gets that far because the relink fails first.
 & (Join-Path $root 'Scripts\build.ps1')
 
 if (-not (Test-Path $exe)) { throw "no executable at $exe" }
