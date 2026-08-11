@@ -93,13 +93,16 @@ To build it yourself for free, you'll need Xcode and
 
 ```sh
 git clone https://github.com/ethannicholas/hyperfocal.git
-cd hyperfocal/App
-xcodegen generate
-open Hyperfocal.xcodeproj
+cd hyperfocal
+Scripts/run.sh                 # build and launch
+Scripts/build.sh               # ...or build it without launching
 ```
 
-Then run from Xcode. You will need to change the signing certificate to your
-own or to "Sign to Run Locally".
+No Apple Developer account is needed: the app is signed to run locally.
+
+To work on it in Xcode instead, `cd App && xcodegen generate && open
+Hyperfocal.xcodeproj` — the generated project builds and runs as-is, with no
+signing settings to change.
 
 ### Building on Linux
 

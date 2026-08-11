@@ -185,11 +185,12 @@ def find_app():
 
 
 def build_app():
+    # Through build.sh rather than xcodebuild directly, so the capture runs
+    # the same binary the everyday build produces — signing included
+    # (Scripts/signing.sh: the real certificate where it exists, which keeps
+    # the Automation grant this script needs from being re-asked every build).
     log("building app")
-    run(["xcodegen", "generate"], cwd=REPO / "App", capture_output=True)
-    run(["xcodebuild", "-project", "Hyperfocal.xcodeproj", "-scheme",
-         "Hyperfocal", "-configuration", "Debug", "-destination",
-         "platform=macOS", "build"], cwd=REPO / "App", capture_output=True)
+    run([str(REPO / "Scripts/build.sh")], cwd=REPO, capture_output=True)
 
 
 def build_mouse_helper():

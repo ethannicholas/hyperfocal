@@ -92,7 +92,18 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: "5.0"
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_STYLE: Automatic
+        # Sign to run locally. A clone must build for someone who has no
+        # Apple Developer account at all — asking Xcode for a "Mac
+        # Development" certificate for the team below is a hard build
+        # failure on every machine but the maintainer's. Ad-hoc is enough
+        # to run and debug (Xcode injects get-task-allow into Debug
+        # builds); Scripts/signing.sh upgrades the command-line build to
+        # real signing where the team's certificate exists, and the
+        # distribution scripts set their own identity. DEVELOPMENT_TEAM is
+        # inert under manual ad-hoc signing and stays as the one record of
+        # the team (Scripts/upload-mas.sh and signing.sh read it here).
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: Y3GFBT2WQ2
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: YES
@@ -179,7 +190,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ethannicholas.hyperfocal.uitests
         SWIFT_VERSION: "5.0"
-        CODE_SIGN_STYLE: Automatic
+        # Ad-hoc by default, for the reason spelled out on the app target.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: Y3GFBT2WQ2
         TEST_TARGET_NAME: Hyperfocal
         GENERATE_INFOPLIST_FILE: YES

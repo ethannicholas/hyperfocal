@@ -280,6 +280,26 @@ rejected alternatives, and why). Cross-platform strategy and phases:
 - Bundle ID `com.ethannicholas.hyperfocal` (lowercase — the capitalized
   form collides case-insensitively in Apple's App ID registry), team
   `Y3GFBT2WQ2`.
+- **A clone must build with no Apple Developer account.** `App/project.yml`
+  signs the app ad-hoc (`CODE_SIGN_IDENTITY: "-"`, "Sign to Run Locally") —
+  it used to ask for a Mac Development certificate for the team above, which
+  is a hard build failure (`No signing certificate "Mac Development" found`)
+  for everyone but the maintainer, i.e. for everyone who tries the project.
+  Never set `CODE_SIGN_STYLE: Automatic` in `project.yml`: it is what makes
+  the *default* path demand a certificate, including in Xcode.app.
+  - The command-line build upgrades itself where it can: `Scripts/signing.sh`
+    (sourced by `build.sh` and `ui-test.sh`) signs with the team's *own*
+    development certificate when the keychain holds one, else ad-hoc, and
+    ignores other teams' certificates — they cannot sign our bundle ID, so
+    using one just reintroduces the failure. `HYPERFOCAL_DEVELOPMENT_TEAM`
+    overrides both ways (a value forces it, empty forces ad-hoc).
+  - Worth signing properly where possible because an ad-hoc signature's
+    designated requirement pins the cdhash, which changes every build: macOS
+    then re-asks for the Automation permission `Scripts/run.sh` (AppleEvent
+    quit) and the UI tests rely on.
+  - The distribution scripts name their own identity and are unaffected:
+    `package-app.sh` (Developer ID, ad-hoc fallback) and `upload-mas.sh`
+    (Apple Distribution, `-allowProvisioningUpdates`).
 - UserDefaults suite `org.hyperfocal.settings` is deliberately decoupled
   from the bundle ID; renaming it orphans users' saved settings.
 

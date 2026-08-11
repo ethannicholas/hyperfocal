@@ -96,6 +96,14 @@ command -v xcodegen >/dev/null 2>&1 || {
 # gitignored) — regenerate every time so project.yml edits always take.
 (cd App && xcodegen generate >/dev/null)
 
+# Ad-hoc unless this machine holds the project team's development
+# certificate — see Scripts/signing.sh for why the default is ad-hoc.
+. Scripts/signing.sh
+hf_signing_args
+
+# HF_SIGN_ARGS is empty when the project's ad-hoc default applies, and
+# bash 3.2 (macOS's /bin/bash) dies on set -u + an empty array expansion —
+# hence the ${a[@]+…} guard rather than a plain "${a[@]}".
 xcodebuild -project App/Hyperfocal.xcodeproj -scheme Hyperfocal \
     -configuration "$CONFIG" -destination 'platform=macOS' \
-    -quiet build
+    ${HF_SIGN_ARGS[@]+"${HF_SIGN_ARGS[@]}"} -quiet build

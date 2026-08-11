@@ -34,14 +34,20 @@ description: Build, launch, and drive the Hyperfocal app end-to-end to verify a 
 
 ```sh
 swift build                            # engine + CLI + retouch-probe
-cd App && xcodegen generate            # ALWAYS after adding files to App/Sources
-xcodebuild -project Hyperfocal.xcodeproj -scheme Hyperfocal \
-    -configuration Debug -destination 'platform=macOS' build
+Scripts/build.sh                       # the macOS app (xcodegen + xcodebuild)
 ```
 
-Real signing works from the CLI (team Y3GFBT2WQ2); no ad-hoc workarounds
-needed. Product lands in
+`Scripts/build.sh` regenerates the Xcode project every time, so it covers
+the "ALWAYS run xcodegen after adding files to App/Sources" rule on its
+own. Product lands in
 `~/Library/Developer/Xcode/DerivedData/Hyperfocal-*/Build/Products/Debug/`.
+
+Signing needs no setup and no ad-hoc workaround: `Scripts/signing.sh` picks
+the project team's development certificate when the machine has one and
+signs to run locally when it doesn't (a clone must build with no Apple
+Developer account at all). Worth knowing when driving the app: under the
+ad-hoc signature the cdhash changes every build, so macOS re-asks for the
+Automation permission that `Scripts/run.sh` and the UI tests depend on.
 
 **Gotcha:** XcodeGen generates `App/Info.plist` and the `.xcodeproj` from
 `App/project.yml` — hand-edits to either are silently reverted. Change

@@ -94,13 +94,21 @@ rm -f "$FIXTURES"/*/ground_truth.*
 echo "== regenerating Xcode project"
 (cd App && xcodegen generate >/dev/null)
 
+# Same identity the everyday build uses (Scripts/signing.sh): ad-hoc unless
+# this machine holds the project team's development certificate.
+. Scripts/signing.sh
+hf_signing_args
+
 LOG="${TMPDIR:-/tmp}/hyperfocal-ui-test.log"
 echo "== running UI tests (full log: $LOG)"
 set +e  # xcodebuild's status must be captured, not fatal; grep may exit 1
+# ${a[@]+…}: bash 3.2 + set -u dies expanding an empty array, and
+# HF_SIGN_ARGS is empty in the ad-hoc case.
 xcodebuild test \
     -project App/Hyperfocal.xcodeproj \
     -scheme Hyperfocal \
     -destination 'platform=macOS' \
+    ${HF_SIGN_ARGS[@]+"${HF_SIGN_ARGS[@]}"} \
     ${ONLY:+-only-testing:"HyperfocalUITests/$ONLY"} 2>&1 \
     | tee "$LOG" \
     | grep -E "Test [Cc]ase|Test [Ss]uite|error:|\*\* TEST"
