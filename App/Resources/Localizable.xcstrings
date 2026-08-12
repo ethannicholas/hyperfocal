@@ -1380,94 +1380,6 @@
         }
       }
     },
-    "%lld folders": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld Ordner"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld carpetas"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld dossiers"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld cartelle"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld個のフォルダ"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "폴더 %lld개"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld mappen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld pastas"
-          }
-        },
-        "ru": {
-          "variations": {
-            "plural": {
-              "few": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld папкам"
-                }
-              },
-              "many": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld папкам"
-                }
-              },
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld папке"
-                }
-              },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld папкам"
-                }
-              }
-            }
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld 个文件夹"
-          }
-        }
-      }
-    },
     "%lld frames look bad": {
       "localizations": {
         "de": {
@@ -8582,66 +8494,66 @@
         }
       }
     },
-    "Hyperfocal doesn’t have permission to read this project’s images": {
+    "Hyperfocal needs permission to read these images": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocal darf die Bilder dieses Projekts nicht lesen"
+            "value": "Hyperfocal benötigt die Berechtigung, diese Bilder zu lesen"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocal no tiene permiso para leer las imágenes de este proyecto"
+            "value": "Hyperfocal necesita permiso para leer estas imágenes"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocal n’est pas autorisé à lire les images de ce projet"
+            "value": "Hyperfocal a besoin de l’autorisation de lire ces images"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocal non ha il permesso di leggere le immagini di questo progetto"
+            "value": "Hyperfocal ha bisogno dell’autorizzazione per leggere queste immagini"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocalにこのプロジェクトの画像を読む権限がありません"
+            "value": "Hyperfocal がこれらの画像を読み取るには許可が必要です"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocal에 이 프로젝트의 이미지를 읽을 권한이 없습니다"
+            "value": "Hyperfocal이 이 이미지를 읽으려면 권한이 필요합니다"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocal heeft geen toestemming om de afbeeldingen van dit project te lezen"
+            "value": "Hyperfocal heeft toestemming nodig om deze afbeeldingen te lezen"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O Hyperfocal não tem permissão para ler as imagens deste projeto"
+            "value": "O Hyperfocal precisa de permissão para ler estas imagens"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "У Hyperfocal нет разрешения на чтение изображений этого проекта"
+            "value": "Hyperfocal требуется разрешение на чтение этих изображений"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hyperfocal 没有权限读取此项目的图像"
+            "value": "Hyperfocal 需要读取这些图像的权限"
           }
         }
       }
@@ -12876,66 +12788,66 @@
         }
       }
     },
-    "Restoring project…": {
+    "Opening project…": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Projekt wird wiederhergestellt …"
+            "value": "Projekt wird geöffnet …"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Restaurando el proyecto…"
+            "value": "Abriendo el proyecto…"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Restauration du projet…"
+            "value": "Ouverture du projet…"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ripristino del progetto…"
+            "value": "Apertura del progetto…"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "プロジェクトを復元中…"
+            "value": "プロジェクトを開いています…"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "프로젝트 복원 중…"
+            "value": "프로젝트 여는 중…"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Project herstellen…"
+            "value": "Project openen…"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Restaurando projeto…"
+            "value": "Abrindo projeto…"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Восстановление проекта…"
+            "value": "Открытие проекта…"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "正在恢复项目…"
+            "value": "正在打开项目…"
           }
         }
       }
@@ -17360,66 +17272,66 @@
         }
       }
     },
-    "macOS grants access folder by folder, and the permission this project saved couldn’t be restored. Grant access to %@ to load the images — saving the project afterward keeps the access for next time. Fused results are intact either way.": {
+    "A file dialog will open to the project’s image folder. Click “Grant Access” to allow Hyperfocal to read the images.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS erteilt Zugriff ordnerweise, und die in diesem Projekt gesicherte Berechtigung konnte nicht wiederhergestellt werden. Erlaube den Zugriff auf %@, um die Bilder zu laden — anschließendes Sichern des Projekts erhält den Zugriff für das nächste Mal. Fusionierte Ergebnisse bleiben in jedem Fall erhalten."
+            "value": "Ein Dateidialog öffnet sich im Bilderordner des Projekts. Klicke auf „Zugriff erlauben“, damit Hyperfocal die Bilder lesen kann."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS concede el acceso carpeta por carpeta, y el permiso guardado en este proyecto no se pudo restaurar. Permite el acceso a %@ para cargar las imágenes; guardar el proyecto después conserva el acceso para la próxima vez. Los resultados fusionados quedan intactos en cualquier caso."
+            "value": "Se abrirá un diálogo de archivos en la carpeta de imágenes del proyecto. Haz clic en «Permitir acceso» para permitir que Hyperfocal lea las imágenes."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS accorde l’accès dossier par dossier, et l’autorisation enregistrée dans ce projet n’a pas pu être restaurée. Autorisez l’accès à %@ pour charger les images — enregistrer ensuite le projet conserve l’accès pour la prochaine fois. Les résultats fusionnés restent intacts dans tous les cas."
+            "value": "Une boîte de dialogue s’ouvrira sur le dossier d’images du projet. Cliquez sur « Autoriser l’accès » pour permettre à Hyperfocal de lire les images."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS concede l’accesso cartella per cartella e il permesso salvato in questo progetto non è stato ripristinato. Consenti l’accesso a %@ per caricare le immagini — salvando poi il progetto l’accesso resta valido la prossima volta. I risultati fusi restano comunque intatti."
+            "value": "Si aprirà una finestra di dialogo sulla cartella delle immagini del progetto. Fai clic su “Consenti accesso” per consentire a Hyperfocal di leggere le immagini."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOSはフォルダごとにアクセスを許可しますが、このプロジェクトに保存された権限を復元できませんでした。画像を読み込むには%@へのアクセスを許可してください。その後プロジェクトを保存すると、次回もアクセスが維持されます。合成済みの結果はいずれの場合も無事です。"
+            "value": "プロジェクトの画像フォルダでファイルダイアログが開きます。「アクセスを許可」をクリックすると、Hyperfocal が画像を読み取れます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS는 폴더 단위로 접근을 허용하는데, 이 프로젝트에 저장된 권한을 복원할 수 없었습니다. 이미지를 로드하려면 %@에 대한 접근을 허용하세요. 이후 프로젝트를 저장하면 다음에도 접근이 유지됩니다. 합성된 결과는 어느 쪽이든 손상되지 않습니다."
+            "value": "파일 대화상자가 프로젝트의 이미지 폴더를 엽니다. ‘접근 허용’을 클릭하면 Hyperfocal이 이미지를 읽을 수 있습니다."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS verleent toegang per map, en de in dit project bewaarde toestemming kon niet worden hersteld. Verleen toegang tot %@ om de afbeeldingen te laden — het project daarna bewaren behoudt de toegang voor de volgende keer. Samengevoegde resultaten blijven hoe dan ook intact."
+            "value": "Er verschijnt een bestandsvenster met de afbeeldingsmap van het project. Klik op ‘Toegang verlenen’ zodat Hyperfocal de afbeeldingen kan lezen."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O macOS concede acesso pasta por pasta, e a permissão salva neste projeto não pôde ser restaurada. Permita o acesso a %@ para carregar as imagens — salvar o projeto depois mantém o acesso para a próxima vez. Os resultados fundidos permanecem intactos de qualquer forma."
+            "value": "Uma janela de arquivos será aberta na pasta de imagens do projeto. Clique em “Permitir Acesso” para permitir que o Hyperfocal leia as imagens."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS выдаёт доступ по папкам, и сохранённое в этом проекте разрешение не удалось восстановить. Разрешите доступ к %@, чтобы загрузить изображения — последующее сохранение проекта сохранит доступ на будущее. Объединённые результаты в любом случае целы."
+            "value": "Откроется диалог выбора файлов в папке изображений проекта. Нажмите «Разрешить доступ», чтобы Hyperfocal мог читать изображения."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS 按文件夹授予访问权限，而此项目存储的权限无法恢复。请允许访问%@以载入图像 — 之后存储项目即可在下次保留该权限。无论如何，已合成的结果都完好无损。"
+            "value": "将打开一个文件对话框，定位到项目的图像文件夹。点击“允许访问”以便 Hyperfocal 读取这些图像。"
           }
         }
       }
@@ -17612,70 +17524,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "sRGB"
-          }
-        }
-      }
-    },
-    "the folder “%@”": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "den Ordner „%@“"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "la carpeta «%@»"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "le dossier « %@ »"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "la cartella “%@”"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "フォルダ「%@」"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "‘%@’ 폴더"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "de map ‘%@’"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "a pasta “%@”"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "папке «%@»"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "文件夹“%@”"
           }
         }
       }

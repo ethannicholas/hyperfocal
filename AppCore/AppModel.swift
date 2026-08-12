@@ -1413,7 +1413,7 @@ public final class AppModel: ObservableObject {
     func openProject(from url: URL) {
         guard !phase.isRunning else { return }
         phase = .running
-        stageText = localizedString("Restoring project…", comment: "")
+        stageText = localizedString("Opening project…", comment: "")
         stageFraction = 0
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
@@ -1559,19 +1559,15 @@ public final class AppModel: ObservableObject {
     var accessGrantPicker: ((URL) -> URL?)?
 
     private func offerAccessRegrant(for roots: [URL]) {
-        let folders = roots.count == 1
-            ? String(format: localizedString("the folder “%@”", comment: ""),
-                     roots[0].lastPathComponent)
-            : String(format: localizedString("%lld folders", comment: ""), roots.count)
         let proceed: Bool
         if let accessPromptOverride {
             proceed = accessPromptOverride(roots.count)
         } else {
             proceed = dialogs?.confirm(
-                message: localizedString("Hyperfocal doesn’t have permission to read this project’s images", comment: ""),
-                informative: String(format: localizedString(
-                    "macOS grants access folder by folder, and the permission this project saved couldn’t be restored. Grant access to %@ to load the images — saving the project afterward keeps the access for next time. Fused results are intact either way.",
-                    comment: ""), folders),
+                message: localizedString("Hyperfocal needs permission to read these images", comment: ""),
+                informative: localizedString(
+                    "A file dialog will open to the project’s image folder. Click “Grant Access” to allow Hyperfocal to read the images.",
+                    comment: ""),
                 confirmTitle: localizedString("Grant Access…", comment: ""),
                 cancelTitle: localizedString("Not Now", comment: ""),
                 warning: true) ?? false
