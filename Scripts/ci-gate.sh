@@ -34,20 +34,61 @@ if [ "$(uname)" = Darwin ]; then PMAX_FLOOR=38.1; else PMAX_FLOOR=38.3; fi
 echo "== synth PSNR gates"
 "$BIN" synth -o "$WORK/synth"
 
-gate() { # method floor
-    local method=$1 floor=$2 line psnr
-    "$BIN" fuse "$WORK"/synth/frame_*.tif -o "$WORK/out-$method.tif" \
+gate() { # method floor [stackdir [label]]
+    # Separate statements on purpose: `local` declares every name before it
+    # assigns any, so a default referring to an earlier one on the same line
+    # ("label=${4:-$method}") reads it as unset and dies under `set -u`.
+    local method=$1 floor=$2 dir=${3:-$WORK/synth}
+    local label=${4:-$method} line psnr
+    "$BIN" fuse "$dir"/frame_*.tif -o "$WORK/out-$label.tif" \
         --method "$method" --color-space p3
-    line=$("$BIN" compare "$WORK/out-$method.tif" "$WORK/synth/ground_truth.tif")
+    line=$("$BIN" compare "$WORK/out-$label.tif" "$dir/ground_truth.tif")
     psnr=$(echo "$line" | awk '{print $2}')
-    echo "$method: $line (floor $floor)"
+    echo "$label: $line (floor $floor)"
     awk -v p="$psnr" -v f="$floor" 'BEGIN { exit !(p >= f) }' || {
-        echo "== CI GATE FAILED: $method PSNR $psnr dB < floor $floor dB"
+        echo "== CI GATE FAILED: $label PSNR $psnr dB < floor $floor dB"
         exit 1
     }
 }
 gate dmap 38.2
 gate pmax "$PMAX_FLOOR"
+
+# Registration-scale gate. The stack above is 900 px on its longest side,
+# which sits BELOW the registration decode bound (max(1000, longest/5)) —
+# so it takes the full-decode path on every platform and is structurally
+# blind to anything that changes what the registrar sees at scale. That
+# blind spot is not hypothetical: reducing Vision's registration input to
+# the bound cost 6-7 dB against ground truth (2026-08-11) and the gate
+# above did not move by a thousandth of a dB. See the dead-end entry in
+# Docs/performance.md.
+#
+# 4240x2832 is the cheapest shape that clears the bound (~10 s for the
+# whole section). Anything that degrades registration accuracy at real
+# frame sizes shows up here and nowhere else in this script.
+echo "== registration-scale gate (frames above the registration bound)"
+"$BIN" synth -o "$WORK/synth-big" --width 4240 --height 2832 --frames 17
+if [ "$(uname)" = Darwin ]; then
+    # Measured on the M5 Max, 2026-08-11: dmap 51.92, pmax 50.93 (bit-stable
+    # across reps). Floors sit ~2 dB under, which still leaves ~4 dB of
+    # separation from the 45.60 the regression above produced.
+    gate dmap 50.0 "$WORK/synth-big" dmap-big
+    gate pmax 49.0 "$WORK/synth-big" pmax-big
+else
+    # NOT YET CALIBRATED off Apple, and deliberately not given a guessed
+    # floor: registration is OpenCV SIFT there, not Vision, and the two have
+    # opposite scale sensitivity (that is precisely the error that produced
+    # the dead end above — reasoning from SIFT's measured scale-tolerance to
+    # Vision's). A floor loose enough to be safe would be too loose to catch
+    # anything, which is worse than an honest gap. First Linux/Windows
+    # session: run this, read the two numbers, and paste them in ~2 dB down.
+    "$BIN" fuse "$WORK"/synth-big/frame_*.tif -o "$WORK/out-dmap-big.tif" \
+        --method dmap --color-space p3
+    "$BIN" fuse "$WORK"/synth-big/frame_*.tif -o "$WORK/out-pmax-big.tif" \
+        --method pmax --color-space p3
+    echo "dmap-big: $("$BIN" compare "$WORK/out-dmap-big.tif" "$WORK/synth-big/ground_truth.tif") (UNCALIBRATED — not gated)"
+    echo "pmax-big: $("$BIN" compare "$WORK/out-pmax-big.tif" "$WORK/synth-big/ground_truth.tif") (UNCALIBRATED — not gated)"
+    echo "== NOTE: registration-scale floors need calibrating on this platform (see Scripts/ci-gate.sh)"
+fi
 
 # DNG round-trip: exporting through our DNG writer and decoding back (LibRaw
 # on Linux, CIRAW on macOS) must reproduce the TIFF render. Guards the raw
