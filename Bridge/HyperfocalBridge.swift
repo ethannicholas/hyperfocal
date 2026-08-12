@@ -212,8 +212,8 @@ private final class BridgeDialogs: DialogService {
     func chooseAccessGrant(for root: URL) -> URL? { nil }
     func chooseExportDirectory(message: String) -> URL? { nil }
     func chooseSaveProject(directory: URL?, suggestedName: String) -> URL? { nil }
-    func chooseSaveAnimation(suggestedName: String) -> URL? { nil }
-    func chooseSaveExport(suggestedName: String) -> URL? { nil }
+    func chooseSaveAnimation(directory: URL?, suggestedName: String) -> URL? { nil }
+    func chooseSaveExport(directory: URL?, suggestedName: String) -> URL? { nil }
 }
 
 /// Copy `string` into a caller-allocated, NUL-terminated UTF-8 buffer;
@@ -1167,6 +1167,41 @@ public func hf_project_path(_ buffer: UnsafeMutablePointer<CChar>?,
     MainActor.assumeIsolated {
         guard let url = Bridge.model?.projectURL else { return 0 }
         return fillUTF8(url.path, buffer, cap)
+    }
+}
+
+/// The export panel's suggested filename stem (no extension): the
+/// project's name when it has one, else the stack folder; depth mode
+/// appends its marker. Mirrors the macOS save panel's prefill.
+@_cdecl("hf_export_suggested_name")
+public func hf_export_suggested_name(_ buffer: UnsafeMutablePointer<CChar>?,
+                                     _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.exportSuggestedName, buffer, cap)
+    }
+}
+
+/// The animation panel's suggested filename stem (no extension) — the
+/// export stem plus the rocking marker.
+@_cdecl("hf_animation_suggested_name")
+public func hf_animation_suggested_name(_ buffer: UnsafeMutablePointer<CChar>?,
+                                        _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let model = Bridge.model else { return 0 }
+        return fillUTF8(model.animationSuggestedName, buffer, cap)
+    }
+}
+
+/// Where the export and animation panels should open: the named
+/// project's directory. 0 bytes when the project has never been saved —
+/// keep the dialog's own default then.
+@_cdecl("hf_export_suggested_directory")
+public func hf_export_suggested_directory(_ buffer: UnsafeMutablePointer<CChar>?,
+                                          _ cap: Int32) -> Int32 {
+    MainActor.assumeIsolated {
+        guard let dir = Bridge.model?.exportSuggestedDirectory else { return 0 }
+        return fillUTF8(dir.path, buffer, cap)
     }
 }
 

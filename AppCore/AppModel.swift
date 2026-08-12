@@ -2656,10 +2656,9 @@ public final class AppModel: ObservableObject {
 
     private func runAnimatePanel() {
         guard canAnimate else { return }
-        let base = (fuseURLs.first ?? frames.first)?
-            .deletingLastPathComponent().lastPathComponent ?? "stacked"
         guard let url = dialogs?.chooseSaveAnimation(
-            suggestedName: "\(base) rocking.\(animationFormat.fileExtension)") else { return }
+            directory: exportSuggestedDirectory,
+            suggestedName: "\(animationSuggestedName).\(animationFormat.fileExtension)") else { return }
         Task { [weak self] in
             _ = await self?.writeAnimation(to: url)
         }
@@ -3891,14 +3890,40 @@ public final class AppModel: ObservableObject {
         // Retouch edits, once made, are the result.
         let baseImage = exportBaseImage
         guard (outputMode == .depth ? depthResultImage() : baseImage) != nil else { return }
-        // Name after the stack's folder — stable and meaningful, unlike
-        // whichever frame happens to be first or selected.
-        let base = (fuseURLs.first ?? frames.first)?
-            .deletingLastPathComponent().lastPathComponent ?? "stacked"
-        let suffix = outputMode == .depth ? localizedString(" depth", comment: "") : ""
         guard let url = dialogs?.chooseSaveExport(
-            suggestedName: "\(base)\(suffix).\(exportFormat.fileExtension)") else { return }
+            directory: exportSuggestedDirectory,
+            suggestedName: "\(exportSuggestedName).\(exportFormat.fileExtension)") else { return }
         writeExport(to: url)
+    }
+
+    /// Where the export panel opens: a named project exports next to its
+    /// .hyperfocal file; before a save there's no better answer than the
+    /// panel's own default (nil).
+    public var exportSuggestedDirectory: URL? {
+        projectURL?.deletingLastPathComponent()
+    }
+
+    /// The stem both save panels build on: the project's own name when it
+    /// has one, else the stack's folder — stable and meaningful, unlike
+    /// whichever frame happens to be first or selected.
+    private var suggestedStemBase: String {
+        projectURL?.deletingPathExtension().lastPathComponent
+            ?? (fuseURLs.first ?? frames.first)?
+                .deletingLastPathComponent().lastPathComponent
+            ?? "stacked"
+    }
+
+    /// The filename stem (no extension) the export panel offers; depth
+    /// exports append their marker.
+    public var exportSuggestedName: String {
+        outputMode == .depth
+            ? suggestedStemBase + localizedString(" depth", comment: "")
+            : suggestedStemBase
+    }
+
+    /// The filename stem (no extension) the animation panel offers.
+    public var animationSuggestedName: String {
+        suggestedStemBase + localizedString(" rocking", comment: "")
     }
 
     /// The crop clamped to an image's bounds — nil when it doesn't

@@ -428,6 +428,14 @@ int hf_tone_lut(uint16_t *out, int size);
 // suite; see HYPERFOCAL_SETTINGS_SUITE in main.cpp) is restored before
 // returning. NULL uses the model's current settings.
 int hf_export(const char *path, const char *format);
+// The export/animation dialogs' prefill, matching the macOS save
+// panels: the filename stem (project name when saved, else the stack
+// folder; the depth/rocking marker appended as appropriate) and, for a
+// named project, its directory (0 bytes when never saved — keep the
+// dialog's default).
+int hf_export_suggested_name(char *buf, int cap);
+int hf_animation_suggested_name(char *buf, int cap);
+int hf_export_suggested_directory(char *buf, int cap);
 
 #ifdef __cplusplus
 }

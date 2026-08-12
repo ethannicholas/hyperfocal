@@ -1330,6 +1330,12 @@ Task { @MainActor in
         print("probe: UNEXPECTED ACCESS RE-GRANT PROMPT (\(count) folders)")
         exit(1)
     }
+    // Export prefill: with no project and no frames the panel offers only
+    // the fallback stem and no directory…
+    guard model2.exportSuggestedDirectory == nil,
+          model2.exportSuggestedName == "stacked" else {
+        print("probe: EXPORT PREFILL BEFORE OPEN NOT FALLBACK"); exit(1)
+    }
     model2.openProject(from: sessionURL)
     ticks = 0
     while model2.phase != .done && ticks < 300 {
@@ -1342,6 +1348,14 @@ Task { @MainActor in
         exit(1)
     }
     print("probe: project restored — frames=\(model2.frames.count), result \(model2.dmapResult!.width)x\(model2.dmapResult!.height)")
+    // …and a named project prefills its own directory and name (the
+    // extension is the export format's, so only the stem matches).
+    guard model2.exportSuggestedDirectory == sessionURL.deletingLastPathComponent(),
+          model2.exportSuggestedName == "probe",
+          model2.animationSuggestedName == "probe rocking" else {
+        print("probe: EXPORT PREFILL DOES NOT FOLLOW THE PROJECT"); exit(1)
+    }
+    print("probe: export prefill follows the project OK")
     try? FileManager.default.removeItem(at: sessionURL)
     // The resumed-session cache: a reloaded project has no fuse spill (it
     // died with the saving process), so the input pane's first aligned

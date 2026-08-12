@@ -2,6 +2,7 @@
 "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.":"\n\nAusgeschlossene Einzelbilder bleiben ohne Häkchen in der Stapelliste — setze das Häkchen wieder, um sie erneut einzubeziehen, und fusioniere neu.",
 " and %lld more":" und %lld weitere",
 " depth":" Tiefe",
+" rocking":" Parallaxe",
 "%.1f× brighter than the stack":"%.1f× heller als der Stapel",
 "%.1f× darker than the stack":"%.1f× dunkler als der Stapel",
 "%1 EV":"%1 EV",

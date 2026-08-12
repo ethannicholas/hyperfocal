@@ -2,6 +2,7 @@
 "\n\nExcluded frames stay in the Stack list with their checkbox cleared — re-check one to opt back in and re-fuse.":"\n\nLas imágenes excluidas permanecen en la lista de la pila con su casilla desmarcada; vuelve a marcar una para reincluirla y fusiona de nuevo.",
 " and %lld more":" y %lld más",
 " depth":" profundidad",
+" rocking":" balanceo",
 "%.1f× brighter than the stack":"%.1f× más clara que la pila",
 "%.1f× darker than the stack":"%.1f× más oscura que la pila",
 "%1 EV":"%1 EV",

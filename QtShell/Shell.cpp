@@ -300,6 +300,15 @@ void Shell::exportAnimationInteractive() {
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setAcceptMode(QFileDialog::AcceptSave);
     dialog.setFileMode(QFileDialog::AnyFile);
+    // Prefill like the export dialog: project directory and name for a
+    // named project, stem only — the filter's default suffix appends.
+    {
+        char buffer[1024];
+        int n = hf_export_suggested_directory(buffer, sizeof buffer);
+        if (n > 0) dialog.setDirectory(QString::fromUtf8(buffer, n));
+        n = hf_animation_suggested_name(buffer, sizeof buffer);
+        if (n > 0) dialog.selectFile(QString::fromUtf8(buffer, n));
+    }
     // Every option list here is a persisted enum rawValue on the model side
     // (AnimationFormat/Duration/Path/Strength). The raw list is what crosses
     // the bridge; the parallel *Labels list is what the user reads. Never
@@ -873,6 +882,18 @@ void Shell::exportInteractive() {
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setAcceptMode(QFileDialog::AcceptSave);
     dialog.setFileMode(QFileDialog::AnyFile);
+    // Prefill like the macOS save panel: a named project exports next to
+    // its .hyperfocal file under the project's name (unsaved projects keep
+    // the dialog's own directory). The stem carries no extension — the
+    // selected filter's default suffix appends on accept, so a format
+    // switch can't strand a stale one.
+    {
+        char buffer[1024];
+        int n = hf_export_suggested_directory(buffer, sizeof buffer);
+        if (n > 0) dialog.setDirectory(QString::fromUtf8(buffer, n));
+        n = hf_export_suggested_name(buffer, sizeof buffer);
+        if (n > 0) dialog.selectFile(QString::fromUtf8(buffer, n));
+    }
     // The dialog's own filter combo IS the format picker — one control,
     // no redundant "Format:" row; only Color Space needs an accessory.
     // Raw values persist (ExportFormat/ExportColorSpace rawValues); the

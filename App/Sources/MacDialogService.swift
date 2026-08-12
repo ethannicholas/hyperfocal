@@ -126,20 +126,22 @@ final class MacDialogService: DialogService {
         return panel.url
     }
 
-    func chooseSaveAnimation(suggestedName: String) -> URL? {
+    func chooseSaveAnimation(directory: URL?, suggestedName: String) -> URL? {
         guard let model else { return nil }
         let panel = NSSavePanel()
         panel.retarget(extension: model.animationFormat.fileExtension)
+        if let directory { panel.directoryURL = directory }
         panel.nameFieldStringValue = suggestedName
         panel.accessoryView = AnimationOptionsView(model: model, panel: panel)
         guard panel.runModal() == .OK else { return nil }
         return panel.url
     }
 
-    func chooseSaveExport(suggestedName: String) -> URL? {
+    func chooseSaveExport(directory: URL?, suggestedName: String) -> URL? {
         guard let model else { return nil }
         let panel = NSSavePanel()
         panel.retarget(extension: model.exportFormat.fileExtension)
+        if let directory { panel.directoryURL = directory }
         panel.nameFieldStringValue = suggestedName
         panel.accessoryView = ExportOptionsView(model: model, panel: panel)
         guard panel.runModal() == .OK else { return nil }

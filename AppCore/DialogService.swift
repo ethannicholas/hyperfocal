@@ -52,8 +52,12 @@ public protocol DialogService: AnyObject {
 
     /// Export rocking animation: destination plus the animation options
     /// (format, path, strength, duration, fps) presented alongside.
-    func chooseSaveAnimation(suggestedName: String) -> URL?
+    /// `directory` (a named project's folder) preselects; nil keeps the
+    /// panel's own default.
+    func chooseSaveAnimation(directory: URL?, suggestedName: String) -> URL?
 
     /// Export result/depth image: destination plus the export options.
-    func chooseSaveExport(suggestedName: String) -> URL?
+    /// `directory` (a named project's folder) preselects; nil keeps the
+    /// panel's own default.
+    func chooseSaveExport(directory: URL?, suggestedName: String) -> URL?
 }
