@@ -314,10 +314,14 @@ public final class AppModel: ObservableObject {
     @Published public var useGPU: Bool {
         didSet { Self.settings.set(useGPU, forKey: "useGPU") }
     }
-    /// Fusion's temporary disk cache (FrameSpill): caches aligned frames
-    /// between the two depth-fusion passes so the stack isn't decoded twice.
-    /// Output is bit-identical either way — the toggle exists for machines
-    /// short on disk (the cache is width×height×16 bytes per frame).
+    /// The temporary disk cache (FrameSpill): caches aligned frames between
+    /// the two depth-fusion passes so the stack isn't decoded twice, and —
+    /// retained past the fuse (or rebuilt lazily) — backs every per-frame
+    /// view of the result and the input pane's raw browsing, so frame
+    /// switches stream off SSD instead of re-decoding. Output is
+    /// bit-identical either way — the toggle exists for machines short on
+    /// disk (a full cache is width×height×8 bytes per frame; the lazy view
+    /// caches stop growing when the volume runs short regardless).
     @Published public var fusionDiskCache: Bool {
         didSet { Self.settings.set(fusionDiskCache, forKey: "fusionDiskCache") }
     }
@@ -613,12 +617,21 @@ public final class AppModel: ObservableObject {
     private var pendingSecondary: (method: FusionMethod, urls: [URL],
                                    config: StackPipeline.Configuration)?
 
-    /// The primary fuse's retained warped-frame cache while the background
-    /// secondary generation is consuming it — or, for a deferred secondary,
-    /// the sole owner keeping the (disk-backed) spill alive until that pass is
-    /// requested. Also lets a re-fuse's disk preflight credit its bytes as
-    /// about-to-be-reclaimed (the new fuse cancels that generation, which
-    /// releases the cache) — cleared wherever the background pass ends.
+    /// The current result's warped-frame spill, held for the result's whole
+    /// lifetime (not just while the background secondary streams from it):
+    /// every on-demand aligned-frame view of this result — retouch brush
+    /// sources, the input pane once transforms exist — threads it into its
+    /// `StackSource.warped` and streams frames off SSD instead of paying a
+    /// RAW decode + warp per frame switch. A DMap primary retains its own
+    /// pass-1 spill (complete); a PMax primary adopts the background DMap
+    /// pass's spill when that lands; when neither exists (reloaded project,
+    /// PMax primary before its secondary) `ensureRetainedSpill` creates an
+    /// EMPTY one that fills as frames decode — partial coverage is partial
+    /// speedup. nil only when the disk cache is off or a spill can't be
+    /// created — consumers fall back to decoding. Released by
+    /// `cancelBackgroundFusion` (new fuse, stack switch, project close —
+    /// everywhere the result itself dies), which also lets a re-fuse's disk
+    /// preflight credit its bytes as about-to-be-reclaimed.
     private var retainedWarpedFrames: WarpedFrameCache?
 
     /// Stops the background secondary-algorithm generation, if any — running
@@ -1010,8 +1023,7 @@ public final class AppModel: ObservableObject {
         noiseFloorPreviewDataEpoch += 1  // invalidate any in-flight build
         noiseFloorPreviewActive = false
         progressive = nil
-        inputCache = [:]
-        inputCacheOrder = []
+        rawInputSpill = nil   // index-keyed over the outgoing stack's frames
         inputPreview = nil
         inputPreviewURL = nil
         inputPreviewAligned = false
@@ -1304,10 +1316,14 @@ public final class AppModel: ObservableObject {
               let size = ImageFile.pixelSize(url: first),
               let short = FrameSpill.shortfall(frameBytes: size.width * size.height * 8,
                                                frameCount: urls.count,
-                                               // A stale secondary generation's
-                                               // retained cache is released by
-                                               // this fuse — its disk is ours.
-                                               reclaimable: retainedWarpedFrames?.diskBytes ?? 0)
+                                               // The outgoing result's retained
+                                               // cache (and the retouch session
+                                               // sharing it) plus the raw-decode
+                                               // cache are released by this fuse
+                                               // before its own spill grows —
+                                               // their disk is ours.
+                                               reclaimable: (retainedWarpedFrames?.diskBytes ?? 0)
+                                                   + (rawInputSpill?.cache.diskBytes ?? 0))
               else { return true }
         let fmt = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         return runConfirmAlert(
@@ -1605,9 +1621,8 @@ public final class AppModel: ObservableObject {
         guard !newGrants.isEmpty else { return }
         // Fresh bookmarks exist only in a re-saved project file.
         hasUnsavedWork = true
-        // The input pane may have already tried (and failed) to decode.
-        inputCache = [:]
-        inputCacheOrder = []
+        // The input pane may have already tried (and failed) to decode —
+        // retry now that access exists (failures are never cached).
         if let url = inputPreviewURL ?? selection.first {
             inputPreviewURL = nil
             showInputFrame(url)
@@ -1677,9 +1692,15 @@ public final class AppModel: ObservableObject {
         case nil: return dmapResult ?? pmaxResult
         }
     }
-    private var inputCache: [URL: (image: PlatformImage, pixelSize: CGSize, aligned: Bool)] = [:]
-    private var inputCacheOrder: [URL] = []
+    /// The input pane's raw-decode cache — see `ensureRawInputSpill`. The
+    /// urls snapshot is the validity key: index-keyed slots are only as good
+    /// as the exact frame list they were built over.
+    private var rawInputSpill: (urls: [URL], cache: WarpedFrameCache)?
     private var inputDecodeTask: Task<Void, Never>?
+
+    // Probe taps: occupancy of the unified frame caches (see retouch-probe).
+    var alignedSpillPopulation: Int { retainedWarpedFrames?.populatedCount ?? 0 }
+    var inputSpillPopulation: Int { rawInputSpill?.cache.populatedCount ?? 0 }
 
     nonisolated static let stackableExtensions: Set<String> =
         ImageFile.rawExtensions.union(["tif", "tiff", "png", "jpg", "jpeg"])
@@ -2422,8 +2443,7 @@ public final class AppModel: ObservableObject {
         inputPreviewAligned = false
         inputPreviewError = nil
         inputPixelSize = nil
-        inputCache = [:]
-        inputCacheOrder = []
+        rawInputSpill = nil
         viewport.reset()
     }
 
@@ -2830,14 +2850,24 @@ public final class AppModel: ObservableObject {
         inputPreviewURL = url
         inputPreviewAligned = aligned
         inputPreviewError = nil
-        if let cached = inputCache[url], cached.aligned == aligned {
-            inputPreview = cached.image
-            inputPixelSize = cached.pixelSize
-            inputPreviewLoading = false
-            return
-        }
         inputDecodeTask?.cancel()
         inputPreviewLoading = true
+        // The unified frame cache: aligned views stream from the result's
+        // retained spill (created lazily if the fuse's didn't survive — a
+        // reloaded project); raw views stream from the per-stack decode
+        // spill. Every load routes through StackSource, so a miss decodes
+        // once and writes its slot back — revisits are SSD reads, whatever
+        // order the user browses in. (This replaced a 4-entry in-RAM preview
+        // cache: the spill holds the whole stack for bytes of RAM, bounded
+        // by disk headroom instead of a fixed slot count.)
+        let rawIndex = frames.firstIndex(of: url)
+        if aligned {
+            ensureRetainedSpill()
+        } else if rawIndex != nil {
+            ensureRawInputSpill()
+        }
+        let warpedFrames = aligned ? retainedWarpedFrames : rawInputSpill?.cache
+        let rawURLs = frames
         inputDecodeTask = Task.detached(priority: .userInitiated) { [weak self] in
             // The decode error is kept, not swallowed: a raw that merely needs
             // the Adobe DNG Converter is a different state from a broken file,
@@ -2848,9 +2878,16 @@ public final class AppModel: ObservableObject {
                 do {
                     let buffer: ImageBuffer
                     if let alignedIndex {
-                        let source = StackPipeline.makeSource(urls: alignedURLs,
+                        var source = StackPipeline.makeSource(urls: alignedURLs,
                                                               transforms: transforms)
+                        source.warped = warpedFrames
                         buffer = try source.frame(at: alignedIndex)
+                    } else if let rawIndex {
+                        // Raw view of a stack frame: same streaming source,
+                        // no transforms — slots hold the decode as-is.
+                        var source = StackSource(urls: rawURLs)
+                        source.warped = warpedFrames
+                        buffer = try source.frame(at: rawIndex)
                     } else {
                         buffer = try ImageFile.load(url: url)
                     }
@@ -2888,17 +2925,46 @@ public final class AppModel: ObservableObject {
                     self.offerConverterDownload(downloadURL: converterMissing.url,
                                                 detail: converterMissing.detail)
                 }
-                if let decoded {
-                    let entry = (decoded.image, decoded.pixelSize, aligned)
-                    if self.inputCache.updateValue(entry, forKey: url) == nil {
-                        self.inputCacheOrder.append(url)
-                        if self.inputCacheOrder.count > 4 {
-                            self.inputCache.removeValue(forKey: self.inputCacheOrder.removeFirst())
-                        }
-                    }
-                }
             }
         }
+    }
+
+    /// The result's frame cache, created lazily when no fuse spill survived
+    /// (reloaded project, PMax primary before its secondary lands): an empty
+    /// spill that fills as retouch sources and the input pane decode frames.
+    /// No-op when a cache already exists, the disk cache is off, or the
+    /// current result has no alignment transforms to key a canvas off.
+    private func ensureRetainedSpill() {
+        guard retainedWarpedFrames == nil, !batchMode, !fuseURLs.isEmpty,
+              FrameSpill.wanted(fusionDiskCache),
+              let transforms = alignmentCache.transforms(for: fuseURLs) else { return }
+        let source = StackPipeline.makeSource(urls: fuseURLs, transforms: transforms)
+        guard let w = source.outputWidth, let h = source.outputHeight,
+              let cache = WarpedFrameCache.lazyCache(width: w, height: h,
+                                                     frameCount: fuseURLs.count,
+                                                     log: logFusion) else { return }
+        retainedWarpedFrames = cache
+        logFusion("lazy warped-frame cache created (\(fuseURLs.count) slots, \(w)x\(h))")
+    }
+
+    /// The per-stack raw-decode cache behind the input pane's unaligned
+    /// views (pre-fuse browsing, excluded frames): index-keyed slots over
+    /// the CURRENT frame list, so any change to that list — membership or
+    /// order — discards it wholesale rather than risking a slot serving the
+    /// wrong file. Sized to frame 0; odd-sized frames in a mixed stack are
+    /// simply never cached (the write-back's dimension guard).
+    private func ensureRawInputSpill() {
+        if let existing = rawInputSpill, existing.urls == frames { return }
+        rawInputSpill = nil
+        guard !frames.isEmpty, !batchMode, FrameSpill.wanted(fusionDiskCache),
+              let dims = ImageFile.pixelSize(url: frames[0]),
+              let cache = WarpedFrameCache.lazyCache(width: dims.width,
+                                                     height: dims.height,
+                                                     frameCount: frames.count,
+                                                     log: logFusion) else { return }
+        rawInputSpill = (frames, cache)
+        logFusion("raw-decode cache created (\(frames.count) slots, "
+            + "\(dims.width)x\(dims.height))")
     }
 
     // MARK: - Fusion
@@ -2951,10 +3017,10 @@ public final class AppModel: ObservableObject {
             return
         }
         fuseURLs = urls
-        // Cached aligned previews were warped under the previous fuse list's
-        // transforms/crop; a new fuse can change both.
-        inputCache = [:]
-        inputCacheOrder = []
+        // Release the raw-decode cache before the fuse's own spill grows —
+        // the preflight above credited its bytes as reclaimable. (The aligned
+        // cache is released by cancelBackgroundFusion below, same deal.)
+        rawInputSpill = nil
         // Snapshot NOW, not at completion: the user can move sliders while
         // the fusion runs, and the result must record the settings it was
         // actually fused with — not whatever the UI shows when it finishes
@@ -2963,15 +3029,15 @@ public final class AppModel: ObservableObject {
         let pmaxSettingsInUse = currentPMaxSettings()
         let method = fusionMethod
         var config = currentConfiguration()
-        // A DMap primary (outside a batch) is followed by the background PMax
-        // generation: keep the warped-frame spill so that pass streams frames
-        // off disk instead of re-decoding the stack — its RAW decodes and
-        // retouch's on-demand source loads otherwise contend on Apple's RAW
-        // engine (measured ≥4× slower end-to-end). The spill is released when
-        // the background pass finishes (its task drops the configuration) —
-        // or, when the memory gate deferred that pass, whenever it is
-        // requested-and-finishes or `cancelBackgroundFusion` discards it
-        // (new fuse, stack switch, project close). Disk-backed either way.
+        // A DMap primary (outside a batch) keeps its warped-frame spill for
+        // the life of the result (see retainedWarpedFrames): the background
+        // PMax generation streams frames from it instead of re-decoding the
+        // stack (its RAW decodes and retouch's on-demand source loads
+        // otherwise contend on Apple's RAW engine — measured ≥4× slower
+        // end-to-end), and retouch brush sources + the input pane stream
+        // from it on every cache-missed frame switch thereafter. Released by
+        // `cancelBackgroundFusion` (new fuse, stack switch, project close).
+        // Disk-backed throughout.
         config.dmap.retainSpill = method == .dmap && !batchMode
         // A PMax primary retains its per-frame sharpness planes so retouch's
         // space auto-pick works immediately (a DMap fuse retains them
@@ -3184,6 +3250,12 @@ public final class AppModel: ObservableObject {
                     // All BEFORE the phase flip, so the pane is coherent the
                     // instant `.done` is observable (the probe holds this
                     // with a synchronous phase sink).
+                    // Retain the spill BEFORE the input-pane re-decode below:
+                    // showInputFrame's aligned branch streams from it, so the
+                    // first post-fuse pane refresh must already see it.
+                    if !self.batchMode {
+                        self.retainedWarpedFrames = output.warpedFrames
+                    }
                     if let first = urls.first {
                         self.selection = [first]
                         self.inputPreviewURL = nil
@@ -3211,7 +3283,6 @@ public final class AppModel: ObservableObject {
                     self.phase = .done
                     MemoryFootprint.mark("results + previews stored")
                     if !self.batchMode {
-                        self.retainedWarpedFrames = output.warpedFrames
                         let other: FusionMethod = method == .dmap ? .pmax : .dmap
                         // HYPERFOCAL_EAGER_COMPLETION = 1/0 forces the gate's
                         // answer (A/B + selftest tap, not a user setting).
@@ -3301,7 +3372,11 @@ public final class AppModel: ObservableObject {
         // disk instead of re-decoding the stack (see Configuration docs). The
         // cache lives exactly as long as this task holds its configuration.
         bg.warpedFrameCache = warpedFrames
-        bg.dmap.retainSpill = false   // the secondary spills for no one
+        // A DMap secondary (PMax primary) keeps its pass-1 spill: the primary
+        // produced none, and retouch/input-pane frame views of this result
+        // stream from it once it lands (see retainedWarpedFrames). A PMax
+        // secondary produces no spill — it *consumes* the primary's.
+        bg.dmap.retainSpill = other == .dmap
         // …and its sharpness planes serve no one either: resultSharpness is
         // the PRIMARY's set (space auto-pick), and the secondary's completion
         // keeps only the image. Without this, a PMax secondary inherited the
@@ -3332,6 +3407,7 @@ public final class AppModel: ObservableObject {
                     }
                 }, cancellation: cancellation)
                 let image = result.output.image
+                let secondarySpill = result.output.warpedFrames
                 await MainActor.run { [weak self] in
                     // Same ownership gate as the foreground: a new fuse, a stack
                     // switch, or project close bumps the generation / cancels.
@@ -3339,7 +3415,18 @@ public final class AppModel: ObservableObject {
                           !cancellation.isCancelled else { return }
                     self.backgroundFusionCancellation = nil
                     self.backgroundFusionTask = nil
-                    self.retainedWarpedFrames = nil
+                    // The spill outlives the pass: it keeps serving retouch
+                    // source loads and the input pane for this result. A DMap
+                    // secondary contributes its own spill (PMax primaries have
+                    // none of their own) — hand it to the live session, whose
+                    // source was built before the spill existed.
+                    if let spill = secondarySpill {
+                        self.retainedWarpedFrames = spill
+                        self.retouch?.adoptWarpedFrames(spill)
+                        logFusion("secondary's warped-frame spill retained for "
+                            + "frame views (\(spill.frameCount) frames, "
+                            + "\(spill.width)x\(spill.height))")
+                    }
                     // Either way this IS the non-base ("other") algorithm — the
                     // foreground fused the primary — so hand it to a live retouch
                     // session as its alternate brush source, no rebuild.
@@ -3692,6 +3779,13 @@ public final class AppModel: ObservableObject {
                 urls: fuseURLs, transforms: alignmentCache.transforms(for: fuseURLs))
             // Same exposure gains too, so stamps don't reintroduce flicker.
             source.gains = resultGains
+            // The result's frame cache: the fuse's retained spill, or a lazy
+            // one created now (reloaded project, PMax primary) that fills as
+            // sources load — either way frame switches stream off SSD once a
+            // slot is held. A disabled disk cache leaves this nil and the
+            // decode path runs.
+            ensureRetainedSpill()
+            source.warped = retainedWarpedFrames
             if let w = source.outputWidth, let h = source.outputHeight,
                w != base.width || h != base.height {
                 // Should be impossible (same deterministic crop as the fusion);

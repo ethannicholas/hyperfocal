@@ -48,7 +48,10 @@ public enum StackPipeline {
         /// Warped frames retained from a prior DMap fuse of the SAME frame
         /// list (`Options.retainSpill` → `Output.warpedFrames`). A `.pmax`
         /// fuse whose canvas matches streams these instead of re-decoding
-        /// and re-warping the stack — the app's background PMax generation
+        /// and re-warping the stack — but only a COMPLETE cache qualifies
+        /// (a lazily-filled partial one serves per-frame views via
+        /// `StackSource.warped`, not whole-stack streaming). The app's
+        /// background PMax generation
         /// uses this to stay off Apple's RAW engine, which retouch's
         /// on-demand source loads are hammering at the same time (concurrent
         /// RAW decode measured ≥4× slower end-to-end). Ignored by `.dmap`
@@ -216,7 +219,7 @@ public enum StackPipeline {
             var pmaxSharpness: FrameSharpness? = nil
             let onSharpness: ((FrameSharpness) -> Void)? =
                 configuration.retainPMaxSharpness ? { pmaxSharpness = $0 } : nil
-            if let cache = configuration.warpedFrameCache,
+            if let cache = configuration.warpedFrameCache, cache.isComplete,
                cache.frameCount == source.count,
                cache.width == source.outputWidth, cache.height == source.outputHeight {
                 // Frames come pre-warped off the retained spill: no RAW
@@ -237,7 +240,8 @@ public enum StackPipeline {
                     onSharpness: onSharpness) { try cache.frame($0) }
             } else {
                 if configuration.warpedFrameCache != nil {
-                    log?("pmax: warped-frame cache doesn't match this canvas — re-decoding")
+                    log?("pmax: warped-frame cache doesn't cover this fuse "
+                        + "(wrong canvas or partial) — re-decoding")
                 }
                 image = try PyramidFusion.fuse(
                     source: source, preferGPU: configuration.preferGPU, log: log,

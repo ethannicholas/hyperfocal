@@ -103,7 +103,7 @@ public final class RetouchSession: ObservableObject {
     private(set) var depthDirty = false
     func markDepthMerged() { depthDirty = false }
     private let sharpness: FrameSharpness?
-    private let stackSource: StackSource
+    private var stackSource: StackSource
 
     private var displayPixels: [UInt8]
     /// Live grayscale visualization of `workingDepth` (1 byte/px), same
@@ -358,6 +358,28 @@ public final class RetouchSession: ObservableObject {
     }
 
     // MARK: - Source slice management
+
+    /// Late arrival of a warped-frame spill for this session's frame list —
+    /// the PMax-primary case, where the spill is produced by the background
+    /// DMap pass *after* the session was built. A complete cache supersedes
+    /// the lazily-filled partial one the session may have started with; an
+    /// already-complete cache is never replaced. Frame loads from here on
+    /// stream off SSD instead of re-decoding (`StackSource.warped`); loads
+    /// already in flight carry the pre-adoption source copy and just decode.
+    /// Mismatched caches are rejected by `StackSource.frame(at:)` itself.
+    func adoptWarpedFrames(_ cache: WarpedFrameCache) {
+        if let existing = stackSource.warped, existing.isComplete { return }
+        stackSource.warped = cache
+    }
+
+    /// Whether frame-source loads consult a warped-frame cache (fuse-retained
+    /// or lazily filling — vs decoding every switch from the original files).
+    /// Probe-visible: retouch-probe asserts the cache reaches the session.
+    var sourceStreamsFromSpill: Bool { stackSource.warped != nil }
+    /// Probe taps: cache occupancy, and whether it is the complete
+    /// fuse-retained spill rather than a lazily-filling partial one.
+    var sourceSpillPopulation: Int { stackSource.warped?.populatedCount ?? 0 }
+    var sourceSpillComplete: Bool { stackSource.warped?.isComplete ?? false }
 
     func selectSource(_ index: Int) {
         sourceShowsData = false  // a fresh selection starts as image pixels

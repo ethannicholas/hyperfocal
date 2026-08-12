@@ -25,6 +25,20 @@ public struct StackSource {
     /// full buffer regardless — see `DecodedFrameCache`. nil (and empty) leaves
     /// behavior exactly as it was.
     public var decoded: DecodedFrameCache?
+    /// A frame cache over the SAME frame list and canvas — either a fuse's
+    /// retained spill (`Options.retainSpill` → `Output.warpedFrames`,
+    /// complete by construction) or a lazily-filled one
+    /// (`WarpedFrameCache.lazyCache`). `frame(at:)` streams a cached slot off
+    /// SSD instead of decoding (and, with transforms, warping); a MISSED slot
+    /// decodes normally and is written back, so the cache fills with use —
+    /// partial coverage is partial speedup, never an error. The slots hold
+    /// pre-gain pixels (aligned sources: post-warp, exactly what the fused
+    /// render consumed; transform-less sources: the raw decode), and gains
+    /// apply after streaming, matching the render pass. Mismatched dimensions
+    /// or frame count, or a failed read, fall back to the decode path. Never
+    /// set by fusion itself — its consumers there go through
+    /// `StackPipeline.Configuration.warpedFrameCache`.
+    public var warped: WarpedFrameCache?
 
     public init(urls: [URL], transforms: [simd_float3x3]? = nil,
                 outputWidth: Int? = nil, outputHeight: Int? = nil) {
@@ -55,17 +69,49 @@ public struct StackSource {
         return img
     }
 
+    /// Whether `warped` provably covers this source: same frame count, and —
+    /// for aligned sources — the cache's canvas is this source's output
+    /// canvas. A transform-less source has no fixed canvas; there the cache
+    /// is keyed to the frames' native size and `store`'s per-frame dimension
+    /// guard is the gate (a frame whose decode doesn't match the slot
+    /// geometry is simply never cached, so a hit can't lie).
+    private func covers(_ cache: WarpedFrameCache) -> Bool {
+        cache.frameCount == urls.count
+            && (transforms == nil
+                || (cache.width == outputWidth && cache.height == outputHeight))
+    }
+
     public func frame(at i: Int) throws -> ImageBuffer {
+        // A cached slot wins outright. try? — an unwritten slot (partial
+        // cache) or a read error (the temp volume yanked mid-session)
+        // degrades to re-decoding, the same contract the fusion passes have.
+        if let cache = warped, covers(cache), var img = try? cache.frame(i) {
+            if let gain = gains?[i], gain != SIMD3(repeating: 1) {
+                img.scaleRGB(by: gain)
+            }
+            return img
+        }
         var img = try decoded?.take(urls[i]) ?? ImageFile.load(url: urls[i])
+        // Warp BEFORE gain (they commute — gain is a per-pixel linear scale,
+        // the warp a linear filter) so the written-back slot holds pre-gain
+        // pixels, the spill convention fusion set: gains always apply after
+        // streaming, and a slot never double-gains.
+        if let t = transforms?[i] {
+            let w = outputWidth ?? img.width
+            let h = outputHeight ?? img.height
+            if !(t == matrix_identity_float3x3 && w == img.width && h == img.height) {
+                img = Warp.apply(img, outputToSource: t.inverse, outWidth: w, outHeight: h)
+            }
+        }
+        // Write the miss back — the next visit to this frame streams. Skipped
+        // silently when the cache doesn't cover this source or the decode's
+        // dimensions don't match its slots (mixed-size stack).
+        if let cache = warped, covers(cache) {
+            cache.store(frame: i, buffer: img)
+        }
         if let gain = gains?[i], gain != SIMD3(repeating: 1) {
             img.scaleRGB(by: gain)
         }
-        guard let t = transforms?[i] else { return img }
-        let w = outputWidth ?? img.width
-        let h = outputHeight ?? img.height
-        if t == matrix_identity_float3x3 && w == img.width && h == img.height {
-            return img
-        }
-        return Warp.apply(img, outputToSource: t.inverse, outWidth: w, outHeight: h)
+        return img
     }
 }

@@ -311,7 +311,11 @@ let cache = AlignmentCache()
 var sawDepthSource = false, sawRenderSource = false
 var alignedDims = Set<Int>()  // width<<32|height of every aligned preview
 var contractViolations = [String]()
-let output = try! StackPipeline.fuse(urls: Array(urls), configuration: .init(),
+// Retain the warped-frame spill — checked below as the decode-blind
+// streaming source retouch/input-pane frame views run on.
+var probeFuseConfig = StackPipeline.Configuration()
+probeFuseConfig.dmap.retainSpill = true
+let output = try! StackPipeline.fuse(urls: Array(urls), configuration: probeFuseConfig,
                                      alignmentCache: cache, progress: { update in
     guard update.sourcePreview != nil else { return }
     switch update.stage {
@@ -345,6 +349,72 @@ if !contractViolations.isEmpty {
     exit(1)
 }
 print("probe: fusion source previews honor the aligned contract OK")
+
+// The retained spill must serve frames decode-blind: a source pointed at
+// nonexistent files but carrying the cache still produces frames — proof the
+// bytes stream off the spill, never the decode path — and they must match a
+// real decode+warp frame-for-frame (50 dB comfortably clears CPU↔GPU warp
+// parity at ≥60 dB, while an index mixup reads as a wrong frame at ~20-30).
+let spillFrameBytes = output.image.width * output.image.height * 8
+if !FrameSpill.wanted(true)
+    || FrameSpill.shortfall(frameBytes: spillFrameBytes, frameCount: urls.count) != nil {
+    print("probe: WARNING spill streaming checks skipped (spill disabled or volume full)")
+} else {
+    guard let warpedCache = output.warpedFrames else {
+        print("probe: WARPED-FRAME SPILL NOT RETAINED"); exit(1)
+    }
+    let real = StackPipeline.makeSource(urls: Array(urls),
+                                        transforms: cache.transforms(for: Array(urls)))
+    var blind = StackSource(urls: urls.map { $0.appendingPathExtension("gone") },
+                            transforms: real.transforms,
+                            outputWidth: real.outputWidth, outputHeight: real.outputHeight)
+    blind.warped = warpedCache
+    for i in Set([0, urls.count / 2, urls.count - 1]) {
+        guard let streamed = try? blind.frame(at: i) else {
+            print("probe: SPILL STREAM FAILED (frame \(i))"); exit(1)
+        }
+        let decoded = try! real.frame(at: i)
+        let db = Metrics.psnr(streamed, decoded)
+        guard db >= 50 else {
+            print("probe: SPILL FRAME \(i) DIVERGES FROM DECODE (\(db) dB)"); exit(1)
+        }
+    }
+    print("probe: warped-frame spill streams decode-blind OK")
+
+    // Partial caches: a lazily-created cache starts empty, fills by
+    // write-back as decodes flow through the source, and serves exactly the
+    // slots it holds — a populated slot streams decode-blind, an empty one
+    // is a miss (NOT phantom zero pixels: the backing file is sparse).
+    guard let lazyCache = WarpedFrameCache.lazyCache(width: real.outputWidth ?? 0,
+                                                     height: real.outputHeight ?? 0,
+                                                     frameCount: urls.count) else {
+        print("probe: LAZY CACHE CREATION FAILED"); exit(1)
+    }
+    guard lazyCache.populatedCount == 0, !lazyCache.isComplete else {
+        print("probe: LAZY CACHE NOT EMPTY AT BIRTH"); exit(1)
+    }
+    var filling = real
+    filling.warped = lazyCache
+    let viaDecode = try! filling.frame(at: 1)   // miss → decode + warp + write-back
+    var waited = 0
+    while lazyCache.populatedCount < 1 && waited < 100 {   // the store is async
+        Thread.sleep(forTimeInterval: 0.05); waited += 1
+    }
+    guard lazyCache.populatedCount == 1 else {
+        print("probe: LAZY CACHE DID NOT POPULATE ON DECODE"); exit(1)
+    }
+    blind.warped = lazyCache
+    guard let lazyStreamed = try? blind.frame(at: 1) else {
+        print("probe: POPULATED LAZY SLOT NOT SERVED DECODE-BLIND"); exit(1)
+    }
+    guard Metrics.psnr(lazyStreamed, viaDecode) >= 50 else {
+        print("probe: LAZY SLOT DIVERGES FROM ITS OWN DECODE"); exit(1)
+    }
+    guard (try? blind.frame(at: 0)) == nil else {
+        print("probe: EMPTY LAZY SLOT SERVED PHANTOM PIXELS"); exit(1)
+    }
+    print("probe: lazy partial cache fills and serves per-slot OK")
+}
 
 Task { @MainActor in
     // 1. Retouch session source loading.
@@ -724,6 +794,20 @@ Task { @MainActor in
     guard model.stacks.count == 1, model.frames.count == urls.count else {
         print("probe: INGEST WRONG (stacks=\(model.stacks.count))"); exit(1)
     }
+    // Pre-fuse browsing populates the unified raw-decode cache (this replaced
+    // the 4-entry in-RAM preview cache): ingest auto-selects the first frame,
+    // whose decode must land in a slot. The store is async — poll.
+    if FrameSpill.wanted(model.fusionDiskCache) {
+        ticks = 0
+        while model.inputSpillPopulation < 1 && ticks < 100 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            ticks += 1
+        }
+        guard model.inputSpillPopulation >= 1 else {
+            print("probe: RAW INPUT DECODE DID NOT POPULATE THE CACHE"); exit(1)
+        }
+        print("probe: raw input decodes populate the unified cache OK")
+    }
     // At the very instant the phase flips to .done the input pane must be
     // coherent: an aligned, canvas-sized preview already installed (the
     // completion seeds it from the fuse's own progress stream) — never the
@@ -784,6 +868,46 @@ Task { @MainActor in
         exit(1)
     }
     print("probe: completion seeds aligned input preview OK")
+    // The fuse's warped-frame spill must reach retouch and SURVIVE the
+    // background secondary: it used to be released the moment that pass
+    // landed, which put every later frame-source switch back on the
+    // RAW-decode path. (A reloaded project has no spill and legitimately
+    // decodes — nil is a supported state, tested implicitly by the restore
+    // checks below.) For a PMax primary the spill is the DMap secondary's,
+    // adopted by the live session when that pass lands — so the immediate
+    // assertion only holds for a DMap primary.
+    if FrameSpill.wanted(model.fusionDiskCache),
+       FrameSpill.shortfall(frameBytes: spillFrameBytes, frameCount: urls.count) == nil {
+        if model.resultMethod == .dmap,
+           model.retouch?.sourceStreamsFromSpill != true {
+            print("probe: PREWARMED SESSION NOT STREAMING FROM SPILL"); exit(1)
+        }
+        ticks = 0
+        while (model.resultMethod == .pmax ? model.dmapResult : model.pmaxResult) == nil
+            && ticks < 600 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            ticks += 1
+        }
+        guard (model.resultMethod == .pmax ? model.dmapResult : model.pmaxResult) != nil else {
+            print("probe: BACKGROUND SECONDARY NEVER LANDED"); exit(1)
+        }
+        guard model.retouch?.sourceStreamsFromSpill == true else {
+            print("probe: SESSION NOT STREAMING AFTER SECONDARY (adoption/survival)"); exit(1)
+        }
+        // A session rebuilt from scratch must carry the COMPLETE fuse spill —
+        // this is the exact regression: the model nilling its retained spill
+        // when the secondary finished. (Attached-but-lazy wouldn't do: a lazy
+        // stand-in is what prepareRetouch creates when the fuse's is gone,
+        // so completeness is what proves survival.)
+        model.retouch = nil
+        model.prepareRetouch()
+        guard model.retouch?.sourceSpillComplete == true else {
+            print("probe: FUSE SPILL DID NOT SURVIVE THE SECONDARY"); exit(1)
+        }
+        print("probe: retouch sources stream from the retained spill OK")
+    } else {
+        print("probe: WARNING spill-to-retouch check skipped (disk cache off)")
+    }
     // Staleness gate: right after a fuse nothing has changed, so Fuse is
     // disabled; a parameter change re-enables it; reverting disables again;
     // a frame-set change re-enables it too.
@@ -1219,6 +1343,30 @@ Task { @MainActor in
     }
     print("probe: project restored — frames=\(model2.frames.count), result \(model2.dmapResult!.width)x\(model2.dmapResult!.height)")
     try? FileManager.default.removeItem(at: sessionURL)
+    // The resumed-session cache: a reloaded project has no fuse spill (it
+    // died with the saving process), so the input pane's first aligned
+    // decode creates a LAZY one and writes itself back — switches get faster
+    // as the session goes. Restore auto-selects the first frame; poll for
+    // its slot (decode + async store).
+    if FrameSpill.wanted(model2.fusionDiskCache) {
+        ticks = 0
+        while model2.alignedSpillPopulation < 1 && ticks < 100 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            ticks += 1
+        }
+        guard model2.alignedSpillPopulation >= 1 else {
+            print("probe: RESUMED SESSION DID NOT REBUILD A FRAME CACHE"); exit(1)
+        }
+        // And the retouch session built on this resumed result shares the
+        // same lazily-filling cache (it must NOT be complete — that would
+        // mean a phantom fuse spill).
+        model2.prepareRetouch()
+        guard model2.retouch?.sourceStreamsFromSpill == true,
+              model2.retouch?.sourceSpillComplete == false else {
+            print("probe: RESUMED RETOUCH SESSION NOT ON THE LAZY CACHE"); exit(1)
+        }
+        print("probe: resumed session rebuilds a lazy frame cache OK")
+    }
 
     // 3a2. Crop round-trips through the project, and exports honor it: the
     // written file must have exactly the crop's dimensions, and clearing
@@ -1370,6 +1518,17 @@ Task { @MainActor in
     }
     guard let pmaxPrimary = exportModel.pmaxResult, let dmapSecondary = exportModel.dmapResult else {
         print("probe: PMAX PRIMARY / DMAP SECONDARY MISSING"); exit(1)
+    }
+    // A PMax primary starts with a lazily-filling cache (no spill of its
+    // own); the DMap secondary that just landed retained ITS pass-1 spill —
+    // complete — and the live prewarmed session must have adopted it in
+    // place of the lazy stand-in. Completeness is what proves the adoption.
+    if FrameSpill.wanted(exportModel.fusionDiskCache),
+       FrameSpill.shortfall(frameBytes: spillFrameBytes, frameCount: urls.count) == nil {
+        guard exportModel.retouch?.sourceSpillComplete == true else {
+            print("probe: PMAX PRIMARY DID NOT ADOPT THE SECONDARY'S SPILL"); exit(1)
+        }
+        print("probe: pmax primary adopts the dmap secondary's spill OK")
     }
     exportModel.exportFormat = .tiff
     exportModel.exportColorSpace = .displayP3   // working space: export values unchanged

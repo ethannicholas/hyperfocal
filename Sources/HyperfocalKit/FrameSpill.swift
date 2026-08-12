@@ -33,16 +33,31 @@ import WinSDK
 /// process death (even a crash can't leak a multi-GB temp file). Slots are
 /// 16 KiB-aligned and the fd is F_NOCACHE: written once, read once, the
 /// traffic shouldn't churn the unified buffer cache.
-/// A DMap fuse's pass-1 warped-frame spill, retained past the fuse so a
-/// follow-on consumer can stream the already-decoded, already-warped frames
-/// instead of re-decoding the stack. The motivating consumer is the app's
-/// background PMax generation: its RAW re-decode contends with retouch's
-/// on-demand source loads on Apple's internally-parallel RAW engine (see
-/// `FramePrefetcher.workers(for:)`), measured ≥4× slower end-to-end under
-/// that load — while spill reads are plain SSD I/O, immune to it. Dimensions
-/// ride along so the consumer can verify the cache matches its canvas. The
-/// spill's disk space (multi-GB, unlinked temp) is reclaimed when the last
-/// reference dies — holders should be scoped, not stored for the session.
+/// A DMap fuse's pass-1 warped-frame spill, retained past the fuse so
+/// follow-on consumers can stream the already-decoded, already-warped frames
+/// instead of re-decoding the stack. Two kinds of consumer: the app's
+/// background secondary generation (its RAW re-decode contends with retouch's
+/// on-demand source loads on Apple's internally-parallel RAW engine — see
+/// `FramePrefetcher.workers(for:)` — measured ≥4× slower end-to-end under
+/// that load, while spill reads are plain SSD I/O, immune to it), and
+/// on-demand aligned-frame views over the same result (`StackSource.warped`:
+/// retouch brush sources, the input pane), which otherwise pay a full RAW
+/// decode + warp per cache-missed frame switch. Dimensions ride along so a
+/// consumer can verify the cache matches its canvas. The spill's disk space
+/// (multi-GB, unlinked temp) is reclaimed when the last reference dies —
+/// the app deliberately holds it for the *lifetime of the fused result* it
+/// belongs to (released on re-fuse, stack switch, project close), because
+/// the result is exactly as long as frame views of it can be requested.
+/// Reads are positional (pread/OVERLAPPED) — concurrent readers are safe.
+///
+/// Occupancy is per-slot, not all-or-nothing: fusion writes every slot and
+/// drains before reading, but a cache can also start EMPTY
+/// (`lazyCache(width:height:frameCount:)`) and fill one frame at a time as
+/// decodes flow through `StackSource.frame(at:)` — the resumed-session case,
+/// where the fuse's spill didn't survive the process. Twenty cached frames
+/// of a 200-frame stack are twenty SSD-fast switches; `frame(_:)` throws on
+/// an unwritten slot (the file is sparse — reading one would silently return
+/// zeros) and the caller falls back to decoding.
 public struct WarpedFrameCache {
     let spill: FrameSpill
     public let width: Int
@@ -50,8 +65,12 @@ public struct WarpedFrameCache {
     public let frameCount: Int
 
     /// Streams frame `i` back as an ImageBuffer — the stored bytes ARE the
-    /// buffer's storage format, so this is a straight read.
+    /// buffer's storage format, so this is a straight read. Throws when the
+    /// slot was never written (partial cache): that's a miss, not corruption.
     func frame(_ i: Int) throws -> ImageBuffer {
+        guard spill.isPopulated(i) else {
+            throw StackError.io("frame \(i) is not in the cache")
+        }
         var buf = ImageBuffer(width: width, height: height)
         try buf.pixels.withUnsafeMutableBufferPointer { p in
             try spill.read(frame: i, into: p.baseAddress!)
@@ -59,13 +78,47 @@ public struct WarpedFrameCache {
         return buf
     }
 
-    /// Disk actually held by the retained spill (its unlinked temp file),
-    /// reclaimed the moment the last reference dies. A caller preflighting a
-    /// NEW fuse's disk needs (which supersedes and releases this cache)
-    /// should credit these bytes as available — see
+    /// Slots currently written. Fusion-produced caches are complete by
+    /// construction; lazily-filled ones hold any subset.
+    public var populatedCount: Int { spill.populatedCount }
+    /// Whether every slot is written — the bar for consumers that stream the
+    /// whole stack (the background secondary), as opposed to per-frame views,
+    /// which work at any occupancy.
+    public var isComplete: Bool { spill.populatedCount == frameCount }
+
+    /// An empty cache that fills via `store(frame:buffer:)` as decodes flow
+    /// through `StackSource` write-back. No full-size preflight: the backing
+    /// file is sparse and every write re-checks disk headroom, so the cache
+    /// sizes itself to the volume and simply stops growing when space runs
+    /// short — it keeps serving whatever it already holds.
+    public static func lazyCache(width: Int, height: Int, frameCount: Int,
+                                 log: ((String) -> Void)? = nil) -> WarpedFrameCache? {
+        guard width > 0, height > 0, frameCount > 0,
+              let spill = FrameSpill(frameBytes: width * height * 8,
+                                     frameCount: frameCount,
+                                     preflight: false, log: log) else { return nil }
+        return WarpedFrameCache(spill: spill, width: width, height: height,
+                                frameCount: frameCount)
+    }
+
+    /// Write-back seam for `StackSource.frame(at:)`: queue `buffer` (pre-gain,
+    /// canvas-sized) into slot `i`. Asynchronous, bounded, and best-effort —
+    /// a frame that can't be written (queue busy, disk tight, wrong
+    /// dimensions) just stays uncached.
+    func store(frame i: Int, buffer: ImageBuffer) {
+        guard (0..<frameCount).contains(i),
+              buffer.width == width, buffer.height == height else { return }
+        spill.storeAsync(frame: i, buffer: buffer)
+    }
+
+    /// Disk actually held by the retained spill (its unlinked temp file):
+    /// written slots only — the file is sparse, so unwritten slots occupy
+    /// nothing. Reclaimed the moment the last reference dies. A caller
+    /// preflighting a NEW fuse's disk needs (which supersedes and releases
+    /// this cache) should credit these bytes as available — see
     /// `FrameSpill.shortfall(frameBytes:frameCount:reclaimable:)`.
     public var diskBytes: Int64 {
-        Int64(spill.slotBytes) * Int64(frameCount)
+        Int64(spill.slotBytes) * Int64(spill.populatedCount)
     }
 }
 
@@ -124,12 +177,22 @@ public final class FrameSpill {
         let slotBytes = (frameBytes + 0x3FFF) & ~0x3FFF
         let spillBytes = Int64(slotBytes) * Int64(frameCount)
         let needed = spillBytes + margin(for: spillBytes)
+        guard let capacity = freeCapacity() else { return nil }
+        let effective = capacity + reclaimable
+        guard effective < needed else { return nil }
+        return (needed, effective)
+    }
+
+    /// Free bytes on the spill volume as seen by an unprivileged writer —
+    /// nil when the figure can't be determined.
+    static func freeCapacity() -> Int64? {
         #if canImport(Darwin)
         guard let capacity = (try? FrameSpill.spillDirectory.resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
                 .volumeAvailableCapacityForImportantUsage else {
             return nil
         }
+        return capacity
         #elseif os(Windows)
         // Bytes available to this caller (quota-aware), same figure the spill
         // has to fit inside.
@@ -138,7 +201,7 @@ public final class FrameSpill {
             GetDiskFreeSpaceExW($0, &free, nil, nil)
         }
         guard ok else { return nil }
-        let capacity = Int64(free.QuadPart)
+        return Int64(free.QuadPart)
         #else
         // Linux has no "important usage" capacity; statvfs on the spill volume
         // reports the blocks available to an unprivileged writer, which is the
@@ -147,11 +210,8 @@ public final class FrameSpill {
         guard statvfs(FrameSpill.spillDirectory.path, &vfs) == 0 else {
             return nil
         }
-        let capacity = Int64(vfs.f_bavail) * Int64(vfs.f_frsize)
+        return Int64(vfs.f_bavail) * Int64(vfs.f_frsize)
         #endif
-        let effective = capacity + reclaimable
-        guard effective < needed else { return nil }
-        return (needed, effective)
     }
 
     /// Where the spill file lives (also the volume the preflight measures).
@@ -176,10 +236,17 @@ public final class FrameSpill {
 
     /// Returns nil (logging why) when the spill volume can't hold the spill
     /// with headroom to spare, or the file can't be created — callers fall
-    /// back to re-decoding.
-    init?(frameBytes: Int, frameCount: Int, log: ((String) -> Void)? = nil) {
+    /// back to re-decoding. `preflight: false` skips the full-size capacity
+    /// check for lazily-filled caches: the file is sparse and `storeAsync`
+    /// re-checks headroom per write instead, so a partial cache can exist on
+    /// a volume that could never hold the whole stack.
+    init?(frameBytes: Int, frameCount: Int, preflight: Bool = true,
+          log: ((String) -> Void)? = nil) {
         self.frameBytes = frameBytes
-        if let short = FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) {
+        self.populatedFlags = [Bool](repeating: false, count: frameCount)
+        writeQueue.setSpecific(key: queueKey, value: true)
+        if preflight,
+           let short = FrameSpill.shortfall(frameBytes: frameBytes, frameCount: frameCount) {
             log?(String(format: "frame spill skipped: needs %.1f GB, volume has %.1f GB free",
                         Double(short.needed) / Double(1 << 30),
                         Double(short.available) / Double(1 << 30)))
@@ -222,7 +289,17 @@ public final class FrameSpill {
     }
 
     deinit {
-        writeQueue.sync {}   // never close the handle under an in-flight write
+        // Never close the handle under an in-flight write — but an async
+        // write's block can itself hold the LAST reference (a lazily-filled
+        // cache released with a store queued; a cancelled fuse unwinding past
+        // its spill), which lands this deinit ON the write queue, where a
+        // sync drain is a dispatch deadlock trap. In that position the drain
+        // is also unnecessary: the finishing block is the queue's tail —
+        // any other queued write would hold its own reference and this
+        // deinit wouldn't be running.
+        if DispatchQueue.getSpecific(key: queueKey) == nil {
+            writeQueue.sync {}
+        }
         if FrameSpill.debugTiming {
             FileHandle.standardError.write(Data(String(
                 format: "spill timing: staging %.2fs, io %.2fs\n",
@@ -304,11 +381,37 @@ public final class FrameSpill {
     }
     #endif
 
+    // MARK: - Slot occupancy
+    // Which slots hold a written frame (scratchLock-guarded). Fusion writes
+    // every slot and drains before reading; lazily-filled caches hold any
+    // subset, and readers must treat an unwritten slot as a miss — the file
+    // is sparse, so reading one would silently return zeros, not fail.
+    private var populatedFlags: [Bool]
+    private var _populatedCount = 0
+
+    var populatedCount: Int {
+        scratchLock.lock(); defer { scratchLock.unlock() }
+        return _populatedCount
+    }
+
+    func isPopulated(_ frame: Int) -> Bool {
+        scratchLock.lock(); defer { scratchLock.unlock() }
+        return populatedFlags.indices.contains(frame) && populatedFlags[frame]
+    }
+
+    private func markPopulated(_ frame: Int) {
+        scratchLock.lock(); defer { scratchLock.unlock() }
+        guard populatedFlags.indices.contains(frame), !populatedFlags[frame] else { return }
+        populatedFlags[frame] = true
+        _populatedCount += 1
+    }
+
     // Write/read move the caller's f16 RGBA payload verbatim.
     func write(frame: Int, from ptr: UnsafeRawPointer) throws {
         let t0 = FrameSpill.now()
         try writeRaw(frame: frame, from: ptr, byteCount: frameBytes)
         tIO += FrameSpill.now() - t0
+        markPopulated(frame)
     }
 
     // MARK: - Overlapped writes
@@ -319,6 +422,10 @@ public final class FrameSpill {
     // to two frames stage at once, then the caller blocks. Errors surface at
     // `drainWrites` — callers must call it before the first read.
     private let writeQueue = DispatchQueue(label: "hyperfocal.spill.write")
+    /// Marks THIS instance's writeQueue so deinit can tell it is running on
+    /// it (see deinit). Per-instance, so one spill dying inside another
+    /// spill's block can't be misread.
+    private let queueKey = DispatchSpecificKey<Bool>()
     private let stagingFree = DispatchSemaphore(value: 2)
     private var asyncError: Error?
     // Staging buffers recycle through this pool (bounded by the semaphore's
@@ -354,6 +461,7 @@ public final class FrameSpill {
                     try writeRaw(frame: frame, from: $0.baseAddress!,
                                  byteCount: payloadBytes)
                 }
+                markPopulated(frame)
             } catch {
                 scratchLock.lock()
                 if asyncError == nil { asyncError = error }
@@ -375,6 +483,54 @@ public final class FrameSpill {
         scratchLock.lock()
         defer { scratchLock.unlock() }
         if let e = asyncError { throw e }
+    }
+
+    // MARK: - Lazy write-back (cache-style spills)
+
+    // Stores queued but not yet written (scratchLock-guarded). Capped at 2:
+    // rapid frame browsing outruns the SSD, and each queued store pins one
+    // full-resolution buffer — an unbounded queue would be a memory spike.
+    private var pendingStores = 0
+
+    /// Best-effort slot write for lazily-filled caches: non-throwing, bounded,
+    /// and disk-aware — a slot that can't be written (queue busy, volume
+    /// tight, I/O error) just stays uncached and decodes next time. The
+    /// buffer is captured as-is: copy-on-write keeps its pixels alive for the
+    /// queued write, and a caller mutating its own copy afterward (applying
+    /// gains) copies rather than racing the I/O.
+    func storeAsync(frame: Int, buffer: ImageBuffer) {
+        scratchLock.lock()
+        guard pendingStores < 2,
+              populatedFlags.indices.contains(frame), !populatedFlags[frame] else {
+            scratchLock.unlock()
+            return
+        }
+        pendingStores += 1
+        scratchLock.unlock()
+        writeQueue.async { [self] in
+            defer {
+                scratchLock.lock()
+                pendingStores -= 1
+                scratchLock.unlock()
+            }
+            // Grow only while the volume keeps the same headroom the
+            // preflighted spill insists on — sized to what the cache actually
+            // holds, so it stops growing (not serving) when disk runs short.
+            let grown = Int64(slotBytes) * Int64(populatedCount + 1)
+            guard let free = FrameSpill.freeCapacity(),
+                  free - Int64(slotBytes) >= FrameSpill.margin(for: grown) else { return }
+            let t0 = FrameSpill.now()
+            do {
+                try buffer.pixels.withUnsafeBufferPointer {
+                    try writeRaw(frame: frame, from: $0.baseAddress!,
+                                 byteCount: frameBytes)
+                }
+                markPopulated(frame)
+            } catch {}
+            scratchLock.lock()
+            tIO += FrameSpill.now() - t0
+            scratchLock.unlock()
+        }
     }
 
     func read(frame: Int, into ptr: UnsafeMutableRawPointer) throws {
