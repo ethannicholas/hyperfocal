@@ -15,6 +15,14 @@ Apple entries had to be retaken: nobody could say which of two far-apart
 machines produced them. Use the short names below; the roster carries the
 specs so individual entries don't have to.
 
+- **M5 Max** — Apple M5 Max, 18-core CPU (12 P + 6 E), 128 GB unified memory.
+  macOS 26.6 as of 2026-08-11. Far wider and deeper than anything else in the
+  roster, which makes it the machine that finds *constant* caps: several
+  engine limiters were written when no machine here could reach them, so they
+  had never been the binding term before. Read its absolutes as a ceiling, not
+  as a user's experience — the low-end floors in those formulas still matter
+  and are still tested (see the 8 GiB entries in `FramePrefetcher` and
+  `AppModel.eagerCompletionFits`).
 - **Mac Studio** — Mac Studio (2022, Mac13,1): Apple M1 Max, 10-core CPU
   (8 P + 2 E), 24-core GPU, 64 GB unified memory. macOS 26.5 as of
   2026-07-29.
@@ -418,6 +426,14 @@ Read against the Mac Studio:
   is effectively serial per frame pair; it is 54 % of pmax/gpu's wall on this
   machine. The "cheaper feature detector" prize is the same prize on every
   machine in the roster.
+  - **Correction (M5 Max, 2026-08-11): the "effectively serial" inference was
+    wrong, and this measurement could not have seen otherwise.** Both machines
+    were pinned at 4 registration workers by a constant cap in
+    `Aligner.registrationConcurrency`, so the constant ~1.7 s was the cap, not
+    Vision — and the cap is exactly why the extra cores bought nothing. Lifted
+    to core count, registration scales nearly linearly (see the section below).
+    The detector prize is real and unchanged in kind, but it is no longer
+    54 % of wall on a wide machine.
 - **CPU fusion: the M1 Max leads the M1 Pro only ~1.25–1.3×** (fuse subtotals
   3.79/3.50 s vs 4.87/4.46 s) despite 2× the memory bandwidth and 8 P cores
   vs 6 — consistent with the Windows section's finding that the CPU path is
@@ -444,6 +460,96 @@ Read against the Mac Studio:
   four within 4 %, dmap/gpu within 10 % (Metal-side work has shipped since)
   — and match no fuse subtotal on either Mac. See the correction in the
   Windows Desktop section.
+
+## Registration concurrency: the cap was the cost (M5 Max, 2026-08-11)
+
+`Aligner.registrationConcurrency` was `min(4, cores − 1)`. The 4 was
+historical; the `min` existed only to keep a 2-core VM usable. On every machine
+in the roster up to this point the 4 was the binding term — and because it was
+a *constant*, registration measured the same on an 8-core M1 Pro and a 10-core
+M1 Max, which the MacBook Pro section read (wrongly) as Vision being serial.
+
+Interleaved A/B on the 12 MP × 17 synth stack, `HYPERFOCAL_REGISTER_WORKERS`
+sweeping the outer fan-out, best of 3, registration wall only:
+
+| workers | 1 | 2 | 4 | 8 | 12 | 16 | 18 |
+|---|---|---|---|---|---|---|---|
+| registration | 2.99 s | 1.70 s | 1.10 s | 0.83 s | 0.69 s | 0.70 s | 0.56 s |
+
+5.3× serial→18, and **1.97× against the old cap of 4**. The flat step at 12–16
+is wave quantization, not saturation: 17 work units over 16 workers is one full
+wave plus a straggler, so the reading is "scales to the core count", not "peaks
+at 18". Both passes parallelize — per-frame decode+gradient+detect, then
+per-pair matching — through the same `boundedConcurrentMap`.
+
+End-to-end, old cap vs the new default (17 here), best of 3:
+
+| stack | wall @4 | wall @default | registration | peak memory |
+|---|---|---|---|---|
+| 12 MP × 17 (4240×2832 TIFF) | 1.84 s | **1.29 s** (−30 %) | 1.12 → 0.57 s | 3.93 → 4.36 GB |
+| 45 MP × 11 (8192×5464 TIFF) | 4.34 s | **3.36 s** (−23 %) | 2.25 → 1.25 s | 12.94 → 13.87 GB |
+
+Fused output is **byte-identical** at every worker count (`cmp` across 4/8/12/17
+at 45 MP) — results are collected by index, so concurrency cannot reorder them.
+
+The per-worker memory cost is ~115 MB at 45 MP (peak 12.95 → 13.87 GB going 4 →
+12 workers), i.e. the full-res gray plane plus its decode transient; only the
+gradient plane (~1/16 of the float image) is retained. The replacement formula
+is `min(cores − 1, physicalMemory / 1 GiB, registrarFanOutCeiling)` — the memory
+term carries ~8× headroom over that measurement and exists to pull small
+machines down, not to shape this one. A 2-core VM still resolves to 1, unchanged.
+
+### …but almost none of it is there on RAW, and the naive version costs 4 GB
+
+The synth stacks above are TIFF. On the **78 × 45 MP NEF reference stack**
+(Fluorite 2, M5 Max, 2026-08-11) the same sweep is *flat* — registration there
+is entirely decode-bound, and CIRAW is internally parallel, so the workers
+contend instead of scaling:
+
+| workers | 2 | 4 | 8 | 12 | 17 |
+|---|---|---|---|---|---|
+| registration | 22.93 s | 23.27 s | 22.84 s | 22.56 s | 22.57 s |
+| peak memory | 8.67 GB | 8.82 GB | 10.51 GB | 10.80 GB | 13.22 GB |
+
+3 % of time for 53 % more peak memory. This is the same fact
+`FramePrefetcher.workers(for:)` already records about the same decoder, arrived
+at from the other direction — so `registrationDecodeConcurrency(for:)` defers to
+it rather than restating it, and registration's **decode** pass is held to 2 on
+Apple RAW while its **pair-matching** pass keeps the full fan-out (it decodes
+nothing, so RAW is irrelevant to it). Splitting the two passes keeps the TIFF
+win and drops the RAW cost instead of trading one against the other.
+
+Re-confirmed after the split, interleaved: peak 9.88/9.91/9.14 GB capped vs
+13.25/13.23 GB uncapped. **The timing half of that A/B is not recorded here** —
+the machine had picked up a load average near 9 by then and registration
+scattered over 22–73 s per run regardless of configuration. Peak memory is
+load-independent, so it stands; the time figures in the table above are from the
+quiet window earlier the same day. If you re-measure, check `uptime` first.
+
+The general shape worth carrying forward: **a fan-out win measured on TIFF does
+not transfer to RAW**, because the two decode paths have opposite concurrency
+behavior. Any future "widen this pass" change wants both input classes measured
+before it ships, and the memory column is as much a result as the time column.
+
+**This lands on the Vision path only; OpenCV keeps the 4.** Vision is one call
+per pair with no thread pool of its own, which is why it scales. OpenCV's SIFT
+detect is internally parallel, so N concurrent detections oversubscribe N× —
+mechanically a different question, and unmeasured. It could not be settled on
+the machine that found the Vision win: the macOS OpenCV A/B needs
+`HYPERFOCAL_OPENCV_AB=1` at build time *and* a pkg-config'd OpenCV, and with
+neither present `HYPERFOCAL_REGISTER=opencv` is **silently ignored** — a sweep
+that appears to exercise OpenCV and in fact re-measures Vision. (Confirmed the
+hard way: the "OpenCV" column came back matching Vision to the millisecond at
+every worker count.) If you run that A/B, check first that the binary really
+has the backend compiled in. Windows/Linux measurement is a ROADMAP item; the
+prize there is the same ~2×, against registration's 51 % of x64 wall clock.
+
+**The general lesson, worth applying to the rest of the file:** a limiter that
+is a constant rather than a formula stops being visible as a limiter the moment
+it binds, and every measurement taken past that point silently describes the
+cap. Two other constants are in the same position and have not yet been
+re-measured — `FramePrefetcher.defaultLookahead`'s trailing `8` and
+`FramePrefetcher.workers(for:)`'s Apple-RAW `2`.
 
 ## Measured dead ends (don't re-try without new hardware or evidence)
 
@@ -543,7 +649,8 @@ Read against the Mac Studio:
   registration A/Bs.
 - Env switches: `HYPERFOCAL_SIFT_NFEATURES` / `HYPERFOCAL_SIFT_CONTRAST` /
   `HYPERFOCAL_REGISTER_MAXSIDE` (needs `HYPERFOCAL_REGISTER_FULLGRAY=1` to ablate
-  above the decode scale) / `HYPERFOCAL_REGISTER_DEBUG` /
+  above the decode scale) / `HYPERFOCAL_REGISTER_WORKERS` (registration
+  fan-out — the sweep above) / `HYPERFOCAL_REGISTER_DEBUG` /
   `HYPERFOCAL_DECODE_DEBUG` / `HYPERFOCAL_SPILL_DEBUG`.
 - wgpu adapter selection: `HYPERFOCAL_WGPU_SOFTWARE=1`
   *permits* auto-selecting a software adapter, and `HYPERFOCAL_WGPU_FALLBACK=1`

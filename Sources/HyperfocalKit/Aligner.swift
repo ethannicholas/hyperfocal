@@ -204,7 +204,10 @@ public enum Aligner {
         // content nearly vanishes and the in-focus texture dominates. Only the
         // gradient plane stays in memory (~1/16th of the float image); the
         // luminance mean rides along for the exposure check.
-        let decoded = try boundedConcurrentMap(count: n, concurrency: registrationConcurrency) { i -> (GrayImage, GrayStats, Float, RegistrationFrame) in
+        let decoded = try boundedConcurrentMap(
+            count: n,
+            concurrency: registrationDecodeConcurrency(for: urls)
+        ) { i -> (GrayImage, GrayStats, Float, RegistrationFrame) in
             try cancellation?.checkCancelled()
             begin(frameIndex: i, pass: .decode)
             // JPEGs decode at a DCT-domain reduction on the CImaging path
@@ -535,14 +538,136 @@ public enum Aligner {
         return sum / Float(count)
     }
 
-    /// Runs `body` for each index with bounded concurrency, collecting results in
-    /// order. Rethrows the first error encountered.
-    /// Decode/register worker count: the historical 4, but never more than
-    /// cores − 1 — on a 2-core VM, 4 concurrent SIFT registrations (each with
-    /// OpenCV's own internal parallelism) starved the UI and the rest of the
-    /// system for the whole pass.
+    /// Worker count for registration's **pair-matching** pass — pure registrar
+    /// compute, no decode, so it takes the full fan-out on every input class.
+    /// The **decode** pass is sized separately by
+    /// `registrationDecodeConcurrency(for:)`, which is RAW-aware; the two knobs
+    /// are distinct for the same reason `FramePrefetcher`'s `lookahead` and
+    /// `workers` are, and the measurements that separate them are there.
+    ///
+    /// **cores − 1, bounded by memory and by
+    /// what the registrar wants** (`registrarFanOutCeiling` — Vision takes the
+    /// full width, OpenCV still caps at 4; read that first, the split is the
+    /// non-obvious part). It used to be `min(4, cores −
+    /// 1)`, where the 4 was historical and the `min` existed only so a 2-core
+    /// VM wouldn't starve (4 concurrent SIFT registrations, each with OpenCV's
+    /// own internal parallelism, monopolized it for the whole pass). That
+    /// low-end floor is preserved exactly — a 2-core VM still resolves to 1 —
+    /// but the ceiling is gone, because on anything wide the 4 *was* the
+    /// binding term and registration is the dominant cost in the fastest
+    /// configuration (~55% of pmax/gpu wall on both Apple reference machines).
+    ///
+    /// This pass is embarrassingly parallel — per-frame decode+gradient+detect,
+    /// then per-pair matching — and it scales nearly linearly to the core
+    /// count. Measured interleaved on the **M5 Max** (18 cores, 2026-08-11),
+    /// 12 MP × 17 synth, best of 3, registration wall only:
+    ///
+    ///     workers  1      2      4      8      12     18
+    ///     seconds  2.99   1.70   1.10   0.83   0.69   0.56
+    ///
+    /// i.e. 1.97× against the old cap of 4, and 5.3× against serial. The
+    /// non-monotonic step at 12–16 is wave quantization, not saturation: 17
+    /// units over 16 workers is a full wave plus a straggler, so the honest
+    /// reading is "scales to the core count", not "peaks at 18".
+    ///
+    /// Two older observations this corrects. `Docs/performance.md` recorded
+    /// registration as ~1.7 s at 12 MP on *both* the 8-core M1 Pro and the
+    /// 10-core M1 Max and concluded Vision's cost was "effectively serial per
+    /// frame pair" — but both machines were pinned at 4 workers, so the
+    /// constant was this cap, not Vision. And the cap is why the extra cores
+    /// bought nothing: the measurement could not see past its own limiter.
+    ///
+    /// The memory term is belt-and-braces, and deliberately loose. Only the
+    /// gradient plane is retained per frame (~1/16 of the float image); the
+    /// full-res gray and the decode transient are the real per-worker cost.
+    /// Two calibrations, because they differ by input class more than you would
+    /// guess: ~115 MB/worker on 45 MP **TIFF** (peak 12.95 → 13.87 GB, 4 → 12
+    /// workers, 8192×5464 × 11), but ~265 MB/worker on 45 MP **RAW** (peak 8.67
+    /// → 13.22 GB, 2 → 17 workers, 78 × NEF) — CIRAW's transients are far
+    /// fatter than a TIFF's. One worker per GiB of physical memory still clears
+    /// the worse of the two by ~3.8×, and still pulls a small machine down: an
+    /// 8 GiB box tops out at 8 workers however many cores it reports, the same
+    /// instinct that sizes `FramePrefetcher.defaultLookahead`. Note the RAW
+    /// figure is what this bound would cost *if* RAW fanned out this wide —
+    /// it doesn't, see `registrationDecodeConcurrency(for:)`.
+    ///
+    /// HYPERFOCAL_REGISTER_WORKERS overrides for ablation (same pattern as
+    /// HYPERFOCAL_PREFETCH_WORKERS and the HYPERFOCAL_SIFT_* switches).
     static var registrationConcurrency: Int {
-        min(4, max(1, ProcessInfo.processInfo.activeProcessorCount - 1))
+        let info = ProcessInfo.processInfo
+        if let override = info.environment["HYPERFOCAL_REGISTER_WORKERS"]
+            .flatMap(Int.init), override > 0 {
+            return override
+        }
+        let cores = max(1, info.activeProcessorCount - 1)
+        let memoryWorkers = max(1, Int(info.physicalMemory / (1 << 30)))
+        return min(cores, memoryWorkers, registrarFanOutCeiling)
+    }
+
+    /// Worker count for registration's **decode** pass (decode → gradient →
+    /// registrar prep). Same as the matching pass, except that a RAW stack on
+    /// Apple is held to `FramePrefetcher.workers(for:)` — the *same* fact about
+    /// the *same* decoder, deliberately not restated: CIRAW is internally
+    /// parallel, so concurrent decodes contend instead of scaling.
+    ///
+    /// Measured on the 78 × 45 MP NEF reference stack (M5 Max, 2026-08-11),
+    /// sweeping `HYPERFOCAL_REGISTER_WORKERS`, registration wall / peak memory:
+    ///
+    ///     workers   2       4       8       12      17
+    ///     seconds   22.93   23.27   22.84   22.56   22.57
+    ///     peak GB   8.67    8.82    10.51   10.80   13.22
+    ///
+    /// Flat to within 3 % — this pass is *entirely* decode-bound on RAW, and
+    /// the whole 1.97× that widening won on TIFF is absent — while peak memory
+    /// climbs 53 %. Paying 4.5 GB for nothing is a bad trade anywhere and a
+    /// harmful one on a 16 GB machine, where `Docs/performance.md` already
+    /// records 45 MP runs spreading ~25 % under memory pressure.
+    ///
+    /// The pair pass is not capped: it decodes nothing, so RAW is irrelevant
+    /// to it. Splitting the two is what keeps the TIFF win and drops the RAW
+    /// cost, rather than trading one for the other.
+    static func registrationDecodeConcurrency(for urls: [URL]) -> Int {
+        let base = registrationConcurrency
+        // A caller-supplied override means "I am measuring" — let it through
+        // unclamped, or the sweep above cannot be reproduced.
+        if ProcessInfo.processInfo.environment["HYPERFOCAL_REGISTER_WORKERS"] != nil {
+            return base
+        }
+        guard let decodeCap = FramePrefetcher.workers(for: urls) else { return base }
+        return min(base, decodeCap)
+    }
+
+    /// How wide the *registrar* wants to be fanned out, independent of the
+    /// machine — the two backends differ mechanically here, so this is not a
+    /// tuning constant that can be shared.
+    ///
+    /// **Vision (Apple) takes the full fan-out.** One call per pair, no thread
+    /// pool of its own that we can see, and it scales nearly linearly to the
+    /// core count — measured on the M5 Max (see `registrationConcurrency`).
+    ///
+    /// **OpenCV SIFT keeps the historical 4, pending measurement.** Its detect
+    /// is internally parallel, so N concurrent detections oversubscribe the
+    /// machine N× — a mechanically different situation from Vision's, and the
+    /// failure mode the original cap was written against (a 2-core VM went
+    /// unusable for the whole pass at 4). Lifting it here would ship an
+    /// unmeasured change to Windows and Linux, and it could not be measured on
+    /// the machine that found the Vision win: the macOS OpenCV A/B build needs
+    /// `HYPERFOCAL_OPENCV_AB=1` *and* a pkg-config'd OpenCV, and without them
+    /// `HYPERFOCAL_REGISTER=opencv` is silently ignored — a sweep that looks
+    /// like it exercised OpenCV and actually re-measured Vision to the
+    /// millisecond. Whoever picks this up: the tap is
+    /// `HYPERFOCAL_REGISTER_WORKERS`, the shape of the answer is in
+    /// `Docs/performance.md`, and the prize is the same ~2× — registration is
+    /// 51% of the fastest configuration's wall clock on x64 (see ROADMAP).
+    private static var registrarFanOutCeiling: Int {
+        #if canImport(Vision)
+        #if HYPERFOCAL_HAVE_OPENCV
+        if useOpenCVRegistration { return 4 }
+        #endif
+        return .max
+        #else
+        return 4
+        #endif
     }
 
     /// Lock-guarded results box for `boundedConcurrentMap`: a reference the
@@ -556,6 +681,11 @@ public enum Aligner {
         init(count: Int) { results = [T?](repeating: nil, count: count) }
     }
 
+    /// Runs `body` for each index with bounded concurrency, collecting results in
+    /// order. Rethrows the first error encountered. Results are stored by index,
+    /// so the output is identical at every `concurrency` — verified byte-for-byte
+    /// across 4/8/12/17 workers when the cap was lifted (see
+    /// `registrationConcurrency`).
     static func boundedConcurrentMap<T>(count: Int, concurrency: Int,
                                         _ body: @escaping (Int) throws -> T) throws -> [T] {
         let state = ConcurrentMapState<T>(count: count)

@@ -604,6 +604,24 @@ stack before quoting a new ledger.
   (write-through during the accumulation pass, like GPUDMap's pass 1) would
   give the DMap secondary the same free ride.
 
+- **Registration fan-out on the OpenCV path (Windows/Linux).** The registration
+  worker count was a constant 4 on every platform;
+  `Aligner.registrationConcurrency` now scales it to `min(cores − 1,
+  physicalMemory / 1 GiB)`, worth **1.97× on registration and −23…30 % on
+  end-to-end wall clock** (M5 Max, 2026-08-11, `Docs/performance.md`). That
+  lift is gated to the **Vision** path by `registrarFanOutCeiling`; OpenCV
+  still caps at 4, because its SIFT detect is internally parallel and N
+  concurrent detections oversubscribe N× — a different question from Vision's,
+  and one that cannot be answered on a Mac (the macOS OpenCV A/B build needs
+  `HYPERFOCAL_OPENCV_AB=1` plus a pkg-config'd OpenCV; without them
+  `HYPERFOCAL_REGISTER=opencv` is silently ignored and you re-measure Vision).
+  Needs a Windows or Linux session: sweep `HYPERFOCAL_REGISTER_WORKERS` over
+  1/2/4/8/cores on a 12 MP stack, interleaved, and either raise the ceiling or
+  record the oversubscription in `Docs/performance.md` as a measured dead end.
+  The prize is large — registration is 51 % of the fastest configuration's wall
+  clock on x64. Done = the ceiling is set by measurement on both backends, not
+  by one measured and one inherited.
+
 - **Fusion throughput on modest hardware** — hit the **< 2 min end-to-end** bar
   on the 2-core reference (currently ~175 s dmap / ~132 s pmax at 11 MP; ~295 s
   dmap at 45 MP). The biggest remaining prize is a **cheaper feature detector**
