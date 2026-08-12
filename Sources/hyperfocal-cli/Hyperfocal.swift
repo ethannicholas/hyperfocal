@@ -370,10 +370,22 @@ struct Fuse: ParsableCommand {
         // Frames stream through both passes one at a time; nothing scales with depth.
         var fuseURLs = urls
         var transforms: [simd_float3x3]? = nil
+        // Same registration-decode reuse the app path sets up in
+        // StackPipeline.fuseResult. This command reimplements that flow rather
+        // than calling it, so anything wired there has to be wired here too or
+        // the CLI measures a configuration no user runs — the divergence
+        // CLAUDE.md's shared-defaults invariant is about.
+        var decodedFrames: DecodedFrameCache? = nil
+        defer { decodedFrames?.removeAll() }
         if fusion.align {
             var registration: Aligner.RegistrationOutput? = nil
+            decodedFrames = DecodedFrameCache(budgetBytes: DecodedFrameCache.defaultBudget())
+            let sink = decodedFrames
             let alignTime = try clock.measure {
-                registration = try Aligner.transformsAndQuality(forFrames: urls, log: log)
+                registration = try Aligner.transformsAndQuality(
+                    forFrames: urls,
+                    decodedSink: { url, image in sink?.offer(image, for: url) },
+                    log: log)
             }
             print("registered \(urls.count) frames in \(alignTime)")
             let issues = registration!.issues
@@ -401,7 +413,11 @@ struct Fuse: ParsableCommand {
                 }
             }
         }
-        let source = StackPipeline.makeSource(urls: fuseURLs, transforms: transforms, log: log)
+        var source = StackPipeline.makeSource(urls: fuseURLs, transforms: transforms, log: log)
+        if let decodedFrames, !decodedFrames.isEmpty {
+            print("reusing registration decodes: \(decodedFrames.summary)")
+            source.decoded = decodedFrames
+        }
         if let w = source.outputWidth, let h = source.outputHeight {
             print("common-coverage canvas: \(w)x\(h)")
         }
@@ -572,8 +588,21 @@ struct Batch: ParsableCommand {
                     case .pmax:
                         var kept = group
                         var transforms: [simd_float3x3]? = nil
+                        // Third open-coded copy of register-then-fuse in this
+                        // file (the others: `fuse`, and `fuseResult` itself,
+                        // which the .dmax case above calls). Each one has to be
+                        // taught the decode cache separately — see the note on
+                        // `fuse`.
+                        var decodedFrames: DecodedFrameCache? = nil
+                        defer { decodedFrames?.removeAll() }
                         if fusion.align {
-                            let reg = try Aligner.transformsAndQuality(forFrames: group, log: log)
+                            decodedFrames = DecodedFrameCache(
+                                budgetBytes: DecodedFrameCache.defaultBudget())
+                            let sink = decodedFrames
+                            let reg = try Aligner.transformsAndQuality(
+                                forFrames: group,
+                                decodedSink: { url, image in sink?.offer(image, for: url) },
+                                log: log)
                             for issue in reg.issues {
                                 print("\(label): bad frame \(group[issue.index].lastPathComponent): \(issue.summary)")
                             }
@@ -586,8 +615,12 @@ struct Batch: ParsableCommand {
                                 transforms = reg.transforms
                             }
                         }
-                        let source = StackPipeline.makeSource(urls: kept,
+                        var source = StackPipeline.makeSource(urls: kept,
                                                               transforms: transforms, log: log)
+                        if let decodedFrames, !decodedFrames.isEmpty {
+                            log("reusing registration decodes: \(decodedFrames.summary)")
+                            source.decoded = decodedFrames
+                        }
                         image = try PyramidFusion.fuse(source: source,
                                                        preferGPU: useGPU, log: log)
                         fusedCount = kept.count

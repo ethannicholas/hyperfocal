@@ -1520,11 +1520,7 @@ public enum PyramidFusion {
                         decodeWorkers: FramePrefetcher.workers(for: source.urls),
                         options: options,
                         onSharpness: onSharpness) { i in
-            var img = try ImageFile.load(url: source.urls[i])
-            if let gain = source.gains?[i], gain != SIMD3(repeating: 1) {
-                img.scaleRGB(by: gain)
-            }
-            return img
+            try source.decodedFrame(at: i)
         }
     }
 

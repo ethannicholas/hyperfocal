@@ -191,7 +191,7 @@ public enum WgpuDMap {
         // Pass 1: per-pixel argmax of smoothed |Laplacian| across the stack.
         let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
                                          workers: FramePrefetcher.workers(for: source.urls)) {
-            try ImageFile.load(url: source.urls[$0])
+            try source.decodedFrame(at: $0)
         }
         for _ in 0..<frameCount {
             try cancellation?.checkCancelled()
@@ -526,7 +526,7 @@ public enum WgpuDMap {
         if spill == nil {
             renderPrefetcher = FramePrefetcher(indices: renderIndices,
                                                workers: FramePrefetcher.workers(for: source.urls)) {
-                try ImageFile.load(url: source.urls[$0])
+                try source.decodedFrame(at: $0)
             }
         }
         var renderedCount = 0

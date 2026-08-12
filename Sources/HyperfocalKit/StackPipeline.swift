@@ -106,6 +106,12 @@ public enum StackPipeline {
         var transforms: [simd_float3x3]? = nil
         var fuseURLs = urls
         var issues = [FrameQualityIssue]()
+        // Released on every exit path, thrown or not: this holds gigabytes, and
+        // a cancelled fuse must not park them for the lifetime of the caller's
+        // reference. The frames it still holds at that point are the ones
+        // fusion never got to.
+        var decodedFrames: DecodedFrameCache? = nil
+        defer { decodedFrames?.removeAll() }
         if configuration.align {
             if let cached = alignmentCache?.transforms(for: urls) {
                 log?("alignment cache hit — skipping registration")
@@ -113,8 +119,17 @@ public enum StackPipeline {
                 transforms = cached
             } else {
                 log?("registering \(urls.count) frames")
+                // Carry registration's decodes into fusion instead of decoding
+                // the stack twice. Populated only where the registration decode
+                // had to build the full buffer anyway (RAW on Apple); elsewhere
+                // this stays empty and costs a nil check per frame.
+                decodedFrames = DecodedFrameCache(
+                    budgetBytes: DecodedFrameCache.defaultBudget())
+                let sink = decodedFrames
                 let registration = try Aligner.transformsAndQuality(
-                    forFrames: urls, log: log,
+                    forFrames: urls,
+                    decodedSink: { url, image in sink?.offer(image, for: url) },
+                    log: log,
                     cancellation: cancellation) { fraction, index, gray, pass, active in
                     guard let progress else { return }
                     var buffer: ImageBuffer? = nil
@@ -174,7 +189,11 @@ public enum StackPipeline {
                 }
             }
         }
-        let source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
+        var source = makeSource(urls: fuseURLs, transforms: transforms, log: log)
+        if let decodedFrames, !decodedFrames.isEmpty {
+            log?("reusing registration decodes: \(decodedFrames.summary)")
+            source.decoded = decodedFrames
+        }
         var output: DMapFusion.Output
         let fusionOptions = configuration.dmap
         switch configuration.method {

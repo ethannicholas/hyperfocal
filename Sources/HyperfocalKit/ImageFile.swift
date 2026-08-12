@@ -65,6 +65,14 @@ public enum ImageFile {
         public let fullWidth: Int
         public let fullHeight: Int
         public let decodeFactor: Int
+        /// The full-resolution decode this gray was derived from — populated
+        /// **only** when producing the gray required decoding it anyway (RAW on
+        /// Apple, where there is no cheap route to luminance) *and* the caller
+        /// asked for it. nil everywhere else, and callers must treat nil as the
+        /// normal case rather than a failure. Handing it back costs nothing: it
+        /// is a retain of a buffer that was already built and was previously
+        /// dropped on the floor. See `DecodedFrameCache`.
+        public var source: ImageBuffer? = nil
     }
 
 #if canImport(CoreGraphics)
@@ -189,7 +197,38 @@ public enum ImageFile {
     /// Produced from the same grayscale CGImage the Apple path always used, so
     /// the bytes Vision registers on are unchanged.
     public static func loadGray8(url: URL) throws -> GrayImage {
-        let cg = try loadGray8CGImage(url: url)
+        try gray8(from: try loadGray8CGImage(url: url))
+    }
+
+    /// Registration gray decode on Apple stays full-resolution (Vision's cost
+    /// profile never made the scaled decode worth platform churn); the seam
+    /// exists so shared Aligner code compiles against one shape. See the
+    /// CImaging overload for the reduced-scale semantics.
+    /// `wantsSource` asks for the full-resolution decode back alongside the
+    /// gray, when making the gray produced one anyway. It never causes a decode
+    /// that wouldn't otherwise happen — see `RegistrationGray.source`.
+    public static func loadGray8Registration(url: URL, minLongest: Int,
+                                             scaleFloorDenom: Int,
+                                             wantsSource: Bool = false) throws -> RegistrationGray {
+        // RAW has no cheap path to luminance: the gray is derived from a full
+        // decode. Keep that decode instead of discarding it — it is bit-for-bit
+        // what `load(url:)` would hand fusion later, because both call
+        // `loadRAW(url:)` and it is deterministic per file.
+        if wantsSource, isRAW(url) {
+            let full = try loadRAW(url: url)
+            let g = try gray8(from: try grayCGImage8(from: full))
+            return RegistrationGray(image: g, fullWidth: g.width, fullHeight: g.height,
+                                    decodeFactor: 1, source: full)
+        }
+        let g = try loadGray8(url: url)
+        return RegistrationGray(image: g, fullWidth: g.width, fullHeight: g.height,
+                                decodeFactor: 1)
+    }
+
+    /// Rasterizes an 8-bit gray CGImage into a `GrayImage` — the tail of
+    /// `loadGray8`, split out so the RAW-with-source path above can share it
+    /// rather than restate the context setup.
+    private static func gray8(from cg: CGImage) throws -> GrayImage {
         let w = cg.width, h = cg.height
         var bytes = [UInt8](repeating: 0, count: w * h)
         bytes.withUnsafeMutableBytes { buf in
@@ -201,17 +240,6 @@ public enum ImageFile {
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         }
         return GrayImage(width: w, height: h, pixels: bytes)
-    }
-
-    /// Registration gray decode on Apple stays full-resolution (Vision's cost
-    /// profile never made the scaled decode worth platform churn); the seam
-    /// exists so shared Aligner code compiles against one shape. See the
-    /// CImaging overload for the reduced-scale semantics.
-    public static func loadGray8Registration(url: URL, minLongest: Int,
-                                             scaleFloorDenom: Int) throws -> RegistrationGray {
-        let g = try loadGray8(url: url)
-        return RegistrationGray(image: g, fullWidth: g.width, fullHeight: g.height,
-                                decodeFactor: 1)
     }
 
     /// Small RGBA half-float buffer from any CGImage (grayscale included), drawn
@@ -527,8 +555,14 @@ public enum ImageFile {
     /// stats/SIFT all run on 1/4 to 1/16 the pixels. Other formats decode
     /// full-resolution (decodeFactor 1). HYPERFOCAL_REGISTER_FULLGRAY=1
     /// disables the reduction for A/B isolation.
+    /// `wantsSource` is accepted and ignored here: this path decodes gray
+    /// directly (LibRaw / libjpeg, often at a reduced scale) and never
+    /// materializes an RGBA buffer, so there is nothing already-paid-for to
+    /// hand back. Producing one would be extra work, which is precisely what
+    /// `DecodedFrameCache` refuses to do.
     public static func loadGray8Registration(url: URL, minLongest: Int,
-                                             scaleFloorDenom: Int) throws -> RegistrationGray {
+                                             scaleFloorDenom: Int,
+                                             wantsSource: Bool = false) throws -> RegistrationGray {
         let disabled = ProcessInfo.processInfo
             .environment["HYPERFOCAL_REGISTER_FULLGRAY"] == "1"
         var fw: CInt = 0, fh: CInt = 0, denom: CInt = 0

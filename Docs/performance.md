@@ -551,6 +551,58 @@ cap. Two other constants are in the same position and have not yet been
 re-measured — `FramePrefetcher.defaultLookahead`'s trailing `8` and
 `FramePrefetcher.workers(for:)`'s Apple-RAW `2`.
 
+## Decoding the stack once instead of twice (M5 Max, 2026-08-12)
+
+Registration decodes every frame, then fusion decodes every frame again. For
+RAW that second decode is pure waste, because the first one already produced
+exactly what fusion wants: `ImageFile.loadGray8CGImage` has no cheap route to
+luminance on a RAW file, so it calls `loadRAW` — full RGBA f16 — and discards it
+to keep 1/16th as gray. `DecodedFrameCache` carries those buffers across the
+registration→fusion boundary instead.
+
+Reuse is exact, not approximate: registration's RAW path and fusion's
+`ImageFile.load` both call `ImageFile.loadRAW(url:)`, deterministic per file.
+Verified — fused output is **byte-identical** (`cmp`) with reuse on and off, for
+both methods.
+
+78 × 45 MP NEF reference stack, interleaved, `HYPERFOCAL_DECODE_REUSE` as the
+budget in MB (0 disables), 2 reps, spread under 1%:
+
+| method | budget | wall | decode-wait | peak memory |
+|---|---|---|---|---|
+| dmap | off | 47.1 s | 15.2 s | 9.78 GB |
+| dmap | 16 GB | **37.4 s** (−21%) | **5.8 s** (−62%) | 24.1 GB |
+| pmax | off | 44.8 s | 19.6 s | 9.89 GB |
+| pmax | 16 GB | **35.5 s** (−21%) | **7.8 s** (−60%) | 24.1 GB |
+
+At 16 GB the cache holds 47 of 78 frames (363 MB each), so ~60% of the second
+decode disappears and the win tracks that fraction — a 4 GB budget caches 11
+frames and buys only ~5%. Peak memory is predictable: baseline + budget.
+
+The budget is `physicalMemory / 8`. The tight moment is the boundary itself,
+where the cache is fullest and fusion is starting to allocate on top; it drains
+from there. Sized in bytes rather than frames because frame size varies ~30×
+across the stacks we handle.
+
+**Windows and Linux are unaffected by construction**, which also means the 8 GB
+OOM history recorded elsewhere in this file is not in play: the CImaging path
+decodes gray directly and never materializes an RGBA buffer, so there is nothing
+already-paid-for to hand back and the cache stays empty. Same for non-RAW on
+Apple. The rule is "never discard what we already made", never "make it early" —
+a cache that *caused* a decode would be a pessimization on every input class
+that has a cheap gray path.
+
+**There were six decode seams, not one.** `StackSource.frame(at:)` looks like
+the funnel and is not: the GPU pyramid engines warp on the device, so they
+deliberately bypass the warping accessor and open-code
+`ImageFile.load(url: source.urls[i])` — `PyramidFusion`, `DMapFusion`, and both
+passes each of `GPUDMap` and `WgpuDMap`. The first cut of this change wired only
+the funnel; the cache filled correctly, was never read, and cost 16 GB for a 7%
+*slowdown*. The tell was decode-wait not moving (18.3 → 19.9 s) while the cache
+reported itself full — a cache that populates but never hits looks exactly like
+a cache that isn't there, plus the memory. They now share
+`StackSource.decodedFrame(at:)`, which is the seam that should have existed.
+
 ## Measured dead ends (don't re-try without new hardware or evidence)
 
 - **Registering Vision below full resolution (M5 Max, 2026-08-11).** The most
@@ -685,7 +737,8 @@ re-measured — `FramePrefetcher.defaultLookahead`'s trailing `8` and
 - `hyperfocal-cli -v` prints phase buckets; `compare` handles differently-cropped
   outputs of the same scene (`Metrics.psnrIntersection`) — use it for
   registration A/Bs.
-- Env switches: `HYPERFOCAL_SIFT_NFEATURES` / `HYPERFOCAL_SIFT_CONTRAST` /
+- Env switches: `HYPERFOCAL_DECODE_REUSE` (registration-decode cache budget in
+  MB; `0` disables) / `HYPERFOCAL_SIFT_NFEATURES` / `HYPERFOCAL_SIFT_CONTRAST` /
   `HYPERFOCAL_REGISTER_MAXSIDE` (needs `HYPERFOCAL_REGISTER_FULLGRAY=1` to ablate
   above the decode scale) / `HYPERFOCAL_REGISTER_WORKERS` (registration
   fan-out — the sweep above) / `HYPERFOCAL_REGISTER_DEBUG` /

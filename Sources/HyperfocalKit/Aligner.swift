@@ -145,7 +145,14 @@ public enum Aligner {
     /// frame is the middle *good* frame.
     ///
     /// Streams: only 8-bit grayscale frames are in memory, never float pixels.
+    /// `decodedSink` receives the full-resolution decode of each frame, for the
+    /// frames whose registration decode produced one anyway (RAW on Apple).
+    /// Registration's job is unchanged; this only stops the buffer being
+    /// dropped on the floor so fusion can skip re-decoding the stack. Called
+    /// from the concurrent decode pass, so it must be thread-safe —
+    /// `DecodedFrameCache` is.
     public static func transformsAndQuality(forFrames urls: [URL],
+                                            decodedSink: ((URL, ImageBuffer) -> Void)? = nil,
                                             log: ((String) -> Void)? = nil,
                                             cancellation: CancellationToken? = nil,
                                             progress: ((_ fraction: Double, _ frameIndex: Int, _ frame: RegistrationPreview?, _ pass: RegistrationPass, _ active: [Int]) -> Void)? = nil) throws -> RegistrationOutput {
@@ -216,7 +223,11 @@ public enum Aligner {
             // the factor. Apple (and non-JPEG) decode full, factor 1.
             let rg = try ImageFile.loadGray8Registration(
                 url: urls[i], minLongest: registrationDecodeMinLongest,
-                scaleFloorDenom: registrationScaleFloorDenom)
+                scaleFloorDenom: registrationScaleFloorDenom,
+                wantsSource: decodedSink != nil)
+            if let decodedSink, let full = rg.source {
+                decodedSink(urls[i], full)
+            }
             let g = rg.image
             let (gradient, lumMean) = gradientImage(g)
             let stats = grayStats(gradient, decodeFactor: rg.decodeFactor)
