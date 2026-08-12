@@ -61,7 +61,11 @@ struct ContentView: View {
     /// form's (see `cardStyled`).
     private var sidebar: some View {
         VStack(spacing: 0) {
+            // Above the form so content scrolled under the negative top
+            // padding below disappears behind this card's opaque fill, like
+            // sidebar content sliding under a pinned header.
             stackPanel
+                .zIndex(1)
             Form {
                 fusionSection
                 toneSection
@@ -69,6 +73,20 @@ struct ContentView: View {
                 exportSection
             }
             .formStyle(.grouped)
+            // Halve the grouped form's stock 20pt side insets (contentMargins
+            // composes additively with them, so -10 lands at 10) so the cards
+            // keep 10pt breathing room, matching cardStyled's 10pt on the
+            // Stack card. Margins, not negative padding: they act inside the
+            // scroll view, so the scrollbar stays on the sidebar's edge.
+            .contentMargins(.horizontal, -10, for: .scrollContent)
+            // The stock 20pt TOP inset (which made the Stack↔Fusion gap twice
+            // the form's own 10pt inter-section spacing) can't be halved the
+            // same way: a negative top contentMargin stops applying the
+            // moment the form's content is shorter than its viewport (e.g.
+            // every section collapsed), snapping the gap back to 20. Pull the
+            // whole form up instead — frame math holds in both states. The
+            // form's top 10pt tucks under the Stack card (see its zIndex).
+            .padding(.top, -10)
             // New identity per project: a fresh form starts scrolled to the
             // top (a leftover scroll position from the last project would
             // hide the Fusion controls). All form state is model-backed, so
@@ -87,8 +105,8 @@ struct ContentView: View {
             // Clip content too (the frame List runs to the card's bottom
             // edge), not just the fill.
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
     }
 
     /// The form's inter-row separator, replicated (Divider alone is twice as
@@ -96,13 +114,6 @@ struct ContentView: View {
     private var cardSeparator: some View {
         Divider().opacity(0.5).padding(.horizontal, 10)
     }
-
-    /// Leading indent that aligns a row's label with the header's TITLE
-    /// (not its chevron): the chevron glyph's width (caption semibold)
-    /// plus the header HStack's 5pt spacing, measured against live
-    /// renders. Applied to the labeled rows (sliders, pickers) — the
-    /// full-width action buttons keep the plain row inset.
-    private var sectionRowIndent: CGFloat { 16.5 }
 
     private var stackPanel: some View {
         cardStyled {
@@ -113,11 +124,11 @@ struct ContentView: View {
                     model.toggleSection(.stack)
                 } label: {
                     HStack(spacing: 5) {
+                        Text(model.stacks.count > 1 ? UIStrings.stackPlural : UIStrings.stackSingular).font(.headline)
                         Image(systemName: model.isCollapsed(.stack)
                               ? "chevron.right" : "chevron.down")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text(model.stacks.count > 1 ? UIStrings.stackPlural : UIStrings.stackSingular).font(.headline)
                         Spacer()
                     }
                     .contentShape(Rectangle())
@@ -321,16 +332,16 @@ struct ContentView: View {
                 model.toggleSection(section)
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: model.isCollapsed(section)
-                          ? "chevron.right" : "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
                     // Font pinned (matching the Stack card's header): a form
                     // ROW styles its text as body — the title must keep the
                     // header weight itself.
                     Text(title)
                         .font(.headline)
                         .foregroundStyle(.primary)
+                    Image(systemName: model.isCollapsed(section)
+                          ? "chevron.right" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     Spacer()
                 }
                 .contentShape(Rectangle())
@@ -403,7 +414,6 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.leading, sectionRowIndent)
             .disabled(model.phase.isRunning)
 
             // Locked during a fuse: the run uses the values it started with,
@@ -448,7 +458,6 @@ struct ContentView: View {
                 help: UIStrings.sliderFocusThresholdTip)
             }
             }
-            .padding(.leading, sectionRowIndent)
             .disabled(model.phase.isRunning)
 
             Button {
@@ -522,7 +531,6 @@ struct ContentView: View {
                 help: UIStrings.sliderBlacksTip,
                 onEditingChanged: { model.toneEditing($0) })
             }
-            .padding(.leading, sectionRowIndent)
             }
         }
     }

@@ -1188,7 +1188,7 @@ ApplicationWindow {
         }
     }
 
-    // Native sectionHeader: chevron + title as one toggle for the
+    // Native sectionHeader: title + chevron as one toggle for the
     // model-persisted collapse state; trailing children (Reset, All/
     // None…) stay outside the toggle's effect but inside the row.
     component SectionHeader: RowLayout {
@@ -1203,11 +1203,6 @@ ApplicationWindow {
         Accessible.role: Accessible.Button
         Accessible.name: title
         Accessible.onPressAction: Shell.toggleSection(section)
-        // Leading indent that puts a content row's label flush with the
-        // TITLE text (not the chevron): the chevron's square cell plus
-        // this row's spacing. Derived, not hardcoded — it tracks the
-        // glyph's rendered size.
-        readonly property real textIndent: chevronCell.implicitWidth + spacing
         Layout.fillWidth: true
         spacing: 6
         // Headers are always as tall as their trailing flat buttons
@@ -1223,6 +1218,7 @@ ApplicationWindow {
             text: "X"
             font.pixelSize: 11
         }
+        Label { text: header.title; color: theme.textPrimary; font.bold: true }
         Item {
             id: chevronCell
             // Native's chevron.right/chevron.down: a real chevron,
@@ -1243,7 +1239,6 @@ ApplicationWindow {
                 rotation: header.collapsed ? 0 : 90
             }
         }
-        Label { text: header.title; color: theme.textPrimary; font.bold: true }
         // The subtitle doubles as the row's flexing element (it elides
         // under pressure). This keeps the header compressible: a
         // ColumnLayout whose set width is below any child's minimum lays
@@ -1834,12 +1829,8 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 spacing: 10
                 CardRule {}
-                // Labeled controls sit one text-indent in, so their labels
-                // line up with the header's title text (the buttons below
-                // keep the card's full width, like native).
                 ColumnLayout {
                 Layout.fillWidth: true
-                Layout.leftMargin: fusionHeader.textIndent
                 spacing: 10
                 // Algorithm selector: DMap (depth map) or PMax (pyramid
                 // fusion), each with an info tooltip. Only DMap carries depth;
@@ -2012,11 +2003,9 @@ ApplicationWindow {
                 CardRule {}
                 // Every tone control reads signed (native "%+.2f EV" /
                 // "%+.0f"): these are offsets from neutral, so the sign is
-                // part of the value, not noise. One text-indent in, so the
-                // labels line up with the header's title text.
+                // part of the value, not noise.
                 ColumnLayout {
                 Layout.fillWidth: true
-                Layout.leftMargin: toneHeader.textIndent
                 spacing: 10
                 SidebarSlider {
                     sliderId: "tone.slider.exposure"
