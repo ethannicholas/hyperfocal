@@ -151,6 +151,25 @@ frame math. The notes below remain for flows outside the suite.
 - Fusion completion: poll the input pane title for "(aligned)".
 - Mouse drags (pan/paint) need CGEvents — AppleScript can't; compile a
   small Swift tool posting leftMouseDown/Dragged/Up.
+- **Finder open / window drop of a .hyperfocal, against a chosen
+  instance**: send the odoc AppleEvent directly to a pid — a small Swift
+  script building `NSAppleEventDescriptor(processIdentifier:)` +
+  `kAEOpenDocuments` with a `typeFileURL` list (see the drop-quit fix in
+  HyperfocalAppMain.swift for why this path matters). `open -a`/AppleScript
+  `tell application` route through LaunchServices and may hit the *user's*
+  running instance; the pid-targeted event cannot. `open -n -a <app>
+  <file>` covers the launch-by-double-click flow on a fresh instance
+  (and, unlike a hand-sent odoc, carries the real sandbox extension).
+  Launching the binary with the file as argv does NOT deliver an open
+  event — it just ignores the argument.
+- **Who called it**: `lldb -b -o 'b <symbol>' -o run -o 'bt 60' -o kill
+  <app-binary>` in a background task, then trigger from a second shell
+  (e.g. send odoc). Silent exits with no crash report are usually AppKit
+  `terminate:` — breakpointing `-[NSApplication terminate:]` and
+  `-[NSWindow close]` attributes them; the unified log's AppKit:Application
+  category (`/usr/bin/log show --predicate 'process == "Hyperfocal"'`)
+  distinguishes a ⌘Q (`performKeyEquivalent:` precedes `terminate:`) from
+  a programmatic quit (no key event) without a debugger.
 
 ## Seeing results
 

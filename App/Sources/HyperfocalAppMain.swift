@@ -82,8 +82,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
+        // Claim open-document events before AppKit's default handler runs.
+        // That handler forwards to SwiftUI's internal app delegate, whose
+        // external-event "activation" (AppWindowsController.
+        // activateWindowForExternalEvent) CLOSES the one main window when
+        // the event matches no scene — and the last-window-closed rule then
+        // exits the app. Net effect: dropping a .hyperfocal on the window,
+        // or double-clicking one in Finder while the app ran, silently quit
+        // it (the quit gate never fires — the close is programmatic, not a
+        // performClose; verified by breakpointing -[NSWindow close]).
+        // Declining events per-scene instead is no better: WindowGroup +
+        // handlesExternalEvents([]) used to park double-click launches
+        // windowless, and Window + handlesExternalEvents(["*"]) still
+        // closed the window (remeasured when this handler was added).
+        // Owning the event keeps SwiftUI out of it entirely; the URLs then
+        // flow through the same queue application(_:open:) fed.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleOpenDocuments(_:with:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEOpenDocuments))
     }
 
+    @objc private func handleOpenDocuments(_ event: NSAppleEventDescriptor,
+                                           with reply: NSAppleEventDescriptor) {
+        guard let list = event.paramDescriptor(forKeyword: keyDirectObject),
+              list.numberOfItems > 0 else { return }
+        var urls = [URL]()
+        for index in 1...list.numberOfItems {
+            if let data = list.atIndex(index)?
+                .coerce(toDescriptorType: typeFileURL)?.data,
+               let url = URL(dataRepresentation: data, relativeTo: nil) {
+                urls.append(url)
+            }
+        }
+        pendingOpenURLs += urls
+        flushPendingOpens()
+    }
+
+    /// Unreachable while handleOpenDocuments owns the odoc event, but kept
+    /// as the documented funnel: anything AppKit still routes here joins
+    /// the same queue.
     func application(_ application: NSApplication, open urls: [URL]) {
         pendingOpenURLs += urls
         flushPendingOpens()
