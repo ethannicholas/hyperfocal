@@ -553,6 +553,44 @@ re-measured — `FramePrefetcher.defaultLookahead`'s trailing `8` and
 
 ## Measured dead ends (don't re-try without new hardware or evidence)
 
+- **Registering Vision below full resolution (M5 Max, 2026-08-11).** The most
+  attractive-looking RAW win on the board, and it fails on quality, decisively.
+  The setup: `ImageFile.loadGray8Registration` on Apple ignores its `minLongest`
+  / `scaleFloorDenom` arguments and full-decodes, so Vision registers 45 MP
+  gradients while the CImaging path has always registered a reduced decode. A
+  full mosaic decode costs ~0.95 s/frame on 45 MP NEF — **9.5 s of a 20 s fuse**
+  on the 78-frame reference stack — whereas `CGImageSourceCreateThumbnailAtIndex`
+  returns the 1651 px image registration consumes in **0.061 s**, ~15× cheaper.
+  `ImageFile.thumbnail` has documented that fast path for display previews all
+  along; registration simply never used it.
+  Implemented (decode at the bound, `RegistrationFrame` carrying its scale on
+  both platforms, `upscaleHomography` mapping the fit back) it is a large,
+  real speedup — 12 MP synth registration 3.31 → 0.94 s, 45 MP 6.16 → 2.13 s —
+  and it costs **6–7 dB against ground truth**:
+
+  | stack | full-res (today) | at the registration bound |
+  |---|---|---|
+  | 12 MP × 17 synth, dmap vs truth | 51.92 dB | 45.60 dB |
+  | 45 MP × 11 synth, dmap vs truth | 57.77 dB | 50.69 dB |
+
+  There is no knee to settle on. Sweeping the 12 MP scale gives 45.60 / 44.95 /
+  46.25 / 47.03 / 47.91 / **51.92** dB at 1000 / 1500 / 2000 / 2500 / 3000 /
+  4240 (full) — monotonic in scale, with the largest single step at the last
+  one, i.e. between "resampled at all" and "not resampled".
+  Not an implementation bug: zero Occam-gate rejections at every scale (a
+  mis-mapped homography would show up there and would collapse PSNR far below
+  45 dB, not shave 6 off it), and the crop offsets move by only a few pixels.
+  **The transferable finding is that the two registrars have opposite
+  scale sensitivity.** OpenCV SIFT was measured quality-neutral at this very
+  bound (the 1600 + 2000-kp A/B, 2026-07-20), which is why the bound exists;
+  Vision is not, and reasoning from one to the other is how this looked safe.
+  Anything that reduces what Vision sees needs its own ground-truth A/B —
+  `hyperfocal-cli synth` at 4240×2832 or larger, since the CI gate's 900 px
+  synth sits below the bound and cannot see this class of regression at all.
+  The RAW decode cost is real and still worth attacking; the remaining route is
+  the double decode (registration's gray pass and fusion's full pass decode the
+  same file separately), which leaves what Vision sees untouched. See ROADMAP.
+
 - **Spill byte-reduction** (RGB + 8-bit-alpha slot layout, 13 B/px fp32 /
   7 B/px fp16, bit-identical fp32 round-trip proven): net-negative on the 2-core
   VM at 11 MP — write io is cache/flush-governed, not byte-proportional (~41–48 s

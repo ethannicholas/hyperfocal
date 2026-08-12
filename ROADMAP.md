@@ -604,6 +604,26 @@ stack before quoting a new ledger.
   (write-through during the accumulation pass, like GPUDMap's pass 1) would
   give the DMap secondary the same free ride.
 
+- **The stack is decoded twice per fuse.** Registration decodes a gray plane
+  from every frame, then fusion decodes the same files again in full. On 45 MP
+  RAW that is the dominant cost twice over: on a 10-frame NEF subset (M5 Max,
+  2026-08-11) registration is 9.5 s and the fuse's own decode-wait is 6.9 s, out
+  of ~20 s total — against **0.05 s of GPU compute**. Decode *is* the product's
+  wall clock on real stacks; everything else is rounding.
+  Making registration's decode cheaper by reducing its scale is a measured dead
+  end — it costs 6–7 dB against ground truth, see `Docs/performance.md`. This
+  item is the other direction: have the two passes share one decode, so what
+  Vision sees is unchanged and the second decode disappears. The awkward parts
+  are that they want different things (8-bit gray at full res vs RGBA f16 at
+  full res) and that registration runs before the fusion pipeline starts, so
+  something has to hold ~45 MP × N frames or spill them — note `FrameSpill`
+  already does exactly this for DMap's two fusion passes and would be the model.
+  Sizing before starting: on a 128 GB machine an in-RAM tier is trivial; on 8 GB
+  it is not, so this needs the same memory-proportional gating as
+  `FramePrefetcher.defaultLookahead`. Done = one decode per frame per fuse on
+  the common path, ground-truth PSNR unchanged, and the memory ceiling measured
+  rather than assumed.
+
 - **Registration fan-out on the OpenCV path (Windows/Linux).** The registration
   worker count was a constant 4 on every platform;
   `Aligner.registrationConcurrency` now scales it to `min(cores − 1,
