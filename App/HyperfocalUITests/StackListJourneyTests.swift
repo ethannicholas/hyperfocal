@@ -19,10 +19,31 @@ final class StackListJourneyTests: XCTestCase {
         XCTAssertTrue(mismatch.waitForExistence(timeout: 15),
                       "mismatch badge missing on the shuffled stack")
         XCTAssertTrue(undated.exists, "undated badge missing on the EXIF-less stack")
-        XCTAssertTrue(mismatch.label.contains("Capture order"),
+        XCTAssertTrue(mismatch.label.contains("filename order disagree"),
                       "mismatch badge label: \(mismatch.label)")
         XCTAssertTrue(undated.label.contains("no capture times"),
                       "undated badge label: \(undated.label)")
+    }
+
+    /// Scrolls the stack list until `element` is hittable. The list shows
+    /// ~8 rows (ContentView bounds its height), and selection changes
+    /// auto-scroll it, so a row this journey needs may sit above or below
+    /// the fold with a zero-size frame. Same search shape as setSlider's:
+    /// one direction for half the attempts, then the other.
+    private func scrolledToRow(_ app: XCUIApplication,
+                               _ element: XCUIElement) -> XCUIElement {
+        XCTAssertTrue(element.waitForExistence(timeout: 5),
+                      "\(element.identifier) never appeared")
+        let list = app.scrollViews
+            .containing(.button, identifier: "stack.row.stack-a").firstMatch
+        var attempts = 0
+        while !element.isHittable && attempts < 10 {
+            list.scroll(byDeltaX: 0, deltaY: attempts < 5 ? 80 : -80)
+            attempts += 1
+        }
+        XCTAssertTrue(element.isHittable,
+                      "\(element.identifier) not hittable after scrolling")
+        return element
     }
 
     func testStackListJourney() throws {
@@ -62,10 +83,10 @@ final class StackListJourneyTests: XCTestCase {
         }
 
         XCTContext.runActivity(named: "row selection") { _ in
-            let rowB = app.buttons["stack.row.stack-b"]
+            let rowB = scrolledToRow(app, app.buttons["stack.row.stack-b"])
             rowB.click()
             XCTAssertTrue(waitFor { rowB.isSelected }, "stack-b never selected")
-            app.buttons["stack.row.stack-a"].click()
+            scrolledToRow(app, app.buttons["stack.row.stack-a"]).click()
             XCTAssertTrue(waitFor { app.buttons["stack.row.stack-a"].isSelected })
         }
 
@@ -81,7 +102,7 @@ final class StackListJourneyTests: XCTestCase {
 
         XCTContext.runActivity(named: "single frame checkbox") { _ in
             let before = text(of: count)
-            let box = app.checkBoxes["frame.row.\(framesA[0]).included"]
+            let box = scrolledToRow(app, app.checkBoxes["frame.row.\(framesA[0]).included"])
             box.click()
             XCTAssertTrue(waitFor { text(of: count) != before }, "count never moved")
             box.click()
@@ -93,7 +114,7 @@ final class StackListJourneyTests: XCTestCase {
             // the automatable representative (tone needs a slider gesture,
             // which XCUITest can't drive — the probe covers that path).
             let before = text(of: count)
-            let box = app.checkBoxes["frame.row.\(framesA[0]).included"]
+            let box = scrolledToRow(app, app.checkBoxes["frame.row.\(framesA[0]).included"])
             box.click()
             XCTAssertTrue(waitFor { text(of: count) != before }, "count never moved")
             clickMenuItem(app, menu: "Edit", item: "Undo Frame Selection")

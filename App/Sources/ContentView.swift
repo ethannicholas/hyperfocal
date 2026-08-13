@@ -279,7 +279,10 @@ struct ContentView: View {
                     // Let the card fill show through — the list's own
                     // backdrop is the window background, visibly darker.
                     .scrollContentBackground(.hidden)
-                    .frame(minHeight: 140, idealHeight: 280, maxHeight: 360)
+                    // ~10 rows at the 24.5pt row pitch — at the previous 360
+                    // cap (~14 rows) the Stack card swallowed half the
+                    // sidebar's height. The Qt shell caps its lists to match.
+                    .frame(minHeight: 140, idealHeight: 245, maxHeight: 245)
                     .onChange(of: model.selection) { _, newValue in
                         model.selectionChanged()
                         // Multi-selection (fusion progress selects every frame

@@ -1373,8 +1373,8 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 // Bounded and independently scrollable — a big tree
                 // must not shove the fusion/tone controls offscreen
-                // (native bounds the stack area the same way).
-                Layout.preferredHeight: Math.min(300, contentHeight)
+                // (native bounds the stack area the same way, ~10 rows).
+                Layout.preferredHeight: Math.min(190, contentHeight)
                 clip: true
                 ScrollBar.vertical: ScrollBar {
                     policy: ScrollBar.AsNeeded
@@ -1717,8 +1717,10 @@ ApplicationWindow {
                 // stacks the tree's nested rows take over, like native.
                 visible: stackList.count <= 1
                 Layout.fillWidth: true
+                // Same ~10-row cap as the stack tree above and the native
+                // sidebar's frame list.
                 Layout.preferredHeight: visible
-                    ? Math.min(300, contentHeight) : 0
+                    ? Math.min(190, contentHeight) : 0
                 clip: true
                 ScrollBar.vertical: ScrollBar {
                     policy: ScrollBar.AsNeeded
