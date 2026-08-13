@@ -6,6 +6,13 @@ import Combine
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
 
+    /// Overlay vs legacy scroll bars — legacy (System Settings → Appearance →
+    /// Show scroll bars: Always, or a mouse with no trackpad) draws an
+    /// always-visible ~19pt scroller the sidebar layout must clear; overlay
+    /// scrollers float over content and need no room. Flips live (settings
+    /// change, mouse plug/unplug), hence state + notification, not a constant.
+    @State private var scrollerStyle = NSScroller.preferredScrollerStyle
+
     var body: some View {
         // Hand-rolled splitter, not HSplitView: the sidebar must open at its
         // persisted width, and HSplitView offers no control over that — it
@@ -78,7 +85,25 @@ struct ContentView: View {
             // keep 10pt breathing room, matching cardStyled's 10pt on the
             // Stack card. Margins, not negative padding: they act inside the
             // scroll view, so the scrollbar stays on the sidebar's edge.
-            .contentMargins(.horizontal, -10, for: .scrollContent)
+            .contentMargins(.leading, -10, for: .scrollContent)
+            // The trailing side must additionally clear the scroller when
+            // scroll bars are the legacy always-visible kind: they occupy
+            // real width at the sidebar's edge (measured 19pt, overlapping
+            // the cards' last 8pt at the stock -10), where overlay scrollers
+            // just float over the 10pt gutter.
+            .contentMargins(.trailing, scrollerStyle == .legacy ? 2 : -10,
+                            for: .scrollContent)
+            // The -10 top tuck below slides the form's viewport under the
+            // Stack card, and the legacy track spans the viewport — its top
+            // poked out of the Stack↔Fusion gap, floating above the first
+            // card. 20 (the stock top inset) starts the track exactly at
+            // that card's top edge.
+            .contentMargins(.top, scrollerStyle == .legacy ? 20 : 0,
+                            for: .scrollIndicators)
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+                scrollerStyle = NSScroller.preferredScrollerStyle
+            }
             // The stock 20pt TOP inset (which made the Stack↔Fusion gap twice
             // the form's own 10pt inter-section spacing) can't be halved the
             // same way: a negative top contentMargin stops applying the
@@ -99,14 +124,38 @@ struct ContentView: View {
     /// live in the Form (above). `.background.secondary` matches the form's
     /// card fill within 1/255 in both light and dark (measured against
     /// live renders); insets and radius likewise mirror the form's.
-    private func cardStyled<T: View>(@ViewBuilder _ content: () -> T) -> some View {
+    private func cardStyled<T: View>(trailing: CGFloat = 10,
+                                     @ViewBuilder _ content: () -> T) -> some View {
         VStack(alignment: .leading, spacing: 0, content: content)
             .background(.background.secondary)
             // Clip content too (the frame List runs to the card's bottom
             // edge), not just the fill.
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, 10)
+            .padding(.leading, 10)
+            .padding(.trailing, trailing)
             .padding(.top, 10)
+    }
+
+    /// Width of the always-visible scroller the frame List reserves inside
+    /// the Stack card — zero when scrollers are overlay (they float, taking
+    /// no room) or when no list is showing. Sized by AppKit, not assumed.
+    private var stackListScrollerWidth: CGFloat {
+        scrollerStyle == .legacy && !model.stacks.isEmpty && !model.isCollapsed(.stack)
+            ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+            : 0
+    }
+
+    /// The Stack card's trailing inset. Under overlay scroll bars, 10 like
+    /// every card. Under legacy ones the form cards end 22pt in (stock 20pt
+    /// inset + the +2 margin that clears the form's scroller), so 22 keeps
+    /// the edges aligned — and when the frame List is showing, the card
+    /// grows back by its reserved scroller's width so the ROWS end at the
+    /// form cards' edge and the card-internal scroller column sits over the
+    /// same gutter as the form's scroller below it. (A fixed 22 instead
+    /// left a dead gutter beside the card while its scroller appeared
+    /// inside — room for a scroll bar with the scroll bar elsewhere.)
+    private var stackCardTrailing: CGFloat {
+        scrollerStyle == .legacy ? 22 - stackListScrollerWidth : 10
     }
 
     /// The form's inter-row separator, replicated (Divider alone is twice as
@@ -116,7 +165,7 @@ struct ContentView: View {
     }
 
     private var stackPanel: some View {
-        cardStyled {
+        cardStyled(trailing: stackCardTrailing) {
             HStack(spacing: 5) {
                 // Same real-button treatment as sectionHeader (accessibility
                 // and automation); All/None stay siblings outside the button.
@@ -155,6 +204,11 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 10)
+            // The card widens by the list's reserved scroller width (see
+            // stackCardTrailing); the header and separator give that width
+            // back so their content ends level with the form cards' —
+            // otherwise All/None jut into the scroller column.
+            .padding(.trailing, stackListScrollerWidth)
             .frame(minHeight: 36)
 
             if model.isCollapsed(.stack) {
@@ -170,6 +224,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 cardSeparator
+                    .padding(.trailing, stackListScrollerWidth)
                 ScrollViewReader { proxy in
                     List(selection: $model.selection) {
                         // One stack keeps the familiar flat list; several show
