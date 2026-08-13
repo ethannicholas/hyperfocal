@@ -239,10 +239,20 @@ def encode_video(raw, out, target_seconds):
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "json", str(raw)]))
     duration = float(probe["format"]["duration"])
-    speed = max(duration / target_seconds, 1.0)
-    log(f"raw recording {duration:.1f}s -> {speed:.2f}x to fit {target_seconds}s")
-    if duration < 15:
-        log("WARNING: raw recording under 15s — App Store previews need 15-30s")
+    # App Store previews must run 15-30s. A long raw compresses to the
+    # target as before; a raw under the floor stretches to clear it —
+    # fusion has gotten fast enough that a real capture can finish in
+    # under 15s, and a slightly slowed replay beats a rejected upload.
+    floor = 15.5  # headroom over the 15s minimum for container rounding
+    if duration > target_seconds:
+        speed = duration / target_seconds
+        log(f"raw recording {duration:.1f}s -> {speed:.2f}x to fit {target_seconds}s")
+    elif duration < floor:
+        speed = duration / floor  # <1 slows the replay
+        log(f"raw recording {duration:.1f}s -> {speed:.2f}x to reach the 15s App Store floor")
+    else:
+        speed = 1.0
+        log(f"raw recording {duration:.1f}s — within 15-30s, no retiming")
     vf = f"setpts=PTS/{speed:.6f},fps=30,scale=1920:1080:flags=lanczos,format=yuv420p"
     run(["ffmpeg", "-y", "-v", "error", "-i", str(raw),
          "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
