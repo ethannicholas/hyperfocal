@@ -50,11 +50,14 @@ ARCHIVE=.build/xcode/Hyperfocal.xcarchive
 echo "== archiving Hyperfocal $VERSION ($BUILD_NUMBER) for team $TEAM_ID"
 # project.yml signs ad-hoc so a clone builds without an Apple Developer
 # account (see Scripts/signing.sh); an App Store archive is the one build
-# that must ask for the real thing, so it says so explicitly here.
+# that must ask for the real thing. Automatic signing archives with the
+# Apple Development identity — naming Apple Distribution here as well is a
+# conflict xcodebuild rejects; the export step below re-signs the archive
+# for App Store Connect.
 xcodebuild -project App/Hyperfocal.xcodeproj -scheme Hyperfocal \
     -configuration Release -derivedDataPath .build/xcode \
     -archivePath "$ARCHIVE" \
-    CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY="Apple Distribution" \
+    CODE_SIGN_STYLE=Automatic \
     DEVELOPMENT_TEAM="$TEAM_ID" \
     MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     ARCHS="arm64" ONLY_ACTIVE_ARCH=NO \
