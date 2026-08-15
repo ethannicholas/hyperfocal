@@ -4,7 +4,7 @@ import simd
 
 // Pure-Swift stand-ins for the small slice of Apple's `simd` module the
 // engine uses, so HyperfocalKit + hyperfocal-cli build on Windows/Linux where
-// `simd` is unavailable (Docs/cross-platform-plan.md, Phase 1). `SIMD2/3/4`
+// `simd` is unavailable. `SIMD2/3/4`
 // themselves are Swift stdlib and portable; only the 3×3 matrix type and a
 // handful of free functions need shimming.
 //

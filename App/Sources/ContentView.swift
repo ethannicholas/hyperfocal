@@ -410,6 +410,9 @@ struct ContentView: View {
             .accessibilityValue(model.isCollapsed(section) ? "collapsed" : "expanded")
             trailing()
         }
+        // External capture drivers crop panel close-ups between a
+        // section's header and a landmark control; inert outside UI-test runs.
+        .background(UITestSupport.frameReporter("section-header.\(section.rawValue)"))
     }
 
     private func sectionHeader(_ title: String,
@@ -951,6 +954,8 @@ struct RetouchControls: View {
         .pickerStyle(.radioGroup)
         .accessibilityIdentifier("retouch.source-kind")
         .help(UIStrings.retouchSourceTip)
+        // Bottom anchor for the capture drivers' Retouch-panel close-up crop.
+        .background(UITestSupport.frameReporter("retouch.source-kind"))
         HStack {
             Spacer()
             Button(UIStrings.revertAll, role: .destructive) { onReset() }

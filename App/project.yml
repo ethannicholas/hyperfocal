@@ -101,7 +101,7 @@ targets:
         # real signing where the team's certificate exists, and the
         # distribution scripts set their own identity. DEVELOPMENT_TEAM is
         # inert under manual ad-hoc signing and stays as the one record of
-        # the team (Scripts/upload-mas.sh and signing.sh read it here).
+        # the team (Scripts/signing.sh and the distribution tooling read it here).
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: Y3GFBT2WQ2

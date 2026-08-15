@@ -15,7 +15,7 @@
 #
 # The layout is not a leftover - it is what a local install test registers
 # (`Add-AppxPackage -Register <layout>\AppxManifest.xml`, developer mode) and
-# what Scripts\store-media.ps1 captures screenshots from. Both want the loose
+# what the store-media capture driver screenshots. Both want the loose
 # files, and both get them from a normal run; neither needs packing skipped.
 # There is deliberately no flag to skip it: packing measures 6.4 s for this
 # payload (1468 files -> 83.3 MB), which buys nothing worth the risk of
@@ -33,7 +33,7 @@
 # -Identity / -Publisher / -PublisherDisplayName, or the environment
 # HYPERFOCAL_MSIX_{IDENTITY,PUBLISHER,PUBLISHER_NAME}.
 #
-# The package satisfies the Qt LGPL-3.0 checklist in ROADMAP: Qt ships as
+# The package satisfies the Qt LGPL-3.0 checklist: Qt ships as
 # separate DLLs (never static), the GPL-3.0 + LGPL-3.0 texts ride along, and
 # the GPLv3-only `qsb` build tool is NOT redistributed (asserted below). The
 # section 4(d)(0) relinking right is satisfied by SOURCE - the app is MIT and public

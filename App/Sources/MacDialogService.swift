@@ -14,7 +14,7 @@ private typealias AnimationFPS = AppModel.AnimationFPS
 
 /// AppKit implementation of DialogService — the NSAlert/NSOpenPanel/
 /// NSSavePanel presentations AppModel used to run inline, moved behind the
-/// dialog seam (Docs/cross-platform-plan.md, Phase 0b) byte-for-byte so
+/// dialog seam byte-for-byte so
 /// behavior is unchanged. Holds the model weakly: the accessory views bind
 /// panel options (export format, animation settings) to the same persisted
 /// settings the engine reads.

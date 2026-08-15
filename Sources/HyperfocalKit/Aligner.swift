@@ -581,7 +581,7 @@ public enum Aligner {
     /// units over 16 workers is a full wave plus a straggler, so the honest
     /// reading is "scales to the core count", not "peaks at 18".
     ///
-    /// Two older observations this corrects. `Docs/performance.md` recorded
+    /// Two older observations this corrects. Earlier measurements recorded
     /// registration as ~1.7 s at 12 MP on *both* the 8-core M1 Pro and the
     /// 10-core M1 Max and concluded Vision's cost was "effectively serial per
     /// frame pair" — but both machines were pinned at 4 workers, so the
@@ -631,8 +631,8 @@ public enum Aligner {
     /// Flat to within 3 % — this pass is *entirely* decode-bound on RAW, and
     /// the whole 1.97× that widening won on TIFF is absent — while peak memory
     /// climbs 53 %. Paying 4.5 GB for nothing is a bad trade anywhere and a
-    /// harmful one on a 16 GB machine, where `Docs/performance.md` already
-    /// records 45 MP runs spreading ~25 % under memory pressure.
+    /// harmful one on a 16 GB machine, where 45 MP runs have already been
+    /// measured spreading ~25 % under memory pressure.
     ///
     /// The pair pass is not capped: it decodes nothing, so RAW is irrelevant
     /// to it. Splitting the two is what keeps the TIFF win and drops the RAW
@@ -667,9 +667,8 @@ public enum Aligner {
     /// `HYPERFOCAL_REGISTER=opencv` is silently ignored — a sweep that looks
     /// like it exercised OpenCV and actually re-measured Vision to the
     /// millisecond. Whoever picks this up: the tap is
-    /// `HYPERFOCAL_REGISTER_WORKERS`, the shape of the answer is in
-    /// `Docs/performance.md`, and the prize is the same ~2× — registration is
-    /// 51% of the fastest configuration's wall clock on x64 (see ROADMAP).
+    /// `HYPERFOCAL_REGISTER_WORKERS`, and the prize is the same ~2× —
+    /// registration is 51% of the fastest configuration's wall clock on x64.
     private static var registrarFanOutCeiling: Int {
         #if canImport(Vision)
         #if HYPERFOCAL_HAVE_OPENCV

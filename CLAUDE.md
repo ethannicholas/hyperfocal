@@ -8,12 +8,9 @@ the dual-UI invariant below). **README.md is the project's front page** — what
 visitor to the GitHub repo reads to decide whether Hyperfocal interests them. It
 is documentation, *not* a changelog: something belongs there only if a
 prospective user would care about it. Never add an entry to README just because
-work shipped, and don't treat it as a record of what's been done. ROADMAP.md is
-the prioritized work list — **completed work is removed from ROADMAP**, and
-items are written self-contained so a cold session can pick one up. **Git history
+work shipped, and don't treat it as a record of what's been done. **Git history
 is the record of what shipped** (hence the detailed commit messages: measurements,
-rejected alternatives, and why). Cross-platform strategy and phases:
-`Docs/cross-platform-plan.md`.
+rejected alternatives, and why).
 
 ## Layout
 
@@ -47,11 +44,8 @@ rejected alternatives, and why). Cross-platform strategy and phases:
   probe-only (extend it for new model-level regression checks — e.g.
   project-format round-trips). It compiles `AppCore/` headless — no
   copies involved. **macOS-only** (imports AppKit).
-- `Site/` — documentation site, hand-written static HTML/CSS, no build
-  step; uploaded as-is to http://ethannicholas.com/hyperfocal.
 - `Scripts/package-app.sh` — Developer ID build (version = git tag,
-  build number = commit count); `Scripts/upload-mas.sh` — App Store
-  Connect upload, same conventions.
+  build number = commit count).
 
 ## Invariants & gotchas
 
@@ -120,13 +114,13 @@ rejected alternatives, and why). Cross-platform strategy and phases:
     App Store binary that has no use for it.
 - `swift build && .build/debug/retouch-probe <synth frames…>` must print
   `probe: ALL PASS` before trusting model/engine changes; synth PSNR
-  baselines live in ROADMAP's header. **`retouch-probe` is macOS-only** (it
+  baselines live in the verify skill (`.claude/skills/verify/SKILL.md`). **`retouch-probe` is macOS-only** (it
   imports AppKit; `swift build` doesn't build it off Apple) — on Windows/Linux
   verify engine/model changes via `hyperfocal-cli` (synth→fuse→compare) and the
   Qt shell selftest matrix instead.
 - `Scripts/ui-test.sh` must print `== UI TESTS PASSED` before trusting
   **macOS** UI-layer changes (XCUITest suite in `App/HyperfocalUITests/`; the
-  Qt shell has its own selftest matrix — see ROADMAP — driven with
+  Qt shell has its own selftest matrix, driven with
   `HFQT_AUTOCONFIRM`; keep both green when a change touches both UIs). Takes
   over mouse/keyboard while running — ASK and wait for a yes before
   running; the user is often actively at the machine. Tests are
@@ -297,16 +291,15 @@ rejected alternatives, and why). Cross-platform strategy and phases:
     designated requirement pins the cdhash, which changes every build: macOS
     then re-asks for the Automation permission `Scripts/run.sh` (AppleEvent
     quit) and the UI tests rely on.
-  - The distribution scripts name their own identity and are unaffected:
-    `package-app.sh` (Developer ID, ad-hoc fallback) and `upload-mas.sh`
-    (Apple Distribution, `-allowProvisioningUpdates`).
+  - Distribution packaging names its own identity and is unaffected:
+    `package-app.sh` (Developer ID, ad-hoc fallback).
 - UserDefaults suite `org.hyperfocal.settings` is deliberately decoupled
   from the bundle ID; renaming it orphans users' saved settings.
 
 ## Writing conventions
 
 Apply to everything an agent writes into the repo — commit messages, code
-comments, docs, the roadmap, user-facing strings:
+comments, docs, user-facing strings:
 
 - **Competing software:** refer to it only in general terms ("commercial
   stackers", "other focus-stacking apps"), never by product name, and always

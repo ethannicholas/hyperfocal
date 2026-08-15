@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import os
+import SwiftUI
 
 /// UI-test mode: launch-environment hooks consumed once at startup, so the
 /// XCUITest suite can seed state without driving open/save panels (the
@@ -50,7 +51,7 @@ import os
 ///       rendered output; direct mouse-drag coverage lives in the one
 ///       context where it provably works (StackListJourney, pre-fuse).
 ///
-/// Store-media capture (Scripts/store-media.py) drives the same channel to
+/// Store-media capture (an external driver) drives the same channel to
 /// stage App Store screenshots/videos — exact window sizes, deterministic
 /// viewport framing, and enough geometry to aim the real cursor:
 ///
@@ -70,7 +71,27 @@ import os
 ///       backing scale, viewport scale/offset, displayed image size, phase,
 ///       and retouch readiness — everything a driver needs to map an image
 ///       point to a screen point (same math as the pane views) and to poll
-///       long operations
+///       long operations. Also carries "content" (the content view's screen
+///       rect, same space) and "frames" (named SwiftUI view frames relative
+///       to the content area, registered via `frameReporter` — SwiftUI views
+///       have no NSView for the pane walk to find, and the capture drivers crop
+///       panel close-ups out of full-window captures by these rects).
+///
+/// Site-media capture (another external driver) stages the tutorial's
+/// screenshots on top of the same channel:
+///
+///   {"action": "set-output", "mode": "result"|"depth", "result": r}
+///       — the Output pane's Result/Depth switch
+///   {"action": "auto-pick", "x": x, "y": y, "result": r}
+///       — the Space key's pick-sharpest-under-brush at an image point,
+///       cursor aimed there too; detail reports the picked source's name so
+///       a driver can verify the frame the tutorial text promises
+///   {"action": "paint", "points": "x,y x,y ...", "result": r}
+///       — one brush stroke as an image-space polyline through the real
+///       beginStroke/continueStroke/endStroke path (tile undo, depth
+///       co-painting, and display invalidation all as if painted by hand);
+///       the retouch canvas is as XCUITest-proof as the sliders, and
+///       capture runs need deterministic strokes
 ///
 /// HYPERFOCAL_WINDOW=WxH (points) sizes the window at launch instead of the
 /// fill-the-screen default — capture runs need exact dimensions.
@@ -327,6 +348,43 @@ enum UITestSupport {
                 session.brushSoftness = s
             }
             finish(true)
+        case "set-output":
+            switch command["mode"] {
+            case "result": model.outputMode = .result
+            case "depth": model.outputMode = .depth
+            default: return finish(false, "unknown mode \(command["mode"] ?? "nil")")
+            }
+            finish(true)
+        case "auto-pick":
+            guard let session = model.retouch, model.retouchMode else {
+                return finish(false, "no retouch session")
+            }
+            guard let x = command["x"].flatMap(Double.init),
+                  let y = command["y"].flatMap(Double.init) else {
+                return finish(false, "bad args")
+            }
+            let point = CGPoint(x: x, y: y)
+            session.cursor = point
+            session.autoPickSource(at: point)
+            finish(true, session.sourceName)
+        case "paint":
+            guard let session = model.retouch, session.canPaint else {
+                return finish(false, "cannot paint")
+            }
+            let points: [CGPoint] = (command["points"] ?? "")
+                .split(separator: " ").compactMap { pair in
+                    let xy = pair.split(separator: ",")
+                    guard xy.count == 2, let x = Double(xy[0]),
+                          let y = Double(xy[1]) else { return nil }
+                    return CGPoint(x: x, y: y)
+                }
+            guard points.count >= 2 else { return finish(false, "need >= 2 points") }
+            session.beginStroke(at: points[0])
+            for (p0, p1) in zip(points, points.dropFirst()) {
+                session.continueStroke(from: p0, to: p1)
+            }
+            session.endStroke()
+            finish(true)
         case "get-geometry":
             guard let resultPath = command["result"] else { return }
             writeGeometry(model: model, to: resultPath)
@@ -344,6 +402,33 @@ enum UITestSupport {
             finish(true)
         default:
             finish(false, "unknown action \(command["action"] ?? "nil")")
+        }
+    }
+
+    // MARK: - SwiftUI frame reporting
+
+    /// Frames of named SwiftUI views in the window's SwiftUI global space
+    /// (points, content-area top-left origin, y down). The pane walk in
+    /// `writeGeometry` finds AppKit views; sidebar sections are pure SwiftUI,
+    /// so they self-report through `frameReporter` instead. The capture
+    /// drivers crop the tutorial's Retouch-panel close-up out of a
+    /// full-window capture using these.
+    private static var reportedFrames: [String: CGRect] = [:]
+
+    /// Background view: records the host view's global frame under `name`
+    /// while UI-test mode is active; draws nothing either way.
+    static func frameReporter(_ name: String) -> some View {
+        Group {
+            if isActive {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { reportedFrames[name] = geo.frame(in: .global) }
+                        .onChange(of: geo.frame(in: .global)) { _, frame in
+                            reportedFrames[name] = frame
+                        }
+                        .onDisappear { reportedFrames.removeValue(forKey: name) }
+                }
+            }
         }
     }
 
@@ -379,6 +464,16 @@ enum UITestSupport {
         if let window = NSApp.windows.first(where: { $0.isVisible }) {
             payload["window"] = topLeftRect(window.frame)
             payload["backingScale"] = Double(window.backingScaleFactor)
+            // SwiftUI's global space is the content area, top-left, y down —
+            // the content rect (same screencapture space as everything else)
+            // is the origin a driver adds `frames` entries to.
+            if let content = window.contentView {
+                let inWindow = content.convert(content.bounds, to: nil)
+                payload["content"] = topLeftRect(window.convertToScreen(inWindow))
+            }
+            payload["frames"] = reportedFrames.mapValues {
+                ["x": $0.minX, "y": $0.minY, "w": $0.width, "h": $0.height]
+            }
             var panes: [[String: Any]] = []
             var walk: ((NSView) -> Void)!
             walk = { view in

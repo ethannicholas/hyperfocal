@@ -4,7 +4,7 @@
      LibRaw::open_file, easyexif's fopen, the DNG SDK's dng_file_stream - interpret the
      UTF-8 paths Swift hands them. Without it those calls go through the
      legacy ANSI code page and frames in non-ASCII-named folders fail to
-     open (ROADMAP Windows residual 1). Embedded at link time on every
+     open. Embedded at link time on every
      Windows executable; the Qt shell embeds the same file via CMake. -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <application>

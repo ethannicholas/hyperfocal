@@ -5,7 +5,7 @@ import Foundation
 /// (`MacDialogService`: NSAlert/NSOpenPanel/NSSavePanel, pixel-identical to
 /// the dialogs the model used to present inline); the probe leaves it nil and
 /// drives the existing per-prompt test overrides instead; a future non-AppKit
-/// shell provides its own (see Docs/cross-platform-plan.md, Phase 0b).
+/// shell provides its own.
 ///
 /// All methods run on the main actor (off-main callers hop via
 /// `DispatchQueue.main.sync` + `MainActor.assumeIsolated`, matching the

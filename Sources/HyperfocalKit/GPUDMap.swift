@@ -150,7 +150,7 @@ public enum GPUDMap {
         // buffer, so pass 1's reads lower than true GPU execution. `warp`
         // is the serialized upload+warp+wait: the exposure gain is measured
         // from the warped frame mid-frame, a real CPU dependency the
-        // pyramid path doesn't have (see the overlap ROADMAP item).
+        // pyramid path doesn't have (overlapping it is a known future win).
         var tDecodeWait = 0.0, tWarp = 0.0, tMean = 0.0, tGPU = 0.0
         var tReadback = 0.0, tRenderWait = 0.0, tRenderGPU = 0.0, tRenderPreview = 0.0
         func bucket(_ total: inout Double, _ body: () throws -> Void) rethrows {

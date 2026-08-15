@@ -3,7 +3,7 @@
 # How a locally built copy of the macOS app is signed. Sourced (not run) by
 # Scripts/build.sh and Scripts/ui-test.sh, which pass "${HF_SIGN_ARGS[@]}"
 # to xcodebuild. Distribution signing is elsewhere: Scripts/package-app.sh
-# (Developer ID) and Scripts/upload-mas.sh (App Store).
+# (Developer ID) and the App Store upload tooling.
 #
 # The default is ad-hoc — Xcode's "Sign to Run Locally" — and it lives in
 # App/project.yml (CODE_SIGN_IDENTITY "-", CODE_SIGN_STYLE Manual) rather
@@ -29,7 +29,7 @@
 #   HYPERFOCAL_DEVELOPMENT_TEAM=       (set but empty) force ad-hoc
 
 # The team the project distributes under. App/project.yml is the single
-# source for it; Scripts/upload-mas.sh reads it the same way.
+# source for it.
 hf_project_team() {
     sed -n 's/.*DEVELOPMENT_TEAM: *//p' App/project.yml | sort -u | head -1
 }

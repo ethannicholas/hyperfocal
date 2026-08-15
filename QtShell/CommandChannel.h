@@ -1,7 +1,7 @@
 // Store-media capture channel: the Qt shell's analogue of the macOS app's
-// UITestSupport command channel (App/Sources/UITestSupport.swift). The macOS
-// side is driven by Scripts/store-media.py, this one by
-// Scripts/store-media.ps1, and the two speak the same command vocabulary —
+// UITestSupport command channel (App/Sources/UITestSupport.swift). Each side
+// is driven by an external capture driver, and the two speak the same
+// command vocabulary —
 // set-window / set-zoom / set-slider / set-sections / set-retouch /
 // get-geometry — so one capture recipe describes both shells rather than two
 // unrelated scripts drifting apart.

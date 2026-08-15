@@ -5,7 +5,7 @@ A free, open-source, cross-platform focus stacking application.
 [Website](https://ethannicholas.com/hyperfocal) ·
 [Tutorial](https://ethannicholas.com/hyperfocal/tutorial.html)
 
-![Hyperfocal main window: a partially focused source frame on the left, the fully sharp fused result on the right](Site/images/app-fused.png)
+![Hyperfocal main window: a partially focused source frame on the left, the fully sharp fused result on the right](.github/images/app-fused.png)
 
 ## What it does
 
@@ -27,7 +27,7 @@ with complicated objects having translucency, small projections, and the like,
 Hyperfocal offers powerful retouching features so you can obtain a flawless
 result every time.
 
-| ![A mineral specimen where only a small part is in focus](Site/images/cinnabar-1.jpg) | ![The same specimen, entirely in focus](Site/images/cinnabar-stack.jpg) |
+| ![A mineral specimen where only a small part is in focus](.github/images/cinnabar-1.jpg) | ![The same specimen, entirely in focus](.github/images/cinnabar-stack.jpg) |
 |:--:|:--:|
 | *In this single shot, only a small part of this cinnabar specimen is in focus* | *After fusing dozens of similar shots in Hyperfocal, the entire specimen is sharp* |
 

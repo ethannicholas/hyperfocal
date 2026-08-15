@@ -10,7 +10,7 @@ import Foundation
 // ImageIO/CoreImage and registers through Vision. On Linux those frameworks
 // don't exist, so the engine talks to a C-ABI shim (`CImaging`) over
 // libtiff/libpng/libjpeg-turbo/LibRaw/lcms2/OpenCV/giflib (EXIF via the
-// vendored BSD-2 easyexif). See Docs/cross-platform-plan.md.
+// vendored BSD-2 easyexif).
 
 // Split a pkg-config invocation's output into individual flags. Run at manifest
 // evaluation time so the multiarch include/lib paths come from the system,
@@ -43,7 +43,7 @@ func pkgExists(_ pkg: String) -> Bool {
     return proc.terminationStatus == 0
 }
 
-// The wgpu compute backend (cross-platform-plan Phase 4), from a wgpu-native
+// The wgpu compute backend, from a wgpu-native
 // prebuilt release at WGPU_ROOT (default: a `wgpu-native` checkout beside this
 // repo — Scripts/fetch-wgpu.sh puts one there).
 //
@@ -96,8 +96,8 @@ if wgpuEnabled {
 }
 
 #if os(Windows)
-// vcpkg supplies every C library on Windows (no pkg-config; see
-// Docs/cross-platform-plan.md). The installed tree is resolved at
+// vcpkg supplies every C library on Windows (no pkg-config). The
+// installed tree is resolved at
 // manifest-eval time from VCPKG_ROOT (falling back to a `vcpkg` checkout
 // beside this repo) and VCPKG_TRIPLET.
 let winEnv = ProcessInfo.processInfo.environment
@@ -185,7 +185,7 @@ var kitSwiftSettings: [SwiftSetting] = warningsAsErrors + isaBaseline + [
     .unsafeFlags(["-O"], .when(configuration: .debug)),
 ]
 
-// The shared model layer as a real module (cross-platform-plan 0d): the
+// The shared model layer as a real module: the
 // probe, the Qt bridge, and (eventually) the Linux shell consume it as a
 // dependency. The Mac app still compiles the same files directly into its
 // target (App/project.yml path reference) — no module boundary there.
@@ -236,7 +236,7 @@ extraTargets.append(
         swiftSettings: appCoreSwiftSettings
     )
 )
-// C-ABI bridge the Qt shell drives (cross-platform-plan Phase 2): a
+// C-ABI bridge the Qt shell drives: a
 // SwiftPM dynamic library so one product definition serves macOS and
 // Linux. A development artifact for the Qt shell — never shipped with
 // the Mac app.
@@ -263,7 +263,7 @@ extraTargets.append(
         path: "Probe"
     )
 )
-// Phase 1.5 registration A/B (Docs/cross-platform-plan.md decision 2):
+// Phase 1.5 registration A/B (OpenCV vs Vision):
 // HYPERFOCAL_OPENCV_AB=1 at build time compiles a small OpenCV-only
 // registration target so the fusion pipeline can run OpenCV registration on
 // macOS and be compared against Vision on identical frames; selected at
@@ -346,8 +346,8 @@ extraTargets.append(
 )
 hyperfocalKitDeps.append("CImaging")
 #elseif os(Windows)
-// The same C-ABI imaging shim, with the libraries supplied by vcpkg
-// (Docs/cross-platform-plan.md). No pkg-config on Windows: the installed
+// The same C-ABI imaging shim, with the libraries supplied by vcpkg.
+// No pkg-config on Windows: the installed
 // tree is resolved at manifest-eval time from VCPKG_ROOT (falling back to
 // a `vcpkg` checkout beside this repo) and VCPKG_TRIPLET.
 // Import-library names as vcpkg builds them (dynamic triplet; raw_r is

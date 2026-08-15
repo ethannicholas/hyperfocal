@@ -1,4 +1,4 @@
-# Windows CI (ROADMAP Windows residual: CI runner): the same gate a dev
+# Windows CI: the same gate a dev
 # machine runs — Scripts/windows-env.ps1 for the environment, then
 # Scripts/ci-gate.sh under Git Bash. Runs on GitHub's arm64 Windows
 # runners (free for public repos), matching the arm64-windows triplet the

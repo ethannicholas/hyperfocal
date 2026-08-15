@@ -1,4 +1,4 @@
-// C-ABI bridge over AppCore for the Qt shell (cross-platform-plan Phase 2).
+// C-ABI bridge over AppCore for the Qt shell.
 //
 // Contract (documented for callers in QtShell/hyperfocal_bridge.h):
 //  - Every hf_* call MUST be made on the process main thread. Qt's GUI

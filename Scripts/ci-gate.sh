@@ -16,8 +16,8 @@ mkdir -p "$WORK"
 # PSNR floors are platform-calibrated just under each platform's
 # measured baseline (plane scene, default synth params, P3 export to
 # match the ground truth): Linux measured 39.1 dmap / 38.6 pmax
-# (aarch64, 2026-07-19); macOS 38.41 dmap / 38.26 pmax (the ROADMAP
-# baselines) — a shared 38.3 pmax floor sat above the macOS baseline
+# (aarch64, 2026-07-19); macOS 38.41 dmap / 38.26 pmax — a shared 38.3
+# pmax floor sat above the macOS baseline
 # and failed on noise alone.
 #
 # The dmap floor dropped from 38.7 to 38.2 when the focus measure gained
@@ -28,8 +28,7 @@ mkdir -p "$WORK"
 # stacks the same change lifted mean sharpness 86.8% -> 94.2% of best
 # achievable, and took the worst stack from 59% to 101%. Do not "recover"
 # this 0.3 dB by shrinking focusPreSigma without re-running that
-# comparison. A synth scene with sensor noise would gate this honestly —
-# see the ROADMAP item.
+# comparison. A synth scene with sensor noise would gate this honestly.
 if [ "$(uname)" = Darwin ]; then PMAX_FLOOR=38.1; else PMAX_FLOOR=38.3; fi
 echo "== synth PSNR gates"
 "$BIN" synth -o "$WORK/synth"
@@ -59,8 +58,7 @@ gate pmax "$PMAX_FLOOR"
 # blind to anything that changes what the registrar sees at scale. That
 # blind spot is not hypothetical: reducing Vision's registration input to
 # the bound cost 6-7 dB against ground truth (2026-08-11) and the gate
-# above did not move by a thousandth of a dB. See the dead-end entry in
-# Docs/performance.md.
+# above did not move by a thousandth of a dB.
 #
 # 4240x2832 is the cheapest shape that clears the bound (~10 s for the
 # whole section). Anything that degrades registration accuracy at real

@@ -2,7 +2,7 @@
 import CWgpu
 import Foundation
 
-/// wgpu compute backend (cross-platform-plan Phase 4): the Windows/Linux
+/// wgpu compute backend: the Windows/Linux
 /// counterpart of `MetalEngine` — kernels compiled once from WGSL at startup,
 /// pipeline cache, dispatch helpers. Same discipline as Metal: all image
 /// kernels operate on raw storage buffers (no textures) with taps, clamps,

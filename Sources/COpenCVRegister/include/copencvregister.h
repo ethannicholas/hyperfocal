@@ -1,7 +1,7 @@
 // OpenCV homography registration, exposed to the *macOS* engine build for the
-// Phase 1.5 A/B (OpenCV vs Vision) — see Docs/cross-platform-plan.md decision 2
-// and ROADMAP "Phase 1.5". macOS normally registers through Vision; this small
-// target lets the same fusion pipeline run OpenCV registration here so the two
+// Phase 1.5 A/B (OpenCV vs Vision). macOS normally registers through Vision;
+// this small target lets the same fusion pipeline run OpenCV registration
+// here so the two
 // can be compared on identical frames (synth PSNR + the fluorite stack) without
 // dragging the whole Linux CImaging shim (libtiff/lcms2/LibRaw/…) onto macOS.
 //

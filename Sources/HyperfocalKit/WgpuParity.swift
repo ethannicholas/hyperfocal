@@ -5,7 +5,7 @@ import simd
 #endif
 
 /// Kernel-level CPU↔wgpu parity checks — the wgpu backend's equivalent of the
-/// Metal path's parity discipline (ROADMAP header: ≥ 90 dB). One case per
+/// Metal path's parity discipline (≥ 90 dB). One case per
 /// kernel: the warps run against the production CPU `Warp.apply`; the rest
 /// against inline references that mirror the MSL/WGSL semantics operation for
 /// operation. All inputs are deterministic (xorshift).
@@ -47,7 +47,7 @@ public enum WgpuParity {
         /// (`Half4`). Pair every use with `q16` on the same array for the CPU
         /// reference: the point of these checks is engine agreement, and
         /// feeding one side f32 while the device holds f16 would instead
-        /// measure storage quantization (~75-80 dB, the ROADMAP header's
+        /// measure storage quantization (~75-80 dB, the f16 arithmetic
         /// ceiling) on every RGBA kernel.
         func bufHalf(_ data: [Float]) throws -> WgpuEngine.Buffer {
             let b = try engine.makeBuffer(halves: data.count)

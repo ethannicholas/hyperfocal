@@ -66,8 +66,11 @@ targeted runs.
 .build/debug/retouch-probe /tmp/synth/frame_*.tif    # must print "probe: ALL PASS"
 ```
 
-The synth PSNR gate — baseline numbers live in ROADMAP's header (don't
-copy them here; they move when defaults are retuned). The measured-with
+The synth PSNR gate — current baselines (default params, re-baseline
+here when defaults are retuned): **plane ≈ 38.4 dB dmap / 38.2 pmax**
+vs truth. (The dmap figure was 38.7 before the focus measure gained its
+pre-Laplacian denoise; the synth scenes are noiseless, so denoise can
+only cost there — judge DMap changes on real stacks too.) The measured-with
 invocation is default synth params plus `--color-space p3` on the fuse
 (the pipeline and ground truth are P3; the default sRGB export skews the
 comparison):
@@ -79,9 +82,12 @@ comparison):
 ```
 
 Repeat with `--method pmax` for the pmax baseline and `synth --scene
-object` for the object baseline. CPU↔GPU parity (≥ 90 dB, ROADMAP
-header): fuse the same stack with `--engine cpu` and `--engine gpu`,
-then `compare` the two outputs.
+object` for the object baseline. CPU↔GPU parity — **≥ 90 dB for dmap**
+(≈ 101 on the synth plane) and **≥ 65 dB for pmax** (≈ 70; pixel
+storage is f16, so ~75–80 dB is the arithmetic ceiling near 1.0, and
+PMax's multi-level collapse compounds a few ulps of it): fuse the same
+stack with `--engine cpu` and `--engine gpu`, then `compare` the two
+outputs.
 
 ## hyperfocal-cli reference
 

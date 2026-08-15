@@ -1,4 +1,4 @@
-# Qt shell (cross-platform-plan Phase 2). Dev build:
+# Qt shell. Dev build:
 #
 #   Scripts/build.sh --qt     # builds the bridge (SwiftPM), configures, builds
 #
@@ -51,7 +51,7 @@ endif()
 
 qt_add_executable(hyperfocal-qt main.cpp)
 
-# UTF-8 active code page for the process (ROADMAP Windows residual 1): the
+# UTF-8 active code page for the process: the
 # C imaging stack under the bridge opens files through ANSI char* APIs; the
 # manifest makes them interpret the UTF-8 paths the shell hands over. MSVC
 # link merges .manifest sources automatically.

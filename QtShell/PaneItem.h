@@ -76,7 +76,7 @@ public:
     Q_INVOKABLE void setAbsoluteScale(double scale);
     Q_INVOKABLE void fit();
     // Pan so an image point sits at the pane's center, clamped like every
-    // other pan. The store-media channel's framing verb (CommandChannel.h):
+    // other pan. The capture channel's framing verb (CommandChannel.h):
     // a marketing shot names the subject in image pixels, and the pane's
     // own offset model is the only place that mapping is correct.
     Q_INVOKABLE void centerOn(QPointF image);

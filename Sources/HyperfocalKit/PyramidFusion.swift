@@ -2430,7 +2430,7 @@ public enum PyramidFusion {
                                         // bands, so the winner copies verbatim.
                                         // (Making this band f32 was measured:
                                         // exactly 0 dB of parity, so it stays
-                                        // half — see ROADMAP's parity note.)
+                                        // half — see WgpuParity's notes.)
                                         let pi = i * 4
                                         fp[pi] = bp[pi]
                                         fp[pi + 1] = bp[pi + 1]

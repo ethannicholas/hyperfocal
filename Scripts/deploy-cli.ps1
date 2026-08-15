@@ -1,5 +1,5 @@
-# Stage a self-contained hyperfocal-cli distribution (ROADMAP Windows
-# residual: CLI DLL deployment). The dev loop resolves DLLs via PATH
+# Stage a self-contained hyperfocal-cli distribution. The dev loop
+# resolves DLLs via PATH
 # (windows-env.ps1); a shipped CLI needs them beside the exe. This script
 # computes the exe's transitive DLL closure with dumpbin /dependents,
 # copies it into the dist folder, and proves the result by running a
