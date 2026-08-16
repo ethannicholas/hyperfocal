@@ -54,6 +54,25 @@ public enum DepthRegularize {
     static let spillScale: Float = 0.05
     /// Variance stabilizer for the adaptive-epsilon (WGIF) weighting.
     static let lambda: Float = 1e-6
+    /// Spill-floor emptiness knee, as a fraction of the scene's bright end
+    /// (p95 of the per-cell max luminance): spill evidence is halved where a
+    /// cell's darkest-frame luminance sits at this fraction and falls off
+    /// quadratically above it. See the tier-S comment in
+    /// `gridCoefficients` for the measurement behind 0.05.
+    static let spillDarkFraction: Float = 0.05
+    /// Tier-R (regional commitment) calibration — see the tier-R comment in
+    /// `gridCoefficients` for the measurements. Cells enter a region when
+    /// their grid confidence and tier-2 vote both sit under these cuts (a
+    /// live tier-2 vote is ≥ tier2Scale × the 0.5 concentration threshold =
+    /// 0.05, so 0.005 excludes exactly the voted cells); a region commits
+    /// when its size clears `regionalMinCells` and its mass-curve bump's
+    /// significance z = (max − median)/(p90 − median) clears the
+    /// `regionalZLo…regionalZHi` ramp (flat noise ≈ 1.3 at any size).
+    static let regionalConfCut: Float = 0.02
+    static let regionalTier2Cut: Float = 0.005
+    static let regionalMinCells = 32
+    static let regionalZLo: Float = 1.5
+    static let regionalZHi: Float = 4
     /// Below this max combined confidence the stage reports "no signal
     /// anywhere" (nil) and the caller keeps the median depth unchanged.
     static let minSignal: Float = 1e-3
@@ -131,75 +150,18 @@ public enum DepthRegularize {
         let noTier2Mask = env["HYPERFOCAL_GUIDED_NO_TIER2_MASK"] != nil
         let fixedEps = env["HYPERFOCAL_GUIDED_FIXED_EPS"] != nil
 
-        var d2 = [Float](repeating: 0, count: gridCount)
-        var c2 = [Float](repeating: 0, count: gridCount)
-        if planes.count > 2, options.peakConcentration > 0, !noTier2 {
-            let n = planes.count
-            let window = max(2, n / 16)
-            let threshold = options.peakConcentration
-            d2.withUnsafeMutableBufferPointer { d2p in
-                c2.withUnsafeMutableBufferPointer { c2p in
-                    cG.withUnsafeBufferPointer { cgp in
-                        DispatchQueue.concurrentPerform(iterations: gh) { gy in
-                            if isStale?() == true { return }
-                            var curve = [Float](repeating: 0, count: n)
-                            var scratch = [Float](repeating: 0, count: n)
-                            for gx in 0..<gw {
-                                for f in 0..<n { curve[f] = 0 }
-                                for ny in max(gy - 2, 0)...min(gy + 2, gh - 1) {
-                                    for nx in max(gx - 2, 0)...min(gx + 2, gw - 1) {
-                                        let j = ny * gw + nx
-                                        let mask = noTier2Mask ? 1 : 1 - cgp[j]
-                                        guard mask > 0 else { continue }
-                                        for f in 0..<n {
-                                            curve[f] += mask * planes[f][j]
-                                        }
-                                    }
-                                }
-                                if let scored = DMapFusion.concentratedArgmax(
-                                        curve: curve, window: window,
-                                        concThreshold: threshold,
-                                        scratch: &scratch) {
-                                    let i = gy * gw + gx
-                                    d2p[i] = scored.depth
-                                    c2p[i] = tier2Scale * scored.concentration
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if isStale?() == true { return nil }
-
-        // No measurable signal anywhere: nothing to regularize toward.
-        var maxSignal: Float = 0
-        for i in 0..<gridCount { maxSignal = max(maxSignal, cG[i] + c2[i]) }
-        guard maxSignal >= minSignal else {
-            log?("guided regularizer: no confident signal — depth left unregularized")
-            return nil
-        }
-
-        // Tier S: spill floor. A signal-free pixel next to a subject shows
-        // nothing of its own — every photon it ever receives is defocus
-        // spill from the subject, which only ever *adds* light. The frame
-        // where the cell is darkest is therefore the least-contaminated one
-        // (the adjacent subject in focus), and that is the right depth to
-        // render — without it the prior interpolates toward the regional
-        // mean of subject depths, and those mid-stack frames carry the
-        // subject's glow straight into the background (the halo). Weighted
-        // by how much the cell's luminance swings across the stack (no
-        // swing → no spill → nothing to protect against) and masked by
-        // confidence, so cells with any real vote are untouched.
-        let noSpill = env["HYPERFOCAL_GUIDED_NO_SPILL"] != nil
-        var dS = [Float](repeating: 0, count: gridCount)
-        var wS = [Float](repeating: 0, count: gridCount)
-        var sS = [Float](repeating: 0, count: gridCount)  // 0…1 evidence strength
-        if luminancePlanes.count > 2, !noSpill {
+        // Per-cell luminance extremes across the stack, shared by the tier-2
+        // boundary rescue (its lit gate) and tier S (its emptiness gate and
+        // darkest-frame target). Computed whenever luminance planes were
+        // retained, independent of either consumer's ablation switch.
+        let hasLum = luminancePlanes.count > 2
+        var lMaxPlane = [Float](repeating: 0, count: gridCount)
+        var spanPlane = [Float](repeating: 0, count: gridCount)
+        var dS = [Float](repeating: 0, count: gridCount)  // argmin-luminance frame
+        var darkK: Float = 0
+        var spanEps2: Float = 0
+        if hasLum {
             let n = luminancePlanes.count
-            var lMaxPlane = [Float](repeating: 0, count: gridCount)
-            var spanPlane = [Float](repeating: 0, count: gridCount)
             lMaxPlane.withUnsafeMutableBufferPointer { mp in
                 spanPlane.withUnsafeMutableBufferPointer { sp in
                     dS.withUnsafeMutableBufferPointer { dp in
@@ -228,8 +190,192 @@ public enum DepthRegularize {
             // 0.2% of the scene's bright end — glow is dim in linear light,
             // and the relative term already shields static surfaces, so this
             // only needs to clear sensor noise.
-            let spanEps = 0.002 * max(DMapFusion.percentile95(lMaxPlane), 1e-6)
-            let spanEps2 = spanEps * spanEps
+            let lRef = max(DMapFusion.percentile95(lMaxPlane), 1e-6)
+            let spanEps = 0.002 * lRef
+            spanEps2 = spanEps * spanEps
+            darkK = Self.spillDarkFraction * lRef
+        }
+
+        var d2 = [Float](repeating: 0, count: gridCount)
+        var c2 = [Float](repeating: 0, count: gridCount)
+        if planes.count > 2, options.peakConcentration > 0, !noTier2 {
+            let n = planes.count
+            let window = max(2, n / 16)
+            let threshold = options.peakConcentration
+            d2.withUnsafeMutableBufferPointer { d2p in
+                c2.withUnsafeMutableBufferPointer { c2p in
+                    cG.withUnsafeBufferPointer { cgp in
+                        DispatchQueue.concurrentPerform(iterations: gh) { gy in
+                            if isStale?() == true { return }
+                            var curve = [Float](repeating: 0, count: n)
+                            var scratch = [Float](repeating: 0, count: n)
+                            for gx in 0..<gw {
+                                for f in 0..<n { curve[f] = 0 }
+                                for ny in max(gy - 2, 0)...min(gy + 2, gh - 1) {
+                                    for nx in max(gx - 2, 0)...min(gx + 2, gw - 1) {
+                                        let j = ny * gw + nx
+                                        let mask = noTier2Mask ? 1 : 1 - cgp[j]
+                                        guard mask > 0 else { continue }
+                                        for f in 0..<n {
+                                            curve[f] += mask * planes[f][j]
+                                        }
+                                    }
+                                }
+                                let i = gy * gw + gx
+                                if let scored = DMapFusion.concentratedArgmax(
+                                        curve: curve, window: window,
+                                        concThreshold: threshold,
+                                        scratch: &scratch) {
+                                    d2p[i] = scored.depth
+                                    c2p[i] = tier2Scale * scored.concentration
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Tier R: regional commitment for lit no-signal regions — the DMap
+        // half of the regional-commitment design (research note
+        // 2026-07-28-pmax-hybrid-background-renderer.md, "Interactions").
+        // Where nothing focuses, per-cell and even multi-cell curve
+        // statistics are noise at every aggregation the 5×5 tier-2 window
+        // can reach: on a 45 MP never-focused foreground, cell argmaxes
+        // scattered across the whole stack while the *whole-region* mass
+        // curve showed one unambiguous frame-0 bump (1.28× its median, with
+        // ~30 k cells cancelling the noise). Blending frames along noisy
+        // depth mixes blur diameters into a patchwork no frame contains, so:
+        // connected components of cells that hold no pixel confidence and
+        // no tier-2 vote — and are LIT (their darkest frame holds light;
+        // the same darkK scale tier S uses, inverted, so a dark cell whose
+        // energy leans to a stack edge stays with the spill floor and no
+        // cell is claimed by both tiers) — each get ONE depth: the argmax
+        // of the component's summed curve. Significance is the bump's
+        // height over the curve's own noise band, (max − median)/(p90 −
+        // median): a flat curve's max sits just past its p90 (≈1.3 at any
+        // component size), a genuine bump clears 2 (measured 2.5 on the
+        // diluted 68 k-cell foreground, 13.5 on its brightest arm), so the
+        // ramp spans regionalZLo…regionalZHi. Where nothing ever resolves,
+        // every frame is photometrically defensible — the wrong answers are
+        // the mixtures — so committing to the best-measured frame is the
+        // conservative choice, and the WGIF blend still reconciles the
+        // committed field with confident neighbours at the seams.
+        let noRegional = env["HYPERFOCAL_GUIDED_NO_REGIONAL"] != nil
+        if hasLum, planes.count > 2, options.peakConcentration > 0, !noRegional {
+            let n = planes.count
+            let darkK2 = darkK * darkK
+            var open = [Bool](repeating: false, count: gridCount)
+            var litPlane = [Float](repeating: 0, count: gridCount)
+            for i in 0..<gridCount {
+                let lo = max(lMaxPlane[i] - spanPlane[i], 0)
+                let lit = lo * lo / (lo * lo + darkK2)
+                litPlane[i] = lit
+                open[i] = cG[i] < Self.regionalConfCut
+                    && c2[i] < Self.regionalTier2Cut && lit > 0.5
+            }
+            let comps = Morphology.components(open: open, width: gw, height: gh)
+            if comps.count > 0 {
+                var curves = [Float](repeating: 0, count: comps.count * n)
+                comps.labels.withUnsafeBufferPointer { lb in
+                    curves.withUnsafeMutableBufferPointer { cv in
+                        for f in 0..<n {
+                            planes[f].withUnsafeBufferPointer { pp in
+                                for i in 0..<gridCount where lb[i] > 0 {
+                                    cv[(Int(lb[i]) - 1) * n + f] += pp[i]
+                                }
+                            }
+                        }
+                    }
+                }
+                var commitDepth = [Float](repeating: 0, count: comps.count)
+                var commitStrength = [Float](repeating: 0, count: comps.count)
+                for c in 0..<comps.count where comps.sizes[c] >= Self.regionalMinCells {
+                    var mx: Float = 0
+                    var am = 0
+                    for f in 0..<n {
+                        let v = curves[c * n + f]
+                        if v > mx { mx = v; am = f }
+                    }
+                    var sorted = Array(curves[(c * n)..<((c + 1) * n)])
+                    sorted.sort()
+                    let med = sorted[n / 2]
+                    let p90 = sorted[min(Int(Float(n) * 0.9), n - 1)]
+                    let band = p90 - med
+                    guard band > 0, mx > med else { continue }
+                    let z = (mx - med) / band
+                    let s = min(max((z - Self.regionalZLo)
+                                    / (Self.regionalZHi - Self.regionalZLo), 0), 1)
+                    if s > 0 {
+                        commitDepth[c] = Float(am)
+                        commitStrength[c] = s
+                    }
+                }
+                for i in 0..<gridCount {
+                    let l = Int(comps.labels[i])
+                    guard l > 0, commitStrength[l - 1] > 0 else { continue }
+                    d2[i] = commitDepth[l - 1]
+                    c2[i] = tier2Scale * commitStrength[l - 1] * litPlane[i]
+                }
+            }
+        }
+
+        if isStale?() == true { return nil }
+
+        // Debug taps (HYPERFOCAL_DUMP_* pattern): the tier-2 vote planes,
+        // and the raw grid-resolution per-frame planes — the latter let a
+        // diagnosis session replay every tier's arithmetic offline instead
+        // of re-running a 45 MP fuse per hypothesis.
+        DMapFusion.dumpPlane(d2, env: "HYPERFOCAL_DUMP_TIER2D")
+        DMapFusion.dumpPlane(c2, env: "HYPERFOCAL_DUMP_TIER2C")
+        DMapFusion.dumpPlane(cG, env: "HYPERFOCAL_DUMP_GRIDCONF")
+        DMapFusion.dumpPlane(cdG, env: "HYPERFOCAL_DUMP_GRIDCONFDEPTH")
+        DMapFusion.dumpPlane(planes.flatMap { $0 }, env: "HYPERFOCAL_DUMP_GRIDPLANES")
+        DMapFusion.dumpPlane(luminancePlanes.flatMap { $0 },
+                             env: "HYPERFOCAL_DUMP_GRIDLUM")
+
+        // No measurable signal anywhere: nothing to regularize toward.
+        var maxSignal: Float = 0
+        for i in 0..<gridCount { maxSignal = max(maxSignal, cG[i] + c2[i]) }
+        guard maxSignal >= minSignal else {
+            log?("guided regularizer: no confident signal — depth left unregularized")
+            return nil
+        }
+
+        // Tier S: spill floor. A signal-free pixel next to a subject shows
+        // nothing of its own — every photon it ever receives is defocus
+        // spill from the subject, which only ever *adds* light. The frame
+        // where the cell is darkest is therefore the least-contaminated one
+        // (the adjacent subject in focus), and that is the right depth to
+        // render — without it the prior interpolates toward the regional
+        // mean of subject depths, and those mid-stack frames carry the
+        // subject's glow straight into the background (the halo). Weighted
+        // by how much the cell's luminance swings across the stack (no
+        // swing → no spill → nothing to protect against) and masked by
+        // confidence, so cells with any real vote are untouched.
+        //
+        // The "spill only adds light" premise holds only where the cell is
+        // *empty* — nothing of its own to redistribute — and an empty cell
+        // is near-black in its least-contaminated frame. A defocused
+        // foreground that never reaches focus (a stack that starts past the
+        // nearest structure) also swings hard with frame — blur moves its
+        // own light across cell boundaries — but it stays bright in every
+        // frame, and its darkest frame is arbitrary: on such a stack the
+        // ungated pull scattered patches of far-frame depth through a
+        // region whose aggregate curves correctly voted the first frame,
+        // rendering a mix of blur diameters instead of one coherent
+        // defocus. `spillDarkFraction` gates the evidence on the darkest
+        // frame actually being dark (measured: empty-backdrop cells sit
+        // below 0.05 of the scene's bright end in linear light with p99
+        // ≈ 0.05, never-focused foreground at 0.10…0.45), which also stands
+        // the tier down on bright backdrops, where a defocused subject
+        // *subtracts* light and keep-darkest picks the most-contaminated
+        // frame.
+        let noSpill = env["HYPERFOCAL_GUIDED_NO_SPILL"] != nil
+        var wS = [Float](repeating: 0, count: gridCount)
+        var sS = [Float](repeating: 0, count: gridCount)  // 0…1 evidence strength
+        if hasLum, !noSpill {
+            let darkK2 = darkK * darkK
             sS.withUnsafeMutableBufferPointer { ssp in
                 wS.withUnsafeMutableBufferPointer { wp in
                     lMaxPlane.withUnsafeBufferPointer { mp in
@@ -245,7 +391,14 @@ public enum DepthRegularize {
                                         // keeps noise-only cells out.
                                         let rel = span / (mp[i] + 1e-6)
                                         let sig = span * span / (span * span + spanEps2)
-                                        ssp[i] = rel * sig * max(1 - min(cgp[i], 1), 0)
+                                        // Emptiness gate (see the tier comment):
+                                        // ≈ 1 where the darkest frame is near-black,
+                                        // → 0 where the cell holds its own light in
+                                        // every frame (never-focused foreground,
+                                        // bright backdrops).
+                                        let lo = max(mp[i] - span, 0)
+                                        let dark = darkK2 / (darkK2 + lo * lo)
+                                        ssp[i] = rel * sig * dark * max(1 - min(cgp[i], 1), 0)
                                         wp[i] = spillScale * ssp[i]
                                     }
                                 }
