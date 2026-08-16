@@ -1764,6 +1764,17 @@ public enum PyramidFusion {
         let threshold: Float
     }
 
+    /// Background-governance config for the GPU paths: which arms are live
+    /// and the textured arm's propagation radius. The GPU streaming loops
+    /// accumulate the cell/block energy tables (a per-frame cell-grid
+    /// reduction of the same grit-blurred level-0 energy the CPU pools) and
+    /// then run the SHARED `governBackground` as a post-pass on the
+    /// collapsed image — decision code identical across engines by
+    /// construction, only the table accumulation is per-engine.
+    struct GPUGovernance {
+        let radius: Int
+    }
+
     /// Selection configuration for the GPU paths, resolved from `Options` +
     /// env by `fuse` exactly once — the GPU paths receive it and never
     /// re-derive it (re-deriving per backend is how paths drift). `clamp`
@@ -1882,23 +1893,21 @@ public enum PyramidFusion {
         // -open-background arm stays experimental behind
         // Options.backgroundGovernanceRadius / HYPERFOCAL_PMAX_GOV_RADIUS
         // (same precedent as HYPERFOCAL_PMAX_NEARBLACK_OFF, so the dual-UI
-        // invariant isn't tripped before its ship-on decision). Governance
-        // is CPU-only for now — its cell/block energy tables exist only in
-        // the CPU streaming loop — so any live arm routes the fuse to the
-        // CPU engine, explicit --engine gpu included (the texturedBase
-        // precedent). The GPU-side table accumulation that lifts this is
-        // the immediate follow-up; until it lands the ci-gate's pmax
-        // cpu↔gpu comparison degenerates to same-engine.
+        // invariant isn't tripped before its ship-on decision). Every
+        // engine runs it: the GPU paths accumulate the cell/block tables in
+        // their streaming loops and call the shared `governBackground` as a
+        // post-pass, so the regional decision is one piece of code
+        // everywhere.
         let govRadius = Int(env["HYPERFOCAL_PMAX_GOV_RADIUS"] ?? "")
             ?? options.backgroundGovernanceRadius
         let litGov = focusGateEnabled && env["HYPERFOCAL_PMAX_LIT_OFF"] == nil
         let governance = (govRadius > 0 || litGov) && focusGateEnabled
         if governance {
             log?("pmax: background governance on (lit \(litGov ? "on" : "off"), "
-                 + "textured radius \(govRadius) cells) — CPU engine")
+                 + "textured radius \(govRadius) cells)")
         }
+        let gpuGovernance = governance ? GPUGovernance(radius: govRadius) : nil
         let preferGPU = preferGPU && !texBase && !smoothSq
-            && !governance
         let gpuSelect = GPUSelect(smoothed: smoothSel, burt: expand5,
                                   clamp: envClamp, veto: texVeto)
         #if canImport(Metal)
@@ -1911,6 +1920,7 @@ public enum PyramidFusion {
                                            decodeLookahead: decodeLookahead,
                                            focusGate: gpuFocusGate,
                                            select: gpuSelect,
+                                           governance: gpuGovernance,
                                            onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
                 log?("GPU pyramid failed (\(error)); falling back to CPU")
@@ -1927,6 +1937,7 @@ public enum PyramidFusion {
                                             decodeLookahead: decodeLookahead,
                                             focusGate: gpuFocusGate,
                                             select: gpuSelect,
+                                            governance: gpuGovernance,
                                             onSharpness: onSharpness, frame: frame)
             } catch let error as StackError {
                 log?("wgpu pyramid failed (\(error)); falling back to CPU")

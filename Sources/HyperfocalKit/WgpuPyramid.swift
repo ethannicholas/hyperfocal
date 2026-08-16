@@ -57,6 +57,7 @@ enum WgpuPyramid {
                      decodeLookahead: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
                      select selOpts: PyramidFusion.GPUSelect = .plain,
+                     governance: PyramidFusion.GPUGovernance? = nil,
                      onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = WgpuEngine.shared else {
@@ -65,6 +66,9 @@ enum WgpuPyramid {
         // The envelope discipline needs the focus gate's full-res planes,
         // exactly as on the CPU path.
         let envelope = selOpts.clamp && focusGate != nil
+        // Governance needs the focus gate's planes too, matching the CPU
+        // condition.
+        let governance = focusGate == nil ? nil : governance
         // Band computation and collapse switch expand operators TOGETHER
         // (see upsampleBurtAt) — both kernel names derive from one flag.
         let upsampleName = selOpts.burt ? "pyr_upsample_burt" : "pyr_upsample"
@@ -78,7 +82,8 @@ enum WgpuPyramid {
                      "pyr_band_energy", "pyr_add4", "pyr_scale4", "pyr_fill",
                      "blur_h", "blur_v"]
                     + (warp == nil ? [] : ["warp_lanczos3"])
-                    + (focusGate == nil && onSharpness == nil ? [] : ["box_downsample"])
+                    + (focusGate == nil && onSharpness == nil && governance == nil
+                       ? [] : ["box_downsample"])
                     + (focusGate == nil ? [] : [gatedSelectName,
                                                 "pyr_base_darkest", "pyr_merge_focus",
                                                 "pyr_lum_minmax", "pyr_focus_minmax",
@@ -169,8 +174,16 @@ enum WgpuPyramid {
         var sharpBufs: [WgpuEngine.Buffer] = []
         var sharpnessPlanes: [[Float]] = []
         var sharpGrid = (w: 0, h: 0)
+        // Governance tables — the Metal path's accumulation, wgpu download
+        // instead of a unified-memory pointer (~2.4 MB per 45 MP frame).
+        var govBufs: [WgpuEngine.Buffer] = []
+        var govGrid = (w: 0, h: 0)
+        var govBlock = (w: 0, h: 0, cells: 8)
+        var govCellMax: [Float] = []
+        var govCellMin: [Float] = []
+        var govBlockEnergy: [Float] = []
         var pending: (frame: Int, preview: WgpuEngine.Buffer?,
-                      sharp: WgpuEngine.Buffer?)? = nil
+                      sharp: WgpuEngine.Buffer?, gov: WgpuEngine.Buffer?)? = nil
         func drain() throws {
             guard let p = pending else { return }
             pending = nil
@@ -182,6 +195,22 @@ enum WgpuPyramid {
                                         byteCount: sharpGrid.w * sharpGrid.h * 4)
                 }
                 sharpnessPlanes.append(plane)
+            }
+            if let gov = p.gov {
+                var grid = [Float](repeating: 0, count: govGrid.w * govGrid.h)
+                try grid.withUnsafeMutableBufferPointer {
+                    try engine.download(gov, into: $0.baseAddress!,
+                                        byteCount: govGrid.w * govGrid.h * 4)
+                }
+                let fi = p.frame
+                for i in 0..<(govGrid.w * govGrid.h) {
+                    let e = grid[i]
+                    if e > govCellMax[i] { govCellMax[i] = e }
+                    if e < govCellMin[i] { govCellMin[i] = e }
+                    let b = (i / govGrid.w / govBlock.cells) * govBlock.w
+                        + (i % govGrid.w) / govBlock.cells
+                    govBlockEnergy[b * frameCount + fi] += e
+                }
             }
             if let progress {
                 var preview: ImageBuffer? = nil
@@ -246,6 +275,21 @@ enum WgpuPyramid {
                     sharpGrid = ((width + f - 1) / f, (height + f - 1) / f)
                     sharpBufs = [try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h),
                                  try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h)]
+                }
+                if governance != nil {
+                    let f = DMapFusion.sharpnessDownsample
+                    govGrid = ((width + f - 1) / f, (height + f - 1) / f)
+                    let bc = max(Int(ProcessInfo.processInfo
+                        .environment["HYPERFOCAL_PMAX_GOV_BLOCK"] ?? "") ?? 8, 1)
+                    govBlock = ((govGrid.w + bc - 1) / bc,
+                                (govGrid.h + bc - 1) / bc, bc)
+                    govBufs = [try engine.makeBuffer(floats: govGrid.w * govGrid.h),
+                               try engine.makeBuffer(floats: govGrid.w * govGrid.h)]
+                    govCellMax = [Float](repeating: -1, count: govGrid.w * govGrid.h)
+                    govCellMin = [Float](repeating: .infinity,
+                                         count: govGrid.w * govGrid.h)
+                    govBlockEnergy = [Float](repeating: 0,
+                                             count: govBlock.w * govBlock.h * frameCount)
                 }
                 gritB = try engine.makeBuffer(floats: width * height)
                 gritWeightsBuf = try engine.makeBuffer(floats: gritWeights.count)
@@ -538,8 +582,21 @@ enum WgpuPyramid {
                                    uniforms: bytes(of: box),
                                    gridW: sharpGrid.w, gridH: sharpGrid.h)
             }
+            var govBuf: WgpuEngine.Buffer? = nil
+            if governance != nil {
+                // Same reduction of the same buffer for the governance
+                // tables; drain() accumulates cell extrema and the
+                // block × frame table from it.
+                govBuf = govBufs[fi % 2]
+                let box = BoxDownParams(srcW: UInt32(width), srcH: UInt32(height),
+                                        dstW: UInt32(govGrid.w), dstH: UInt32(govGrid.h),
+                                        factor: UInt32(DMapFusion.sharpnessDownsample))
+                try batch.dispatch("box_downsample", buffers: [gritA, govBuf!],
+                                   uniforms: bytes(of: box),
+                                   gridW: govGrid.w, gridH: govGrid.h)
+            }
             batch.submit()
-            pending = (fi, previewBuf, sharpBuf)
+            pending = (fi, previewBuf, sharpBuf, govBuf)
             log?("pyramid \(fi + 1)/\(frameCount) (wgpu)")
         }
         try drain()
@@ -560,6 +617,8 @@ enum WgpuPyramid {
         var fmaxArr: [Float] = []
         var fminArr: [Float] = []
         var envMaxArr: [Float] = []
+        var lumMinArr: [Float] = []
+        var lumMaxArr: [Float] = []
         if focusGate != nil {
             // Near-black membership from the level-0 min luminance, built by the
             // SHARED CPU helper so this merge and the CPU one cannot drift.
@@ -581,6 +640,8 @@ enum WgpuPyramid {
             }
             fmaxArr = fmax
             fminArr = fmin
+            lumMinArr = lm
+            lumMaxArr = lx
             var veto: [Float]? = nil
             if envelope {
                 let cells = envGrid.gw * envGrid.gh
@@ -673,6 +734,21 @@ enum WgpuPyramid {
                                              burtExpand: selOpts.burt,
                                              env: ProcessInfo.processInfo.environment,
                                              log: log)
+        }
+        if let governance {
+            // The shared governance post-pass — see the Metal path's note.
+            let ws = PyramidFusion.CPUWorkspace(width: width, height: height,
+                                                levels: 1)
+            ws.burtExpand = selOpts.burt
+            try PyramidFusion.governBackground(
+                ws: ws, out: &out, frameCount: frameCount,
+                lumMin0: lumMinArr, lumMax0: lumMaxArr,
+                focusMax0: fmaxArr, focusMin0: fminArr,
+                cellMax: govCellMax, cellMin: govCellMin,
+                blockEnergy: govBlockEnergy, blockCells: govBlock.cells,
+                radius: governance.radius, warp: warp,
+                env: ProcessInfo.processInfo.environment,
+                log: log, cancellation: cancellation, frame: frame)
         }
         return out
     }

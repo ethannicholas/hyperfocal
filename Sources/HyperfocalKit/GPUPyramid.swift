@@ -36,6 +36,7 @@ enum GPUPyramid {
                      decodeLookahead: Int? = nil,
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
                      select selOpts: PyramidFusion.GPUSelect = .plain,
+                     governance: PyramidFusion.GPUGovernance? = nil,
                      onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = MetalEngine.shared else {
@@ -44,11 +45,14 @@ enum GPUPyramid {
         // The envelope discipline needs the focus gate's full-res planes,
         // exactly as on the CPU path.
         let envelope = selOpts.clamp && focusGate != nil
+        // Governance (both arms) needs the focus gate's planes too; without
+        // the gate there is nothing to govern, matching the CPU condition.
+        let governance = focusGate == nil ? nil : governance
         let warpPipeline = warp == nil ? nil : try engine.pipeline("warp_lanczos3")
         // Focus-gate kernels: box_downsample builds the per-level focus map,
         // the two-track select replaces pyr_select, darkest-base replaces
         // pyr_add4, and the merge folds track B in after the last frame.
-        let boxDownsample = (focusGate == nil && onSharpness == nil)
+        let boxDownsample = (focusGate == nil && onSharpness == nil && governance == nil)
             ? nil : try engine.pipeline("box_downsample")
         let selectFocusGated = focusGate == nil ? nil
             : try engine.pipeline(selOpts.smoothed
@@ -161,8 +165,20 @@ enum GPUPyramid {
         var sharpBufs: [MTLBuffer] = []
         var sharpnessPlanes: [[Float]] = []
         var sharpGrid = (w: 0, h: 0)
+        // Governance tables, accumulated CPU-side from a per-frame cell-grid
+        // reduction of gritA (the same grit-blurred level-0 energy the CPU
+        // loop pools) — read back through the drain ping-pong like the
+        // sharpness planes; ~2.4 MB per 45 MP frame, a pointer on unified
+        // memory. Mirrors the CPU accumulation exactly: per-frame min/max
+        // and block sums are order-independent, so parity is arithmetic.
+        var govBufs: [MTLBuffer] = []
+        var govGrid = (w: 0, h: 0)
+        var govBlock = (w: 0, h: 0, cells: 8)
+        var govCellMax: [Float] = []
+        var govCellMin: [Float] = []
+        var govBlockEnergy: [Float] = []
         var pending: (cmd: MTLCommandBuffer, frame: Int, preview: MTLBuffer?,
-                      sharp: MTLBuffer?)? = nil
+                      sharp: MTLBuffer?, gov: MTLBuffer?)? = nil
         func drain() {
             guard let p = pending else { return }
             pending = nil
@@ -176,6 +192,20 @@ enum GPUPyramid {
                                sharpGrid.w * sharpGrid.h * 4)
                 }
                 sharpnessPlanes.append(plane)
+            }
+            if let gov = p.gov {
+                let grid = UnsafeBufferPointer(
+                    start: gov.contents().assumingMemoryBound(to: Float.self),
+                    count: govGrid.w * govGrid.h)
+                let fi = p.frame
+                for i in 0..<(govGrid.w * govGrid.h) {
+                    let e = grid[i]
+                    if e > govCellMax[i] { govCellMax[i] = e }
+                    if e < govCellMin[i] { govCellMin[i] = e }
+                    let b = (i / govGrid.w / govBlock.cells) * govBlock.w
+                        + (i % govGrid.w) / govBlock.cells
+                    govBlockEnergy[b * frameCount + fi] += e
+                }
             }
             if let progress, let buf = p.preview {
                 var preview: ImageBuffer! = nil
@@ -242,6 +272,21 @@ enum GPUPyramid {
                     sharpGrid = ((width + f - 1) / f, (height + f - 1) / f)
                     sharpBufs = [try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h),
                                  try engine.makeBuffer(floats: sharpGrid.w * sharpGrid.h)]
+                }
+                if governance != nil {
+                    let f = DMapFusion.sharpnessDownsample
+                    govGrid = ((width + f - 1) / f, (height + f - 1) / f)
+                    let bc = max(Int(ProcessInfo.processInfo
+                        .environment["HYPERFOCAL_PMAX_GOV_BLOCK"] ?? "") ?? 8, 1)
+                    govBlock = ((govGrid.w + bc - 1) / bc,
+                                (govGrid.h + bc - 1) / bc, bc)
+                    govBufs = [try engine.makeBuffer(floats: govGrid.w * govGrid.h),
+                               try engine.makeBuffer(floats: govGrid.w * govGrid.h)]
+                    govCellMax = [Float](repeating: -1, count: govGrid.w * govGrid.h)
+                    govCellMin = [Float](repeating: .infinity,
+                                         count: govGrid.w * govGrid.h)
+                    govBlockEnergy = [Float](repeating: 0,
+                                             count: govBlock.w * govBlock.h * frameCount)
                 }
                 baseTmp = try engine.makeBuffer(halves: sizes[levels].w * sizes[levels].h * 4)
                 previewLevel = sizes.firstIndex { max($0.w, $0.h) <= 1600 } ?? levels
@@ -606,6 +651,21 @@ enum GPUPyramid {
                 enc.setBytes(&box, length: MemoryLayout<GPUDMap.BoxDownParams>.size, index: 2)
                 engine.dispatch2D(enc, boxDownsample!, width: sharpGrid.w, height: sharpGrid.h)
             }
+            var govBuf: MTLBuffer? = nil
+            if governance != nil {
+                // Same reduction of the same buffer for the governance
+                // tables; drain() accumulates cell extrema and the
+                // block × frame energy table from it.
+                govBuf = govBufs[fi % 2]
+                var box = GPUDMap.BoxDownParams(
+                    srcW: UInt32(width), srcH: UInt32(height),
+                    dstW: UInt32(govGrid.w), dstH: UInt32(govGrid.h),
+                    factor: UInt32(DMapFusion.sharpnessDownsample))
+                enc.setBuffer(gritA, offset: 0, index: 0)
+                enc.setBuffer(govBuf!, offset: 0, index: 1)
+                enc.setBytes(&box, length: MemoryLayout<GPUDMap.BoxDownParams>.size, index: 2)
+                engine.dispatch2D(enc, boxDownsample!, width: govGrid.w, height: govGrid.h)
+            }
             enc.endEncoding()
             var previewBuf: MTLBuffer? = nil
             if progress != nil {
@@ -625,7 +685,7 @@ enum GPUPyramid {
                 }
             }
             cmd.commit()
-            pending = (cmd, fi, previewBuf, sharpBuf)
+            pending = (cmd, fi, previewBuf, sharpBuf, govBuf)
             log?("pyramid \(fi + 1)/\(frameCount) (GPU)")
         }
         drain()
@@ -647,6 +707,8 @@ enum GPUPyramid {
         var fmaxArr: [Float] = []
         var fminArr: [Float] = []
         var envMaxArr: [Float] = []
+        var lumMinArr: [Float] = []
+        var lumMaxArr: [Float] = []
         if focusGate != nil {
             guard let cmd = engine.queue.makeCommandBuffer(),
                   let enc = cmd.makeComputeCommandEncoder() else {
@@ -672,6 +734,8 @@ enum GPUPyramid {
                                            count: width * height)
             fmaxArr = Array(fmax)
             fminArr = Array(fmin)
+            lumMinArr = Array(lm)
+            lumMaxArr = Array(lx)
             var veto: [Float]? = nil
             if envelope {
                 let cells = envGrid.gw * envGrid.gh
@@ -689,8 +753,8 @@ enum GPUPyramid {
                     if veto != nil { log?("pmax: near-black texture veto engaged (GPU)") }
                 }
             }
-            let gate = PyramidFusion.debloomMasks(lumMin0: Array(lm),
-                                                  lumMax0: Array(lx),
+            let gate = PyramidFusion.debloomMasks(lumMin0: lumMinArr,
+                                                  lumMax0: lumMaxArr,
                                                   focusMax0: fmaxArr,
                                                   focusMin0: fminArr,
                                                   frameCount: frameCount,
@@ -758,6 +822,25 @@ enum GPUPyramid {
                                              burtExpand: selOpts.burt,
                                              env: ProcessInfo.processInfo.environment,
                                              log: log)
+        }
+        if let governance {
+            // The shared governance post-pass (see PyramidFusion.
+            // governBackground): decisions from the tables this loop
+            // accumulated, second-pass decode + composite on a minimal CPU
+            // workspace — one level is all installFrame/level0BandEnergy
+            // need. Runs after the clamp exactly as the CPU path does.
+            let ws = PyramidFusion.CPUWorkspace(width: width, height: height,
+                                                levels: 1)
+            ws.burtExpand = selOpts.burt
+            try PyramidFusion.governBackground(
+                ws: ws, out: &out, frameCount: frameCount,
+                lumMin0: lumMinArr, lumMax0: lumMaxArr,
+                focusMax0: fmaxArr, focusMin0: fminArr,
+                cellMax: govCellMax, cellMin: govCellMin,
+                blockEnergy: govBlockEnergy, blockCells: govBlock.cells,
+                radius: governance.radius, warp: warp,
+                env: ProcessInfo.processInfo.environment,
+                log: log, cancellation: cancellation, frame: frame)
         }
         return out
     }
