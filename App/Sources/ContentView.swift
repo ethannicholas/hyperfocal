@@ -1405,6 +1405,31 @@ struct PreviewPane<Header: View>: View {
 class ToneFilteredPaneView: NSView {
     private var appliedTone = ToneSettings()
 
+    /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
+    /// re-invoked when only the viewport changes. `$offset`/`$mode` emit the
+    /// incoming value during willSet, so invalidating here joins the same
+    /// CA transaction as the SwiftUI panes' position update and the panes
+    /// move in lockstep. (Observing objectWillChange + a main-queue hop —
+    /// needed because that publisher fires before the value lands — redrew
+    /// a runloop pass later, and this pane visibly trailed its SwiftUI
+    /// sibling during fast pans.)
+    var viewport: ViewportState? {
+        didSet {
+            guard viewport !== oldValue else { return }
+            guard let viewport else {
+                viewportSubscription = nil
+                return
+            }
+            // removeDuplicates keeps clamped-at-the-edge pans (same offset
+            // reassigned per scroll event) from forcing full repaints.
+            viewportSubscription = viewport.$offset.removeDuplicates()
+                .map { _ in () }
+                .merge(with: viewport.$mode.removeDuplicates().map { _ in () })
+                .sink { [weak self] in self?.needsDisplay = true }
+        }
+    }
+    private var viewportSubscription: AnyCancellable?
+
     func applyTone(_ tone: ToneSettings) {
         guard tone != appliedTone else { return }
         appliedTone = tone
@@ -1434,17 +1459,6 @@ class ToneFilteredPaneView: NSView {
 /// it. Mirrors the plain Image branch's position math exactly: a toned pane
 /// must not shift by a pixel relative to a neutral one.
 final class TonedImagePaneNSView: ToneFilteredPaneView {
-    /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
-    /// re-invoked when only the viewport changes (same as RetouchCanvas).
-    var viewport: ViewportState? {
-        didSet {
-            guard viewport !== oldValue else { return }
-            viewportSubscription = viewport?.objectWillChange.sink { [weak self] _ in
-                // objectWillChange fires before the value lands; read it after.
-                DispatchQueue.main.async { self?.viewportDidUpdate() }
-            }
-        }
-    }
     var image: CGImage? {
         didSet {
             guard image !== oldValue else { return }
@@ -1468,7 +1482,10 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
     var sourceAngle: Double = 0 {
         didSet { if sourceAngle != oldValue { needsDisplay = true } }
     }
-    private var viewportSubscription: AnyCancellable?
+    /// The state the last draw actually rendered — viewportDidUpdate compares
+    /// against it so SwiftUI-driven update passes (e.g. cursor moves) don't
+    /// force repaints when the viewport hasn't moved. The base class's
+    /// subscription invalidates on real viewport changes.
     private var lastScale: CGFloat = -1
     private var lastOffset: CGSize = .zero
     /// Retouch shows a second full-res pane (the brush source) alongside the
@@ -1487,8 +1504,6 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
         guard let viewport, nominalSize != .zero else { return }
         let scale = viewport.effectiveScale(imageSize: nominalSize, viewSize: bounds.size)
         if scale != lastScale || viewport.offset != lastOffset {
-            lastScale = scale
-            lastOffset = viewport.offset
             needsDisplay = true
         }
     }
@@ -1499,6 +1514,8 @@ final class TonedImagePaneNSView: ToneFilteredPaneView {
         ctx.fill(dirtyRect)
         guard let cg = image, let viewport, nominalSize != .zero else { return }
         let scale = viewport.effectiveScale(imageSize: nominalSize, viewSize: bounds.size)
+        lastScale = scale
+        lastOffset = viewport.offset
         let canvas = sourceCanvas == .zero ? nominalSize : sourceCanvas
         // originX/Y = view position of the bitmap canvas's pixel (0, 0) in
         // the displayed (possibly cropped) coordinate space.
@@ -1938,6 +1955,152 @@ final class RetouchEventView: PanZoomEventView {
 /// only the view rect they touched, and drawing samples the live byte buffer
 /// through a zero-copy CGImage. No per-frame NSImage rebuilds, no full-texture
 /// re-uploads — this is what makes 45 MP painting smooth.
+/// Successively halved renditions of a retouch canvas display plane.
+///
+/// Panning the canvas redraws the whole visible region from the session's
+/// full-resolution byte plane, and zoomed out that resamples every source
+/// pixel on the main thread per scroll tick (~45 MP at fit — the pan
+/// framerate collapse). The chain bounds a draw's read to at most 4× the
+/// pane's backing pixels: draws pick the deepest level still at or above the
+/// display's sampling rate, and strokes keep the levels current by cascading
+/// just their dirty rect down the chain (each level re-renders from the one
+/// above, so the box filtering accumulates instead of skipping octaves).
+/// Levels stop once a halving reaches 2048 px on its long side; canvases
+/// already that small never build a chain and draw from the full plane.
+final class PaneMipCache {
+    enum Plane {
+        case rgba   // premultiplied RGBA in the working color space
+        case gray   // 8-bit grayscale (the depth visualization)
+    }
+
+    private final class Level {
+        let width: Int
+        let height: Int
+        private let bytesPerRow: Int
+        private let bytesPerPixel: Int
+        private let data: UnsafeMutableRawPointer
+        let ctx: CGContext
+        private let colorSpace: CGColorSpace
+        private let bitmapInfo: CGBitmapInfo
+        /// Wrapper over the live level bytes: recreated after each write so
+        /// CoreGraphics never serves a cached rendition of stale bytes, and
+        /// stable across pans so it may serve a cached one of current bytes.
+        private var wrapper: CGImage?
+
+        init?(width: Int, height: Int, plane: Plane) {
+            self.width = width
+            self.height = height
+            switch plane {
+            case .rgba:
+                bytesPerPixel = 4
+                colorSpace = ImageFile.workingSpace
+                bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+            case .gray:
+                bytesPerPixel = 1
+                colorSpace = CGColorSpaceCreateDeviceGray()
+                bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue)
+            }
+            bytesPerRow = (width * bytesPerPixel + 15) & ~15
+            let size = bytesPerRow * height
+            data = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
+            memset(data, 0, size)
+            guard let ctx = CGContext(data: data, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+                                      space: colorSpace, bitmapInfo: bitmapInfo.rawValue) else {
+                data.deallocate()
+                return nil
+            }
+            ctx.interpolationQuality = .low
+            self.ctx = ctx
+        }
+
+        deinit { data.deallocate() }
+
+        func markDirty() { wrapper = nil }
+
+        func image() -> CGImage? {
+            if wrapper == nil {
+                guard let provider = CGDataProvider(dataInfo: nil, data: data,
+                                                    size: bytesPerRow * height,
+                                                    releaseData: { _, _, _ in }) else {
+                    return nil
+                }
+                wrapper = CGImage(width: width, height: height, bitsPerComponent: 8,
+                                  bitsPerPixel: bytesPerPixel * 8, bytesPerRow: bytesPerRow,
+                                  space: colorSpace, bitmapInfo: bitmapInfo,
+                                  provider: provider, decode: nil, shouldInterpolate: true,
+                                  intent: .defaultIntent)
+            }
+            return wrapper
+        }
+    }
+
+    private let fullWidth: Int
+    private let fullHeight: Int
+    private let levels: [Level]
+    /// False until the first draw that wants a level triggers the full
+    /// build — sessions that are only ever viewed zoomed in never pay it.
+    private(set) var isPopulated = false
+
+    init?(width: Int, height: Int, plane: Plane) {
+        fullWidth = width
+        fullHeight = height
+        var built: [Level] = []
+        var w = width, h = height
+        while max(w, h) > 2048 {
+            w = (w + 1) / 2
+            h = (h + 1) / 2
+            guard let level = Level(width: w, height: h, plane: plane) else { break }
+            built.append(level)
+        }
+        guard !built.isEmpty else { return nil }
+        levels = built
+    }
+
+    /// The deepest level still at or above the display's sampling rate
+    /// (`targetScale` = backing pixels per image pixel), building the chain
+    /// from `full` on first use. nil → draw the full-resolution plane.
+    func image(forScale targetScale: CGFloat, from full: CGImage) -> CGImage? {
+        guard let level = levels.last(where: {
+            CGFloat($0.width) >= targetScale * CGFloat(fullWidth)
+        }) else { return nil }
+        if !isPopulated {
+            PerfLog.span("canvas: populate mips \(fullWidth)×\(fullHeight)") {
+                update(rect: CGRect(x: 0, y: 0, width: fullWidth, height: fullHeight),
+                       from: full)
+            }
+            isPopulated = true
+        }
+        return level.image()
+    }
+
+    /// Re-render `rect` (full-plane pixel coordinates, top-left origin) down
+    /// the chain.
+    func update(rect: CGRect, from full: CGImage) {
+        var source: CGImage? = full
+        for level in levels {
+            guard let src = source else { return }
+            let sx = CGFloat(level.width) / CGFloat(fullWidth)
+            let sy = CGFloat(level.height) / CGFloat(fullHeight)
+            // Inset covers the bilinear taps' halo accumulating per level.
+            let dest = CGRect(x: rect.minX * sx, y: rect.minY * sy,
+                              width: rect.width * sx, height: rect.height * sy)
+                .insetBy(dx: -2, dy: -2)
+                .intersection(CGRect(x: 0, y: 0, width: level.width, height: level.height))
+            guard !dest.isEmpty else { return }
+            let ctx = level.ctx
+            ctx.saveGState()
+            // Bitmap contexts are bottom-up; the dirty rect is top-down.
+            ctx.clip(to: CGRect(x: dest.minX, y: CGFloat(level.height) - dest.maxY,
+                                width: dest.width, height: dest.height))
+            ctx.draw(src, in: CGRect(x: 0, y: 0, width: level.width, height: level.height))
+            ctx.restoreGState()
+            level.markDirty()
+            source = level.image()
+        }
+    }
+}
+
 final class RetouchCanvasNSView: ToneFilteredPaneView {
     weak var session: RetouchSession?
     /// Depth view: draw the session's live depth visualization instead of
@@ -1964,18 +2127,14 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
     private var displaySize: CGSize {
         cropRect?.size ?? session?.nominalSize ?? .zero
     }
-    /// Observed directly via Combine — SwiftUI's updateNSView isn't reliably
-    /// re-invoked through the AnyView wrapping when only the viewport changes.
-    var viewport: ViewportState? {
-        didSet {
-            guard viewport !== oldValue else { return }
-            viewportSubscription = viewport?.objectWillChange.sink { [weak self] _ in
-                // objectWillChange fires before the value lands; read it after.
-                DispatchQueue.main.async { self?.viewportDidUpdate() }
-            }
-        }
-    }
-    private var viewportSubscription: AnyCancellable?
+    /// Downsampled renditions of the two display planes (see PaneMipCache);
+    /// nil for canvases small enough to draw from the full plane every tick.
+    private var colorMips: PaneMipCache?
+    private var depthMips: PaneMipCache?
+    /// The state the last draw actually rendered — viewportDidUpdate compares
+    /// against it so SwiftUI-driven update passes (cursor moves re-evaluate
+    /// the body) don't repaint the canvas when the viewport hasn't moved.
+    /// The base class's subscription invalidates on real viewport changes.
     private var lastScale: CGFloat = -1
     private var lastOffset: CGSize = .zero
     /// The Start Retouching latency measurement ends at the first completed
@@ -1995,10 +2154,31 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
     func attach(session: RetouchSession) {
         guard self.session !== session else { return }
         self.session = session
+        colorMips = PaneMipCache(width: session.width, height: session.height,
+                                 plane: .rgba)
+        depthMips = PaneMipCache(width: session.width, height: session.height,
+                                 plane: .gray)
         session.onDisplayDirty = { [weak self] imageRect in
+            self?.updateMips(imageRect)
             self?.invalidate(imageRect: imageRect)
         }
         needsDisplay = true
+    }
+
+    /// Keep populated mip chains current with the session's display planes;
+    /// an unpopulated chain rebuilds wholesale on its next use instead.
+    private func updateMips(_ imageRect: CGRect) {
+        guard let session else { return }
+        if let colorMips, colorMips.isPopulated {
+            session.withDisplayCGImage { cg in
+                if let cg { colorMips.update(rect: imageRect, from: cg) }
+            }
+        }
+        if let depthMips, depthMips.isPopulated {
+            session.withDepthDisplayCGImage { cg in
+                if let cg { depthMips.update(rect: imageRect, from: cg) }
+            }
+        }
     }
 
     /// Redraw fully only when the viewport actually moved (cursor-move renders
@@ -2007,8 +2187,6 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
         guard session != nil, let viewport else { return }
         let scale = viewport.effectiveScale(imageSize: displaySize, viewSize: bounds.size)
         if scale != lastScale || viewport.offset != lastOffset {
-            lastScale = scale
-            lastOffset = viewport.offset
             needsDisplay = true
         }
     }
@@ -2054,6 +2232,8 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
         let imageSize = session.nominalSize
         let display = displaySize
         let scale = viewport.effectiveScale(imageSize: display, viewSize: bounds.size)
+        lastScale = scale
+        lastOffset = viewport.offset
         // View position of the bitmap's pixel (0,0) in the displayed
         // (possibly cropped) coordinate space — same math as
         // TonedImagePaneNSView so the panes never drift apart.
@@ -2061,12 +2241,21 @@ final class RetouchCanvasNSView: ToneFilteredPaneView {
             - (viewport.offset.width + display.width / 2 + (cropRect?.minX ?? 0)) * scale
         let originY = bounds.height / 2
             - (viewport.offset.height + display.height / 2 + (cropRect?.minY ?? 0)) * scale
-        ctx.interpolationQuality = scale >= 2 ? .none : .low
+        let backing = window?.backingScaleFactor ?? 2
+        let mips = showDepth ? depthMips : colorMips
         let drawImage: ((CGImage?) -> Void) -> Void = self.showDepth
             ? session.withDepthDisplayCGImage
             : session.withDisplayCGImage
-        drawImage { cg in
-            guard let cg else { return }
+        drawImage { full in
+            guard let full else { return }
+            // Zoomed out, drawing from the full plane resamples every source
+            // pixel per pan tick (~45 MP at fit); the mip chain bounds the
+            // read to ≤ 4× the pane's backing pixels.
+            let cg = mips?.image(forScale: scale * backing, from: full) ?? full
+            // Bitmap pixels per point pick sharp-vs-smooth, exactly as in
+            // TonedImagePaneNSView (a mip is below full resolution).
+            ctx.interpolationQuality =
+                CGFloat(cg.width) * scale / max(imageSize.width, 1) >= 2 ? .none : .low
             ctx.saveGState()
             if cropRect != nil {
                 // Clip to the displayed crop region: the bitmap extends past
