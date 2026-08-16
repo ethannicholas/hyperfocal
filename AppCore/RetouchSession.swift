@@ -901,7 +901,6 @@ public final class RetouchSession: ObservableObject {
 
         snapshotTiles(x0: x0, y0: y0, x1: x1, y1: y1)
 
-        let w = width
         // The stroke's depth: a frame paints its own index (that IS the depth
         // of the pixels being copied); the base result is the eraser and paints
         // the session-start depth back; the OTHER algorithm's result — whose
@@ -910,98 +909,30 @@ public final class RetouchSession: ObservableObject {
         let paintsDepth = !isAlgorithmSource || isBaseSource
         let eraseDepth = isBaseSource
         let frameDepth = Float(min(sourceIndex, urls.count - 1))
-        let dScale = depthDisplayScale
+        // The pixel loop is RetouchPaint's (the Kit is -O in every
+        // configuration; this loop at the model layer's Debug -Onone ran
+        // ~30x slower and coalesced drag events into polygon strokes).
         working.pixels.withUnsafeMutableBufferPointer { dst in
             src.pixels.withUnsafeBufferPointer { s in
                 displayPixels.withUnsafeMutableBufferPointer { bytes in
                     workingDepth.withUnsafeMutableBufferPointer { wd in
                         originalDepth.withUnsafeBufferPointer { od in
                             depthDisplayPixels.withUnsafeMutableBufferPointer { dbytes in
-                    let innerSq = inner * inner
-                    let count = w * self.height
-                    // Pixels are f16 storage: rebind to SIMD4<Float16> (one
-                    // 8-byte RGBA vector), widen per pixel for the blend, and
-                    // narrow on store. Rebinding to SIMD4<Float> here would
-                    // read twice the bytes the buffer holds.
-                    dst.baseAddress!.withMemoryRebound(to: SIMD4<Float16>.self, capacity: count) { dstV in
-                    s.baseAddress!.withMemoryRebound(to: SIMD4<Float16>.self, capacity: count) { srcV in
-                    bytes.baseAddress!.withMemoryRebound(to: SIMD4<UInt8>.self, capacity: count) { bytesV in
-                    let dstBox = UncheckedSendable(dstV)
-                    let srcBox = UncheckedSendable(srcV)
-                    let bytesBox = UncheckedSendable(bytesV)
-                    let wdBox = UncheckedSendable(wd)
-                    let odBox = UncheckedSendable(od)
-                    let dbytesBox = UncheckedSendable(dbytes)
-                    let paintRow: @Sendable (Int) -> Void = { y in
-                        let dstV = dstBox.value, srcV = srcBox.value
-                        let bytesV = bytesBox.value
-                        let wd = wdBox.value, od = odBox.value, dbytes = dbytesBox.value
-                        let dy = Double(y) - center.y
-                        let dySq = dy * dy
-                        guard dySq <= r * r else { return }
-                        // Row extent from the circle equation: the loop never
-                        // visits the bounding square's corners, and pixels in
-                        // the hard core skip the square root entirely.
-                        let chord = (r * r - dySq).squareRoot()
-                        let xLo = max(x0, Int((center.x - chord).rounded(.up)))
-                        let xHi = min(x1, Int((center.x + chord).rounded(.down)))
-                        guard xLo <= xHi else { return }
-                        for x in xLo...xHi {
-                            let dx = Double(x) - center.x
-                            let dSq = dx * dx + dySq
-                            let t: Double
-                            if dSq <= innerSq || r <= inner {
-                                t = 1
-                            } else {
-                                let d = dSq.squareRoot()
-                                t = min(max((r - d) / (r - inner), 0), 1)
-                            }
-                            let pi = y * w + x
-                            // Respect source coverage: alpha 0 means the aligned
-                            // frame has no data here (warp out-of-bounds) — never
-                            // paint smear colors from past its edge.
-                            let sh = srcV[pi]
-                            let sv = SIMD4<Float>(Float(sh.x), Float(sh.y),
-                                                  Float(sh.z), Float(sh.w))
-                            let alpha = Float(t * t * (3 - 2 * t)) * sv.w
-                            guard alpha > 0.003 else { continue }
-                            let dh = dstV[pi]
-                            let dv = SIMD4<Float>(Float(dh.x), Float(dh.y),
-                                                  Float(dh.z), Float(dh.w))
-                            // Same arithmetic as the scalar path had
-                            // (d·(1−α) + s·α), one vector op per pixel.
-                            var out = dv * (1 - alpha) + sv * alpha
-                            out.w = 1
-                            dstV[pi] = SIMD4<Float16>(out)
-                            // hfMin/hfMax: the stdlib generic stays witness-
-                            // dispatched at -O on the Mac toolchain (see
-                            // PortableSIMD's contract).
-                            let scaled = hfMin(hfMax(out, .zero), .one)
-                                * 255 + SIMD4<Float>(repeating: 0.5)
-                            bytesV[pi] = SIMD4<UInt8>(scaled)
-                            if paintsDepth {
-                                let target = eraseDepth ? od[pi] : frameDepth
-                                let v = wd[pi] * (1 - alpha) + target * alpha
-                                wd[pi] = v
-                                let g = 1 - v * dScale
-                                dbytes[pi] = UInt8(min(max(g, 0), 1) * 255 + 0.5)
-                            }
-                        }
-                    }
-                    // Rows write disjoint memory in every buffer — safe to
-                    // fan out (the convertToBytes structural argument). Small
-                    // brushes stay serial; the dispatch overhead would win.
-                    let rows = y1 - y0 + 1
-                    if rows >= 128 {
-                        DispatchQueue.concurrentPerform(iterations: rows) { i in
-                            paintRow(y0 + i)
-                        }
-                    } else {
-                        for y in y0...y1 { paintRow(y) }
-                    }
-                    }
-                    }
-                    }
+                                RetouchPaint.stamp(
+                                    working: dst.baseAddress!,
+                                    source: s.baseAddress!,
+                                    display: bytes.baseAddress!,
+                                    workingDepth: wd.baseAddress!,
+                                    originalDepth: od.baseAddress!,
+                                    depthDisplay: dbytes.baseAddress!,
+                                    width: width,
+                                    centerX: center.x, centerY: center.y,
+                                    radius: r, inner: inner,
+                                    x0: x0, y0: y0, x1: x1, y1: y1,
+                                    paintsDepth: paintsDepth,
+                                    eraseDepth: eraseDepth,
+                                    frameDepth: frameDepth,
+                                    depthDisplayScale: depthDisplayScale)
                             }
                         }
                     }
@@ -1062,33 +993,23 @@ public final class RetouchSession: ObservableObject {
     private func restoreTile(_ tileIndex: Int, snapshot: TileSnapshot) {
         let tx = tileIndex % tilesAcross, ty = tileIndex / tilesAcross
         let r = tileRect(tx: tx, ty: ty)
-        let dScale = depthDisplayScale
         working.pixels.withUnsafeMutableBufferPointer { dst in
             displayPixels.withUnsafeMutableBufferPointer { bytes in
-                snapshot.pixels.withUnsafeBufferPointer { src in
-                    for row in 0..<r.h {
-                        let dstStart = ((r.y0 + row) * width + r.x0) * 4
-                        let srcStart = row * r.w * 4
-                        for i in 0..<(r.w * 4) {
-                            let v = src[srcStart + i]
-                            dst[dstStart + i] = v
-                            bytes[dstStart + i] = UInt8(min(max(Float(v), 0), 1) * 255 + 0.5)
-                        }
-                    }
-                }
-            }
-        }
-        workingDepth.withUnsafeMutableBufferPointer { dst in
-            depthDisplayPixels.withUnsafeMutableBufferPointer { bytes in
-                snapshot.depth.withUnsafeBufferPointer { src in
-                    for row in 0..<r.h {
-                        let dstStart = (r.y0 + row) * width + r.x0
-                        let srcStart = row * r.w
-                        for i in 0..<r.w {
-                            let v = src[srcStart + i]
-                            dst[dstStart + i] = v
-                            let g = 1 - v * dScale
-                            bytes[dstStart + i] = UInt8(min(max(g, 0), 1) * 255 + 0.5)
+                workingDepth.withUnsafeMutableBufferPointer { wd in
+                    depthDisplayPixels.withUnsafeMutableBufferPointer { dbytes in
+                        snapshot.pixels.withUnsafeBufferPointer { src in
+                            snapshot.depth.withUnsafeBufferPointer { srcD in
+                                RetouchPaint.restoreTile(
+                                    pixels: src.baseAddress!,
+                                    depth: srcD.baseAddress!,
+                                    working: dst.baseAddress!,
+                                    display: bytes.baseAddress!,
+                                    workingDepth: wd.baseAddress!,
+                                    depthDisplay: dbytes.baseAddress!,
+                                    width: width, x0: r.x0, y0: r.y0,
+                                    w: r.w, h: r.h,
+                                    depthDisplayScale: depthDisplayScale)
+                            }
                         }
                     }
                 }
@@ -1099,31 +1020,21 @@ public final class RetouchSession: ObservableObject {
     }
 
     // MARK: - Display conversion
-
-    /// Wrapper for pointer captures in concurrentPerform's @Sendable closure.
-    /// Safety is structural: each iteration writes a disjoint row, and the
-    /// pointers outlive the (synchronous) call.
-    private struct UncheckedSendable<T>: @unchecked Sendable {
-        let value: T
-        init(_ value: T) { self.value = value }
-    }
+    //
+    // The per-pixel loops are RetouchPaint's (Kit, -O in every
+    // configuration); these wrappers keep the session's array/CGRect
+    // surface.
 
     nonisolated private static func convertToBytes(from buffer: ImageBuffer,
                                                    into bytes: inout [UInt8], rect: CGRect) {
-        let w = buffer.width
         let x0 = Int(rect.minX), y0 = Int(rect.minY)
         let x1 = min(buffer.width, Int(rect.maxX)), y1 = min(buffer.height, Int(rect.maxY))
+        let w = buffer.width
         buffer.pixels.withUnsafeBufferPointer { src in
             bytes.withUnsafeMutableBufferPointer { dst in
-                let srcBox = UncheckedSendable(src)
-                let dstBox = UncheckedSendable(dst)
-                DispatchQueue.concurrentPerform(iterations: y1 - y0) { row in
-                    let src = srcBox.value, dst = dstBox.value
-                    let y = y0 + row
-                    for i in ((y * w + x0) * 4)..<((y * w + x1) * 4) {
-                        dst[i] = UInt8(min(max(src[i], 0), 1) * 255 + 0.5)
-                    }
-                }
+                RetouchPaint.convertToBytes(pixels: src.baseAddress!,
+                                            into: dst.baseAddress!,
+                                            width: w, x0: x0, x1: x1, y0: y0, y1: y1)
             }
         }
     }
@@ -1135,16 +1046,9 @@ public final class RetouchSession: ObservableObject {
                                                         width: Int, rows: Range<Int>) {
         depth.withUnsafeBufferPointer { src in
             bytes.withUnsafeMutableBufferPointer { dst in
-                let srcBox = UncheckedSendable(src)
-                let dstBox = UncheckedSendable(dst)
-                DispatchQueue.concurrentPerform(iterations: rows.count) { row in
-                    let src = srcBox.value, dst = dstBox.value
-                    let y = rows.lowerBound + row
-                    for i in (y * width)..<((y + 1) * width) {
-                        let v = 1 - src[i] * scale
-                        dst[i] = UInt8(min(max(v, 0), 1) * 255 + 0.5)
-                    }
-                }
+                RetouchPaint.convertDepthToBytes(depth: src.baseAddress!, scale: scale,
+                                                 into: dst.baseAddress!,
+                                                 width: width, rows: rows)
             }
         }
     }

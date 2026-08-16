@@ -104,6 +104,14 @@ hf_signing_args
 # HF_SIGN_ARGS is empty when the project's ad-hoc default applies, and
 # bash 3.2 (macOS's /bin/bash) dies on set -u + an empty array expansion —
 # hence the ${a[@]+…} guard rather than a plain "${a[@]}".
+#
+# ARCHS=arm64 at the invocation, not just in project.yml: the target-level
+# pin there doesn't reach the SwiftPM package targets, so a Release build
+# (ONLY_ACTIVE_ARCH=NO) otherwise compiles the packages universal and dies
+# on the x86_64 slice — `Float16`, the engine's pixel storage, does not
+# exist on Intel macOS (see project.yml's ARCHS note; package-app.sh pins
+# the same way). Debug builds only the active arch and never noticed.
 xcodebuild -project App/Hyperfocal.xcodeproj -scheme Hyperfocal \
     -configuration "$CONFIG" -destination 'platform=macOS' \
+    ARCHS="arm64" \
     ${HF_SIGN_ARGS[@]+"${HF_SIGN_ARGS[@]}"} -quiet build

@@ -104,6 +104,21 @@ public func hfStoreRGBA(_ p: UnsafeMutablePointer<Float16>, _ i: Int,
     UnsafeMutableRawPointer(p + i).storeBytes(of: h, as: SIMD4<Float16>.self)
 }
 
+/// Stores an f32 RGBA vector as display bytes; the caller has already
+/// clamped and scaled `v` into [0, 256). Same asymmetry as the f16 pair:
+/// the vector spelling `SIMD4<UInt8>(v)` is the stdlib's GENERIC
+/// float→int `init(_:rounding:)` and does not specialize (it was 58% of
+/// the brush stamp's samples), so the int direction takes the
+/// scalar-element form.
+@inlinable
+public func hfStoreRGBA8(_ p: UnsafeMutablePointer<UInt8>, _ i: Int,
+                         _ v: SIMD4<Float>) {
+    p[i] = UInt8(v.x)
+    p[i + 1] = UInt8(v.y)
+    p[i + 2] = UInt8(v.z)
+    p[i + 3] = UInt8(v.w)
+}
+
 /// f16's finite range. Pixels live in [0, 1], but decode excursions and
 /// intermediate sums must saturate rather than become inf — `Float16(x)` of an
 /// out-of-range `Float` yields inf, which would poison a whole neighborhood
