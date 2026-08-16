@@ -222,11 +222,21 @@ int hf_export_animation(const char *path);
 
 // Project lifecycle. hf_save_project writes to `path`, or with NULL to
 // the existing project file (0 when there is none — the shell then asks
-// for a path, the native Save vs Save-As split). hf_project_path names
-// the open project file (bytes; 0 = never saved); hf_has_unsaved_work
+// for a path, the native Save vs Save-As split). 1 means the save
+// STARTED: the write runs off the main thread (multi-GB of blobs on a
+// large stack), hf_has_unsaved_work stays 1 until the file lands, and a
+// failure surfaces through the dialog seam like any other. hf_project_path
+// names the open project file (bytes; 0 = never saved); hf_has_unsaved_work
 // drives the dirty marker and the quit gate; close-stack/close-project
 // confirm destructive cases through the dialog seam.
 int hf_save_project(const char *path);
+// The async write's observability: in-flight flag (modal popup + close
+// veto), progress fraction, and the Save/Save As enabled states (Save
+// goes dark once there is nothing left to save).
+int hf_saving_project(void);
+double hf_save_progress(void);
+int hf_can_save_project(void);
+int hf_can_save_project_as(void);
 int hf_project_path(char *buf, int cap);
 // Bumped whenever the whole project context is replaced (new project,
 // open, close) — the shell resets list scroll positions on this edge,

@@ -249,7 +249,9 @@ enum UITestSupport {
             }
         case "save-project":
             guard let path = command["path"] else { return finish(false, "no path") }
-            finish(model.writeProject(to: URL(fileURLWithPath: path)))
+            // The write is asynchronous now — finish only when the file is
+            // on disk, so capture drivers can rely on the result marker.
+            model.writeProject(to: URL(fileURLWithPath: path)) { finish($0) }
         case "set-export":
             // The format/color-space pickers live in the export dialogs
             // (NSSavePanel accessories), which XCUITest can't drive — tests

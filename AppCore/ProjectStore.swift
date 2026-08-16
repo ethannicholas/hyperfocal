@@ -70,6 +70,15 @@ enum ProjectStore {
         var sharpnessFullHeight: Int?
         var sharpnessFrameCount: Int?
         var sharpnessScale: Float?       // global max used for 16-bit quantization
+        // Which algorithm fused the displayed result ("dmap"/"pmax"). Absent
+        // in pre-persistence files, whose only savable result was DMap — the
+        // reader infers dmap for those. Losing this on restore left
+        // `resultMethod` nil, which silently disabled the deferred secondary
+        // (retouch sat on "Preparing the PMax result…" forever) AND the
+        // retouch depth fold-back.
+        var resultMethod: String? = nil
+        var hasPMax: Bool? = nil         // stack_NNN/pmax.raw present
+        var pmaxFusedSettings: PMaxSettings? = nil
     }
 
     private struct VersionProbe: Codable {
@@ -87,6 +96,14 @@ enum ProjectStore {
         var depth: [Float] = []
         var sharpness: FrameSharpness?
         var working: ImageBuffer?        // retouched pixels, if any edits
+        // The PMax image, saved whenever it exists: as the primary it IS the
+        // result (which previously could not survive a save at all), and as
+        // the secondary it spares a reopened session the full background
+        // re-fuse that used to stand between "open project" and painting
+        // from the PMax layer.
+        var pmax: ImageBuffer? = nil
+        var resultMethod: FusionMethod? = nil
+        var pmaxFusedSettings: PMaxSettings? = nil
         var sourceIndex: Int?
         var gains: [SIMD3<Float>]? = nil
         var orderWarning: String? = nil
@@ -112,7 +129,28 @@ enum ProjectStore {
 
     // MARK: - Write
 
-    static func write(_ project: Project, to url: URL) throws {
+    /// Bytes of blob payload a save of `project` will write — the
+    /// denominator for the save progress bar, computable before any Data
+    /// exists (blob sizes follow from the plane shapes).
+    static func payloadBytes(_ project: Project) -> Int64 {
+        var total: Int64 = 0
+        for stack in project.stacks {
+            guard let dims = stack.result ?? stack.pmax else { continue }
+            let px = Int64(dims.width) * Int64(dims.height)
+            if stack.result != nil { total += px * 8 + px * 2 }  // result + depth
+            if stack.pmax != nil { total += px * 8 }
+            if stack.working != nil { total += px * 8 }
+            if let s = stack.sharpness {
+                total += Int64(s.planeCount) * Int64(s.cellsPerPlane) * 2
+            }
+        }
+        return total
+    }
+
+    /// `progress` reports cumulative blob bytes written over
+    /// `payloadBytes(_:)`, from whatever thread runs the write.
+    static func write(_ project: Project, to url: URL,
+                      progress: ((Int64) -> Void)? = nil) throws {
         let fm = FileManager.default
         // Stage the file in a temp directory the sandbox can write. The
         // save panel's grant covers exactly the chosen URL — a sibling
@@ -130,6 +168,12 @@ enum ProjectStore {
         defer { try? fm.removeItem(at: temp) }
         let zip = try ZipWriter(url: temp)
 
+        // Cumulative blob bytes on disk, reported as each chunk lands (the
+        // multi-hundred-MB blobs stream in 16 MiB slices, so the bar moves
+        // through a single large plane instead of jumping per file).
+        var written: Int64 = 0
+        let report: (Int) -> Void = { written += Int64($0); progress?(written) }
+
         var stackManifests = [StackManifest]()
         for (index, stack) in project.stacks.enumerated() {
             var manifest = StackManifest(
@@ -143,8 +187,11 @@ enum ProjectStore {
                     }
                 },
                 hasResult: stack.result != nil,
-                resultWidth: stack.result?.width ?? 0,
-                resultHeight: stack.result?.height ?? 0,
+                // The blob dimensions: every 16-bit plane in this stack's
+                // directory shares them, whichever algorithm produced it
+                // (a PMax primary has no DMap result to take them from).
+                resultWidth: (stack.result ?? stack.pmax)?.width ?? 0,
+                resultHeight: (stack.result ?? stack.pmax)?.height ?? 0,
                 hasWorking: stack.working != nil,
                 sourceIndex: stack.sourceIndex,
                 // Legacy field carries the luminance combination so pre-
@@ -156,30 +203,43 @@ enum ProjectStore {
                 tone: stack.tone,
                 crop: stack.crop,
                 cropAngle: stack.cropAngle)
-            if let result = stack.result {
+            manifest.resultMethod = stack.resultMethod?.rawValue
+            manifest.pmaxFusedSettings = stack.pmaxFusedSettings
+            if stack.result != nil || stack.pmax != nil {
                 let dir = stackDirectoryName(index)
                 // All blobs are 16-bit: the pixels came from 16-bit sensors and
                 // export at 16-bit, depth is a frame index (1/64-index fixed
                 // point), and sharpness only needs relative magnitude.
-                try zip.add("\(dir)/result.raw", fixed16Data(result.pixels, scale: 65535))
-                try zip.add("\(dir)/depth.raw", fixed16Data(stack.depth, scale: 64))
+                if let result = stack.result {
+                    try zip.add("\(dir)/result.raw",
+                                fixed16Data(result.pixels, scale: 65535), onChunk: report)
+                    // Depth belongs to the DMap result; a PMax primary has none.
+                    try zip.add("\(dir)/depth.raw",
+                                fixed16Data(stack.depth, scale: 64), onChunk: report)
+                }
+                if let pmax = stack.pmax {
+                    manifest.hasPMax = true
+                    try zip.add("\(dir)/pmax.raw",
+                                fixed16Data(pmax.pixels, scale: 65535), onChunk: report)
+                }
                 if let working = stack.working {
                     try zip.add("\(dir)/working.raw",
-                                fixed16Data(working.pixels, scale: 65535))
+                                fixed16Data(working.pixels, scale: 65535), onChunk: report)
                 }
                 if let sharpness = stack.sharpness {
-                    var flat = [Float]()
-                    flat.reserveCapacity(sharpness.planes.count
-                                         * (sharpness.planes.first?.count ?? 0))
-                    for plane in sharpness.planes { flat.append(contentsOf: plane) }
-                    let scale = max(flat.max() ?? 0, 1e-9)
+                    // The in-memory retention IS the file's encoding (16-bit
+                    // fixed point against the global-max scale), so the blob
+                    // is a straight concatenation — no requantization pass.
+                    var flat = [UInt16]()
+                    flat.reserveCapacity(sharpness.planeCount * sharpness.cellsPerPlane)
+                    for plane in sharpness.samples { flat.append(contentsOf: plane) }
                     try zip.add("\(dir)/sharpness.raw",
-                                fixed16Data(flat, scale: 65535 / scale))
+                                flat.withUnsafeBytes { Data($0) }, onChunk: report)
                     manifest.sharpnessFactor = sharpness.factor
                     manifest.sharpnessFullWidth = sharpness.fullWidth
                     manifest.sharpnessFullHeight = sharpness.fullHeight
-                    manifest.sharpnessFrameCount = sharpness.planes.count
-                    manifest.sharpnessScale = scale
+                    manifest.sharpnessFrameCount = sharpness.planeCount
+                    manifest.sharpnessScale = sharpness.scale
                 }
             }
             stackManifests.append(manifest)
@@ -286,14 +346,26 @@ enum ProjectStore {
             tone: manifest.tone,
             crop: manifest.crop,
             cropAngle: manifest.cropAngle)
-        guard manifest.hasResult else { return payload }
+        // Pre-persistence fused files carry no method — and could only have
+        // saved a DMap result, so that IS the method for them.
+        payload.resultMethod = manifest.resultMethod.flatMap(FusionMethod.init(rawValue:))
+            ?? (manifest.hasResult ? .dmap : nil)
+        payload.pmaxFusedSettings = manifest.pmaxFusedSettings
+        guard manifest.hasResult || manifest.hasPMax == true else { return payload }
 
         let w = manifest.resultWidth, h = manifest.resultHeight
-        let resultPixels = try readFixed16Half(try blob("result.raw"), name: "result.raw",
-                                               scale: 65535, expected: w * h * 4)
-        payload.result = ImageBuffer(width: w, height: h, pixels: resultPixels)
-        payload.depth = try readFixed16(try blob("depth.raw"), name: "depth.raw",
-                                        scale: 64, expected: w * h)
+        if manifest.hasResult {
+            let resultPixels = try readFixed16Half(try blob("result.raw"), name: "result.raw",
+                                                   scale: 65535, expected: w * h * 4)
+            payload.result = ImageBuffer(width: w, height: h, pixels: resultPixels)
+            payload.depth = try readFixed16(try blob("depth.raw"), name: "depth.raw",
+                                            scale: 64, expected: w * h)
+        }
+        if manifest.hasPMax == true {
+            let pixels = try readFixed16Half(try blob("pmax.raw"), name: "pmax.raw",
+                                             scale: 65535, expected: w * h * 4)
+            payload.pmax = ImageBuffer(width: w, height: h, pixels: pixels)
+        }
         if manifest.hasWorking {
             let pixels = try readFixed16Half(try blob("working.raw"), name: "working.raw",
                                              scale: 65535, expected: w * h * 4)
@@ -305,14 +377,23 @@ enum ProjectStore {
            let count = manifest.sharpnessFrameCount, count > 0 {
             let planeSize = ((fullW + factor - 1) / factor) * ((fullH + factor - 1) / factor)
             let scale = manifest.sharpnessScale ?? 1
-            let flat = try readFixed16(try blob("sharpness.raw"), name: "sharpness.raw",
-                                       scale: 65535 / max(scale, 1e-9),
-                                       expected: planeSize * count)
-            let planes = (0..<count).map {
-                Array(flat[($0 * planeSize)..<(($0 + 1) * planeSize)])
+            // The retention stores exactly what the file does, so restore is
+            // a straight copy of the 16-bit samples — no dequantize pass.
+            let data = try blob("sharpness.raw")
+            guard data.count == planeSize * count * 2 else {
+                throw NSError(domain: "Hyperfocal", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "sharpness.raw: expected \(planeSize * count * 2) bytes, found \(data.count)"])
+            }
+            let samples: [[UInt16]] = data.withUnsafeBytes { raw in
+                let src = raw.bindMemory(to: UInt16.self)
+                return (0..<count).map {
+                    Array(src[($0 * planeSize)..<(($0 + 1) * planeSize)])
+                }
             }
             payload.sharpness = FrameSharpness(fullWidth: fullW, fullHeight: fullH,
-                                               factor: factor, planes: planes)
+                                               factor: factor, samples: samples,
+                                               scale: max(scale, 1e-9))
         }
         return payload
     }
@@ -446,7 +527,8 @@ enum ProjectStore {
                 date: UInt16(((max(c.year!, 1980) - 1980) << 9) | (c.month! << 5) | c.day!))
         }
 
-        func add(_ name: String, _ payload: Data) throws {
+        func add(_ name: String, _ payload: Data,
+                 onChunk: ((Int) -> Void)? = nil) throws {
             let crc = payload.withUnsafeBytes { buf -> UInt32 in
                 guard var p = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
                     return UInt32(crc32(0, nil, 0))
@@ -491,7 +573,17 @@ enum ProjectStore {
                 local.append(0)
             }
             try handle.write(contentsOf: local)
-            try handle.write(contentsOf: payload)
+            // Stream large payloads in slices so a progress observer sees
+            // movement through a single multi-hundred-MB plane.
+            var cursor = 0
+            while cursor < payload.count {
+                let n = min(16 << 20, payload.count - cursor)
+                let start = payload.index(payload.startIndex, offsetBy: cursor)
+                let end = payload.index(start, offsetBy: n)
+                try handle.write(contentsOf: payload[start..<end])
+                cursor += n
+                onChunk?(n)
+            }
 
             central.appendLE(UInt32(0x02014b50))
             central.appendLE(UInt16(45))            // version made by

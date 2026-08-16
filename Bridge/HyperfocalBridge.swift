@@ -1141,8 +1141,12 @@ public func hf_export_animation(_ path: UnsafePointer<CChar>?) -> Int32 {
 
 /// Write the project to `path`, or to its existing file when NULL (the
 /// native Save vs Save As split — the shell chooses the path with its
-/// own dialog, like exports). 0 when NULL with no existing file, or on
-/// write failure.
+/// own dialog, like exports). 0 when NULL with no existing file — the
+/// shell's cue to open Save As. 1 means the save STARTED: the write runs
+/// off the main thread (it is ~2 GB of blobs on a large stack and froze
+/// the UI when synchronous); a failure surfaces through the model's
+/// dialog seam like any other, and `hf_has_unsaved_work` stays 1 until
+/// the file actually lands.
 @_cdecl("hf_save_project")
 public func hf_save_project(_ path: UnsafePointer<CChar>?) -> Int32 {
     MainActor.assumeIsolated {
@@ -1155,8 +1159,36 @@ public func hf_save_project(_ path: UnsafePointer<CChar>?) -> Int32 {
         } else {
             return 0
         }
-        return model.writeProject(to: url) ? 1 : 0
+        model.writeProject(to: url)
+        return 1
     }
+}
+
+/// 1 while a background project write is in flight — the shell holds its
+/// modal saving popup (and vetoes window close) on this.
+@_cdecl("hf_saving_project")
+public func hf_saving_project() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.savingProject == true ? 1 : 0 }
+}
+
+/// Fraction (0…1) of the in-flight write's blob bytes on disk.
+@_cdecl("hf_save_progress")
+public func hf_save_progress() -> Double {
+    MainActor.assumeIsolated { Bridge.model?.saveProgress ?? 0 }
+}
+
+/// Whether File > Save has work to do: content + unsaved changes + no
+/// write already running. Drives the menu item's enabled state, so a
+/// completed save visibly disables Save on both shells.
+@_cdecl("hf_can_save_project")
+public func hf_can_save_project() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.canSaveProject == true ? 1 : 0 }
+}
+
+/// Save As needs only content (an already-saved project can be copied).
+@_cdecl("hf_can_save_project_as")
+public func hf_can_save_project_as() -> Int32 {
+    MainActor.assumeIsolated { Bridge.model?.canSaveProjectAs == true ? 1 : 0 }
 }
 
 /// The open project's file path (window titles, Save reuse). Bytes; 0

@@ -44,10 +44,11 @@ struct FuseSettings: Equatable, Codable {
 }
 
 /// The PMax-specific parameters a PMax result was produced with — staleness
-/// tracking for the PMax pass, the analogue of `FuseSettings` for DMap. Kept
-/// in memory only: the PMax result isn't saved in projects (it's regenerated),
-/// so this needn't be Codable.
-struct PMaxSettings: Equatable {
+/// tracking for the PMax pass, the analogue of `FuseSettings` for DMap.
+/// Codable because it rides in the project manifest alongside the saved PMax
+/// image (which used to be regenerated on every reopen — a full background
+/// re-fuse between "open project" and painting from the PMax layer).
+struct PMaxSettings: Equatable, Codable {
     var align: Bool
     var useGPU: Bool
     var coarseLevels: Int
@@ -132,8 +133,8 @@ public final class Stack: Identifiable {
 
     /// The displayed/exported image — `resultMethod` picks between the peer
     /// results, falling back to whichever exists (a background pass may not
-    /// have finished, and `pmaxResult` doesn't survive project reload).
-    /// Mirror of `AppModel.primaryResult` for non-selected stacks.
+    /// have finished). Mirror of `AppModel.primaryResult` for non-selected
+    /// stacks.
     var primaryResult: ImageBuffer? {
         switch resultMethod {
         case .pmax: return pmaxResult ?? dmapResult

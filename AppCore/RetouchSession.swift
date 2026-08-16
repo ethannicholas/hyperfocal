@@ -211,6 +211,29 @@ public final class RetouchSession: ObservableObject {
     }
     private static let tileSize = 256
     private static let maxUndoStrokes = 20
+    /// Byte ceiling on the retained stroke snapshots, alongside the count
+    /// cap. Twenty strokes is a fine history for small dabs, but a snapshot
+    /// costs 12 bytes per covered pixel (f16 RGBA + Float depth), so broad
+    /// strokes on a large canvas pin hundreds of MB each — a 36 MP session
+    /// idles at ~4.2 GB, and twenty near-full-canvas snapshots would add
+    /// ~9 GB on top, which is compressor/swap territory on smaller machines
+    /// long before the count cap helps. An eighth of physical RAM (capped
+    /// at 2 GiB) keeps deep history for normal brushes and sheds
+    /// oldest-first under huge ones; the newest stroke always survives,
+    /// whatever its size, so ⌘Z never goes dead right after painting.
+    static let maxUndoBytes = min(Int64(2) << 30,
+                                  Int64(ProcessInfo.processInfo.physicalMemory / 8))
+    /// Probe seam: a RAM-relative default isn't assertable on an arbitrary
+    /// machine, so the byte-budget check pins its own ceiling.
+    var undoByteBudgetOverride: Int64?
+    /// Snapshots currently held for ⌘Z, in bytes (probe-visible).
+    var undoStackBytes: Int64 { undoStack.reduce(0) { $0 + Self.bytes(of: $1) } }
+    private static func bytes(of stroke: [Int: TileSnapshot]) -> Int64 {
+        stroke.values.reduce(0) {
+            $0 + Int64($1.pixels.count * MemoryLayout<Float16>.stride
+                       + $1.depth.count * MemoryLayout<Float>.stride)
+        }
+    }
     private var currentStrokeTiles: [Int: TileSnapshot] = [:]
     private var undoStack: [[Int: TileSnapshot]] = []
     private var redoStack: [[Int: TileSnapshot]] = []
@@ -767,8 +790,14 @@ public final class RetouchSession: ObservableObject {
         strokeActive = false
         if !currentStrokeTiles.isEmpty {
             undoStack.append(currentStrokeTiles)
-            if undoStack.count > Self.maxUndoStrokes {
-                undoStack.removeFirst()
+            // Two caps, one eviction loop: count (deep histories of small
+            // dabs) and bytes (few huge strokes). Each eviction notifies the
+            // model so its oldest .stroke marker drops in lockstep.
+            let budget = undoByteBudgetOverride ?? Self.maxUndoBytes
+            var bytes = undoStackBytes
+            while undoStack.count > Self.maxUndoStrokes
+                    || (bytes > budget && undoStack.count > 1) {
+                bytes -= Self.bytes(of: undoStack.removeFirst())
                 onOldestStrokeEvicted?()
             }
             redoStack = []

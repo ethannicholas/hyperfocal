@@ -181,31 +181,36 @@ struct HyperfocalApp: App {
                 // it's pointing the app at a folder of frames.
                 Button(UIStrings.newProject) { model.openFrames() }
                     .keyboardShortcut("n", modifiers: .command)
-                    .disabled(model.phase.isRunning)
+                    .disabled(model.phase.isRunning || model.savingProject)
                 Button(UIStrings.openProject) { model.openProjectPanel() }
                     .keyboardShortcut("o", modifiers: .command)
-                    .disabled(model.phase.isRunning)
+                    .disabled(model.phase.isRunning || model.savingProject)
                 Button(UIStrings.addStackFolder) { model.addStackFolderPanel() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-                    .disabled(model.phase.isRunning)
+                    .disabled(model.phase.isRunning || model.savingProject)
                 Button(UIStrings.closeStack) { model.closeSelectedStack() }
-                    .disabled(model.phase.isRunning || model.selectedStackID == nil)
+                    .disabled(model.phase.isRunning || model.savingProject
+                              || model.selectedStackID == nil)
                 Button(UIStrings.closeProject) { model.closeProject() }
-                    .disabled(model.phase.isRunning || model.stacks.isEmpty)
+                    .disabled(model.phase.isRunning || model.savingProject
+                              || model.stacks.isEmpty)
                 Divider()
-                // Enabled whenever there's anything at all to save: unfused
-                // stacks persist fine, and `phase` only mirrors the selected
-                // stack — keying on it wrongly disabled Save in multi-stack
-                // projects whenever an unfused stack happened to be selected.
-                // Save writes back to the project's file; a never-saved
-                // project falls through to the Save As panel (no ellipsis:
-                // the common case shows no dialog).
+                // Enabled only while there is something to save
+                // (canSaveProject: content + unsaved changes + no write in
+                // flight) — Save staying lit after a save made it unclear
+                // whether anything had happened. `phase` only mirrors the
+                // selected stack, so it gates running-ness, not content —
+                // keying content on it wrongly disabled Save in multi-stack
+                // projects whenever an unfused stack happened to be
+                // selected. Save writes back to the project's file; a
+                // never-saved project falls through to the Save As panel
+                // (no ellipsis: the common case shows no dialog).
                 Button(UIStrings.saveProject) { model.saveProject() }
                     .keyboardShortcut("s", modifiers: .command)
-                    .disabled(model.stacks.isEmpty || model.phase.isRunning)
+                    .disabled(!model.canSaveProject || model.phase.isRunning)
                 Button(UIStrings.saveProjectAs) { model.saveProjectAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
-                    .disabled(model.stacks.isEmpty || model.phase.isRunning)
+                    .disabled(!model.canSaveProjectAs || model.phase.isRunning)
                 // Label follows the output mode, like the export button and
                 // the Qt shell's menu — in depth mode ⌘E exports the depth
                 // map, and the menu should say so.

@@ -463,8 +463,8 @@ struct Fuse: ParsableCommand {
                 // the retention's cost on a real fuse.
                 var sharpnessTap: ((FrameSharpness) -> Void)? = nil
                 if env["HYPERFOCAL_PMAX_SHARPNESS"] == "1" {
-                    sharpnessTap = { print("retained \($0.planes.count) sharpness planes "
-                                           + "(\($0.planes.first?.count ?? 0) cells each)") }
+                    sharpnessTap = { print("retained \($0.planeCount) sharpness planes "
+                                           + "(\($0.cellsPerPlane) cells each)") }
                 }
                 result = try PyramidFusion.fuse(source: source,
                                                 preferGPU: try fusion.resolveUseGPU(),

@@ -93,6 +93,13 @@ class Shell : public QObject {
     Q_PROPERTY(int projectGeneration READ projectGeneration
                NOTIFY projectGenerationChanged)
     Q_PROPERTY(bool hasUnsavedWork READ hasUnsavedWork NOTIFY changed)
+    // The async project write: modal saving popup + close veto + live
+    // progress, and the Save/Save As enabled split (Save goes dark once
+    // there is nothing left to save).
+    Q_PROPERTY(bool savingProject READ savingProject NOTIFY changed)
+    Q_PROPERTY(double saveProgress READ saveProgress NOTIFY changed)
+    Q_PROPERTY(bool canSaveProject READ canSaveProject NOTIFY changed)
+    Q_PROPERTY(bool canSaveProjectAs READ canSaveProjectAs NOTIFY changed)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY changed)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY changed)
     Q_PROPERTY(QString undoTitle READ undoTitle NOTIFY changed)
@@ -305,6 +312,10 @@ public:
     QString projectPath() const;
     int projectGeneration() const;
     bool hasUnsavedWork() const;
+    bool savingProject() const;
+    double saveProgress() const;
+    bool canSaveProject() const;
+    bool canSaveProjectAs() const;
     Q_INVOKABLE void toneEditing(bool editing);
     Q_INVOKABLE void noiseFloorEditing(bool editing);
     Q_INVOKABLE bool undo();

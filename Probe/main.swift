@@ -753,6 +753,46 @@ Task { @MainActor in
     assert(restoredUnfused.tone == nil, "neutral stack should carry no tone")
     print("probe: project round-trip OK (fused + unfused stacks, tone)")
 
+    // 2b. PMax persistence: the PMax image (primary or secondary) rides in
+    // the project along with the fused method. Losing the method on restore
+    // is what left a reopened project's retouch waiting forever on a
+    // "Preparing the PMax result…" pass that never started — and a PMax
+    // primary previously could not persist its result at all.
+    assert(restored.resultMethod == .dmap,
+           "pre-persistence fused files must infer a DMap method")
+    var pmaxStack = savedStack
+    pmaxStack.pmax = output.image  // stands in for a PMax render
+    pmaxStack.resultMethod = .pmax
+    pmaxStack.pmaxFusedSettings = PMaxSettings(align: true, useGPU: false,
+                                               coarseLevels: 5, threshold: 0.1)
+    var pmaxOnly = ProjectStore.StackPayload(
+        name: "pmax-primary", frameURLs: Array(urls), includedURLs: Set(urls),
+        transforms: nil, result: nil)
+    pmaxOnly.pmax = output.image
+    pmaxOnly.resultMethod = .pmax
+    let pmaxURL = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("probe-pmax.hyperfocal")
+    try! ProjectStore.write(ProjectStore.Project(stacks: [pmaxStack, pmaxOnly]),
+                            to: pmaxURL)
+    let pmaxProject = try! ProjectStore.read(from: pmaxURL)
+    let rBoth = pmaxProject.stacks[0]
+    assert(rBoth.resultMethod == .pmax, "resultMethod lost in round-trip")
+    assert(rBoth.pmaxFusedSettings == pmaxStack.pmaxFusedSettings,
+           "pmax settings lost in round-trip")
+    assert(maxDiff(rBoth.pmax!.pixels, output.image.pixels) <= 1.0 / 65535 + 1e-6,
+           "pmax pixels beyond 16-bit quantization")
+    assert(rBoth.result != nil && !rBoth.depth.isEmpty,
+           "dmap blobs must survive beside the pmax one")
+    let rOnly = pmaxProject.stacks[1]
+    assert(rOnly.result == nil && rOnly.depth.isEmpty,
+           "pmax-only stack must not grow dmap blobs")
+    assert(rOnly.pmax!.width == output.image.width
+           && maxDiff(rOnly.pmax!.pixels, output.image.pixels) <= 1.0 / 65535 + 1e-6,
+           "pmax-primary result lost (dimensions must come from the pmax image)")
+    assert(rOnly.resultMethod == .pmax, "pmax-primary method lost")
+    try? FileManager.default.removeItem(at: pmaxURL)
+    print("probe: pmax persistence round-trip OK")
+
     // The container must be a standards-conforming zip, not merely one our
     // own reader accepts — users will point other tools at these files.
     func runUnzip(_ arguments: [String]) -> Bool {
@@ -1288,6 +1328,39 @@ Task { @MainActor in
     }
     print("probe: unified undo timeline OK")
 
+    // 3a3b. Byte budget: the count cap alone lets a handful of broad strokes
+    // pin gigabytes (a snapshot is 12 B per covered pixel), so the window
+    // also sheds oldest-first past a byte ceiling — with markers following
+    // in the same lockstep the count cap proves above. The newest stroke
+    // survives even when it alone exceeds the ceiling, so ⌘Z never goes
+    // dead right after painting.
+    model.enterRetouch()
+    guard let session4 = model.retouch else {
+        print("probe: BYTE BUDGET ENTER RETOUCH FAILED"); exit(1)
+    }
+    session4.beginStroke(at: strokePoint); session4.endStroke()
+    let oneStroke = session4.undoStackBytes
+    guard oneStroke > 0 else { print("probe: BYTE BUDGET SAW NO SNAPSHOT"); exit(1) }
+    session4.undoByteBudgetOverride = oneStroke * 2 + 1  // room for two strokes
+    for _ in 0..<3 { session4.beginStroke(at: strokePoint); session4.endStroke() }
+    let budgetMarkers = model.undoHistory.filter(\.isStroke).count
+    guard session4.undoStackBytes <= oneStroke * 2 + 1, budgetMarkers == 2 else {
+        print("probe: BYTE BUDGET EVICTION WRONG "
+              + "(\(session4.undoStackBytes) bytes, \(budgetMarkers) markers)")
+        exit(1)
+    }
+    session4.undoByteBudgetOverride = oneStroke - 1  // below a single stroke
+    session4.beginStroke(at: strokePoint); session4.endStroke()
+    guard session4.canUndo, model.undoHistory.filter(\.isStroke).count == 1 else {
+        print("probe: BYTE BUDGET DROPPED THE NEWEST STROKE"); exit(1)
+    }
+    model.resetRetouch()
+    model.exitRetouch()
+    guard !model.undoHistory.contains(where: { $0.isStroke }) else {
+        print("probe: BYTE BUDGET CLEANUP LEFT MARKERS"); exit(1)
+    }
+    print("probe: stroke undo byte budget OK")
+
     // 3a4. Revert All must never leave the output pane showing discarded
     // edits: Done resnapshots after a revert (this visit or an earlier
     // one), an out-of-mode revert re-presents immediately, and a pristine
@@ -1346,6 +1419,12 @@ Task { @MainActor in
           model2.frames.count == urls.count, !model2.hasUnsavedWork else {
         print("probe: RESTORE FAILED (\(model2.phase), frames=\(model2.frames.count))")
         exit(1)
+    }
+    // The fused method must survive the reopen (inferred for legacy files):
+    // nil here silently disabled the deferred secondary AND the retouch
+    // depth fold-back — both guard on it.
+    guard model2.resultMethod == .dmap else {
+        print("probe: RESTORED resultMethod NIL/WRONG"); exit(1)
     }
     print("probe: project restored — frames=\(model2.frames.count), result \(model2.dmapResult!.width)x\(model2.dmapResult!.height)")
     // …and a named project prefills its own directory and name (the
@@ -1670,14 +1749,14 @@ Task { @MainActor in
         sharpCfg.retainPMaxSharpness = true
         let sharpOut = try! StackPipeline.fuse(urls: Array(urls), configuration: sharpCfg,
                                                alignmentCache: cache)
-        guard let planes = sharpOut.sharpness, planes.planes.count == urls.count,
+        guard let planes = sharpOut.sharpness, planes.planeCount == urls.count,
               planes.factor == DMapFusion.sharpnessDownsample,
-              planes.planes.allSatisfy({ $0.contains(where: { $0 > 0 }) }) else {
+              planes.samples.allSatisfy({ $0.contains(where: { $0 > 0 }) }) else {
             print("probe: PMAX SHARPNESS PLANES MISSING/EMPTY "
-                + "(\(sharpOut.sharpness?.planes.count ?? -1) of \(urls.count))")
+                + "(\(sharpOut.sharpness?.planeCount ?? -1) of \(urls.count))")
             exit(1)
         }
-        print("probe: pmax sharpness retention OK (\(planes.planes.count) planes)")
+        print("probe: pmax sharpness retention OK (\(planes.planeCount) planes)")
     }
 
     // 6. Session auto-split + batch queue: two capture-time-stamped stacks in

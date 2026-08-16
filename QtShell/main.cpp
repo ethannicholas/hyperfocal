@@ -236,6 +236,7 @@ struct SelfTest {
     bool animationStarted = false, animationOK = false;
     QString animationFile;
     QString projectFile;
+    bool projectSaveStarted = false;  // stage 8 polls the async write out
     QString expectedInput;    // selected frame's name
     int finishStage = 0;      // 0 input-wait, 1..3 zoom cycle, 4 finish
     int finishTries = 0;
@@ -679,6 +680,27 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 return;
             }
             case 8: {   // other-algorithm layer lands (maybe a deferred fusion)
+                if (state->projectSaveStarted) {
+                    // The write runs off the main thread now — the dirty
+                    // flag clears (and the path lands) only once the file
+                    // is actually on disk, so poll it out before asserting
+                    // and before reopening the file.
+                    if (shell->hasUnsavedWork()
+                        && ++state->stageTicks < kDecodeWaitTicks)
+                        return;
+                    const bool clean = !shell->hasUnsavedWork();
+                    const bool pathSet =
+                        QDir::fromNativeSeparators(shell->projectPath())
+                            == QDir::fromNativeSeparators(state->projectFile);
+                    state->projectOK = clean && pathSet;
+                    if (!state->projectOK)
+                        qWarning() << "selftest project: clean" << clean
+                                   << "path" << pathSet << shell->projectPath();
+                    if (state->projectOK)
+                        shell->openStack(QUrl::fromLocalFile(state->projectFile));
+                    advance(9);
+                    return;
+                }
                 if (!shell->retouchCanPaint()
                     && ++state->stageTicks < kSecondaryWaitTicks)
                     return;
@@ -689,25 +711,21 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
                 state->otherSourceOK = shell->retouchCanPaint();
                 state->retouchOK = state->retouchOK && shell->exitRetouch()
                     && !shell->retouchMode();
-                // Project round-trip: save must clear the dirty flag and
-                // set the path; reopening the file must restore a fused
-                // stack (stage 9 waits out the load). Compare paths with
-                // forward slashes: the bridge echoes them that way, while a
-                // Windows runner passes the out path with backslashes.
+                // Project round-trip: the save must land (stage re-entered
+                // until the async write clears the dirty flag), set the
+                // path, and reopening the file must restore a fused stack
+                // (stage 9 waits out the load). Compare paths with forward
+                // slashes: the bridge echoes them that way, while a Windows
+                // runner passes the out path with backslashes.
                 state->projectFile = state->outPath + ".hyperfocal";
-                const bool saved =
-                    shell->saveProject(QUrl::fromLocalFile(state->projectFile));
-                const bool clean = !shell->hasUnsavedWork();
-                const bool pathSet = QDir::fromNativeSeparators(shell->projectPath())
-                        == QDir::fromNativeSeparators(state->projectFile);
-                state->projectOK = saved && clean && pathSet;
-                if (!state->projectOK)
-                    qWarning() << "selftest project: save" << saved
-                               << "clean" << clean << "path" << pathSet
-                               << shell->projectPath();
-                if (state->projectOK)
-                    shell->openStack(QUrl::fromLocalFile(state->projectFile));
-                advance(9);
+                if (!shell->saveProject(QUrl::fromLocalFile(state->projectFile))) {
+                    state->projectOK = false;
+                    qWarning() << "selftest project: save did not start";
+                    advance(9);
+                    return;
+                }
+                state->projectSaveStarted = true;
+                state->stageTicks = 0;
                 return;
             }
             case 9: {   // reload settles: a stack is back, still fused

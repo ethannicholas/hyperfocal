@@ -732,7 +732,11 @@ public final class AppModel: ObservableObject {
     /// A fused result (or retouch edits on one) exists that no project file
     /// holds. Set by fuse completion and retouch strokes, cleared by saving
     /// or opening a project; quitting with it set asks for confirmation.
-    public private(set) var hasUnsavedWork = false
+    /// Turning true bumps the epoch a background save compares against, so
+    /// edits made while a write is in flight stay marked unsaved.
+    public private(set) var hasUnsavedWork = false {
+        didSet { if hasUnsavedWork { noteUnsavedWork() } }
+    }
     /// The file the current project was opened from or last saved to —
     /// File > Save writes straight back to it; nil (never saved, or project
     /// closed) makes Save fall through to Save As. The open/save panels'
@@ -1030,7 +1034,9 @@ public final class AppModel: ObservableObject {
         inputPreviewError = nil
         inputPixelSize = nil
         viewport.reset()
-        if stack.dmapResult != nil {
+        // primaryResult, not dmapResult: a PMax primary is just as fused
+        // (and, now that projects persist it, just as restorable).
+        if stack.primaryResult != nil {
             phase = .done
         } else if let message = stack.failureMessage {
             phase = .failed(message)
@@ -1061,11 +1067,11 @@ public final class AppModel: ObservableObject {
     public func status(of stack: Stack) -> StackStatus {
         if stack.id == selectedStackID {
             if phase.isRunning { return .fusing }
-            if dmapResult != nil { return .fused }
+            if primaryResult != nil { return .fused }
             if case .failed(let message) = phase { return .failed(message) }
             return .unfused
         }
-        if stack.dmapResult != nil { return .fused }
+        if stack.primaryResult != nil { return .fused }
         if let message = stack.failureMessage { return .failed(message) }
         return .unfused
     }
@@ -1085,7 +1091,7 @@ public final class AppModel: ObservableObject {
     public func closeSelectedStack() {
         guard !phase.isRunning, let stack = selectedStack else { return }
         stash(into: stack)
-        if stack.dmapResult != nil, hasUnsavedWork,
+        if stack.primaryResult != nil, hasUnsavedWork,
            !runConfirmAlert(message: String(format: localizedString(
                                 "Close the stack “%@”?", comment: ""), stack.name),
                             informative: localizedString(
@@ -1146,7 +1152,7 @@ public final class AppModel: ObservableObject {
     }
 
     public var fusedStackCount: Int {
-        stacks.filter { $0.id == selectedStackID ? dmapResult != nil : $0.dmapResult != nil }.count
+        stacks.filter { $0.id == selectedStackID ? primaryResult != nil : $0.primaryResult != nil }.count
     }
 
     /// True when fusing this stack would produce something its current result
@@ -1241,6 +1247,9 @@ public final class AppModel: ObservableObject {
                 depth: stack.resultDepth,
                 sharpness: stack.resultSharpness,
                 working: stack.savedWorking,
+                pmax: stack.pmaxResult,
+                resultMethod: stack.resultMethod,
+                pmaxFusedSettings: stack.pmaxFusedSettings,
                 sourceIndex: stack.savedSourceIndex,
                 gains: stack.resultGains,
                 orderWarning: stack.orderWarning,
@@ -1338,6 +1347,10 @@ public final class AppModel: ObservableObject {
     /// TerminateReply) so AppCore stays toolkit-neutral — the app maps
     /// it at the delegate edge.
     func confirmTermination() -> Bool {
+        // Never let a quit race the write it would truncate: while the
+        // background save runs (its modal progress is on screen), quitting
+        // simply doesn't take — retry once the bar completes.
+        guard !savingProject else { return false }
         guard hasUnsavedWork, fusedStackCount > 0, !phase.isRunning else { return true }
         return runConfirmAlert(message: localizedString("Are you sure you want to quit?", comment: ""),
                                informative: localizedString("Unsaved data will be lost.", comment: ""),
@@ -1369,24 +1382,102 @@ public final class AppModel: ObservableObject {
         writeProject(to: url)
     }
 
+    /// True while a project write is in flight. Serialization runs off the
+    /// main thread — a save of a 36 MP stack is ~2 GB of 16-bit blobs and
+    /// froze the UI for ~20 s when it was synchronous — so Save returns
+    /// immediately and the write lands in the background. Both shells put
+    /// a modal progress bar over this state: the app stays responsive
+    /// (live progress, no beachball) but the user waits the write out
+    /// rather than wondering whether anything happened.
+    @Published public private(set) var savingProject = false
+    /// Fraction of the in-flight write's blob bytes on disk (0…1),
+    /// published on the main thread for the modal progress bar.
+    @Published public private(set) var saveProgress: Double = 0
+    /// File > Save has work to do: something is loaded, it isn't already
+    /// on disk in its current state, and no write is running. A NEVER-saved
+    /// project is unsaved by definition, whatever the dirty flag says (a
+    /// freshly ingested stack list arrives clean) — hence the projectURL
+    /// clause. Both shells' Save items key off this: Save going dark after
+    /// a save is the visible "it worked".
+    public var canSaveProject: Bool {
+        (hasUnsavedWork || projectURL == nil) && !stacks.isEmpty && !savingProject
+    }
+    /// Save As only needs content — an already-saved project may still be
+    /// copied elsewhere.
+    public var canSaveProjectAs: Bool { !stacks.isEmpty && !savingProject }
+    /// Bumped whenever `hasUnsavedWork` turns true, so a finished write can
+    /// tell whether edits arrived while it ran (they keep the dirty flag —
+    /// the file on disk doesn't have them).
+    private var unsavedEpoch = 0
+    func noteUnsavedWork() { unsavedEpoch &+= 1 }
+    /// A save requested while one is writing: it recaptures fresh state and
+    /// runs after the current write lands (last writer wins; every
+    /// requester's completion still fires).
+    private var pendingSave: (url: URL, completions: [(Bool) -> Void])?
+
     /// Panel-free save: the write body of saveProject/saveProjectAs,
-    /// callable directly (UITestSupport, and any future probe checks).
-    @discardableResult
-    public func writeProject(to url: URL) -> Bool {
-        guard let project = captureProject() else { return false }
-        do {
-            try ProjectStore.write(project, to: url)
-            hasUnsavedWork = false
-            projectURL = url  // a successful write makes this THE document
-            return true
-        } catch {
-            // A failed save must not touch `phase`: the fused result is
-            // still valid, and .failed would disable Save itself (plus
-            // export and retouch) until a pointless re-fuse. Report and
-            // leave the session exactly as it was.
-            dialogs?.notify(message: localizedString("Couldn't save the project", comment: ""),
-                            informative: error.localizedDescription, warning: true)
-            return false
+    /// callable directly (UITestSupport, the bridge, and any future probe
+    /// checks). The state snapshot is captured NOW on the main thread —
+    /// copy-on-write keeps it consistent if the user keeps painting — and
+    /// `completion` fires on the main thread once the file is on disk (or
+    /// the write failed).
+    public func writeProject(to url: URL, completion: ((Bool) -> Void)? = nil) {
+        if savingProject {
+            var pending = pendingSave ?? (url, [])
+            pending.url = url
+            if let completion { pending.completions.append(completion) }
+            pendingSave = pending
+            return
+        }
+        guard let project = captureProject() else { completion?(false); return }
+        savingProject = true
+        saveProgress = 0
+        let epoch = unsavedEpoch
+        // The write must not stamp state onto a project it didn't capture:
+        // if the user opens or closes a project while it runs, the file
+        // still lands but projectURL/dirty stay with the NEW context.
+        let generation = projectGeneration
+        let totalBytes = max(ProjectStore.payloadBytes(project), 1)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let error: Error?
+            do {
+                try ProjectStore.write(project, to: url) { written in
+                    let fraction = Double(written) / Double(totalBytes)
+                    Task { @MainActor [weak self] in
+                        guard let self, self.savingProject else { return }
+                        self.saveProgress = min(fraction, 1)
+                    }
+                }
+                error = nil
+            } catch let e { error = e }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.savingProject = false
+                if let error {
+                    // A failed save must not touch `phase`: the fused result
+                    // is still valid, and .failed would disable Save itself
+                    // (plus export and retouch) until a pointless re-fuse.
+                    // Report and leave the session exactly as it was.
+                    self.dialogs?.notify(
+                        message: localizedString("Couldn't save the project", comment: ""),
+                        informative: error.localizedDescription, warning: true)
+                    completion?(false)
+                } else {
+                    if self.projectGeneration == generation {
+                        // Edits made during the write keep the dirty flag:
+                        // the file holds the capture-time state, not them.
+                        if self.unsavedEpoch == epoch { self.hasUnsavedWork = false }
+                        self.projectURL = url  // a successful write makes this THE document
+                    }
+                    completion?(true)
+                }
+                if let pending = self.pendingSave {
+                    self.pendingSave = nil
+                    self.writeProject(to: pending.url) { ok in
+                        pending.completions.forEach { $0(ok) }
+                    }
+                }
+            }
         }
     }
 
@@ -1423,8 +1514,14 @@ public final class AppModel: ObservableObject {
                     var outputCG: PlatformImage? = nil
                     var depthCG: PlatformImage? = nil
                     var depthImage: ImageBuffer? = nil
+                    // The displayed image follows the fused method; the depth
+                    // visualization exists only where a DMap result does.
+                    let display = payload.resultMethod == .pmax
+                        ? (payload.pmax ?? payload.result) : (payload.result ?? payload.pmax)
+                    if let display {
+                        outputCG = try Preview.image(from: payload.working ?? display)
+                    }
                     if let result = payload.result {
-                        outputCG = try Preview.image(from: payload.working ?? result)
                         let image = DMapFusion.depthImage(
                             from: payload.depth, width: result.width, height: result.height,
                             frameCount: max(payload.includedURLs.count, 2))
@@ -1476,6 +1573,13 @@ public final class AppModel: ObservableObject {
             stack.dmapResult = item.payload.result
             stack.resultDepth = item.payload.depth
             stack.resultSharpness = item.payload.sharpness
+            stack.pmaxResult = item.payload.pmax
+            // Without this, a reopened project's `resultMethod` stayed nil —
+            // which silently disabled the deferred secondary (retouch waited
+            // on "Preparing the PMax result…" forever, with nothing running)
+            // and the retouch depth fold-back (both guard on the method).
+            stack.resultMethod = item.payload.resultMethod
+            stack.pmaxFusedSettings = item.payload.pmaxFusedSettings
             stack.resultGains = item.payload.gains
             stack.orderWarning = item.payload.orderWarning
             stack.fusedSettings = item.payload.fusedSettings
@@ -1839,7 +1943,7 @@ public final class AppModel: ObservableObject {
     /// Re-shapes the current rect to the locked ratio about its center,
     /// preserving area, clamped to the canvas.
     private func reshapeCropToAspect() {
-        guard cropMode, dmapResult != nil, let r = cropRect,
+        guard cropMode, primaryResult != nil, let r = cropRect,
               let ratio = cropAspectRatio else { return }
         // Preserve area at the new ratio, then shrink/recenter to fit
         // (including under the current rotation).
@@ -3582,7 +3686,7 @@ public final class AppModel: ObservableObject {
 
     public func beginNoiseFloorPreview() {
         guard phase == .done, let sharpness = resultSharpness, let dmapResult,
-              !sharpness.planes.isEmpty else { return }
+              sharpness.planeCount > 0 else { return }
         noiseFloorPreviewActive = true
         if noiseFloorPreviewData != nil {
             updateNoiseFloorPreview()
@@ -3592,7 +3696,6 @@ public final class AppModel: ObservableObject {
         noiseFloorPreviewBuilding = true
         let epoch = noiseFloorPreviewDataEpoch
         let sw = sharpness.width, sh = sharpness.height
-        let planes = sharpness.planes
         let resultImage = dmapResult
         // Off-main: the one-time build scans every retained plane and reduces
         // them — seconds of work on a deep stack, and grabbing the slider
@@ -3618,6 +3721,10 @@ public final class AppModel: ObservableObject {
             // cost, and at display scale the coarser fit is invisible. The
             // fit's spatial mapping handles the factor natively — this is
             // the same relationship the real pipeline has to full res.
+            // Dequantize here, off-main: the Float planes are a full-size
+            // transient (over half a GB on a deep stack) that dies with
+            // this pass — only the 2× reductions are retained.
+            let planes = sharpness.floatPlanes()
             let halfPlanes = planes.map {
                 DMapFusion.boxDownsample($0, width: sw, height: sh, factor: 2)
             }
@@ -3630,7 +3737,7 @@ public final class AppModel: ObservableObject {
                 guard epoch == self.noiseFloorPreviewDataEpoch else { return }
                 self.noiseFloorPreviewData = (energyMax, argmax, concentration,
                                               halfPlanes, guide, sw, sh,
-                                              (sw + 1) / 2, planes.count)
+                                              (sw + 1) / 2, sharpness.planeCount)
                 if self.noiseFloorPreviewActive { self.updateNoiseFloorPreview() }
             }
         }

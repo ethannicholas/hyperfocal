@@ -990,6 +990,10 @@ QString Shell::projectPath() const {
 int Shell::projectGeneration() const { return hf_project_generation(); }
 
 bool Shell::hasUnsavedWork() const { return hf_has_unsaved_work() != 0; }
+bool Shell::savingProject() const { return hf_saving_project() != 0; }
+double Shell::saveProgress() const { return hf_save_progress(); }
+bool Shell::canSaveProject() const { return hf_can_save_project() != 0; }
+bool Shell::canSaveProjectAs() const { return hf_can_save_project_as() != 0; }
 
 void Shell::toneEditing(bool editing) { hf_tone_editing(editing ? 1 : 0); }
 

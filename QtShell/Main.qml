@@ -118,6 +118,13 @@ ApplicationWindow {
     }
 
     onClosing: function(close) {
+        // Never let a close truncate the write in flight — the modal
+        // saving popup is up; the close simply doesn't take until the
+        // bar completes (same veto as the native shell's quit gate).
+        if (Shell.savingProject) {
+            close.accepted = false
+            return
+        }
         // The native unsaved-work gate, through the same message-box
         // path as every other confirm (synchronous, full-size, icon).
         if (Shell.hasUnsavedWork && !Shell.confirmQuit())
@@ -130,7 +137,7 @@ ApplicationWindow {
             Action {
                 text: Shell.uiString("newProject")
                 shortcut: StandardKey.New
-                enabled: !Shell.isRunning
+                enabled: !Shell.isRunning && !Shell.savingProject
                 // Confirm before the picker, like native; the chosen
                 // folder REPLACES the project (Add Stack Folder adds).
                 onTriggered: {
@@ -141,31 +148,36 @@ ApplicationWindow {
             Action {
                 text: Shell.uiString("openProject")
                 shortcut: StandardKey.Open
-                enabled: !Shell.isRunning
+                enabled: !Shell.isRunning && !Shell.savingProject
                 onTriggered: openProjectDialog.open()
             }
             Action {
                 text: Shell.uiString("addStackFolder")
                 shortcut: "Ctrl+Shift+N"
-                enabled: !Shell.isRunning
+                enabled: !Shell.isRunning && !Shell.savingProject
                 onTriggered: openDialog.open()
             }
             MenuSeparator {}
             Action {
                 text: Shell.uiString("closeStack")
-                enabled: !Shell.isRunning && Shell.stacks.length > 0
+                enabled: !Shell.isRunning && !Shell.savingProject
+                         && Shell.stacks.length > 0
                 onTriggered: Shell.closeStack()
             }
             Action {
                 text: Shell.uiString("closeProject")
-                enabled: !Shell.isRunning && Shell.stacks.length > 0
+                enabled: !Shell.isRunning && !Shell.savingProject
+                         && Shell.stacks.length > 0
                 onTriggered: Shell.closeProject()
             }
             MenuSeparator {}
             Action {
                 text: Shell.uiString("saveProject")
                 shortcut: StandardKey.Save
-                enabled: !Shell.isRunning
+                // canSaveProject: content + unsaved changes + no write in
+                // flight — Save going dark after a save is the visible
+                // "it worked", matching the native menu.
+                enabled: !Shell.isRunning && Shell.canSaveProject
                 onTriggered: {
                     if (!Shell.saveProject(""))
                         saveProjectDialog.open()
@@ -174,7 +186,7 @@ ApplicationWindow {
             Action {
                 text: Shell.uiString("saveProjectAs")
                 shortcut: "Ctrl+Shift+S"
-                enabled: !Shell.isRunning
+                enabled: !Shell.isRunning && Shell.canSaveProjectAs
                 onTriggered: {
                     saveProjectDialog.selectedFile =
                         "file:///" + Shell.suggestedProjectName()
@@ -294,6 +306,35 @@ ApplicationWindow {
         defaultSuffix: "hyperfocal"
         nameFilters: [qsTr("Hyperfocal projects (*.hyperfocal)")]
         onAccepted: Shell.saveProject(selectedFile)
+    }
+
+    // Saving is modal: the write runs off the main thread (the shell stays
+    // responsive), but the window waits it out behind a live progress bar —
+    // an invisible background save left no sign anything had happened. The
+    // window close is vetoed for the same duration (onClosing above); the
+    // File actions disable via savingProject. Mirrors the native sheet.
+    Popup {
+        id: savingPopup
+        modal: true
+        closePolicy: Popup.NoAutoClose
+        anchors.centerIn: parent
+        visible: Shell.savingProject
+        padding: 24
+        contentItem: Column {
+            spacing: 12
+            Label {
+                text: qsTr("Saving project…")
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+            ProgressBar {
+                objectName: "project.saving-progress"
+                Accessible.name: qsTr("Saving project…")
+                width: 260
+                from: 0
+                to: 1
+                value: Shell.saveProgress
+            }
+        }
     }
 
     // Folders dropped anywhere on the window add stacks, like the

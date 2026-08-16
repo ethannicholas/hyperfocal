@@ -56,6 +56,22 @@ struct ContentView: View {
             }
             return true
         }
+        // Saving is modal: the write itself runs off the main thread (the
+        // app never beachballs), but the window waits it out behind a live
+        // progress bar — an invisible background save left no sign anything
+        // had happened, and interacting mid-write only invited confusion
+        // about what state the file would hold. Quit is vetoed for the same
+        // duration (AppModel.confirmTermination).
+        .sheet(isPresented: Binding(get: { model.savingProject }, set: { _ in })) {
+            VStack(spacing: 12) {
+                Text("Saving project…")
+                ProgressView(value: model.saveProgress)
+                    .frame(width: 260)
+                    .accessibilityIdentifier("project.saving-progress")
+            }
+            .padding(24)
+            .interactiveDismissDisabled()
+        }
     }
 
     // MARK: - Sidebar

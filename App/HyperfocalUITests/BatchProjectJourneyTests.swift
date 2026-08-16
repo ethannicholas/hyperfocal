@@ -81,17 +81,27 @@ final class BatchProjectJourneyTests: XCTestCase {
             XCTAssertTrue(waitFor { second.buttons["export.result"].isEnabled },
                           "stack-b lost its result across the round trip")
 
-            // Save on an opened project writes back in place — no panel.
+            // A freshly opened project is exactly what its file holds, so
+            // Save has nothing to do — the disabled item is the visible
+            // "everything is saved".
+            XCTAssertFalse(menuItemEnabled(second, menu: "File", item: "Save Project"),
+                           "Save must disable for a clean, just-opened project")
+            // An edit re-arms it; Save then writes back in place — no panel —
+            // and goes dark again once the (asynchronous) write lands.
+            try sendCommand(["action": "set-slider", "id": "tone.slider.exposure",
+                             "value": "0.5"])
             let before = (try? FileManager.default
                 .attributesOfItem(atPath: project.path)[.modificationDate]) as? Date
             clickMenuItem(second, menu: "File", item: "Save Project")
             XCTAssertFalse(second.windows["Save"].waitForExistence(timeout: 2),
                            "Save on an opened project must not ask where")
-            XCTAssertTrue(waitFor(timeout: 10) {
+            XCTAssertTrue(waitFor(timeout: 30) {
                 let after = (try? FileManager.default
                     .attributesOfItem(atPath: project.path)[.modificationDate]) as? Date
                 return after != nil && before != nil && after! > before!
             }, "Save should have rewritten the project file in place")
+            XCTAssertFalse(menuItemEnabled(second, menu: "File", item: "Save Project"),
+                           "Save must disable again once the write lands")
         }
     }
 }
