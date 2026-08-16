@@ -920,6 +920,254 @@ public enum PyramidFusion {
                                  frame: (Int) throws -> ImageBuffer) throws {
         let (w, h) = ws.sizes[0]
         let debug = env["HYPERFOCAL_PMAX_BG_DEBUG"] != nil
+        var govBg = [Float](repeating: 0, count: w * h)
+
+        // Tier L: LIT never-focused membership — scene material the stack's
+        // sweep never reaches (started past the nearest structure / ended
+        // before the farthest), the PMax mirror of DMap's tier R. Neither
+        // existing arm can see it: the near-black arm requires darkness, and
+        // the open-background arm requires ≥100 pixels whose renditions
+        // agree within an absolute 0.02 — a bright defocused foreground
+        // swings far past both. Membership is per-pixel: lit in its darkest
+        // frame (the same scene-relative 0.05 knee DMap's spill/rescue
+        // partition uses — a DARK pixel whose energy never moves is
+        // backdrop, and stays with the shipped tracks), never sharp by
+        // energy, and never moving by the N-anchored ratio (both together,
+        // so no focusing content can qualify by either test alone), closed
+        // to bridge bokeh gaps. Components below the size floor stay
+        // shipped. Deliberately no border-contact, clean-anchor, or
+        // flatness clause — those identify BACKDROPS, and tier L's members
+        // are scene material wherever they sit.
+        let litOff = env["HYPERFOCAL_PMAX_LIT_OFF"] != nil
+        let litFrac = Float(env["HYPERFOCAL_PMAX_LIT_FRAC"] ?? "") ?? 0.05
+        let f0 = DMapFusion.sharpnessDownsample
+        let lgw = (w + f0 - 1) / f0, lgh = (h + f0 - 1) / f0
+        let lbw = (lgw + blockCells - 1) / blockCells
+        let lbh = (lgh + blockCells - 1) / blockCells
+        // Per-block committed frame for tier-L blocks, -1 elsewhere. Filled
+        // here — the commitment is part of ADMISSION: a lit component whose
+        // mass curve holds no significant bump has no honest frame to
+        // commit to, and admitting it anyway would hand its blocks to the
+        // per-block argmax, whose scatter inside a never-focused region is
+        // the exact mosaic this tier exists to remove (measured during the
+        // DMap tier-R work: windows to 328 px agreed with the region's true
+        // frame less than half the time). Such components stay entirely
+        // with shipped rendering.
+        var litBlockFrame = [Int32](repeating: -1, count: lbw * lbh)
+        var litMember = 0
+        if !litOff {
+            // Membership at CELL level: lit AND not-confident, the exact
+            // mirror of DMap tier R's "lit no-signal" partition, built from
+            // the same scale-free discriminators governance already trusts.
+            // A first cut used per-pixel absolute tests (never sharp below
+            // 0.15 × p99 energy, never moving below the N-anchored ratio)
+            // and detonated at full resolution: linear-light p99 is
+            // specular-dominated, so most of a 45 MP scene read "never
+            // sharp", one 27 M px component swallowed subject and blob
+            // alike, and its mass curve — bokeh sweeps included — committed
+            // the lot to a mid-stack frame at the marginal z of exactly the
+            // old 1.5 cut. The cell-ratio test has no such anchor: in-focus
+            // texture moves 100–5000:1 across the sweep, defocused-garden
+            // bokeh 5–30:1, a never-focused foreground's residual bump
+            // 2–4:1, noise 1.1–1.3:1 — the same population figures the
+            // confidence cut below was calibrated on.
+            let litCut = litFrac * max(PlaneMath.percentileLow(lumMax0, 0.95), 1e-6)
+            let cellLumMin = DMapFusion.boxDownsample(lumMin0, width: w, height: h,
+                                                      factor: f0)
+            // Two ratio cuts with distinct roles, and the measurements that
+            // forced the split: the CORE (< 4, the BFS confidence family)
+            // is what components and the z decision are built from — at 30
+            // the blob merged with the mid-ground's own bokeh fields
+            // (also 5–30) and the merged giant's mass curve diluted below
+            // every z, so nothing committed at all. The EXPANSION cut
+            // (< 30) is rendering coverage only: glints inside a
+            // never-focused region clear 4 (their bump is real) but ride
+            // the bokeh family, and excluding them left max-of-N wash
+            // islands speckled through committed content. Expansion is a
+            // bounded BFS from committed cores — cell-blocked by focusing
+            // texture (100–5000, far above both cuts), distance-blocked
+            // from the mid-ground fields the core cut exists to keep out.
+            let coreRatio = Float(env["HYPERFOCAL_PMAX_LIT_CORE"] ?? "") ?? 4
+            let expandRatio = Float(env["HYPERFOCAL_PMAX_LIT_RATIO"] ?? "") ?? 30
+            let expandReach = Int(env["HYPERFOCAL_PMAX_LIT_REACH"] ?? "") ?? 16
+            let confFloor = (Float(env["HYPERFOCAL_PMAX_GOV_FLOOR"] ?? "") ?? 0.002)
+                * max(PlaneMath.percentileLow(cellMax, 0.99), 1e-7)
+            var m = [Bool](repeating: false, count: lgw * lgh)
+            var m30 = [Bool](repeating: false, count: lgw * lgh)
+            for i in m.indices {
+                guard cellLumMin[i] > litCut else { continue }
+                let strong = cellMax[i] > confFloor
+                let r4 = cellMax[i] > coreRatio * max(cellMin[i], 1e-7)
+                let r30 = cellMax[i] > expandRatio * max(cellMin[i], 1e-7)
+                m[i] = !(strong && r4)
+                m30[i] = !(strong && r30)
+            }
+            // Fill enclosed holes: glints inside a never-focused region are
+            // "confident" (their bump clears the ratio) yet belong to the
+            // region — excluded, they render as max-of-N wash islands inside
+            // committed content, a patchwork of visibly different blur.
+            // Hole-filling (complement components that touch no grid border,
+            // below a size ceiling) admits them without moving the OUTER
+            // boundary one cell — the conservative-subject-mask lesson from
+            // the governance review; a morphological close was rejected for
+            // exactly that reason (it also claims concave subject inlets).
+            let holes = Morphology.components(open: m.map { !$0 },
+                                              width: lgw, height: lgh)
+            let holeMax = 4096  // cells; generous for glint clusters,
+                                // far below any real scene region
+            for i in m.indices where holes.labels[i] > 0 {
+                let c = Int(holes.labels[i]) - 1
+                if !holes.touchesBorder[c] && holes.sizes[c] <= holeMax {
+                    m[i] = true
+                }
+            }
+            let comps = Morphology.components(open: m, width: lgw, height: lgh)
+            // Size floor in cells (64 px² each): regions, not speckle — and
+            // small enough that a real never-focused band still qualifies.
+            let minCells = 256
+            let litKeep = (0..<comps.count).map { comps.sizes[$0] >= minCells }
+            if litKeep.contains(true) {
+                var cellLabel = [Int32](repeating: 0, count: lgw * lgh)
+                for i in cellLabel.indices where comps.labels[i] > 0
+                    && litKeep[Int(comps.labels[i]) - 1] {
+                    cellLabel[i] = comps.labels[i]
+                }
+                var blockComp = [Int32](repeating: 0, count: lbw * lbh)
+                for by in 0..<lbh {
+                    for bx in 0..<lbw {
+                        var counts: [Int32: Int] = [:]
+                        for y in (by * blockCells)..<min((by + 1) * blockCells, lgh) {
+                            for x in (bx * blockCells)..<min((bx + 1) * blockCells, lgw) {
+                                let l = cellLabel[y * lgw + x]
+                                if l > 0 { counts[l, default: 0] += 1 }
+                            }
+                        }
+                        if let (l, n) = counts.max(by: { $0.value < $1.value }),
+                           n * 2 >= blockCells * blockCells {
+                            blockComp[by * lbw + bx] = l
+                        }
+                    }
+                }
+                var compCurve: [Int32: [Double]] = [:]
+                for b in 0..<(lbw * lbh) where blockComp[b] > 0 {
+                    var cur = compCurve[blockComp[b]]
+                        ?? [Double](repeating: 0, count: frameCount)
+                    for fr in 0..<frameCount {
+                        cur[fr] += Double(blockEnergy[b * frameCount + fr])
+                    }
+                    compCurve[blockComp[b]] = cur
+                }
+                // Significance floor 2: the tier-R populations put flat
+                // noise at ≤ 1.3 whatever the component size and genuine
+                // bumps at 2.5+; the old 1.5 admitted a scene-swallowing
+                // component at exactly 1.5 (see the membership comment).
+                let zLo = Float(env["HYPERFOCAL_PMAX_LIT_Z"] ?? "") ?? 2
+                // NEAR-boundary argmaxes only, each exclusion forced by a
+                // measurement. Mid-stack: the core cut's low end (2–4)
+                // overlaps faint-but-real focusing texture (the measured
+                // 3–8 no-man's land), and whole-region commitment painted
+                // this stack's mid-scene moss pockets with a defocused
+                // frame — the governance review's "sharp sub-content
+                // replaced by blur" failure re-measured. FAR boundary: a
+                // lit background is a focus continuum running off the
+                // sweep's far end — its content peaks across many late
+                // frames, and committing the lot to the last one failed
+                // C7 (+0.9% background lift) and C8 (121 clustered blur
+                // cells) on the lit-garden acceptance stack while touching
+                // 70% of its pixels. A NEAR argmax has shown no such
+                // continuum: a stack started past its nearest structure
+                // yields one coherent beyond-sweep layer, and the first
+                // frame is the best rendition physics permits. The far
+                // case stays with shipped rendering until the per-cell
+                // focusing veto the governance review calls for exists.
+                let window = max(2, frameCount / 16)
+                var committedFrame: [Int32: Int32] = [:]
+                for (comp, curve) in compCurve {
+                    var mx = -Double.infinity
+                    var am = 0
+                    for fr in 0..<frameCount where curve[fr] > mx {
+                        mx = curve[fr]; am = fr
+                    }
+                    guard am <= window else { continue }
+                    let sorted = curve.sorted()
+                    let med = sorted[frameCount / 2]
+                    let p90 = sorted[min(Int(Float(frameCount) * 0.9), frameCount - 1)]
+                    let band = p90 - med
+                    guard band > 0, mx > med, Float((mx - med) / band) >= zLo
+                    else { continue }
+                    committedFrame[comp] = Int32(am)
+                    log?("pmax gov: lit component (\(comps.sizes[Int(comp) - 1]) cells) "
+                         + "committed to frame \(am + 1) "
+                         + String(format: "(z %.1f)", (mx - med) / band))
+                }
+                if !committedFrame.isEmpty {
+                    // Expansion: bounded BFS from each committed core
+                    // through the wider mask. Cells inherit the core's
+                    // label (and so its frame); first-come at meeting
+                    // fronts, which only happens between two committed
+                    // regions and lands in the feather either way.
+                    var dist = [Int32](repeating: .max, count: lgw * lgh)
+                    var queue = [Int32]()
+                    for i in cellLabel.indices
+                        where cellLabel[i] > 0
+                        && committedFrame[cellLabel[i]] != nil {
+                        dist[i] = 0
+                        queue.append(Int32(i))
+                    }
+                    var head = 0
+                    while head < queue.count {
+                        let i = Int(queue[head]); head += 1
+                        let d = dist[i]
+                        guard d < Int32(expandReach) else { continue }
+                        let y = i / lgw, x = i % lgw
+                        for ny in max(y - 1, 0)...min(y + 1, lgh - 1) {
+                            for nx in max(x - 1, 0)...min(x + 1, lgw - 1) {
+                                let ni = ny * lgw + nx
+                                if dist[ni] == .max, m30[ni] {
+                                    dist[ni] = d + 1
+                                    cellLabel[ni] = cellLabel[i]
+                                    queue.append(Int32(ni))
+                                }
+                            }
+                        }
+                    }
+                    // Blocks from the EXPANDED labels, frames from the
+                    // core decision.
+                    for by in 0..<lbh {
+                        for bx in 0..<lbw {
+                            var counts: [Int32: Int] = [:]
+                            for y in (by * blockCells)..<min((by + 1) * blockCells, lgh) {
+                                for x in (bx * blockCells)..<min((bx + 1) * blockCells, lgw) {
+                                    let l = cellLabel[y * lgw + x]
+                                    if l > 0, committedFrame[l] != nil {
+                                        counts[l, default: 0] += 1
+                                    }
+                                }
+                            }
+                            if let (l, n) = counts.max(by: { $0.value < $1.value }),
+                               n * 2 >= blockCells * blockCells {
+                                litBlockFrame[by * lbw + bx] = committedFrame[l]!
+                            }
+                        }
+                    }
+                    // Full-res membership from the expanded labels. The
+                    // composite's feather softens the boundary; focusing
+                    // texture can never be a member (cell-blocked by both
+                    // cuts).
+                    for y in 0..<h {
+                        let gy = y / f0
+                        for x in 0..<w {
+                            let l = cellLabel[gy * lgw + x / f0]
+                            if l > 0, committedFrame[l] != nil {
+                                govBg[y * w + x] = 1
+                                litMember += 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Stack gate: govern only when the CLEAN-FIELD geometry (energy-only
         // subject test, where bright feature interiors stay enclosed) shows
         // a provably TEXTURED open component. Governance's own widened
@@ -933,48 +1181,52 @@ public enum PyramidFusion {
         // clean-field cut (0.0035) and this one get NEITHER mechanism —
         // shipped behavior — which is the safe default for a border case.
         let govFlatCut = Float(env["HYPERFOCAL_PMAX_GOV_FLAT"] ?? "") ?? 0.006
-        guard let cleanGeo = openFieldCandidates(focusMax0: focusMax0,
-                                                 focusMin0: focusMin0,
-                                                 lumMin0: lumMin0, lumMax0: lumMax0,
-                                                 frameCount: frameCount,
-                                                 width: w, height: h, env: env),
-              componentFlatness(comps: cleanGeo.comps, candidate: cleanGeo.candidate,
-                                lumMin0: lumMin0, lumMax0: lumMax0,
-                                rLo: cleanGeo.rLo, rHi: cleanGeo.rHi,
-                                width: w, height: h, env: env)
-                  .sigma.contains(where: { $0 != .infinity && $0 > govFlatCut })
-        else {
-            log?("pmax gov: no textured open background — pass skipped")
-            return
-        }
-        guard let open = openFieldCandidates(focusMax0: focusMax0, focusMin0: focusMin0,
-                                             lumMin0: lumMin0, lumMax0: lumMax0,
-                                             frameCount: frameCount,
-                                             width: w, height: h, env: env,
-                                             governance: true) else {
-            log?("pmax gov: no open-field candidates — pass skipped")
-            return
-        }
-        // Governance's membership is the TEXTURED complement of the
-        // clean-field scope: candidate components that are NOT provably
-        // flat. Flat components keep the shipped clean-field/near-black
-        // rendering — it is a faithful model exactly there, and governing
-        // them repainted healthy backdrops wholesale.
-        let flat = componentFlatness(comps: open.comps, candidate: open.candidate,
-                                     lumMin0: lumMin0, lumMax0: lumMax0,
-                                     rLo: open.rLo, rHi: open.rHi,
-                                     width: w, height: h, env: env)
-        let flatCut = Float(env["HYPERFOCAL_PMAX_BG_FLAT"] ?? "") ?? 0.0035
-        var govBg = [Float](repeating: 0, count: w * h)
+        // The textured-open-background arm is the still-experimental half
+        // (its radius-6 calibration is the one manual review rejected):
+        // it runs only on the explicit radius opt-in, while tier L above
+        // ships with the focus gate.
         var member = 0
-        for i in govBg.indices where open.comps.labels[i] > 0 {
-            let c = Int(open.comps.labels[i]) - 1
-            if open.candidate[c] && !(flat.sigma[c] < flatCut) {
-                govBg[i] = 1; member += 1
+        if radius > 0, let cleanGeo = openFieldCandidates(focusMax0: focusMax0,
+                                              focusMin0: focusMin0,
+                                              lumMin0: lumMin0, lumMax0: lumMax0,
+                                              frameCount: frameCount,
+                                              width: w, height: h, env: env),
+           componentFlatness(comps: cleanGeo.comps, candidate: cleanGeo.candidate,
+                             lumMin0: lumMin0, lumMax0: lumMax0,
+                             rLo: cleanGeo.rLo, rHi: cleanGeo.rHi,
+                             width: w, height: h, env: env)
+               .sigma.contains(where: { $0 != .infinity && $0 > govFlatCut }),
+           let open = openFieldCandidates(focusMax0: focusMax0, focusMin0: focusMin0,
+                                          lumMin0: lumMin0, lumMax0: lumMax0,
+                                          frameCount: frameCount,
+                                          width: w, height: h, env: env,
+                                          governance: true) {
+            // Governance's open-background membership is the TEXTURED
+            // complement of the clean-field scope: candidate components that
+            // are NOT provably flat. Flat components keep the shipped
+            // clean-field/near-black rendering — it is a faithful model
+            // exactly there, and governing them repainted healthy backdrops
+            // wholesale.
+            let flat = componentFlatness(comps: open.comps, candidate: open.candidate,
+                                         lumMin0: lumMin0, lumMax0: lumMax0,
+                                         rLo: open.rLo, rHi: open.rHi,
+                                         width: w, height: h, env: env)
+            let flatCut = Float(env["HYPERFOCAL_PMAX_BG_FLAT"] ?? "") ?? 0.0035
+            for i in govBg.indices where open.comps.labels[i] > 0 && govBg[i] == 0 {
+                let c = Int(open.comps.labels[i]) - 1
+                if open.candidate[c] && !(flat.sigma[c] < flatCut) {
+                    govBg[i] = 1; member += 1
+                }
             }
         }
-        guard member > 0 else {
-            log?("pmax gov: no textured open component — pass skipped")
+        // Either arm can carry the pass alone: the textured-background arm's
+        // gates identify backdrops and say nothing about tier L's lit scene
+        // material (a stack whose only defect is a never-focused foreground
+        // has a flat black backdrop, which is exactly the geometry the
+        // stack gate exists to skip).
+        guard litMember + member > 0 else {
+            log?("pmax gov: no textured open background and no lit "
+                 + "never-focused region — pass skipped")
             return
         }
         DMapFusion.dumpPlane(govBg, env: "HYPERFOCAL_DUMP_GOV_BG")
@@ -1101,6 +1353,19 @@ public enum PyramidFusion {
             // blocks steer the re-decode budget by exactly nothing.
             wonMass[bestF] += Double(bestE - minE)
         }
+        // Tier-L committed frames carry their components' mass so the
+        // dominant ranking sees them (commitment itself was decided during
+        // admission, from the same block-energy table).
+        for b in 0..<(bw * bh) where litBlockFrame[b] >= 0 {
+            var mx = -Float.infinity
+            var mn = Float.infinity
+            for fr in 0..<frameCount {
+                let e = blockEnergy[b * frameCount + fr]
+                if e > mx { mx = e }
+                if e < mn { mn = e }
+            }
+            wonMass[Int(litBlockFrame[b])] += Double(max(mx - mn, 0))
+        }
         // The selective second pass re-decodes only the frames that win
         // significant mass, capped (a full-field textured background can
         // legitimately want many — its liveliest frame varies continuously
@@ -1108,11 +1373,17 @@ public enum PyramidFusion {
         // to 0.5-0.8× the liveliest rendition). Blocks whose winner did not
         // make the cut fall back to the best RANKED frame by the same
         // table — a measured second choice, not a frame-index guess.
+        // Tier-L committed frames join unconditionally: their blocks render
+        // that frame and no other, so it must be decoded.
         let maxDom = max(Int(env["HYPERFOCAL_PMAX_GOV_FRAMES"] ?? "") ?? 8, 1)
         let totalMass = wonMass.reduce(0, +)
-        let dominant = wonMass.indices.filter { wonMass[$0] > 0.02 * totalMass }
+        var dominant = wonMass.indices.filter { wonMass[$0] > 0.02 * totalMass }
             .sorted { wonMass[$0] > wonMass[$1] }
             .prefix(maxDom).map { $0 }
+        for b in 0..<(bw * bh) where litBlockFrame[b] >= 0 {
+            let fr = Int(litBlockFrame[b])
+            if !dominant.contains(fr) { dominant.append(fr) }
+        }
         guard !dominant.isEmpty else {
             log?("pmax gov: no frame wins significant mass — pass skipped")
             return
@@ -1147,7 +1418,15 @@ public enum PyramidFusion {
                 }
             }
         }
-        for b in 0..<(bw * bh) where blockBest[b] >= 0 {
+        for b in 0..<(bw * bh) {
+            // A tier-L committed block is pinned: remapping it by re-measured
+            // energy would reintroduce exactly the per-block scatter the
+            // component decision exists to remove.
+            if litBlockFrame[b] >= 0 {
+                blockBest[b] = litBlockFrame[b]
+                continue
+            }
+            guard blockBest[b] >= 0 else { continue }
             var bestK = -1
             var bestE: Float = 0
             for k in 0..<dominant.count
@@ -1168,7 +1447,7 @@ public enum PyramidFusion {
             for by in 0..<bh {
                 for bx in 0..<bw {
                     let b = by * bw + bx
-                    guard blockBest[b] >= 0 else { continue }
+                    guard blockBest[b] >= 0, litBlockFrame[b] < 0 else { continue }
                     let ownK = dominant.firstIndex(of: Int(blockBest[b]))!
                     let ownE = blockDomE[b * dominant.count + ownK]
                     var bestFrame = Int(blockBest[b])
@@ -1596,17 +1875,27 @@ public enum PyramidFusion {
         // 2026-07-28), configured once here via GPUSelect.
         if texBase { log?("pmax: textured base on — CPU engine") }
         if smoothSq { log?("pmax: squared-luma energy ablation — CPU engine") }
-        // Background governance (see Options.backgroundGovernanceRadius): the
-        // env override is the experimental surface while there is no UI —
-        // same precedent as HYPERFOCAL_PMAX_NEARBLACK_OFF, so the dual-UI
-        // invariant isn't tripped before the ship-on decision. CPU-only the
-        // (its second pass touches ≤ 8 frames; the GPU story is
-        // measure-first, per the design note's parity section).
+        // Background governance runs in two arms with different ship states.
+        // Tier L (lit never-focused regional commitment) ships ON whenever
+        // the focus gate is enabled — the debloom slider's 0 is its off
+        // switch, and HYPERFOCAL_PMAX_LIT_OFF is the ablation. The textured
+        // -open-background arm stays experimental behind
+        // Options.backgroundGovernanceRadius / HYPERFOCAL_PMAX_GOV_RADIUS
+        // (same precedent as HYPERFOCAL_PMAX_NEARBLACK_OFF, so the dual-UI
+        // invariant isn't tripped before its ship-on decision). Governance
+        // is CPU-only for now — its cell/block energy tables exist only in
+        // the CPU streaming loop — so any live arm routes the fuse to the
+        // CPU engine, explicit --engine gpu included (the texturedBase
+        // precedent). The GPU-side table accumulation that lifts this is
+        // the immediate follow-up; until it lands the ci-gate's pmax
+        // cpu↔gpu comparison degenerates to same-engine.
         let govRadius = Int(env["HYPERFOCAL_PMAX_GOV_RADIUS"] ?? "")
             ?? options.backgroundGovernanceRadius
-        let governance = govRadius > 0 && focusGateEnabled
+        let litGov = focusGateEnabled && env["HYPERFOCAL_PMAX_LIT_OFF"] == nil
+        let governance = (govRadius > 0 || litGov) && focusGateEnabled
         if governance {
-            log?("pmax: background governance on (radius \(govRadius) cells) — CPU engine")
+            log?("pmax: background governance on (lit \(litGov ? "on" : "off"), "
+                 + "textured radius \(govRadius) cells) — CPU engine")
         }
         let preferGPU = preferGPU && !texBase && !smoothSq
             && !governance
