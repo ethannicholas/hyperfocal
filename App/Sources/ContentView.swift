@@ -753,16 +753,10 @@ struct ContentView: View {
                         rect: $model.cropRect,
                         angle: $model.cropAngle)) : nil,
                     header: {
-                        Picker("", selection: $model.outputMode) {
-                            ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
-                                Text(mode.displayName).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .controlSize(.small)
-                        .frame(width: 130)
-                        .disabled(model.depthPreview == nil)
-                        .accessibilityIdentifier("output.mode")
+                        OutputModePicker(mode: model.outputMode,
+                                         enabled: model.depthPreview != nil,
+                                         select: { model.outputMode = $0 })
+                            .equatable()
                     }
                 )
                 .overlay(alignment: .bottom) {
@@ -844,6 +838,48 @@ struct ContentView: View {
 
 }
 
+/// The Result/Depth segmented switch, used by the fusion output pane and the
+/// retouch pane. Deliberately Equatable and mounted via `.equatable()` so its
+/// subtree re-evaluates ONLY when the selection or enablement actually
+/// changes: on macOS 26, SwiftUI's segmented-picker bridge allocates
+/// observation-tracking objects every time the picker participates in an
+/// update pass and its platform item list retains them indefinitely — with
+/// the picker riding panes that re-render on every model publish, a long
+/// retouch session accumulated ~32,000 of them, and every SwiftUI
+/// transaction then walked that pile (measured: a 13-minute main-thread burn
+/// and the brush cursor repainting at ~2 fps, worsening with stroke count
+/// and never recovering; 30 scripted strokes leaked exactly 91 objects with
+/// the picker mounted and exactly 0 without it). Strokes leave the selection
+/// untouched, so equality-gating pins the leak to actual mode switches — a
+/// handful per session.
+///
+/// The selection writes through a captured closure rather than a Binding in
+/// the Equatable surface: EquatableView keeps serving the OLD view value
+/// while == holds, and a closure over the enclosing binding still writes to
+/// the live model either way.
+struct OutputModePicker: View, Equatable {
+    let mode: AppModel.OutputMode
+    let enabled: Bool
+    let select: (AppModel.OutputMode) -> Void
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.mode == b.mode && a.enabled == b.enabled
+    }
+
+    var body: some View {
+        Picker("", selection: Binding(get: { mode }, set: { select($0) })) {
+            ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
+                Text(mode.displayName).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .frame(width: 130)
+        .disabled(!enabled)
+        .accessibilityIdentifier("output.mode")
+    }
+}
+
 // MARK: - Retouch preview area
 
 /// Owns observation of the retouch session (panes must live-update with
@@ -900,15 +936,11 @@ struct RetouchPreviewArea: View {
                                               cropRect: crop,
                                               cropAngle: cropAngle)),
                 header: {
-                    Picker("", selection: $outputMode) {
-                        ForEach(AppModel.OutputMode.allCases, id: \.self) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .controlSize(.small)
-                    .frame(width: 130)
-                    .accessibilityIdentifier("output.mode")
+                    // The binding is intentionally unwrapped into value +
+                    // closure — see OutputModePicker's leak note.
+                    OutputModePicker(mode: outputMode, enabled: true,
+                                     select: { outputMode = $0 })
+                        .equatable()
                 }
             )
         }
