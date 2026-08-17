@@ -710,7 +710,7 @@ struct Synth: ParsableCommand {
     @Option(help: "Exposure flicker amplitude (0.1 = ±10% per-frame gain).") var flicker: Float = 0
     @Option(help: "Per-pixel Gaussian sensor noise sigma in linear light (e.g. 0.005).") var noise: Float = 0
     @Option(help: "Frame file format: tif, png, or jpg.") var ext: String = "tif"
-    @Option(help: "Scene: plane (tilted texture), object (bright subject on dark background), brightObject (dark subject on bright background), or foreground (never-focused lit near layer over the plane).")
+    @Option(help: "Scene: plane (tilted texture), object (bright subject on dark background), brightObject (dark subject on bright background), whiteOnWhite (bright low-contrast subject on bright background), or foreground (never-focused lit near layer over the plane).")
     var scene: String = "plane"
     @Option(help: "Darken this frame to ~2% (synthetic flash misfire, for bad-frame detection tests).")
     var misfireFrame: Int? = nil

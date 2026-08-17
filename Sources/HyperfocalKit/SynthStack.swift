@@ -17,12 +17,25 @@ public enum SynthStack {
         /// the halo torture test (defocus spill onto featureless background).
         case object
         /// Dark textured object over a near-white far background — the
-        /// sign-inverted case. Scene-relative "near-black" membership lands
-        /// inside the subject here, not on a backdrop, so any keep-darkest
-        /// fallback can only damage it. Pair with `flicker` to also exercise
-        /// darkest-frame selection on a bright field, where un-normalized
-        /// exposure makes "darkest" mean "dimmest-exposed".
+        /// sign-inverted contamination case: the backdrop's bloom spills
+        /// INTO the dark subject, so this measures whether the debloom
+        /// family defends a subject the scene-relative "near-black" cut
+        /// claims. (Measured 2026-08-17: keep-darkest is the correct
+        /// defense here — darkest = least bright-contaminated — so gating
+        /// the near-black arm off on bright fields costs 2.9 dB on this
+        /// scene.) Pair with `flicker` to also exercise darkest-frame
+        /// selection on a bright field, where un-normalized exposure makes
+        /// "darkest" mean "dimmest-exposed".
         case brightObject
+        /// Bright LOW-CONTRAST object over a near-white far background —
+        /// white-on-white. Here defocus DIMS the subject (its faint bright
+        /// texture blurs away against the bright field), so a darkest-frame
+        /// fallback selects the blurriest rendition: the polarity where
+        /// keep-darkest damages instead of defends. This is the scene an
+        /// absolute focus threshold fails — the subject's fine energy never
+        /// clears a cut calibrated on high-contrast content, so the gated
+        /// coarse levels never see that it is sharp.
+        case whiteOnWhite
         /// The plane scene with a lit, textured near layer the focus sweep
         /// never reaches (the stack starts past its nearest structure). The
         /// ground truth renders that layer at the FIRST frame's focus — the
@@ -358,7 +371,7 @@ public enum SynthStack {
             truth = tex
             makeFrame = planeFrameMaker(tex: tex, maxBlur: options.maxBlur, log: log)
 
-        case .object, .brightObject:
+        case .object, .brightObject, .whiteOnWhite:
             // Textured subject (flat, at depth 0.3) premultiplied by a soft
             // ellipse mask, over a textured far background at depth 1.0.
             // `.object`: bright subject over near-black — defocused frames
@@ -368,16 +381,28 @@ public enum SynthStack {
             // texture) over a near-white sweep with the SAME backdrop
             // contrast, so mechanisms calibrated on dark backdrops meet the
             // field they were not calibrated for.
+            // `.whiteOnWhite`: bright low-contrast subject over the same
+            // near-white sweep — the subject's fine energy sits far below
+            // any absolute focus cut calibrated on high-contrast content,
+            // and defocus DIMS it, so darkest-frame fallbacks pick blur.
             let tex = groundTruth(width: w, height: h, seed: seed)
             var bg = groundTruth(width: w, height: h, seed: seed &+ 7)
             let subjectMap: (SIMD4<Float>) -> SIMD4<Float>
-            if options.scene == .object {
+            switch options.scene {
+            case .object:
                 bg.scaleRGB(by: 0.05)
                 subjectMap = { $0 }
-            } else {
+            case .brightObject:
                 bg.affineRGB(scale: 0.05, offset: 0.95)
                 subjectMap = { v in
                     SIMD4<Float>(0.02, 0.02, 0.02, 0) + v * SIMD4<Float>(0.18, 0.18, 0.18, 1)
+                }
+            default:
+                bg.affineRGB(scale: 0.05, offset: 0.95)
+                // 0.80-0.95: bright, contrast 0.15 — real texture, but fine
+                // energy well under high-contrast calibrations.
+                subjectMap = { v in
+                    SIMD4<Float>(0.80, 0.80, 0.80, 0) + v * SIMD4<Float>(0.15, 0.15, 0.15, 1)
                 }
             }
             let subject = ellipseLayer(tex: tex, map: subjectMap,

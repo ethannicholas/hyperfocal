@@ -90,6 +90,14 @@ fi
 #    The remaining gap to DMap (~6.6 dB) is the un-remediated rest of
 #    the family (darkest-base and friends), so later remediations
 #    should raise this number again — re-raise the floor when they do.
+#  - whiteOnWhite: bright LOW-CONTRAST subject on the same near-white
+#    sweep — the polarity where defocus DIMS the subject, so darkest-
+#    frame fallbacks would pick blur. Measured 2026-08-17: the debloom
+#    family is inert here (every ablation within 0.4 dB) and the
+#    dmap-pmax gap (57.3 vs 46.5) is max-of-N selection diluting
+#    low-contrast coefficients — the known low-contrast weakness. The
+#    floors fence both behaviors; the pmax floor is the number the
+#    weak-speckle work should raise.
 #  - foreground (sensor noise, no breathing/jitter): a lit near layer
 #    the sweep never reaches — the never-focused-foreground class.
 #    Noise is load-bearing: it floors the energy ratios the way real
@@ -100,6 +108,7 @@ fi
 echo "== scene gates (bias-class fixtures)"
 "$BIN" synth -o "$WORK/synth-object" --scene object
 "$BIN" synth -o "$WORK/synth-bright" --scene brightObject --flicker 0.02
+"$BIN" synth -o "$WORK/synth-wow" --scene whiteOnWhite
 "$BIN" synth -o "$WORK/synth-fg" --scene foreground --noise 0.002 \
     --breathing 0 --jitter 0
 
@@ -108,12 +117,16 @@ if [ "$(uname)" = Darwin ]; then
     gate pmax 33.2 "$WORK/synth-object" object-pmax
     gate dmap 46.3 "$WORK/synth-bright" bright-dmap
     gate pmax 39.7 "$WORK/synth-bright" bright-pmax
+    gate dmap 56.8 "$WORK/synth-wow" wow-dmap
+    gate pmax 46.0 "$WORK/synth-wow" wow-pmax
     gate dmap 36.4 "$WORK/synth-fg" fg-dmap
 else
     report dmap "$WORK/synth-object" object-dmap
     report pmax "$WORK/synth-object" object-pmax
     report dmap "$WORK/synth-bright" bright-dmap
     report pmax "$WORK/synth-bright" bright-pmax
+    report dmap "$WORK/synth-wow" wow-dmap
+    report pmax "$WORK/synth-wow" wow-pmax
     report dmap "$WORK/synth-fg" fg-dmap
 fi
 
