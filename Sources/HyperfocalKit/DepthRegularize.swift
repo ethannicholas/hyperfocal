@@ -309,6 +309,9 @@ public enum DepthRegularize {
                     if s > 0 {
                         commitDepth[c] = Float(am)
                         commitStrength[c] = s
+                        log?("guided regularizer: lit component (\(comps.sizes[c]) cells) "
+                             + "committed to frame \(am + 1) "
+                             + String(format: "(z %.1f)", z))
                     }
                 }
                 for i in 0..<gridCount {

@@ -707,8 +707,9 @@ struct Synth: ParsableCommand {
     @Option(help: "Total focus-breathing scale change (0.02 = 2%).") var breathing: Float = 0.02
     @Option(help: "Max per-frame translation jitter in pixels.") var jitter: Float = 3
     @Option(help: "Exposure flicker amplitude (0.1 = ±10% per-frame gain).") var flicker: Float = 0
+    @Option(help: "Per-pixel Gaussian sensor noise sigma in linear light (e.g. 0.005).") var noise: Float = 0
     @Option(help: "Frame file format: tif, png, or jpg.") var ext: String = "tif"
-    @Option(help: "Scene: plane (tilted texture) or object (subject on dark background).")
+    @Option(help: "Scene: plane (tilted texture), object (bright subject on dark background), brightObject (dark subject on bright background), or foreground (never-focused lit near layer over the plane).")
     var scene: String = "plane"
     @Option(help: "Darken this frame to ~2% (synthetic flash misfire, for bad-frame detection tests).")
     var misfireFrame: Int? = nil
@@ -722,7 +723,8 @@ struct Synth: ParsableCommand {
 
     func run() throws {
         guard let sceneKind = SynthStack.Scene(rawValue: scene) else {
-            throw ValidationError("unknown scene '\(scene)' (use plane or object)")
+            let known = SynthStack.Scene.allCases.map(\.rawValue).joined(separator: ", ")
+            throw ValidationError("unknown scene '\(scene)' (use \(known))")
         }
         let reference = (frames % 2 == 0 ? frames + 1 : frames) / 2
         if misfireFrame == reference || bumpFrame == reference {
@@ -730,7 +732,7 @@ struct Synth: ParsableCommand {
         }
         let opts = SynthStack.Options(width: width, height: height, frames: frames,
                                       maxBlur: maxBlur, breathing: breathing, jitter: jitter,
-                                      flicker: flicker, scene: sceneKind,
+                                      flicker: flicker, noise: noise, scene: sceneKind,
                                       misfireFrame: misfireFrame, bumpFrame: bumpFrame,
                                       captureStart: captureStart.map { Date(timeIntervalSince1970: $0) },
                                       captureSpacing: captureSpacing)

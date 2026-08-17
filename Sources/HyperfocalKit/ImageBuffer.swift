@@ -100,6 +100,25 @@ public struct ImageBuffer {
         }
     }
 
+    /// RGB → RGB × scale + offset, leaving alpha (coverage) untouched —
+    /// e.g. remapping a texture into a near-white band (scale 0.05,
+    /// offset 0.95) for bright-field synthetic scenes.
+    public mutating func affineRGB(scale: Float, offset: Float) {
+        let w = width
+        let g = SIMD4<Float>(scale, scale, scale, 1)
+        let o = SIMD4<Float>(offset, offset, offset, 0)
+        pixels.withUnsafeMutableBufferPointer { px in
+            let p = px.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: height) { y in
+                var pi = y * w * 4
+                for _ in 0..<w {
+                    hfStoreRGBA(p, pi, hfLoadRGBA(p, pi) * g + o)
+                    pi += 4
+                }
+            }
+        }
+    }
+
     /// Rec. 709 luma as a single-channel plane. Planes stay f32: they are
     /// per-pixel scalars (a quarter of an RGBA plane's bytes), several of them
     /// carry frame indices and accumulator sums rather than [0,1] color, and

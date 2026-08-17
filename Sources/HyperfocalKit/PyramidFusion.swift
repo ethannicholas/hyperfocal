@@ -1022,6 +1022,13 @@ public enum PyramidFusion {
                 }
             }
             let comps = Morphology.components(open: m, width: lgw, height: lgh)
+            if debug {
+                let mc = m.filter { $0 }.count
+                let sizes = comps.sizes.sorted(by: >).prefix(5)
+                log?("pmax gov DEBUG: lit m=\(mc)/\(m.count) cells, "
+                     + "\(comps.count) comps, top sizes \(Array(sizes)), "
+                     + "litCut \(litCut)")
+            }
             // Size floor in cells (64 px² each): regions, not speckle — and
             // small enough that a real never-focused band still qualifies.
             let minCells = 256
@@ -1087,6 +1094,16 @@ public enum PyramidFusion {
                     var am = 0
                     for fr in 0..<frameCount where curve[fr] > mx {
                         mx = curve[fr]; am = fr
+                    }
+                    if debug {
+                        let s = curve.sorted()
+                        let m0 = s[frameCount / 2]
+                        let p9 = s[min(Int(Float(frameCount) * 0.9), frameCount - 1)]
+                        let zd = p9 - m0 > 0 ? (mx - m0) / (p9 - m0) : -1
+                        log?("pmax gov DEBUG: comp \(comp) "
+                             + "(\(comps.sizes[Int(comp) - 1]) cells) argmax \(am) "
+                             + "window \(window) z \(String(format: "%.2f", zd)) "
+                             + "curve[0..4] \(curve.prefix(5).map { Float($0) })")
                     }
                     guard am <= window else { continue }
                     let sorted = curve.sorted()

@@ -52,6 +52,108 @@ gate() { # method floor [stackdir [label]]
 gate dmap 38.2
 gate pmax "$PMAX_FLOOR"
 
+report() { # method stackdir label — fuse + compare, floor not yet calibrated
+    local method=$1 dir=$2 label=$3
+    "$BIN" fuse "$dir"/frame_*.tif -o "$WORK/out-$label.tif" \
+        --method "$method" --color-space p3
+    echo "$label: $("$BIN" compare "$WORK/out-$label.tif" "$dir/ground_truth.tif") (UNCALIBRATED — not gated)"
+}
+
+# The same plane WITH sensor noise. The clean plane is the one input
+# class a noise-robustness change cannot help (see the focusPreSigma
+# note above: it COST 0.31 dB here while lifting every real stack), so
+# gating only the clean scene punishes exactly the changes real stacks
+# reward. The noisy plane gates that direction honestly.
+"$BIN" synth -o "$WORK/synth-noisy" --noise 0.005
+if [ "$(uname)" = Darwin ]; then
+    # Measured macOS baselines 37.81 dmap / 37.57 pmax (bit-stable).
+    gate dmap 37.3 "$WORK/synth-noisy" noisy-dmap
+    gate pmax 37.1 "$WORK/synth-noisy" noisy-pmax
+else
+    report dmap "$WORK/synth-noisy" noisy-dmap
+    report pmax "$WORK/synth-noisy" noisy-pmax
+fi
+
+# Scene gates — the bias-class fixtures. The plane scene cannot express
+# any dark-backdrop, bright-field, or never-focused failure, so each
+# class gets its own synthetic scene and floor (macOS floors sit ~0.5 dB
+# under baselines that are bit-stable across reps on the calibration
+# machine; other platforms report until a session there calibrates,
+# same convention as the registration-scale gate below):
+#  - object: bright subject over a near-black backdrop — the halo /
+#    defocus-spill class.
+#  - brightObject (+2% flicker): dark subject over a near-white sweep —
+#    the sign-inverted-membership class. The PMax floor sits ~11 dB
+#    under DMap's because PMax applies no exposure normalization, so
+#    darkest-frame selection reads flicker as signal; exposure-
+#    normalization work should RAISE its number (then re-raise the
+#    floor), and any deepening of the bias fails it.
+#  - foreground (sensor noise, no breathing/jitter): a lit near layer
+#    the sweep never reaches — the never-focused-foreground class.
+#    Noise is load-bearing: it floors the energy ratios the way real
+#    sensors do (a noiseless defocused layer reads either flat or
+#    steeply "focusing", never the measured gentle decline). Breathing
+#    and jitter are off so the truth's pixel-scale detail stays
+#    achievable and fusion selection, not alignment, is what's scored.
+echo "== scene gates (bias-class fixtures)"
+"$BIN" synth -o "$WORK/synth-object" --scene object
+"$BIN" synth -o "$WORK/synth-bright" --scene brightObject --flicker 0.02
+"$BIN" synth -o "$WORK/synth-fg" --scene foreground --noise 0.002 \
+    --breathing 0 --jitter 0
+
+if [ "$(uname)" = Darwin ]; then
+    gate dmap 33.5 "$WORK/synth-object" object-dmap
+    gate pmax 33.2 "$WORK/synth-object" object-pmax
+    gate dmap 46.3 "$WORK/synth-bright" bright-dmap
+    gate pmax 35.0 "$WORK/synth-bright" bright-pmax
+    gate dmap 36.4 "$WORK/synth-fg" fg-dmap
+else
+    report dmap "$WORK/synth-object" object-dmap
+    report pmax "$WORK/synth-object" object-pmax
+    report dmap "$WORK/synth-bright" bright-dmap
+    report pmax "$WORK/synth-bright" bright-pmax
+    report dmap "$WORK/synth-fg" fg-dmap
+fi
+
+# Mechanism fences on the foreground scene. The global PSNR cannot see
+# a silently disengaging regional mechanism — the band's improvement is
+# diluted ~8:1 by the sharp plane around it — so the fences are
+# behavioral and differential:
+#  - PMax governance tier L must engage on the class fixture and commit
+#    the band to the edge frame (asserted from the fuse log; the same
+#    shared governBackground decides on every engine).
+#  - DMap must render the band from a committed frame: with the
+#    committed tiers ablated this scene measures 36.92 -> 36.07 (macOS,
+#    bit-stable), so default-minus-ablated must stay >= 0.4 dB.
+"$BIN" fuse "$WORK"/synth-fg/frame_*.tif -o "$WORK/out-fg-pmax.tif" \
+    --method pmax --color-space p3 -v > "$WORK/fg-pmax.log" 2>&1
+fgpmax_line=$("$BIN" compare "$WORK/out-fg-pmax.tif" "$WORK/synth-fg/ground_truth.tif")
+fgpmax=$(echo "$fgpmax_line" | awk '{print $2}')
+HYPERFOCAL_GUIDED_NO_TIER2=1 HYPERFOCAL_GUIDED_NO_REGIONAL=1 \
+    "$BIN" fuse "$WORK"/synth-fg/frame_*.tif -o "$WORK/out-fg-dmap-abl.tif" \
+    --method dmap --color-space p3
+fgdmap=$("$BIN" compare "$WORK/out-fg-dmap.tif" "$WORK/synth-fg/ground_truth.tif" | awk '{print $2}')
+fgabl=$("$BIN" compare "$WORK/out-fg-dmap-abl.tif" "$WORK/synth-fg/ground_truth.tif" | awk '{print $2}')
+echo "fg-pmax: $fgpmax_line"
+echo "fg-dmap committed $fgdmap dB vs ablated $fgabl dB"
+if [ "$(uname)" = Darwin ]; then
+    grep -q "lit component ([0-9]* cells) committed to frame 1 " "$WORK/fg-pmax.log" || {
+        echo "== CI GATE FAILED: PMax tier L did not commit the never-focused band to its edge frame"
+        grep -i "gov" "$WORK/fg-pmax.log" || true
+        exit 1
+    }
+    awk -v p="$fgpmax" 'BEGIN { exit !(p >= 36.8) }' || {
+        echo "== CI GATE FAILED: fg-pmax PSNR $fgpmax dB < floor 36.8 dB"
+        exit 1
+    }
+    awk -v d="$fgdmap" -v a="$fgabl" 'BEGIN { exit !(d - a >= 0.4) }' || {
+        echo "== CI GATE FAILED: DMap regional commitment gains only $fgdmap - $fgabl dB on the never-focused band (>= 0.4 required)"
+        exit 1
+    }
+else
+    echo "fg mechanism fences: UNCALIBRATED — not gated (calibrate on this platform and gate)"
+fi
+
 # Registration-scale gate. The stack above is 900 px on its longest side,
 # which sits BELOW the registration decode bound (max(1000, longest/5)) —
 # so it takes the full-decode path on every platform and is structurally

@@ -16,6 +16,20 @@ public enum SynthStack {
         /// Bright textured object at one depth over a near-black far background —
         /// the halo torture test (defocus spill onto featureless background).
         case object
+        /// Dark textured object over a near-white far background — the
+        /// sign-inverted case. Scene-relative "near-black" membership lands
+        /// inside the subject here, not on a backdrop, so any keep-darkest
+        /// fallback can only damage it. Pair with `flicker` to also exercise
+        /// darkest-frame selection on a bright field, where un-normalized
+        /// exposure makes "darkest" mean "dimmest-exposed".
+        case brightObject
+        /// The plane scene with a lit, textured near layer the focus sweep
+        /// never reaches (the stack starts past its nearest structure). The
+        /// ground truth renders that layer at the FIRST frame's focus — the
+        /// least-blurred rendition physics permits is the correct fused
+        /// output — so regional frame commitment scores high here and noisy
+        /// per-cell depth scores low.
+        case foreground
     }
 
     public struct Options {
@@ -26,6 +40,15 @@ public enum SynthStack {
         public var breathing: Float    // total scale change across the ramp (e.g. 0.02 = 2%)
         public var jitter: Float       // max translation per frame, in pixels
         public var flicker: Float      // exposure flicker amplitude (0.1 = ±10% gain)
+        /// Per-pixel Gaussian sensor noise sigma in linear light, applied
+        /// independently per channel and per frame (0 = noiseless). The CI
+        /// PSNR gates were historically blind to every noise-driven failure
+        /// — and never-focused-region discriminators calibrated on real
+        /// stacks NEED a noise floor to read a gentle energy decline the way
+        /// real sensors deliver one: a noiseless defocused layer's fine
+        /// energy either vanishes below f16 quantization or falls too
+        /// steeply, never the measured 2–4:1.
+        public var noise: Float
         public var scene: Scene
         /// Darken this frame to ~2% — a synthetic flash misfire. Exercises
         /// bad-frame exposure detection.
@@ -42,7 +65,7 @@ public enum SynthStack {
 
         public init(width: Int = 900, height: Int = 600, frames: Int = 15,
                     maxBlur: Float = 6, breathing: Float = 0.02, jitter: Float = 3,
-                    flicker: Float = 0, scene: Scene = .plane,
+                    flicker: Float = 0, noise: Float = 0, scene: Scene = .plane,
                     misfireFrame: Int? = nil, bumpFrame: Int? = nil,
                     captureStart: Date? = nil, captureSpacing: TimeInterval = 1) {
             self.width = width
@@ -53,6 +76,7 @@ public enum SynthStack {
             self.breathing = breathing
             self.jitter = jitter
             self.flicker = flicker
+            self.noise = noise
             self.scene = scene
             self.misfireFrame = misfireFrame
             self.bumpFrame = bumpFrame
@@ -149,9 +173,147 @@ public enum SynthStack {
         return img
     }
 
+    /// Adds deterministic per-pixel luminance detail (hash noise, ±amplitude)
+    /// to a texture. The octave stack's finest cells are ~9 px at the default
+    /// synth size — smooth at pixel scale — so an in-focus cell carries
+    /// almost no finest-level energy and scale-free focus discriminators
+    /// read the whole scene as never-focusing glint-speckle. Real macro
+    /// texture is dense at pixel scale; this restores that. Scene detail,
+    /// not sensor noise: it lives in the ground truth and defocuses with it.
+    static func addPixelDetail(_ img: inout ImageBuffer, amplitude: Float, seed: UInt64) {
+        let w = img.width, h = img.height
+        img.pixels.withUnsafeMutableBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: h) { y in
+                for x in 0..<w {
+                    var rng = SplitMix64(state: seed &+ UInt64(y * w + x))
+                    let n = (rng.nextFloat() * 2 - 1) * amplitude
+                    let pi = (y * w + x) * 4
+                    var v = hfLoadRGBA(px, pi) + SIMD4<Float>(n, n, n, 0)
+                    v = v.clamped(lowerBound: .zero, upperBound: .one)
+                    hfStoreRGBA(px, pi, v)
+                }
+            }
+        }
+    }
+
+    /// Per-pixel, per-channel Gaussian sensor noise in linear light
+    /// (Box–Muller over the hash stream), clipped to [0, 1] like a sensor.
+    static func addSensorNoise(_ img: inout ImageBuffer, sigma: Float, seed: UInt64) {
+        let w = img.width, h = img.height
+        img.pixels.withUnsafeMutableBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: h) { y in
+                for x in 0..<w {
+                    var rng = SplitMix64(state: seed &+ UInt64(y * w + x))
+                    let u1 = max(rng.nextFloat(), 1e-7)
+                    let u2 = rng.nextFloat()
+                    let u3 = max(rng.nextFloat(), 1e-7)
+                    let u4 = rng.nextFloat()
+                    let r1 = (-2 * Foundation.log(u1)).squareRoot() * sigma
+                    let r2 = (-2 * Foundation.log(u3)).squareRoot() * sigma
+                    let n = SIMD4<Float>(r1 * Foundation.cos(2 * .pi * u2),
+                                         r1 * Foundation.sin(2 * .pi * u2),
+                                         r2 * Foundation.cos(2 * .pi * u4), 0)
+                    let pi = (y * w + x) * 4
+                    let v = (hfLoadRGBA(px, pi) + n)
+                        .clamped(lowerBound: .zero, upperBound: .one)
+                    hfStoreRGBA(px, pi, v)
+                }
+            }
+        }
+    }
+
     /// Depth plane in [0, 1]: mostly left-to-right ramp with a slight vertical tilt.
     static func depth(x: Int, y: Int, width: Int, height: Int) -> Float {
         0.75 * Float(x) / Float(width - 1) + 0.25 * Float(y) / Float(height - 1)
+    }
+
+    /// Depth of the `.foreground` scene's near layer. Focus positions span
+    /// [0, 1], so a negative depth keeps the layer defocused in every frame,
+    /// most gently in frame 0 — never sharp, but with the measurable
+    /// frame-0 energy bump of a real beyond-sweep layer. Too deep and the
+    /// blur pushes the layer's fine energy below f16 frame quantization,
+    /// leaving a flat noise curve no regional mechanism can (or should)
+    /// commit — real stacks keep the bump measurable because residual
+    /// signal rides above the sensor noise floor.
+    static let foregroundDepth: Float = -0.45
+
+    /// The `.plane` frame renderer: per-pixel depth-dependent defocus,
+    /// interpolated from pre-blurred sigma buckets.
+    static func planeFrameMaker(tex: ImageBuffer, maxBlur: Float,
+                                log: ((String) -> Void)?) -> (Float) -> ImageBuffer {
+        let w = tex.width, h = tex.height
+        let bucketStep: Float = 0.75
+        let bucketCount = Int((maxBlur / bucketStep).rounded(.up)) + 1
+        // Buckets live in ONE contiguous plane array indexed by
+        // `bucket * planeCount + i`, so the per-pixel interpolation below
+        // needs a single base pointer instead of escaping one per bucket
+        // out of a `withUnsafeBufferPointer` (which would be UB).
+        let planeCount = w * h * 4
+        var buckets = [Float16](repeating: 0, count: (bucketCount + 1) * planeCount)
+        buckets.replaceSubrange(0..<planeCount, with: tex.pixels)
+        for b in 1...bucketCount {
+            let sigma = Float(b) * bucketStep
+            let k = Filters.gaussianKernel(sigma: sigma)
+            let blurred = Filters.convolveSeparableRGBA(tex, kernel: k)
+            buckets.replaceSubrange(b * planeCount..<(b + 1) * planeCount,
+                                    with: blurred.pixels)
+        }
+        log?("\(bucketCount + 1) blur buckets prepared")
+        return { focus in
+            var frame = ImageBuffer(width: w, height: h)
+            buckets.withUnsafeBufferPointer { bkBuf in
+                let bk = bkBuf.baseAddress!
+                frame.pixels.withUnsafeMutableBufferPointer { pxBuf in
+                    let px = pxBuf.baseAddress!
+                    DispatchQueue.concurrentPerform(iterations: h) { y in
+                        for x in 0..<w {
+                            let sigma = maxBlur * abs(depth(x: x, y: y, width: w, height: h) - focus)
+                            let fb = sigma / bucketStep
+                            let b0 = min(Int(fb), bucketCount - 1)
+                            let b1 = min(b0 + 1, bucketCount)
+                            let t = fb - Float(b0)
+                            let pi = (y * w + x) * 4
+                            hfStoreRGBA(px, pi,
+                                        hfLoadRGBA(bk, b0 * planeCount + pi) * (1 - t)
+                                      + hfLoadRGBA(bk, b1 * planeCount + pi) * t)
+                        }
+                    }
+                }
+            }
+            return frame
+        }
+    }
+
+    /// A premultiplied subject layer: `tex` remapped through `map` (straight
+    /// opaque RGBA in, straight RGBA out), then masked by a soft-edged
+    /// ellipse (~2 px feather) that premultiplies color and sets alpha.
+    static func ellipseLayer(tex: ImageBuffer,
+                             map: @escaping (SIMD4<Float>) -> SIMD4<Float>,
+                             cx: Float, cy: Float,
+                             rx: Float, ry: Float) -> ImageBuffer {
+        let w = tex.width, h = tex.height
+        var subject = ImageBuffer(width: w, height: h)
+        subject.pixels.withUnsafeMutableBufferPointer { pxBuf in
+            let px = pxBuf.baseAddress!
+            tex.pixels.withUnsafeBufferPointer { tpBuf in
+                let tp = tpBuf.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: h) { y in
+                    for x in 0..<w {
+                        let dx = (Float(x) - cx) / rx
+                        let dy = (Float(y) - cy) / ry
+                        let d = (dx * dx + dy * dy).squareRoot()
+                        let m = min(max((1.01 - d) / 0.02, 0), 1)  // ~2 px soft edge
+                        let pi = (y * w + x) * 4
+                        var v = map(hfLoadRGBA(tp, pi)) * m
+                        v.w = m
+                        hfStoreRGBA(px, pi, v)
+                    }
+                }
+            }
+        }
+        return subject
     }
 
     /// Premultiplied-alpha over: fg.rgb + bg.rgb * (1 - fg.a), opaque result.
@@ -194,78 +356,33 @@ public enum SynthStack {
         case .plane:
             let tex = groundTruth(width: w, height: h, seed: seed)
             truth = tex
-            // Pre-blurred versions at bucketed sigmas; per-pixel blur interpolates buckets.
-            let bucketStep: Float = 0.75
-            let bucketCount = Int((options.maxBlur / bucketStep).rounded(.up)) + 1
-            // Buckets live in ONE contiguous plane array indexed by
-            // `bucket * planeCount + i`, so the per-pixel interpolation below
-            // needs a single base pointer instead of escaping one per bucket
-            // out of a `withUnsafeBufferPointer` (which would be UB).
-            let planeCount = w * h * 4
-            var buckets = [Float16](repeating: 0, count: (bucketCount + 1) * planeCount)
-            buckets.replaceSubrange(0..<planeCount, with: tex.pixels)
-            for b in 1...bucketCount {
-                let sigma = Float(b) * bucketStep
-                let k = Filters.gaussianKernel(sigma: sigma)
-                let blurred = Filters.convolveSeparableRGBA(tex, kernel: k)
-                buckets.replaceSubrange(b * planeCount..<(b + 1) * planeCount,
-                                        with: blurred.pixels)
-            }
-            log?("\(bucketCount + 1) blur buckets prepared")
-            let maxBlur = options.maxBlur
-            makeFrame = { focus in
-                var frame = ImageBuffer(width: w, height: h)
-                buckets.withUnsafeBufferPointer { bkBuf in
-                    let bk = bkBuf.baseAddress!
-                    frame.pixels.withUnsafeMutableBufferPointer { pxBuf in
-                        let px = pxBuf.baseAddress!
-                        DispatchQueue.concurrentPerform(iterations: h) { y in
-                            for x in 0..<w {
-                                let sigma = maxBlur * abs(depth(x: x, y: y, width: w, height: h) - focus)
-                                let fb = sigma / bucketStep
-                                let b0 = min(Int(fb), bucketCount - 1)
-                                let b1 = min(b0 + 1, bucketCount)
-                                let t = fb - Float(b0)
-                                let pi = (y * w + x) * 4
-                                hfStoreRGBA(px, pi,
-                                            hfLoadRGBA(bk, b0 * planeCount + pi) * (1 - t)
-                                          + hfLoadRGBA(bk, b1 * planeCount + pi) * t)
-                            }
-                        }
-                    }
-                }
-                return frame
-            }
+            makeFrame = planeFrameMaker(tex: tex, maxBlur: options.maxBlur, log: log)
 
-        case .object:
-            // Bright textured subject (flat, at depth 0.3) premultiplied by a soft
-            // ellipse mask, over a near-black textured background at depth 1.0.
-            // Defocused frames spill subject glow onto the background — the halo case.
+        case .object, .brightObject:
+            // Textured subject (flat, at depth 0.3) premultiplied by a soft
+            // ellipse mask, over a textured far background at depth 1.0.
+            // `.object`: bright subject over near-black — defocused frames
+            // spill subject glow onto the background (the halo case).
+            // `.brightObject`: the sign inversion — dark subject (mostly
+            // under a scene-relative "near-black" cut, but carrying real
+            // texture) over a near-white sweep with the SAME backdrop
+            // contrast, so mechanisms calibrated on dark backdrops meet the
+            // field they were not calibrated for.
             let tex = groundTruth(width: w, height: h, seed: seed)
             var bg = groundTruth(width: w, height: h, seed: seed &+ 7)
-            bg.scaleRGB(by: 0.05)
-
-            var subject = ImageBuffer(width: w, height: h)
-            let cx = Float(w) * 0.5, cy = Float(h) * 0.52
-            let rx = Float(w) * 0.28, ry = Float(h) * 0.34
-            subject.pixels.withUnsafeMutableBufferPointer { pxBuf in
-                let px = pxBuf.baseAddress!
-                tex.pixels.withUnsafeBufferPointer { tpBuf in
-                    let tp = tpBuf.baseAddress!
-                    DispatchQueue.concurrentPerform(iterations: h) { y in
-                        for x in 0..<w {
-                            let dx = (Float(x) - cx) / rx
-                            let dy = (Float(y) - cy) / ry
-                            let d = (dx * dx + dy * dy).squareRoot()
-                            let m = min(max((1.01 - d) / 0.02, 0), 1)  // ~2 px soft edge
-                            let pi = (y * w + x) * 4
-                            var v = hfLoadRGBA(tp, pi) * m
-                            v.w = m
-                            hfStoreRGBA(px, pi, v)
-                        }
-                    }
+            let subjectMap: (SIMD4<Float>) -> SIMD4<Float>
+            if options.scene == .object {
+                bg.scaleRGB(by: 0.05)
+                subjectMap = { $0 }
+            } else {
+                bg.affineRGB(scale: 0.05, offset: 0.95)
+                subjectMap = { v in
+                    SIMD4<Float>(0.02, 0.02, 0.02, 0) + v * SIMD4<Float>(0.18, 0.18, 0.18, 1)
                 }
             }
+            let subject = ellipseLayer(tex: tex, map: subjectMap,
+                                       cx: Float(w) * 0.5, cy: Float(h) * 0.52,
+                                       rx: Float(w) * 0.28, ry: Float(h) * 0.34)
             truth = composite(subject, over: bg)
             let maxBlur = options.maxBlur
             makeFrame = { focus in
@@ -279,6 +396,54 @@ public enum SynthStack {
                     : bg
                 return composite(blurredSubject, over: blurredBg)
             }
+
+        case .foreground:
+            // The plane scene, occluded across its bottom by a lit
+            // textured layer at `foregroundDepth` — in FRONT of every focus
+            // position, so no frame ever renders it sharp and its energy
+            // argmax is frame 0 (the near stack boundary). The layer is
+            // deliberately deep enough that even frame 0 is heavily blurred:
+            // in a never-focused region per-cell depth is noise, and the only
+            // correct output is one committed frame's rendition. The ground
+            // truth therefore composites the layer at frame 0's defocus over
+            // the sharp plane — fusion that commits the region to its edge
+            // frame matches it; fusion that blends noisy per-cell selections
+            // across the sweep does not.
+            var tex = groundTruth(width: w, height: h, seed: seed)
+            addPixelDetail(&tex, amplitude: 0.2, seed: seed &+ 21)
+            var fgTex = groundTruth(width: w, height: h, seed: seed &+ 13)
+            addPixelDetail(&fgTex, amplitude: 0.2, seed: seed &+ 34)
+            // The layer is a bottom band whose single (top) edge is aligned
+            // to the fusion engines' 64-px energy-block grid (8-px cells ×
+            // 8-cell blocks) and feathered ~2 px. At real resolutions a
+            // never-focused region's boundary blocks are a negligible
+            // fraction; at synth scale a misaligned edge puts pure sharp-
+            // plane cells inside majority-member blocks, and their energy
+            // (tens of times the defocused layer's) buries the region's
+            // frame-0 mass-curve bump under mid-sweep boundary humps.
+            let bandTop = 64 * Int(Float(h) * 0.64 / 64)
+            var fg = fgTex
+            fg.pixels.withUnsafeMutableBufferPointer { pxBuf in
+                let px = pxBuf.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: h) { y in
+                    let m = min(max((Float(y) - Float(bandTop)) / 2, 0), 1)
+                    var pi = y * w * 4
+                    for _ in 0..<w {
+                        var v = hfLoadRGBA(px, pi) * m
+                        v.w = m
+                        hfStoreRGBA(px, pi, v)
+                        pi += 4
+                    }
+                }
+            }
+            let maxBlur = options.maxBlur
+            let blurFg = { (focus: Float) -> ImageBuffer in
+                let sigma = maxBlur * (focus - foregroundDepth)
+                return Filters.convolveSeparableRGBA(fg, kernel: Filters.gaussianKernel(sigma: sigma))
+            }
+            truth = composite(blurFg(0), over: tex)
+            let plane = planeFrameMaker(tex: tex, maxBlur: maxBlur, log: log)
+            makeFrame = { focus in composite(blurFg(focus), over: plane(focus)) }
         }
 
         let truthURL = outDir.appendingPathComponent("ground_truth.tif")
@@ -321,6 +486,15 @@ public enum SynthStack {
             }
             if i == options.bumpFrame, i != refIndex {
                 frame = bumped(frame)
+            }
+
+            // Sensor noise is the last thing a capture applies — after
+            // optics (blur), exposure (flicker/misfire), and motion (warp).
+            // Per-frame seeds keep it decorrelated across the stack, the
+            // property every noise-driven failure mode hinges on.
+            if options.noise > 0 {
+                addSensorNoise(&frame, sigma: options.noise,
+                               seed: seed &+ 0xC0FFEE &+ UInt64(i) &* 0x9E3779B97F4A7C15)
             }
 
             let url = outDir.appendingPathComponent(String(format: "frame_%03d.%@", i, frameExtension))
