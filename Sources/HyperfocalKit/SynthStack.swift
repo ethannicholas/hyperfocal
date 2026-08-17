@@ -447,13 +447,30 @@ public enum SynthStack {
             // (tens of times the defocused layer's) buries the region's
             // frame-0 mass-curve bump under mid-sweep boundary humps.
             let bandTop = 64 * Int(Float(h) * 0.64 / 64)
+            // A block-aligned focusing POCKET punched through the band: the
+            // plane shows through and focuses mid-sweep, so the region's
+            // never-focuses component test (a median) still passes around it
+            // while the pocket carries genuinely focusing sub-content — the
+            // class the governance review's per-cell focusing veto exists to
+            // protect ("sharp sub-content replaced by blur"). A regional
+            // mechanism that hole-fills or commits the pocket paints real
+            // mid-sweep sharpness with the edge frame's defocus, and the
+            // scene's PSNR moves; a per-cell veto leaves the pocket with
+            // per-coefficient selection and heals it.
+            let px0 = 64 * Int(Float(w) * 0.57 / 64), px1 = px0 + 128
+            let py0 = 64 * Int(Float(h) * 0.75 / 64), py1 = py0 + 64
             var fg = fgTex
             fg.pixels.withUnsafeMutableBufferPointer { pxBuf in
                 let px = pxBuf.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: h) { y in
-                    let m = min(max((Float(y) - Float(bandTop)) / 2, 0), 1)
+                    let band = min(max((Float(y) - Float(bandTop)) / 2, 0), 1)
+                    let pocketY = min(max((Float(y) - Float(py0)) / 2, 0), 1)
+                        * min(max((Float(py1) - Float(y)) / 2, 0), 1)
                     var pi = y * w * 4
-                    for _ in 0..<w {
+                    for x in 0..<w {
+                        let pocketX = min(max((Float(x) - Float(px0)) / 2, 0), 1)
+                            * min(max((Float(px1) - Float(x)) / 2, 0), 1)
+                        let m = band * (1 - pocketX * pocketY)
                         var v = hfLoadRGBA(px, pi) * m
                         v.w = m
                         hfStoreRGBA(px, pi, v)

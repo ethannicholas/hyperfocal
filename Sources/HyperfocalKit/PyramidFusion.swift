@@ -994,13 +994,29 @@ public enum PyramidFusion {
                 * max(PlaneMath.percentileLow(cellMax, 0.99), 1e-7)
             var m = [Bool](repeating: false, count: lgw * lgh)
             var m30 = [Bool](repeating: false, count: lgw * lgh)
+            // Coverage-rim guard: registration is estimated, so a partially
+            // dark sliver of the warp border survives the common-coverage
+            // crop, and with focus breathing its width shrinks monotonically
+            // through the sweep — a fake edge-frame energy bump in any
+            // border-touching component (measured on a low-contrast synth
+            // scene: the rim's curve read z 16 at frame 0 and committed 96%
+            // of a scene with no never-focused region at all; ring p99 was
+            // 30x the interior's). The outer cell ring leaves MEMBERSHIP —
+            // and with it the components, block majorities, and mass curves
+            // — but stays reachable by the expansion BFS, so a real
+            // committed region still renders its own edge cells by
+            // inheritance instead of leaving a shipped-rendered ring.
+            let edgeCells = 2
             for i in m.indices {
                 guard cellLumMin[i] > litCut else { continue }
                 let strong = cellMax[i] > confFloor
-                let r4 = cellMax[i] > coreRatio * max(cellMin[i], 1e-7)
                 let r30 = cellMax[i] > expandRatio * max(cellMin[i], 1e-7)
-                m[i] = !(strong && r4)
                 m30[i] = !(strong && r30)
+                let x = i % lgw, y = i / lgw
+                guard x >= edgeCells, y >= edgeCells,
+                      x < lgw - edgeCells, y < lgh - edgeCells else { continue }
+                let r4 = cellMax[i] > coreRatio * max(cellMin[i], 1e-7)
+                m[i] = !(strong && r4)
             }
             // Fill enclosed holes: glints inside a never-focused region are
             // "confident" (their bump clears the ratio) yet belong to the
@@ -1015,7 +1031,22 @@ public enum PyramidFusion {
                                               width: lgw, height: lgh)
             let holeMax = 4096  // cells; generous for glint clusters,
                                 // far below any real scene region
-            for i in m.indices where holes.labels[i] > 0 {
+            // Per-cell focusing veto on hole admission (the governance
+            // review's "sharp sub-content replaced by blur" class): an
+            // enclosed FOCUSING pocket — real scene content the sweep does
+            // reach, visible through the never-focused layer — must not be
+            // filled. Unvetoed, its cells join the component, its blocks'
+            // sharp mid-sweep energy (tens of times the layer's) enters the
+            // mass curve, and the argmax leaves the NEAR window: one pocket
+            // silently disables the whole region's commitment (measured on
+            // the pocketed foreground fixture: argmax 0 -> 10, z 2.8 ->
+            // 1.0, commitment lost). The veto is the expansion mask's own
+            // cell-ratio cut: glints ride the bokeh family (5-30) and stay
+            // admitted; focusing texture (>30, measured 40+ even on noisy
+            // synth and 100-5000 on real stacks) is excluded from the
+            // fill, the curve, and the committed render — it keeps
+            // per-coefficient selection, which is what protects sharpness.
+            for i in m.indices where holes.labels[i] > 0 && m30[i] {
                 let c = Int(holes.labels[i]) - 1
                 if !holes.touchesBorder[c] && holes.sizes[c] <= holeMax {
                     m[i] = true
@@ -1042,6 +1073,17 @@ public enum PyramidFusion {
                 var blockComp = [Int32](repeating: 0, count: lbw * lbh)
                 for by in 0..<lbh {
                     for bx in 0..<lbw {
+                        // Canvas-edge blocks stay out of the mass curve:
+                        // blockEnergy sums the WHOLE 64-px block, so even
+                        // with the rim cells de-membered above, an edge
+                        // block's energy still carries the coverage rim —
+                        // whose breathing-scaled width is what fakes the
+                        // edge-frame bump. Their cells still RENDER
+                        // committed via the full-res membership; they just
+                        // don't vote.
+                        if bx == 0 || by == 0 || bx == lbw - 1 || by == lbh - 1 {
+                            continue
+                        }
                         var counts: [Int32: Int] = [:]
                         for y in (by * blockCells)..<min((by + 1) * blockCells, lgh) {
                             for x in (bx * blockCells)..<min((bx + 1) * blockCells, lgw) {

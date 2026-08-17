@@ -97,9 +97,19 @@ fi
 #    dmap-pmax gap (57.3 vs 46.5) is max-of-N selection diluting
 #    low-contrast coefficients — the known low-contrast weakness. The
 #    floors fence both behaviors; the pmax floor is the number the
-#    weak-speckle work should raise.
+#    weak-speckle work should raise. (It dropped 46.5 -> 41.2 when the
+#    coverage-rim guard landed: tier L had been committing this whole
+#    scene to frame 0 off the rim's fake edge-frame energy bump, and
+#    that wrong commitment happened to smooth max-of-N's low-contrast
+#    fabrication. The floor fences the honest shipped behavior.)
 #  - foreground (sensor noise, no breathing/jitter): a lit near layer
-#    the sweep never reaches — the never-focused-foreground class.
+#    the sweep never reaches — the never-focused-foreground class —
+#    plus a block-aligned FOCUSING POCKET punched through it: enclosed
+#    genuinely-focusing sub-content, the class the per-cell focusing
+#    veto protects. Unvetoed, the pocket's sharp mid-sweep energy joins
+#    the region's mass curve and silently kills the whole commitment
+#    (measured: argmax 0 -> 10), so the engagement fence below fences
+#    the veto too.
 #    Noise is load-bearing: it floors the energy ratios the way real
 #    sensors do (a noiseless defocused layer reads either flat or
 #    steeply "focusing", never the measured gentle decline). Breathing
@@ -109,7 +119,7 @@ echo "== scene gates (bias-class fixtures)"
 "$BIN" synth -o "$WORK/synth-object" --scene object
 "$BIN" synth -o "$WORK/synth-bright" --scene brightObject --flicker 0.02
 "$BIN" synth -o "$WORK/synth-wow" --scene whiteOnWhite
-"$BIN" synth -o "$WORK/synth-fg" --scene foreground --noise 0.002 \
+"$BIN" synth -o "$WORK/synth-fg" --scene foreground --noise 0.001 \
     --breathing 0 --jitter 0
 
 if [ "$(uname)" = Darwin ]; then
@@ -118,8 +128,8 @@ if [ "$(uname)" = Darwin ]; then
     gate dmap 46.3 "$WORK/synth-bright" bright-dmap
     gate pmax 39.7 "$WORK/synth-bright" bright-pmax
     gate dmap 56.8 "$WORK/synth-wow" wow-dmap
-    gate pmax 46.0 "$WORK/synth-wow" wow-pmax
-    gate dmap 36.4 "$WORK/synth-fg" fg-dmap
+    gate pmax 40.7 "$WORK/synth-wow" wow-pmax
+    gate dmap 36.1 "$WORK/synth-fg" fg-dmap
 else
     report dmap "$WORK/synth-object" object-dmap
     report pmax "$WORK/synth-object" object-pmax
@@ -138,7 +148,7 @@ fi
 #    the band to the edge frame (asserted from the fuse log; the same
 #    shared governBackground decides on every engine).
 #  - DMap must render the band from a committed frame: with the
-#    committed tiers ablated this scene measures 36.92 -> 36.07 (macOS,
+#    committed tiers ablated this scene measures 36.51 -> 35.81 (macOS,
 #    bit-stable), so default-minus-ablated must stay >= 0.4 dB.
 "$BIN" fuse "$WORK"/synth-fg/frame_*.tif -o "$WORK/out-fg-pmax.tif" \
     --method pmax --color-space p3 -v > "$WORK/fg-pmax.log" 2>&1
@@ -157,8 +167,8 @@ if [ "$(uname)" = Darwin ]; then
         grep -i "gov" "$WORK/fg-pmax.log" || true
         exit 1
     }
-    awk -v p="$fgpmax" 'BEGIN { exit !(p >= 36.8) }' || {
-        echo "== CI GATE FAILED: fg-pmax PSNR $fgpmax dB < floor 36.8 dB"
+    awk -v p="$fgpmax" 'BEGIN { exit !(p >= 36.7) }' || {
+        echo "== CI GATE FAILED: fg-pmax PSNR $fgpmax dB < floor 36.7 dB"
         exit 1
     }
     awk -v d="$fgdmap" -v a="$fgabl" 'BEGIN { exit !(d - a >= 0.4) }' || {
