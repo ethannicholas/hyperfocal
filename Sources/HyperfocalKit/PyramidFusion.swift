@@ -912,6 +912,7 @@ public enum PyramidFusion {
                                  lumMin0: [Float], lumMax0: [Float],
                                  focusMax0: [Float], focusMin0: [Float],
                                  cellMax: [Float], cellMin: [Float],
+                                 cellArg: [Int32] = [],
                                  blockEnergy: [Float], blockCells: Int,
                                  radius: Int,
                                  warp: PyramidWarp?, env: [String: String],
@@ -921,6 +922,13 @@ public enum PyramidFusion {
         let (w, h) = ws.sizes[0]
         let debug = env["HYPERFOCAL_PMAX_BG_DEBUG"] != nil
         var govBg = [Float](repeating: 0, count: w * h)
+        // Offline study tap for the protection-side focusing veto: the
+        // per-cell energy-argmax plane (frame indices as floats, -1 where
+        // no frame ever installed).
+        if !cellArg.isEmpty {
+            DMapFusion.dumpPlane(cellArg.map { Float($0) },
+                                 env: "HYPERFOCAL_DUMP_GOV_CELLARG")
+        }
 
         // Tier L: LIT never-focused membership — scene material the stack's
         // sweep never reaches (started past the nearest structure / ended
@@ -1070,6 +1078,16 @@ public enum PyramidFusion {
                     && litKeep[Int(comps.labels[i]) - 1] {
                     cellLabel[i] = comps.labels[i]
                 }
+                // Cells the focusing veto (below) protects from committed
+                // rendering; filled after the curves exist. `vetoCoherent`
+                // is the raw own-argmax 5x5 coherence mask, kept for the
+                // expansion BFS: inherited rendering must not walk into
+                // coherent-focusing content either (a pocket too
+                // ratio-strong for membership is NOT labeled, so the veto
+                // above never examines it — expansion was how it still got
+                // painted with the committed frame).
+                var vetoCell = [Bool](repeating: false, count: lgw * lgh)
+                var vetoCoherent = [Bool](repeating: false, count: lgw * lgh)
                 var blockComp = [Int32](repeating: 0, count: lbw * lbh)
                 for by in 0..<lbh {
                     for bx in 0..<lbw {
@@ -1105,6 +1123,177 @@ public enum PyramidFusion {
                         cur[fr] += Double(blockEnergy[b * frameCount + fr])
                     }
                     compCurve[blockComp[b]] = cur
+                }
+                // Per-cell focusing veto, BEFORE the commitment decision
+                // (the governance review's "sharp sub-content replaced by
+                // blur"): a committed region may enclose sub-content the
+                // sweep DOES reach — deep dim background seen through a
+                // hole in the near layer — whose late energy both poisons
+                // the region's mass curve (one 128-cell pocket moved the
+                // fixture band's argmax 0 -> 10 and silently killed the
+                // whole commitment) and, if the region still commits,
+                // gets painted with the edge frame's defocus. Cell ratios
+                // cannot separate it from bokeh in the overlapping band;
+                // the per-cell energy ARGMAX can: genuine focusing content
+                // coheres with its neighbors at its true focus frame
+                // (fixture pocket: 100% of cells within ±window), while
+                // never-focused mottle scatters (measured p50 coherence
+                // 0.24 across a 45 MP committed region). The reference is
+                // the NEAR-window argmax of the component's own curve —
+                // the only frame tier L may commit to — so the veto needs
+                // no committed frame to exist yet. Vetoed cells: INTERIOR
+                // only (the region's outermost rows are feather mixtures
+                // whose sliver of adjacent sharp content reads coherent —
+                // a 73-cell false pocket along the fixture band's top
+                // feather cost 5.5 dB of committed benefit), in clusters
+                // of >= 16 cells (isolated coherence accidents and lone
+                // glints stay committed: per-cell exclusions are the
+                // measured max-of-N wash-island failure). Blocks whose
+                // labeled cells are majority-vetoed leave the mass curve,
+                // then the standard argmax/z/NEAR guards decide on clean
+                // evidence; the render fill below skips vetoed cells, so
+                // protected pockets keep per-coefficient selection. On the
+                // motivating stack this protects 19 pockets (~2% of the
+                // commitment) where the same-canvas DMap render shows
+                // genuinely sharp rock that commitment had painted with
+                // the edge frame's defocus.
+                let vetoOff = env["HYPERFOCAL_PMAX_VETO_OFF"] != nil
+                let vetoWin = max(2, frameCount / 16)
+                if !vetoOff, cellArg.count == lgw * lgh {
+                    var nearF0: [Int32: Int32] = [:]
+                    for (comp, curve) in compCurve {
+                        var mx = -Double.infinity
+                        var am: Int32 = 0
+                        for fr in 0...min(vetoWin, frameCount - 1)
+                            where curve[fr] > mx {
+                            mx = curve[fr]; am = Int32(fr)
+                        }
+                        nearF0[comp] = am
+                    }
+                    let wWin = Int32(vetoWin)
+                    let interior = Morphology.erode(
+                        cellLabel.map { $0 > 0 },
+                        width: lgw, height: lgh, radius: 2)
+                    var cand = [Bool](repeating: false, count: lgw * lgh)
+                    for i in cand.indices where interior[i] {
+                        guard let f0 = nearF0[cellLabel[i]] else { continue }
+                        let a0 = cellArg[i]
+                        guard a0 >= 0, abs(a0 - f0) > wWin else { continue }
+                        var agree = 0, total = 0
+                        let y = i / lgw, x = i % lgw
+                        for ny in max(y - 2, 0)...min(y + 2, lgh - 1) {
+                            for nx in max(x - 2, 0)...min(x + 2, lgw - 1) {
+                                let a = cellArg[ny * lgw + nx]
+                                guard a >= 0 else { continue }
+                                total += 1
+                                if abs(a - a0) <= wWin { agree += 1 }
+                            }
+                        }
+                        cand[i] = total > 0 && Float(agree) > 0.6 * Float(total)
+                    }
+                    // Own-argmax coherence over ALL cells (not just labeled
+                    // interiors) for the expansion gate below.
+                    for i in vetoCoherent.indices {
+                        let a0 = cellArg[i]
+                        guard a0 >= 0 else { continue }
+                        var agree = 0, total = 0
+                        let y = i / lgw, x = i % lgw
+                        for ny in max(y - 2, 0)...min(y + 2, lgh - 1) {
+                            for nx in max(x - 2, 0)...min(x + 2, lgw - 1) {
+                                let a = cellArg[ny * lgw + nx]
+                                guard a >= 0 else { continue }
+                                total += 1
+                                if abs(a - a0) <= wWin { agree += 1 }
+                            }
+                        }
+                        vetoCoherent[i] = total > 0
+                            && Float(agree) > 0.6 * Float(total)
+                    }
+                    let vcomps = Morphology.components(open: cand,
+                                                       width: lgw, height: lgh)
+                    let vetoMin = 16
+                    var kept = 0
+                    var pockets = Set<Int32>()
+                    // Cluster ANCHOR argmax (median of the core): growth
+                    // and every later comparison are judged against it —
+                    // judging against the frontier cell lets a smooth
+                    // argmax gradient chain-drift the growth arbitrarily
+                    // far (measured on the motivating stack: a frame-116
+                    // pocket's growth walked down to frame-0 cells and
+                    // "protected" 1590 cells of genuinely never-focused
+                    // material).
+                    var anchor: [Int32: Int32] = [:]
+                    var clusterOf = [Int32](repeating: 0, count: lgw * lgh)
+                    var grow = [Int32]()
+                    for c in 0..<vcomps.count where vcomps.sizes[c] >= vetoMin {
+                        var args = [Int32]()
+                        for i in cand.indices where Int(vcomps.labels[i]) - 1 == c {
+                            args.append(cellArg[i])
+                        }
+                        args.sort()
+                        anchor[Int32(c + 1)] = args[args.count / 2]
+                    }
+                    for i in cand.indices where vcomps.labels[i] > 0
+                        && anchor[vcomps.labels[i]] != nil {
+                        vetoCell[i] = true
+                        clusterOf[i] = vcomps.labels[i]
+                        kept += 1
+                        pockets.insert(vcomps.labels[i])
+                        grow.append(Int32(i))
+                    }
+                    // Grow accepted clusters back through argmax-COMPATIBLE
+                    // labeled neighbors (compatible with the cluster's
+                    // anchor): the coherence test plus the interior erosion
+                    // structurally confine the core to the pocket's inside
+                    // (a 128-cell pocket cores at ~46), which can leave
+                    // every block under the veto-majority rule below — the
+                    // curve stays poisoned and nothing commits. The
+                    // surrounding never-focused cells, whose argmaxes don't
+                    // match the anchor, block the growth.
+                    var head = 0
+                    while head < grow.count {
+                        let i = Int(grow[head]); head += 1
+                        let cl = clusterOf[i]
+                        guard let anc = anchor[cl] else { continue }
+                        let y = i / lgw, x = i % lgw
+                        for ny in max(y - 1, 0)...min(y + 1, lgh - 1) {
+                            for nx in max(x - 1, 0)...min(x + 1, lgw - 1) {
+                                let ni = ny * lgw + nx
+                                guard !vetoCell[ni], cellLabel[ni] > 0,
+                                      cellArg[ni] >= 0,
+                                      abs(cellArg[ni] - anc) <= wWin else { continue }
+                                vetoCell[ni] = true
+                                clusterOf[ni] = cl
+                                kept += 1
+                                grow.append(Int32(ni))
+                            }
+                        }
+                    }
+                    if kept > 0 {
+                        // Rebuild curves without veto-majority blocks.
+                        for b in 0..<(lbw * lbh) where blockComp[b] > 0 {
+                            let bx = b % lbw, by = b / lbw
+                            var vetoed = 0, labeled = 0
+                            for y in (by * blockCells)..<min((by + 1) * blockCells, lgh) {
+                                for x in (bx * blockCells)..<min((bx + 1) * blockCells, lgw) {
+                                    let i = y * lgw + x
+                                    if cellLabel[i] > 0 {
+                                        labeled += 1
+                                        if vetoCell[i] { vetoed += 1 }
+                                    }
+                                }
+                            }
+                            guard labeled > 0, vetoed * 2 >= labeled else { continue }
+                            var cur = compCurve[blockComp[b]]!
+                            for fr in 0..<frameCount {
+                                cur[fr] -= Double(blockEnergy[b * frameCount + fr])
+                            }
+                            compCurve[blockComp[b]] = cur
+                        }
+                        log?("pmax gov: focusing veto kept \(kept) cells "
+                             + "(\(pockets.count) pockets) on per-coefficient "
+                             + "selection")
+                    }
                 }
                 // Significance floor 2: the tier-R populations put flat
                 // noise at ≤ 1.3 whatever the component size and genuine
@@ -1182,7 +1371,12 @@ public enum PyramidFusion {
                         for ny in max(y - 1, 0)...min(y + 1, lgh - 1) {
                             for nx in max(x - 1, 0)...min(x + 1, lgw - 1) {
                                 let ni = ny * lgw + nx
-                                if dist[ni] == .max, m30[ni] {
+                                if dist[ni] == .max, m30[ni],
+                                   !(vetoCoherent[ni] && cellArg.count == m30.count
+                                     && cellArg[ni] >= 0
+                                     && committedFrame[cellLabel[i]].map({
+                                            abs(cellArg[ni] - $0)
+                                                > Int32(max(2, frameCount / 16)) }) == true) {
                                     dist[ni] = d + 1
                                     cellLabel[ni] = cellLabel[i]
                                     queue.append(Int32(ni))
@@ -1216,8 +1410,9 @@ public enum PyramidFusion {
                     for y in 0..<h {
                         let gy = y / f0
                         for x in 0..<w {
-                            let l = cellLabel[gy * lgw + x / f0]
-                            if l > 0, committedFrame[l] != nil {
+                            let gi = gy * lgw + x / f0
+                            let l = cellLabel[gi]
+                            if l > 0, committedFrame[l] != nil, !vetoCell[gi] {
                                 govBg[y * w + x] = 1
                                 litMember += 1
                             }
@@ -2145,6 +2340,12 @@ public enum PyramidFusion {
         // measurement over ALL frames, not an inference from argmax votes.
         var govCellMax: [Float] = []
         var govCellMin: [Float] = []
+        // Per-cell argmax frame of the level-0 cell energy — the raw
+        // material of the protection-side focusing veto: genuine focusing
+        // content coheres with its neighbors' argmaxes at its true focus
+        // frame, never-focused mottle scatters (measured <50% agreement at
+        // any window on a 45 MP never-focused region).
+        var govCellArg: [Int32] = []
         var govBlockEnergy: [Float] = []
         var govGw = 0, govBw = 0
         let govBlockCells = max(Int(env["HYPERFOCAL_PMAX_GOV_BLOCK"] ?? "") ?? 8, 1)
@@ -2286,6 +2487,7 @@ public enum PyramidFusion {
                     let gh = (h + f - 1) / f
                     govCellMax = [Float](repeating: -1, count: govGw * gh)
                     govCellMin = [Float](repeating: .infinity, count: govGw * gh)
+                    govCellArg = [Int32](repeating: -1, count: govGw * gh)
                     govBw = (govGw + govBlockCells - 1) / govBlockCells
                     let bh = (gh + govBlockCells - 1) / govBlockCells
                     govBlockEnergy = [Float](repeating: 0, count: govBw * bh * frameCount)
@@ -2354,7 +2556,10 @@ public enum PyramidFusion {
                 let grid = DMapFusion.boxDownsample(ws.energy, width: cw, height: ch,
                                                     factor: DMapFusion.sharpnessDownsample)
                 for i in grid.indices {
-                    if grid[i] > govCellMax[i] { govCellMax[i] = grid[i] }
+                    if grid[i] > govCellMax[i] {
+                        govCellMax[i] = grid[i]
+                        govCellArg[i] = Int32(fi)
+                    }
                     if grid[i] < govCellMin[i] { govCellMin[i] = grid[i] }
                     let b = (i / govGw / govBlockCells) * govBw
                         + (i % govGw) / govBlockCells
@@ -2600,6 +2805,7 @@ public enum PyramidFusion {
                                  lumMin0: lumMin0, lumMax0: lumMax0,
                                  focusMax0: focusMax0, focusMin0: focusMin0,
                                  cellMax: govCellMax, cellMin: govCellMin,
+                                 cellArg: govCellArg,
                                  blockEnergy: govBlockEnergy,
                                  blockCells: govBlockCells, radius: govRadius,
                                  warp: warp, env: env, log: log,

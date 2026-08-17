@@ -106,10 +106,13 @@ fi
 #    the sweep never reaches — the never-focused-foreground class —
 #    plus a block-aligned FOCUSING POCKET punched through it: enclosed
 #    genuinely-focusing sub-content, the class the per-cell focusing
-#    veto protects. Unvetoed, the pocket's sharp mid-sweep energy joins
-#    the region's mass curve and silently kills the whole commitment
-#    (measured: argmax 0 -> 10), so the engagement fence below fences
-#    the veto too.
+#    veto protects (its plane is DIMMED — deep background through a
+#    hole — so it joins the membership the way the real class does).
+#    Unvetoed, the pocket's late energy joins the region's mass curve
+#    and silently kills the whole commitment (measured: argmax
+#    0 -> 10, z 1.0), so the engagement fence below fences the whole
+#    protection chain: candidate coherence, cluster growth, and the
+#    curve cleaning that lets the region commit at all.
 #    Noise is load-bearing: it floors the energy ratios the way real
 #    sensors do (a noiseless defocused layer reads either flat or
 #    steeply "focusing", never the measured gentle decline). Breathing
@@ -129,7 +132,7 @@ if [ "$(uname)" = Darwin ]; then
     gate pmax 39.7 "$WORK/synth-bright" bright-pmax
     gate dmap 56.8 "$WORK/synth-wow" wow-dmap
     gate pmax 40.7 "$WORK/synth-wow" wow-pmax
-    gate dmap 36.1 "$WORK/synth-fg" fg-dmap
+    gate dmap 35.8 "$WORK/synth-fg" fg-dmap
 else
     report dmap "$WORK/synth-object" object-dmap
     report pmax "$WORK/synth-object" object-pmax
@@ -148,7 +151,7 @@ fi
 #    the band to the edge frame (asserted from the fuse log; the same
 #    shared governBackground decides on every engine).
 #  - DMap must render the band from a committed frame: with the
-#    committed tiers ablated this scene measures 36.51 -> 35.81 (macOS,
+#    committed tiers ablated this scene measures 36.17 -> 35.52 (macOS,
 #    bit-stable), so default-minus-ablated must stay >= 0.4 dB.
 "$BIN" fuse "$WORK"/synth-fg/frame_*.tif -o "$WORK/out-fg-pmax.tif" \
     --method pmax --color-space p3 -v > "$WORK/fg-pmax.log" 2>&1

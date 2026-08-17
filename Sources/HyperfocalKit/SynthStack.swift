@@ -459,6 +459,31 @@ public enum SynthStack {
             // per-coefficient selection and heals it.
             let px0 = 64 * Int(Float(w) * 0.57 / 64), px1 = px0 + 128
             let py0 = 64 * Int(Float(h) * 0.75 / 64), py1 = py0 + 64
+            // The plane seen through the pocket is DIMMED (deep background
+            // through a hole in the near layer, still lit and textured, its
+            // energy in the moderate ratio band): dim enough to join the
+            // lit-governance membership like the real class does, sharp
+            // late in the sweep — so an unprotected regional commitment
+            // paints it with the edge frame's defocus, and the per-cell
+            // focusing veto is what heals it.
+            tex.pixels.withUnsafeMutableBufferPointer { pxBuf in
+                let px = pxBuf.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: h) { y in
+                    let py = min(max((Float(y) - Float(py0)) / 2, 0), 1)
+                        * min(max((Float(py1) - Float(y)) / 2, 0), 1)
+                    guard py > 0 else { return }
+                    for x in 0..<w {
+                        let pxm = min(max((Float(x) - Float(px0)) / 2, 0), 1)
+                            * min(max((Float(px1) - Float(x)) / 2, 0), 1)
+                        let dim = 1 - 0.75 * pxm * py
+                        guard dim < 1 else { continue }
+                        let pi = (y * w + x) * 4
+                        var v = hfLoadRGBA(px, pi)
+                        v = SIMD4<Float>(v.x * dim, v.y * dim, v.z * dim, v.w)
+                        hfStoreRGBA(px, pi, v)
+                    }
+                }
+            }
             var fg = fgTex
             fg.pixels.withUnsafeMutableBufferPointer { pxBuf in
                 let px = pxBuf.baseAddress!

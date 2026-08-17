@@ -177,6 +177,7 @@ enum GPUPyramid {
         var govBlock = (w: 0, h: 0, cells: 8)
         var govCellMax: [Float] = []
         var govCellMin: [Float] = []
+        var govCellArg: [Int32] = []
         var govBlockEnergy: [Float] = []
         var pending: (cmd: MTLCommandBuffer, frame: Int, preview: MTLBuffer?,
                       sharp: MTLBuffer?, gov: MTLBuffer?)? = nil
@@ -201,7 +202,10 @@ enum GPUPyramid {
                 let fi = p.frame
                 for i in 0..<(govGrid.w * govGrid.h) {
                     let e = grid[i]
-                    if e > govCellMax[i] { govCellMax[i] = e }
+                    if e > govCellMax[i] {
+                        govCellMax[i] = e
+                        govCellArg[i] = Int32(fi)
+                    }
                     if e < govCellMin[i] { govCellMin[i] = e }
                     let b = (i / govGrid.w / govBlock.cells) * govBlock.w
                         + (i % govGrid.w) / govBlock.cells
@@ -285,6 +289,7 @@ enum GPUPyramid {
                     govBufs = [try engine.makeBuffer(floats: govGrid.w * govGrid.h),
                                try engine.makeBuffer(floats: govGrid.w * govGrid.h)]
                     govCellMax = [Float](repeating: -1, count: govGrid.w * govGrid.h)
+                    govCellArg = [Int32](repeating: -1, count: govGrid.w * govGrid.h)
                     govCellMin = [Float](repeating: .infinity,
                                          count: govGrid.w * govGrid.h)
                     govBlockEnergy = [Float](repeating: 0,
@@ -839,6 +844,7 @@ enum GPUPyramid {
                 lumMin0: lumMinArr, lumMax0: lumMaxArr,
                 focusMax0: fmaxArr, focusMin0: fminArr,
                 cellMax: govCellMax, cellMin: govCellMin,
+                cellArg: govCellArg,
                 blockEnergy: govBlockEnergy, blockCells: govBlock.cells,
                 radius: governance.radius, warp: warp,
                 env: ProcessInfo.processInfo.environment,
