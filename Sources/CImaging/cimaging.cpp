@@ -1881,6 +1881,43 @@ static double siftContrastThreshold() {
     return v;
 }
 
+// Starvation rescue. A frame whose scene contrast sits under OpenCV's default
+// keypoint threshold yields almost nothing to match: on the brightObject
+// fixture (a dark subject over a 5%-contrast near-white field, the backlit
+// class) detection returned 0 keypoints on three of fifteen frames and under
+// ten on three more, so pair after pair fell below findHomography's four-point
+// minimum and the whole stack refused to align.
+//
+// The structure is there — it is just below the cut. Re-detecting those frames
+// at 0.01 takes the worst frame from 0 keypoints to 45 and registers all
+// fourteen pairs.
+//
+// This retries ONLY the starved frames rather than lowering the threshold for
+// everything, because lowering it everywhere is not free: measured across the
+// gate fixtures, 0.01 was neutral-to-positive on plane/noisy/object/big
+// (within +-0.02 dB, +0.1 on object and big) but cost the foreground fixture
+// 0.53 dB (36.13 -> 35.60), which is a gated floor on macOS. A frame that
+// already clears the floor is detected exactly as before, so every healthy
+// fixture keeps its numbers bit-for-bit; only a frame that would otherwise
+// contribute nothing pays the second detect.
+//
+// The floor sits in the measured gap: starved frames came in at 0-89
+// keypoints, healthy ones at 202-1442.
+static double siftRescueContrast() {
+    static const double v = [] {
+        const char* e = std::getenv("HYPERFOCAL_SIFT_RESCUE_CONTRAST");
+        return e ? std::atof(e) : 0.01;
+    }();
+    return v;
+}
+static int siftRescueFloor() {
+    static const int v = [] {
+        const char* e = std::getenv("HYPERFOCAL_SIFT_RESCUE_FLOOR");
+        return e ? std::atoi(e) : 128;    // 0 disables the rescue
+    }();
+    return v;
+}
+
 extern "C" hf_sift* hf_sift_detect(int w, int h, const uint8_t* gray) {
     const int64_t t0 = cv::getTickCount();
     try {
@@ -1895,15 +1932,29 @@ extern "C" hf_sift* hf_sift_detect(int w, int h, const uint8_t* gray) {
         // them — 200+ seconds per pair, of which ~1300 matches survived the
         // ratio test. The cap keeps the strongest N by response; hundreds of
         // ratio-test survivors remain, which is all RANSAC needs.
-        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(siftNFeatures(), 3,
-                                                  siftContrastThreshold());
         auto* f = new hf_sift();
-        sift->detectAndCompute(img, cv::noArray(), f->kp, f->desc);
-        if (registerDebug())
-            fprintf(stderr, "hf_sift_detect %dx%d: kp %zu, %.0fms (cvthreads %d)\n",
+        auto detect = [&](double contrast) {
+            f->kp.clear();
+            f->desc.release();
+            cv::Ptr<cv::SIFT> sift = cv::SIFT::create(siftNFeatures(), 3, contrast);
+            sift->detectAndCompute(img, cv::noArray(), f->kp, f->desc);
+        };
+        detect(siftContrastThreshold());
+        // See siftRescueFloor: starved frames only, so healthy ones are
+        // detected exactly as before.
+        const bool rescue = siftRescueFloor() > 0
+            && (int)f->kp.size() < siftRescueFloor()
+            && siftRescueContrast() < siftContrastThreshold();
+        const size_t before = f->kp.size();
+        if (rescue) detect(siftRescueContrast());
+        if (registerDebug()) {
+            fprintf(stderr, "hf_sift_detect %dx%d: kp %zu, %.0fms (cvthreads %d)%s\n",
                     w, h, f->kp.size(),
                     (double)(cv::getTickCount() - t0) * 1000.0 / cv::getTickFrequency(),
-                    cv::getNumThreads());
+                    cv::getNumThreads(),
+                    rescue ? (" [rescued from " + std::to_string(before) + "]").c_str()
+                           : "");
+        }
         return f;
     } catch (...) { return nullptr; }
 }

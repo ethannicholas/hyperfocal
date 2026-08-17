@@ -40,11 +40,33 @@ extern "C" hfr_status hfr_register(int w, int h,
         // ratio test. The cap keeps the strongest N by response; hundreds of
         // ratio-test survivors remain, which is all RANSAC needs. (2000
         // matches the Linux/Windows backend's measured-neutral cap.)
-        cv::Ptr<cv::SIFT> sift = cv::SIFT::create(2000);
+        //
+        // Starvation rescue, mirroring `hf_sift_detect`: a frame whose scene
+        // contrast sits under OpenCV's default keypoint threshold yields
+        // almost nothing to match (measured: 0 keypoints on a backlit
+        // dark-subject-over-near-white frame), so re-detect just those frames
+        // at a lower threshold. Frames that already clear the floor are
+        // detected exactly as before — lowering the threshold for everything
+        // measurably cost one fixture 0.53 dB. Constants match the Linux/
+        // Windows backend's defaults; see the comment there for the numbers.
+        constexpr double kContrast = 0.04;   // OpenCV's default
+        constexpr double kRescueContrast = 0.01;
+        constexpr int kRescueFloor = 128;
+        auto detect = [&](const cv::Mat& img, std::vector<cv::KeyPoint>& kp,
+                          cv::Mat& desc) {
+            auto run = [&](double contrast) {
+                kp.clear();
+                desc.release();
+                cv::Ptr<cv::SIFT> sift = cv::SIFT::create(2000, 3, contrast);
+                sift->detectAndCompute(img, cv::noArray(), kp, desc);
+            };
+            run(kContrast);
+            if ((int)kp.size() < kRescueFloor) run(kRescueContrast);
+        };
         std::vector<cv::KeyPoint> kpF, kpM;
         cv::Mat descF, descM;
-        sift->detectAndCompute(fixedM, cv::noArray(), kpF, descF);
-        sift->detectAndCompute(movingM, cv::noArray(), kpM, descM);
+        detect(fixedM, kpF, descF);
+        detect(movingM, kpM, descM);
         if (descF.empty() || descM.empty() || kpF.size() < 4 || kpM.size() < 4)
             return hfr_fail;
         cv::BFMatcher matcher(cv::NORM_L2);
