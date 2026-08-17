@@ -876,8 +876,8 @@ enum GPUPyramid {
             throw StackError.metal("cannot create command buffer")
         }
         // scale4 divides the f32 base accumulator by the frame count and
-        // narrows it into the half4 collapse chain in one pass — it used to
-        // need a blit copy of the base first, because it scaled in place.
+        // narrows it into the half4 collapse chain in one pass — writing
+        // into scratch, never in place, so the running sum stays intact.
         var scale = baseScale
         var baseCount = UInt32(bw * bh)
         enc.setBuffer(baseTmp, offset: 0, index: 0)

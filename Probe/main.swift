@@ -12,9 +12,9 @@ import simd
 // AND WRITES the user's real app settings: a persisted `fusionMethod` of
 // PMax from a real session flips the main model's primary and the
 // noise-floor preview check waits on a DMap result that hasn't landed
-// (found 2026-07-27, machine-dependent probe failure) — and the probe's
-// own setting writes (noiseFloor, exportFormat, …) polluted the user's
-// app state in return. Must precede the first AppModel touch: the suite
+// (a machine-dependent probe failure) — and the probe's own setting
+// writes (noiseFloor, exportFormat, …) pollute the user's app state in
+// return. Must precede the first AppModel touch: the suite
 // is read once into a static.
 setenv("HYPERFOCAL_SETTINGS_SUITE", "org.hyperfocal.probe-settings", 1)
 UserDefaults(suiteName: "org.hyperfocal.probe-settings")?
@@ -222,7 +222,7 @@ let args = CommandLine.arguments.dropFirst()
 // absoluteURL matters: a relative path here yields a URL carrying a baseURL,
 // which compares UNEQUAL to its round-tripped absolute twin even though the
 // paths match — the included-set check then fails with two identical-looking
-// lists. Invoking the probe with relative frame paths used to do exactly that.
+// lists whenever the probe is invoked with relative frame paths.
 let urls = args.map { URL(fileURLWithPath: $0).absoluteURL }
     .sorted { $0.lastPathComponent < $1.lastPathComponent }
 
@@ -306,8 +306,8 @@ let cache = AlignmentCache()
 // The FusionProgress aligned contract: once transforms exist (post-
 // registration on an align-on fuse), every source preview is the frame
 // warped onto the fused canvas and flagged sourceAligned — the seam the
-// input pane's "(aligned)" marker hangs off. The GPU depth pass used to
-// ship the raw decode here, and the divergence was only caught by eye.
+// input pane's "(aligned)" marker hangs off. A pass that ships the raw
+// decode here instead diverges in a way only caught by eye.
 var sawDepthSource = false, sawRenderSource = false
 var alignedDims = Set<Int>()  // width<<32|height of every aligned preview
 var contractViolations = [String]()
@@ -451,8 +451,8 @@ Task { @MainActor in
     // 1a2. Selecting the alternate source before the background pass has landed
     // shows the loading state; toggling back to a cached frame must fully
     // supersede that wait — a late progress tick or provideOtherResult must not
-    // stomp the frame's pane. Shipped bug: the cache-hit selection path didn't
-    // bump the load generation, so stragglers passed the staleness guard.
+    // stomp the frame's pane. The failure mode: a cache-hit selection path that
+    // doesn't bump the load generation lets stragglers pass the staleness guard.
     let session2 = RetouchSession(result: output.image, method: .dmap, depth: output.depth,
                                   sharpness: output.sharpness, source: source)
     session2.selectSource(0)
@@ -754,10 +754,10 @@ Task { @MainActor in
     print("probe: project round-trip OK (fused + unfused stacks, tone)")
 
     // 2b. PMax persistence: the PMax image (primary or secondary) rides in
-    // the project along with the fused method. Losing the method on restore
-    // is what left a reopened project's retouch waiting forever on a
-    // "Preparing the PMax result…" pass that never started — and a PMax
-    // primary previously could not persist its result at all.
+    // the project along with the fused method — a PMax primary's result
+    // included. Losing the method on restore leaves a reopened project's
+    // retouch waiting forever on a "Preparing the PMax result…" pass that
+    // never starts.
     assert(restored.resultMethod == .dmap,
            "pre-persistence fused files must infer a DMap method")
     var pmaxStack = savedStack
@@ -910,9 +910,8 @@ Task { @MainActor in
     }
     print("probe: completion seeds aligned input preview OK")
     // The fuse's warped-frame spill must reach retouch and SURVIVE the
-    // background secondary: it used to be released the moment that pass
-    // landed, which put every later frame-source switch back on the
-    // RAW-decode path. (A reloaded project has no spill and legitimately
+    // background secondary: releasing it the moment that pass lands puts
+    // every later frame-source switch back on the RAW-decode path. (A reloaded project has no spill and legitimately
     // decodes — nil is a supported state, tested implicitly by the restore
     // checks below.) For a PMax primary the spill is the DMap secondary's,
     // adopted by the live session when that pass lands — so the immediate
@@ -1048,11 +1047,11 @@ Task { @MainActor in
 
     // 3a0. The app's fusion sliders must start at the engine's shipped
     // defaults, and the pipeline configuration the app builds from an untouched
-    // model must equal the engine's own defaults. Debloom once shipped ON in
-    // the app and OFF in the CLI (a redundant boolean gate on the CLI side), so
-    // every PMax measurement taken through the CLI described a configuration no
-    // user ever saw — found by eye, months later. This asserts the app half;
-    // the CLI half is structural (its @Option defaults now read the same
+    // model must equal the engine's own defaults. The drift this fences:
+    // debloom ON in the app but OFF in the CLI (a redundant boolean gate on the
+    // CLI side) makes every PMax measurement taken through the CLI describe a
+    // configuration no user ever sees — findable only by eye. This asserts the
+    // app half; the CLI half is structural (its @Option defaults read the same
     // objects). See CLAUDE.md's shared-defaults invariant.
     do {
         let engineDMap = DMapFusion.Options()
@@ -1068,7 +1067,7 @@ Task { @MainActor in
         }
         // And a default-constructed pipeline configuration — what any caller
         // gets for free — must already carry them, with debloom enabled. This
-        // is the half that actually broke: the values agreed, the enable did
+        // is the half that drifts: the values can agree while the enable does
         // not. (Deliberately not asserted against the live `model` here: the
         // probe has exercised the sliders by this point, so its state says
         // nothing about the shipped defaults.)
@@ -1085,8 +1084,8 @@ Task { @MainActor in
             print("probe: PMAX DEBLOOM DEFAULTS TO OFF")
             exit(1)
         }
-        // Smoothed selection (and the envelope discipline it carries)
-        // shipped ON 2026-07-28; a default-constructed pipeline must have it.
+        // Smoothed selection (and the envelope discipline it carries) ships
+        // ON; a default-constructed pipeline must have it.
         guard enginePMax.smoothedSelection, config.pmax.smoothedSelection else {
             print("probe: PMAX SMOOTHED SELECTION DEFAULTS TO OFF")
             exit(1)
@@ -1523,7 +1522,7 @@ Task { @MainActor in
     print("probe: missing input frame diagnosed: \(inputHint)")
 
     // 4. Cancellation: cancel mid-fusion, expect CancellationError promptly.
-    // 50ms: early enough to land inside registration even now that the whole
+    // 50ms: early enough to land inside registration even though the whole
     // warm pipeline on this tiny stack finishes in a few hundred ms.
     let token = CancellationToken()
     let cancelStart = Date()
@@ -1592,9 +1591,9 @@ Task { @MainActor in
 
     // 5c. Export honors the PRIMARY result. With a PMax primary, the DMap
     // peer still lands in the background as the depth/retouch source — the
-    // export must not grab it (shipped bug 2026-07-27: fresh project, PMax
-    // fuse, export wrote the DMap image until retouching happened to install
-    // the PMax buffer as the working image).
+    // export must not grab it (the failure: fresh project, PMax fuse, export
+    // writes the DMap image until retouching happens to install the PMax
+    // buffer as the working image).
     let exportModel = AppModel()
     exportModel.ingest(urls: urls)
     ticks = 0
@@ -1688,7 +1687,7 @@ Task { @MainActor in
         exit(1)
     }
     // Act during the drain: replace the project with a different stack —
-    // exactly the flow that used to dead-end silently under "Cancelling…".
+    // exactly the flow that otherwise dead-ends silently under "Cancelling…".
     cancelModel.ingest(urls: cancelURLs)
     ticks = 0
     while cancelModel.phase.isRunning && ticks < 100 {

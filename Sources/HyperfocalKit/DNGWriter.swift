@@ -186,10 +186,10 @@ public enum DNGWriter {
 
     /// 8-bit sRGB preview payload, longest side ≤ 256: downscale, apply the
     /// tone the embedded XMP carries (the DNG spec wants previews to show the
-    /// *rendered* appearance, and until 2026-08 they showed the untoned linear
-    /// look), and convert Display P3 → sRGB — both writers declare the preview
-    /// as sRGB (PreviewColorSpace), so working-space bytes written verbatim
-    /// were slightly desaturated everywhere the tag is honored.
+    /// *rendered* appearance, not the untoned linear look), and convert
+    /// Display P3 → sRGB — both writers declare the preview as sRGB
+    /// (PreviewColorSpace), so working-space bytes written verbatim would be
+    /// slightly desaturated everywhere the tag is honored.
     static func previewSRGB8(from image: ImageBuffer, tone: ToneSettings)
         -> (pixels: [UInt8], width: Int, height: Int) {
         let scale = 256.0 / Double(max(image.width, image.height))

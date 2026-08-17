@@ -3,7 +3,7 @@ import Foundation
 /// The shared layer's localized-string seam.
 ///
 /// On Apple this is `NSLocalizedString` against the main bundle — the macOS
-/// app's `Localizable.xcstrings`, exactly as before; headless Apple consumers
+/// app's `Localizable.xcstrings`; headless Apple consumers
 /// (CLI, probe) have no catalog and get the English key back.
 ///
 /// Off Apple there is no bundle catalog to read, and every string AppCore
@@ -16,10 +16,10 @@ import Foundation
 /// wins on every platform, Apple included: the Qt shell decides the UI
 /// language for its own half and hands the same tag down here, so the two
 /// halves of one window cannot pick differently. Nothing in the macOS app
-/// calls it, so that shell keeps reading its bundle catalog as before.
+/// calls it, so that shell keeps reading its bundle catalog.
 ///
-/// `comment:` is retained (and ignored) so call sites read like the
-/// `NSLocalizedString` they replaced and stay greppable for the coverage gate.
+/// `comment:` is retained (and ignored) so call sites read like
+/// `NSLocalizedString` and stay greppable for the coverage gate.
 public func localizedString(_ key: String, comment: String = "") -> String {
     if let table = PortableStrings.explicitTable { return table[key] ?? key }
     #if canImport(CoreGraphics)

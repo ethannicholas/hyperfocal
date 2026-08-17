@@ -21,12 +21,10 @@ import WinSDK
 /// so the stored plane IS what pass 2 would compute), which the ≥ 90 dB
 /// CPU↔GPU parity gate leans on.
 ///
-/// This class used to carry a *degrade-to-fp16* tier for temp volumes that
-/// couldn't hold the fp32 spill (~75–80 dB, and the escape hatch for the
-/// 45 MP case where a barely-fitting fp32 spill drove a volume to 97% full
-/// and the fuse to 2124 s vs 469 s). Storage is f16 end to end now, so the
-/// spill is already half what it was and the tier has nothing left to halve;
-/// a spill that still doesn't fit is skipped, and the caller re-decodes.
+/// There is deliberately no degrade-to-lower-precision tier for temp volumes
+/// that can't hold the spill: storage is already f16 end to end, so there is
+/// nothing left to halve. A spill that doesn't fit (with margin — see
+/// `margin(for:)`) is skipped, and the caller re-decodes.
 ///
 /// The backing file is unlinked immediately after creation — it lives only as
 /// this object's file descriptor, so the space is reclaimed on deinit or
@@ -144,7 +142,7 @@ public final class FrameSpill {
     /// Free space the spill must leave untouched on the temp volume: 2 GB,
     /// or half the spill's own size for large spills. The flat 2 GB floor
     /// let a 7.3 GB spill "fit" a volume with 9.3 GB free (Fluorite 45 MP × 10
-    /// on the dev VM, 2026-07-21) — driving the volume to 97% full, where
+    /// on the dev VM) — driving the volume to 97% full, where
     /// write latency collapses: that fuse took 2124 s against 469 s for a
     /// half-size spill. Proportional headroom demotes exactly those
     /// barely-fits cases.

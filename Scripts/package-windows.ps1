@@ -22,9 +22,8 @@
 # leaving dist\ holding a layout and an .msix that disagree - and the .msix is
 # the artifact that gets submitted.
 #
-# There is deliberately NO archive either. An earlier version zipped the layout
-# by default, which produced the one artifact nothing consumes while making the
-# only real deliverable opt-in - and a Hyperfocal-<version>.zip sitting in
+# There is deliberately NO archive either. Zipping the layout produces the
+# one artifact nothing consumes - and a Hyperfocal-<version>.zip sitting in
 # dist\ reads as a downloadable release, which is exactly the thing this
 # project does not ship.
 #
@@ -158,14 +157,14 @@ Write-Host "== packaging Hyperfocal $Version ($build) for $arch"
 
 # ------------------------------------------------------------------ build --
 # ------------------------------------------------------------------ wgpu ---
-# The GPU compute backend, now compiled into every Windows build (Package.swift
-# stops the build without it) rather than opted into here. This check stays
-# because it runs earlier and says more: it names the directory it looked in,
-# and the staging below needs $wgpuLib anyway. A Store build that quietly fused
-# on the CPU is what shipped before 2026-08-06, and the difference is a 45 MP
-# dmap fuse at 13.9 s instead of 17.9 s and a 100 MP one at 26.5 s instead of
-# 33.7 s, with a third less device memory - Scripts\fetch-wgpu.sh puts the tree
-# where WGPU_ROOT (or the sibling default) points.
+# The GPU compute backend, compiled into every Windows build (Package.swift
+# stops the build without it). The check here is kept anyway because it runs
+# earlier and says more: it names the directory it looked in, and the staging
+# below needs $wgpuLib anyway. A Store build that quietly fuses on the CPU is
+# a real regression - a 45 MP dmap fuse at 17.9 s instead of 13.9 s and a
+# 100 MP one at 33.7 s instead of 26.5 s, with half again the device memory -
+# Scripts\fetch-wgpu.sh puts the tree where WGPU_ROOT (or the sibling
+# default) points.
 if (-not $env:WGPU_ROOT) {
     $siblingWgpu = Join-Path $root '..\wgpu-native'
     if (Test-Path $siblingWgpu) { $env:WGPU_ROOT = (Resolve-Path $siblingWgpu).Path }
@@ -279,10 +278,9 @@ while ($queue.Count -gt 0) {
 }
 Write-Host "== $($copied.Count) runtime DLLs resolved from swift/vcpkg/wgpu"
 
-# The import walk found wgpu only if the bridge was actually built against it.
-# Without this assertion a release silently reverts to CPU fusion the moment
-# the environment loses WGPU_ROOT - which is exactly how it shipped CPU-only
-# for its whole life before 2026-08-06.
+# The import walk finds wgpu only if the bridge was actually built against
+# it. Without this assertion a release silently reverts to CPU fusion the
+# moment the environment loses WGPU_ROOT, and nothing in the package says so.
 if (-not (Test-Path (Join-Path $stage 'wgpu_native.dll'))) {
     throw "wgpu_native.dll not staged - the bridge was not built with the GPU backend (stale .build? drop -SkipBuild)"
 }

@@ -15,20 +15,19 @@ mkdir -p "$WORK"
 
 # PSNR floors are platform-calibrated just under each platform's
 # measured baseline (plane scene, default synth params, P3 export to
-# match the ground truth): Linux measured 39.1 dmap / 38.6 pmax
-# (aarch64, 2026-07-19); macOS 38.41 dmap / 38.26 pmax — a shared 38.3
-# pmax floor sat above the macOS baseline
-# and failed on noise alone.
+# match the ground truth): Linux measures 39.1 dmap / 38.6 pmax
+# (aarch64); macOS 38.41 dmap / 38.26 pmax — a shared 38.3 pmax floor
+# would sit above the macOS baseline and fail on noise alone.
 #
-# The dmap floor dropped from 38.7 to 38.2 when the focus measure gained
-# its pre-Laplacian denoise (Options.focusPreSigma, 2026-07-26). The synth
-# plane is *noiseless*, so denoising can only cost precision there — it is
-# the one input class the change cannot help, and it gave up 0.31 dB.
-# Real stacks are the opposite case: across the nine reference sample
-# stacks the same change lifted mean sharpness 86.8% -> 94.2% of best
-# achievable, and took the worst stack from 59% to 101%. Do not "recover"
-# this 0.3 dB by shrinking focusPreSigma without re-running that
-# comparison. A synth scene with sensor noise would gate this honestly.
+# The dmap floor bakes in the cost of the focus measure's pre-Laplacian
+# denoise (Options.focusPreSigma). The synth plane is *noiseless*, so
+# denoising can only cost precision there — it is the one input class the
+# denoise cannot help, and it gives up 0.31 dB. Real stacks are the
+# opposite case: across the nine reference sample stacks the same denoise
+# lifted mean sharpness 86.8% -> 94.2% of best achievable, and took the
+# worst stack from 59% to 101%. Do not "recover" this 0.3 dB by shrinking
+# focusPreSigma without re-running that comparison. A synth scene with
+# sensor noise would gate this honestly.
 if [ "$(uname)" = Darwin ]; then PMAX_FLOOR=38.1; else PMAX_FLOOR=38.3; fi
 echo "== synth PSNR gates"
 "$BIN" synth -o "$WORK/synth"
@@ -83,25 +82,25 @@ fi
 #  - object: bright subject over a near-black backdrop — the halo /
 #    defocus-spill class.
 #  - brightObject (+2% flicker): dark subject over a near-white sweep —
-#    the sign-inverted-membership class. Before PMax normalized exposure
-#    (bias-audit A0) its number sat at 35.58, ~11 dB under DMap's —
-#    darkest-frame selection read the flicker as signal; normalization
-#    lifted it to 40.18 and the floor fences the normalized baseline.
-#    The remaining gap to DMap (~6.6 dB) is the un-remediated rest of
-#    the family (darkest-base and friends), so later remediations
-#    should raise this number again — re-raise the floor when they do.
+#    the sign-inverted-membership class. PMax's exposure normalization
+#    (bias-audit A0) is what keeps darkest-frame selection from reading
+#    the flicker as signal, and the floor fences that normalized
+#    baseline. The remaining gap to DMap (~6.6 dB) is the un-remediated
+#    rest of the family (darkest-base and friends), so later
+#    remediations should raise this number — re-raise the floor when
+#    they do.
 #  - whiteOnWhite: bright LOW-CONTRAST subject on the same near-white
 #    sweep — the polarity where defocus DIMS the subject, so darkest-
-#    frame fallbacks would pick blur. Measured 2026-08-17: the debloom
-#    family is inert here (every ablation within 0.4 dB) and the
-#    dmap-pmax gap (57.3 vs 46.5) is max-of-N selection diluting
-#    low-contrast coefficients — the known low-contrast weakness. The
-#    floors fence both behaviors; the pmax floor is the number the
-#    weak-speckle work should raise. (It dropped 46.5 -> 41.2 when the
-#    coverage-rim guard landed: tier L had been committing this whole
-#    scene to frame 0 off the rim's fake edge-frame energy bump, and
-#    that wrong commitment happened to smooth max-of-N's low-contrast
-#    fabrication. The floor fences the honest shipped behavior.)
+#    frame fallbacks would pick blur. The debloom family is inert here
+#    (every ablation within 0.4 dB) and the dmap-pmax gap (57.3 vs
+#    41.2) is max-of-N selection diluting low-contrast coefficients —
+#    the known low-contrast weakness. The floors fence both behaviors;
+#    the pmax floor is the number the weak-speckle work should raise.
+#    (The coverage-rim guard costs ~5 dB of it: without the guard,
+#    tier L commits this whole scene to frame 0 off the rim's fake
+#    edge-frame energy bump, and that wrong commitment happens to
+#    smooth max-of-N's low-contrast fabrication. The floor fences the
+#    honest behavior, not that accident.)
 #  - foreground (sensor noise, no breathing/jitter): a lit near layer
 #    the sweep never reaches — the never-focused-foreground class —
 #    plus a block-aligned FOCUSING POCKET punched through it: enclosed
@@ -187,8 +186,8 @@ fi
 # so it takes the full-decode path on every platform and is structurally
 # blind to anything that changes what the registrar sees at scale. That
 # blind spot is not hypothetical: reducing Vision's registration input to
-# the bound cost 6-7 dB against ground truth (2026-08-11) and the gate
-# above did not move by a thousandth of a dB.
+# the bound cost 6-7 dB against ground truth, and the gate above did not
+# move by a thousandth of a dB.
 #
 # 4240x2832 is the cheapest shape that clears the bound (~10 s for the
 # whole section). Anything that degrades registration accuracy at real
@@ -196,13 +195,12 @@ fi
 echo "== registration-scale gate (frames above the registration bound)"
 "$BIN" synth -o "$WORK/synth-big" --width 4240 --height 2832 --frames 17
 if [ "$(uname)" = Darwin ]; then
-    # Measured on the M5 Max, 2026-08-11: dmap 51.92, pmax 50.93 (bit-stable
+    # Measured on the M5 Max: dmap 51.92, pmax 50.93 (bit-stable
     # across reps). Floors sit ~2 dB under, which still leaves ~4 dB of
     # separation from the 45.60 the regression above produced.
     gate dmap 50.0 "$WORK/synth-big" dmap-big
     gate pmax 49.0 "$WORK/synth-big" pmax-big
 else
-    # Calibrated 2026-08-17, the session this section's note was waiting for.
     # Registration here is OpenCV SIFT, not Vision, so the numbers are its
     # own — measured on all three non-Apple surfaces CI and development
     # actually use:
@@ -233,10 +231,9 @@ fi
 # color chain — linear-gamma decode, declared-white-level scaling,
 # embedded-matrix preference. Floors are platform-calibrated because the
 # decoder differs by design (divergence documented in the plan): LibRaw
-# reproduces our linear DNGs at ≈93 dB (Linux/aarch64, 2026-07-19); CIRAW
-# renders them through Apple's own pipeline and has always sat at ≈48 dB
-# (measured identically at 3bc4b65, before the 2026-07-19 RAW work — a
-# tripwire against macOS-side drift, not a fidelity claim).
+# reproduces our linear DNGs at ≈93 dB (Linux/aarch64); CIRAW renders
+# them through Apple's own pipeline and sits at ≈48 dB, so the macOS
+# floor is a tripwire against macOS-side drift, not a fidelity claim.
 if [ "$(uname)" = Darwin ]; then DNG_FLOOR=45; else DNG_FLOOR=60; fi
 echo "== DNG round-trip gate"
 "$BIN" fuse "$WORK"/synth/frame_*.tif -o "$WORK/rt.dng" --color-space p3

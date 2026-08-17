@@ -1,10 +1,10 @@
 import Foundation
 
 /// Small shared math helpers for grid/plane passes (PMax debloom gates, the
-/// export black-point). Formerly hosted by the rim despill, which is gone —
-/// removed 2026-08-04 after measurements showed its subject/glow discriminator
-/// fails on translucent specimens (cell-sized dark blotches) while its halo
-/// benefit on the stacks it was tuned for had become marginal.
+/// export black-point). The rim despill is deliberately absent — measurements
+/// showed its subject/glow discriminator fails on translucent specimens
+/// (cell-sized dark blotches) while its halo benefit on the stacks it was
+/// tuned for is marginal; don't resurrect it without solving both.
 public enum PlaneMath {
 
     /// Hermite smoothstep, clamped. 0 at/below `e0`, 1 at/above `e1`.

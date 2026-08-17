@@ -257,11 +257,11 @@ public enum StackPipeline {
         case .dmap:
         // A GPU failure costs the user a slower fuse, never their export: the
         // CPU engine is a complete implementation, so fall back to it rather
-        // than fail — the same contract `PyramidFusion.fuse` has always had,
-        // and dmap did not until 2026-08-06. What reaches here as a
-        // `StackError` is a device lost mid-fuse, an allocation the adapter
-        // cannot satisfy at this resolution, or a driver quirk on hardware
-        // nobody has tested on; none of them are worth losing a finished
+        // than fail — the same contract `PyramidFusion.fuse` keeps. What
+        // reaches here as a `StackError` is a device lost mid-fuse, an
+        // allocation the adapter cannot satisfy at this resolution, or a
+        // driver quirk on hardware nobody has tested on; none of them are
+        // worth losing a finished
         // registration pass over. Cancellation is deliberately NOT caught —
         // `CancellationToken` throws `CancellationError`, so a cancel
         // propagates instead of quietly restarting the whole fuse on the CPU.
@@ -310,13 +310,13 @@ public enum StackPipeline {
     /// output. Applied to every consumer of the fused result, DNG included.
     ///
     /// A rim despill pass (structured defocus-spill glow hugging the
-    /// silhouette) used to run here first; it was removed 2026-08-04 — its
-    /// subject/glow discriminator rests on "subject doesn't swing under
-    /// defocus", which is false for translucent/glossy specimens (measured:
-    /// cell-sized dark blotches on a halite stack no gate tuning could fix),
-    /// while its measured benefit had shrunk to a partial trim of one glow
-    /// plume. History and measurements: the rim-quality research doc and the
-    /// removal commit.
+    /// silhouette) is deliberately absent here: its subject/glow
+    /// discriminator rests on "subject doesn't swing under defocus", which is
+    /// false for translucent/glossy specimens (measured: cell-sized dark
+    /// blotches on a halite stack no gate tuning could fix), while its
+    /// measured benefit is a partial trim of one glow plume. Don't
+    /// reintroduce it without the measurements in the rim-quality research
+    /// doc.
     ///
     /// A/B escape hatch (measurement, not a user setting):
     /// `HYPERFOCAL_BLACK_POINT` = 0 disables the pass.

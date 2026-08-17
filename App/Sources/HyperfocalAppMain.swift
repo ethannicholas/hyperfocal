@@ -7,10 +7,9 @@ import HyperfocalKit
 ///
 /// Also disables window tabbing: tabs would show several scenes all bound
 /// to the one shared AppModel — not a multi-project feature, just the same
-/// project rendered twice. (The View menu used to be stripped wholesale for
-/// its tab items, but disabling tabbing removes them at the source, and the
-/// stripper raced SwiftUI's menu reinstalls — a flickering View menu during
-/// fuses — once zoom commands moved in.)
+/// project rendered twice. (Disabling tabbing removes the tab menu items at
+/// the source; stripping them from the View menu instead races SwiftUI's
+/// menu reinstalls — a flickering View menu during fuses.)
 /// Window-delegate proxy: SwiftUI installs its own delegate on the scene's
 /// window, so the close veto wraps it — windowShouldClose is ours, every
 /// other delegate callback forwards untouched.
@@ -92,9 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // it (the quit gate never fires — the close is programmatic, not a
         // performClose; verified by breakpointing -[NSWindow close]).
         // Declining events per-scene instead is no better: WindowGroup +
-        // handlesExternalEvents([]) used to park double-click launches
-        // windowless, and Window + handlesExternalEvents(["*"]) still
-        // closed the window (remeasured when this handler was added).
+        // handlesExternalEvents([]) parks double-click launches windowless,
+        // and Window + handlesExternalEvents(["*"]) still closes the window.
         // Owning the event keeps SwiftUI out of it entirely; the URLs then
         // flow through the same queue application(_:open:) fed.
         NSAppleEventManager.shared().setEventHandler(

@@ -339,8 +339,8 @@ struct ContentView: View {
                     .onChange(of: model.projectGeneration) {
                         // A replaced project must not inherit the previous
                         // one's scroll offset (the List survives the swap, so
-                        // a new import used to arrive scrolled wherever the
-                        // old project left it). Same targeting as onAppear —
+                        // without this a new import arrives scrolled wherever
+                        // the old project left it). Same targeting as onAppear —
                         // a restored selection's header, else the first row —
                         // but unconditional: the list may sit anywhere.
                         // Deferred a tick for the same layout reason, which
@@ -2355,8 +2355,7 @@ struct RetouchOverlay: NSViewRepresentable {
         view.onBrushResize = { [weak session] in session?.adjustBrushRadius(by: $0) }
         view.onTogglePMax = { [weak session] in session?.togglePMaxLayer() }
         view.onToggleDMap = { [weak session] in session?.toggleDMapLayer() }
-        // R follows the base/eraser whichever algorithm fused it (it toggled
-        // the DMap layer historically, when DMap was the only primary).
+        // R follows the base/eraser whichever algorithm fused it.
         view.onToggleResult = { [weak session] in session?.toggleResultLayer() }
         return view
     }

@@ -86,8 +86,8 @@ public enum Warp {
     /// level 0. Skips the per-frame output allocation (a zeroed ~180 MB at
     /// 11 MP, page-faulted on first touch) and the copy that followed it.
     ///
-    /// Interior tap loop runs as three SIMD8 pair loads + FMAs per row
-    /// (2026-07-20): 18 loads instead of 36 and the horizontal sum grouped
+    /// Interior tap loop runs as three SIMD8 pair loads + FMAs per row:
+    /// 18 loads instead of 36 and the horizontal sum grouped
     /// (even taps + odd taps) instead of left-to-right. That reassociation
     /// moves the result by ~1 ulp — measured 151.2 dB vs the tap-at-a-time
     /// loop on the bench scene (`debug-bench warp`), far above every parity

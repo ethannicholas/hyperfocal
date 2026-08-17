@@ -97,10 +97,9 @@ enum ProjectStore {
         var sharpness: FrameSharpness?
         var working: ImageBuffer?        // retouched pixels, if any edits
         // The PMax image, saved whenever it exists: as the primary it IS the
-        // result (which previously could not survive a save at all), and as
-        // the secondary it spares a reopened session the full background
-        // re-fuse that used to stand between "open project" and painting
-        // from the PMax layer.
+        // result, and as the secondary it spares a reopened session a full
+        // background re-fuse between "open project" and painting from the
+        // PMax layer.
         var pmax: ImageBuffer? = nil
         var resultMethod: FusionMethod? = nil
         var pmaxFusedSettings: PMaxSettings? = nil

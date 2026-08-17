@@ -604,9 +604,9 @@ public enum GPUDMap {
                     // `input` holds the frame on the output canvas in every
                     // branch — the spilled warp, or the warp this command
                     // buffer just ran — so the source preview reads back from
-                    // it after the wait (the FusionProgress aligned contract;
-                    // the old pre-encode path showed the raw decode whenever
-                    // the spill was unavailable).
+                    // it after the wait (the FusionProgress aligned contract —
+                    // reading before the warp runs would show the raw
+                    // unaligned decode whenever the spill is unavailable).
                     let sourcePreview = ImageBuffer.downsampledNearest(
                         fromRGBA: input.contents().assumingMemoryBound(to: Float16.self),
                         width: width, height: height, maxSide: 1200)

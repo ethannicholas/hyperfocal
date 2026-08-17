@@ -5,8 +5,7 @@ import HyperfocalKit
 /// must never localize): UI shows `displayName`, storage keeps `rawValue`.
 /// Lookup key = the English rawValue, resolved against the main bundle's
 /// string catalog — headless consumers (probe, bridge, Linux) have no
-/// catalog and fall back to the English key, which is exactly the old
-/// behavior.
+/// catalog and fall back to the English key.
 public protocol DisplayNamed: CaseIterable, Equatable {
     var displayName: String { get }
 }

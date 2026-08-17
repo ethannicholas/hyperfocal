@@ -1037,8 +1037,8 @@ public enum WgpuParity {
             minPSNR = min(minPSNR, psnr)
         }
 
-        // Every case runs the SHIPPED expand operator (Burt — always on since
-        // 2026-07-28; the bilinear kernels remain for env ablation only, and
+        // Every case runs the SHIPPED expand operator (Burt — always on;
+        // the bilinear kernels remain for env ablation only, and
         // gating an ablation path here would test a configuration nothing
         // ships). The CPU side resolves the same operator from the same env.
         let burtOnly = PyramidFusion.GPUSelect(smoothed: false, burt: true,
@@ -1120,28 +1120,25 @@ public enum WgpuParity {
     /// measures). Depth-map agreement is reported but the gate is the fused
     /// image: depth drives the render, so a depth regression shows there.
     ///
-    /// **The warped variant used to carry its own relaxed floor, and no longer
-    /// does — worth knowing why, because the fix was the opposite of what one
-    /// measurement predicted.** While the WGSL kernels were f32 under f16
-    /// pixel storage, this backend alone resampled in f32 and stored through
-    /// half, so wherever its f32 result and the CPU's straddled a rounding
-    /// boundary they landed on adjacent halves and the argmax turned that into
-    /// a whole frame-index flip: 74.0 dB against a 90 dB bar, hence a
-    /// documented 71 floor. A narrow fix — quantizing only the *warp output*
-    /// on-device — made it measurably worse (78.2 → 70.7 at the time) and was
-    /// reverted, which is what made the asymmetry look intrinsic to f16.
-    /// It was not: moving the whole kernel chain to half storage (every RGBA
-    /// buffer, both engines then holding byte-identical pixels end to end)
-    /// took the warped figure to **100.1 dB** (depth 103.4) on this scene,
-    /// past the same 90 dB bar the unwarped variant clears at 112.9. The
-    /// lesson the narrow experiment taught was real but local: quantizing at
-    /// one seam leaves the downstream kernels reading values the CPU never
-    /// held, which is worse than a consistent f32 disagreement — only making
-    /// the whole chain agree removes the flips.
+    /// **The warped variant holds the same 90 dB bar as the unwarped one —
+    /// no relaxed floor — and that rests on the whole kernel chain using
+    /// half storage.** With f32 WGSL kernels under f16 pixel storage, this
+    /// backend alone resamples in f32 and stores through half, so wherever
+    /// its f32 result and the CPU's straddle a rounding boundary they land
+    /// on adjacent halves and the argmax turns that into a whole frame-index
+    /// flip: 74.0 dB against the 90 dB bar. The tempting narrow fix —
+    /// quantizing only the *warp output* on-device — measures WORSE
+    /// (78.2 → 70.7): quantizing at one seam leaves the downstream kernels
+    /// reading values the CPU never held, which is worse than a consistent
+    /// f32 disagreement. Half storage through the whole chain (every RGBA
+    /// buffer, both engines holding byte-identical pixels end to end) puts
+    /// the warped figure at **100.1 dB** (depth 103.4) on this scene, past
+    /// the same 90 dB bar the unwarped variant clears at 112.9 — only
+    /// making the whole chain agree removes the flips.
     ///
     /// **llvmpipe is the one adapter that still misses 90** (74.1 dB, depth
     /// 75.5 — byte-identical on x86_64 LLVM 20 and aarch64 LLVM 21, so it is
-    /// deterministic, not noise). Half storage removed the *storage*
+    /// deterministic, not noise). Half storage removes the *storage*
     /// asymmetry; llvmpipe's warp kernels disagree in the f32 *arithmetic*
     /// itself — shader `sin()` in the lanczos weights, its own codegen for
     /// bilinear — which is why they are the only kernels scoring in the

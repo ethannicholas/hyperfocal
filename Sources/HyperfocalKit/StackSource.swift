@@ -22,8 +22,8 @@ public struct StackSource {
     /// hitting the disk, and destructive on read, so the stack is decoded once
     /// per fuse rather than once for registration and again for fusion. Only
     /// ever populated for the input classes where registration had to build the
-    /// full buffer regardless — see `DecodedFrameCache`. nil (and empty) leaves
-    /// behavior exactly as it was.
+    /// full buffer regardless — see `DecodedFrameCache`. nil (and empty) means
+    /// every frame decodes from disk.
     public var decoded: DecodedFrameCache?
     /// A frame cache over the SAME frame list and canvas — either a fuse's
     /// retained spill (`Options.retainSpill` → `Output.warpedFrames`,
@@ -56,8 +56,8 @@ public struct StackSource {
     /// be handed a CPU-warped frame. Both `PyramidFusion.fuse(source:)` and
     /// `DMapFusion.fuseWithDepth(source:)` open-coded these three lines; they
     /// share this instead, so the decode path has one place to consult the
-    /// registration-decode cache. Missing that this was two seams and not one
-    /// is why the first cut of the cache filled correctly and was never read.
+    /// registration-decode cache. Keep it one seam: with the two open-coded
+    /// copies, the cache fills correctly and is never read.
     public func decodedFrame(at i: Int) throws -> ImageBuffer {
         // The cached buffer is the output of the same deterministic
         // `ImageFile.loadRAW` call this would otherwise make, so the two are

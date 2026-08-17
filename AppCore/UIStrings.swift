@@ -10,9 +10,9 @@ import HyperfocalKit
 /// still resolves through `localizedString` against the one
 /// `Localizable.xcstrings` catalog, exactly as a native literal would.
 ///
-/// Before this file, the same English sentence was typed independently in
-/// `App/Sources/*.swift` and `QtShell/*.qml` — two copies free to drift.
-/// Add new shared strings here, not as new literals in either shell.
+/// A sentence typed independently in `App/Sources/*.swift` and
+/// `QtShell/*.qml` is two copies free to drift. Add new shared strings
+/// here, not as new literals in either shell.
 public enum UIStrings {
 
     // MARK: - App menu / project

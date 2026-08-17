@@ -298,9 +298,9 @@ public final class AppModel: ObservableObject {
                 : "org.hyperfocal.settings")
         let defaults = UserDefaults(suiteName: name) ?? .standard
         // UI-test/capture runs get a FRESH throwaway suite, cleared here at
-        // first touch — clearing it any later (it used to happen in
-        // UITestSupport.activate) is after the model's initializers have
-        // already read the previous run's leftovers.
+        // first touch — clearing it any later (e.g. in UITestSupport.activate)
+        // is after the model's initializers have already read the previous
+        // run's leftovers.
         if env["HYPERFOCAL_UITEST"] == "1" {
             defaults.removePersistentDomain(forName: name)
         }
@@ -651,8 +651,8 @@ public final class AppModel: ObservableObject {
     /// the process's peak: the fused image, previews, and the input-pane
     /// re-decode are all live, and the prewarm's full-resolution decodes plus
     /// a second full-canvas fusion on top OOM-killed an 8 GB Linux machine on
-    /// a 10 × 45.7 MP DNG stack (measured 2026-07-30; the primary alone
-    /// peaked at 4.9 GB). The estimate is a heuristic in the same spirit as
+    /// a 10 × 45.7 MP DNG stack (the primary alone peaked at 4.9 GB). The
+    /// estimate is a heuristic in the same spirit as
     /// `FramePrefetcher.defaultLookahead`: ~80 B/px for the completion working
     /// set (retained results + previews + in-flight decode transients),
     /// ~70 B/px for the secondary's own streaming window + pyramid, plus a
@@ -771,9 +771,9 @@ public final class AppModel: ObservableObject {
             .flatMap { ExportColorSpace(rawValue: $0) } ?? .srgb
         alignFrames = d.object(forKey: "alignFrames") as? Bool ?? true
         // Default on wherever an engine exists, and remember the user's
-        // choice. Off Apple that engine is wgpu; this said a flat `false`
-        // until 2026-08-06, which meant a build carrying the whole wgpu
-        // backend still fused on the CPU because the model never asked for it.
+        // choice. Off Apple that engine is wgpu; a flat `false` here means a
+        // build carrying the whole wgpu backend still fuses on the CPU
+        // because the model never asks for it.
         // `usableForAutoSelection` keeps a software rasterizer from counting —
         // WARP and llvmpipe run the same kernels on the same cores the CPU
         // path uses, minus its vectorization, so they are slower than not
@@ -789,7 +789,7 @@ public final class AppModel: ObservableObject {
         fusionDiskCache = d.object(forKey: "fusionDiskCache") as? Bool ?? true
         for legacy in ["sharpnessSigma", "noiseFloor", "medianRadius",
                        "blendRadius", "slabDeepStacks"] {
-            d.removeObject(forKey: legacy)  // sliders no longer persist; slabbing removed
+            d.removeObject(forKey: legacy)  // stale keys: per-stack sliders, slabbing
         }
         normalizeExposure = d.object(forKey: "normalizeExposure") as? Bool ?? true
         fusionMethod = d.string(forKey: "fusionMethod")
@@ -802,13 +802,12 @@ public final class AppModel: ObservableObject {
         sidebarWidth = min(max(d.object(forKey: "sidebarWidth") as? Double ?? 280,
                                280), 360)
 
-        // One-time cleanup: earlier builds autosaved the whole project on quit
-        // (hundreds of MB of pixel blobs — the write took too long, which is
-        // why quit now warns about unsaved work instead). The old file lingers
-        // for anyone upgrading past that.
+        // One-time cleanup: delete any leftover quit-autosave file (hundreds
+        // of MB of pixel blobs — that write took too long, which is why quit
+        // warns about unsaved work instead of autosaving).
         try? FileManager.default.removeItem(at: ProjectStore.autosaveURL)
-        // Slabbing (removed 2026-07-15) left per-fuse image directories
-        // behind in Application Support; clear the whole tree once.
+        // The removed slabbing path left per-fuse image directories behind
+        // in Application Support; clear the whole tree once.
         if let support = FileManager.default.urls(for: .applicationSupportDirectory,
                                                   in: .userDomainMask).first {
             try? FileManager.default.removeItem(
@@ -1851,8 +1850,7 @@ public final class AppModel: ObservableObject {
     /// edits, once made, ARE the result — whichever algorithm they started
     /// from. The last step must be `primaryResult`, not `dmapResult`: with a
     /// PMax primary the DMap peer still exists as the depth/retouch source,
-    /// and exporting it instead of what the panes show is a bug (shipped as
-    /// one until 2026-07-27).
+    /// and exporting it instead of what the panes show is a bug.
     var exportBaseImage: ImageBuffer? {
         retouch?.hasEdits == true ? retouch?.working : (savedWorking ?? primaryResult)
     }
@@ -1982,8 +1980,8 @@ public final class AppModel: ObservableObject {
         /// A retouch stroke's place in the timeline. The pixels live in the
         /// session's tile snapshots (`RetouchSession.undo/redo`); the marker
         /// only keeps the ordering, so ⌘Z interleaves strokes with tone and
-        /// inclusion edits instead of scoping by mode (tone changes made
-        /// during a retouch session used to be unreachable until Done).
+        /// inclusion edits instead of scoping by mode (which leaves tone
+        /// changes made during a retouch session unreachable until Done).
         /// Markers and the session's stroke stacks move in lockstep: each
         /// recorded stroke appends one (`onStrokeRecorded`), cap evictions
         /// drop one from whichever side hit its cap, and the purge seams
@@ -2879,11 +2877,10 @@ public final class AppModel: ObservableObject {
     /// processing-source name mid-fuse, the previewed frame's name otherwise,
     /// either carrying the localized "(aligned)" marker exactly when the
     /// shown pixels are warped into the fused canvas. The marker derives
-    /// from the tracked aligned state, never from the phase — the shells
-    /// used to compose this themselves, which is how the mid-fuse path
-    /// showed warped frames without the marker (and the Qt side shipped the
-    /// suffix untranslated). `nil` when the pane has nothing to name; each
-    /// shell shows its default hint.
+    /// from the tracked aligned state, never from the phase — a shell
+    /// composing this itself shows warped frames without the marker on the
+    /// mid-fuse path (and hands the Qt side an untranslated suffix). `nil`
+    /// when the pane has nothing to name; each shell shows its default hint.
     public var inputPaneTitle: String? {
         let name: String
         let aligned: Bool

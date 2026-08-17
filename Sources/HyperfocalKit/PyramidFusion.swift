@@ -6,7 +6,7 @@ import simd
 
 /// Per-frame alignment for a pyramid fusion whose `frame` closure returns
 /// *unwarped* frames. The GPU path applies these homographies on-device
-/// (`warp_lanczos3`) — the CPU Lanczos warp was ~55% of GPU-fusion
+/// (`warp_lanczos3`) — on the CPU the Lanczos warp is ~55% of GPU-fusion
 /// wall-clock on a 50×45 MP stack; the CPU path applies the identical
 /// `Warp.apply` after decode, so output doesn't depend on the engine.
 public struct PyramidWarp {
@@ -967,14 +967,14 @@ public enum PyramidFusion {
             // Membership at CELL level: lit AND not-confident, the exact
             // mirror of DMap tier R's "lit no-signal" partition, built from
             // the same scale-free discriminators governance already trusts.
-            // A first cut used per-pixel absolute tests (never sharp below
-            // 0.15 × p99 energy, never moving below the N-anchored ratio)
-            // and detonated at full resolution: linear-light p99 is
-            // specular-dominated, so most of a 45 MP scene read "never
-            // sharp", one 27 M px component swallowed subject and blob
-            // alike, and its mass curve — bokeh sweeps included — committed
-            // the lot to a mid-stack frame at the marginal z of exactly the
-            // old 1.5 cut. The cell-ratio test has no such anchor: in-focus
+            // Per-pixel absolute tests (never sharp below 0.15 × p99
+            // energy, never moving below the N-anchored ratio) detonate at
+            // full resolution: linear-light p99 is specular-dominated, so
+            // most of a 45 MP scene reads "never sharp", one 27 M px
+            // component swallows subject and blob alike, and its mass curve
+            // — bokeh sweeps included — commits the lot to a mid-stack frame
+            // at a marginal z of exactly 1.5 (why the significance floor
+            // below sits at 2). The cell-ratio test has no such anchor: in-focus
             // texture moves 100–5000:1 across the sweep, defocused-garden
             // bokeh 5–30:1, a never-focused foreground's residual bump
             // 2–4:1, noise 1.1–1.3:1 — the same population figures the
@@ -1297,7 +1297,7 @@ public enum PyramidFusion {
                 }
                 // Significance floor 2: the tier-R populations put flat
                 // noise at ≤ 1.3 whatever the component size and genuine
-                // bumps at 2.5+; the old 1.5 admitted a scene-swallowing
+                // bumps at 2.5+; a floor of 1.5 admits a scene-swallowing
                 // component at exactly 1.5 (see the membership comment).
                 let zLo = Float(env["HYPERFOCAL_PMAX_LIT_Z"] ?? "") ?? 2
                 // NEAR-boundary argmaxes only, each exclusion forced by a
@@ -1316,8 +1316,9 @@ public enum PyramidFusion {
                 // continuum: a stack started past its nearest structure
                 // yields one coherent beyond-sweep layer, and the first
                 // frame is the best rendition physics permits. The far
-                // case stays with shipped rendering until the per-cell
-                // focusing veto the governance review calls for exists.
+                // case stays with shipped rendering: committing it would
+                // need the C7/C8 acceptance re-run with the per-cell
+                // focusing veto in place.
                 let window = max(2, frameCount / 16)
                 var committedFrame: [Int32: Int32] = [:]
                 for (comp, curve) in compCurve {
@@ -1945,10 +1946,11 @@ public enum PyramidFusion {
     /// than restating 5 and 0.07, and must express "off" as `coarseLevels == 0`
     /// rather than inventing their own switch.
     ///
-    /// That is not style. Debloom shipped ON in the app and OFF in the CLI
-    /// because the CLI wrapped this in a separate boolean, so every PMax
-    /// measurement taken through the CLI described a configuration no user ever
-    /// saw. `isEnabled` lives here so no caller has to decide what "off" means.
+    /// That is not style. A surface that wraps this in its own boolean can
+    /// ship debloom ON in the app and OFF in the CLI, and then every PMax
+    /// measurement taken through the CLI describes a configuration no user
+    /// ever sees. `isEnabled` lives here so no caller has to decide what
+    /// "off" means.
     public struct Options: Sendable {
         /// Number of coarsest band levels to focus-gate. 0 disables the gate —
         /// this one value is both the off-switch and the strength dial, which
@@ -1956,8 +1958,8 @@ public enum PyramidFusion {
         public var coarseLevels: Int
         public var threshold: Float
         /// Smooth the selection energy at every band level, not just level 0
-        /// (default ON, shipped 2026-07-28). The level-0 grit blur exists
-        /// because the max-selector can't tell focused detail from isolated
+        /// (default ON). The level-0 grit blur exists because the
+        /// max-selector can't tell focused detail from isolated
         /// noise; the same failure repeats at coarse levels with bloom in the
         /// noise role — a defocused bright feature's smooth gradient wins
         /// scattered coarse cells against a sharp frame whose energy is dense
@@ -2170,8 +2172,6 @@ public enum PyramidFusion {
         // authoritative, exactly as `DMapFusion.Options` is for dmap. There is
         // no separate enable var: `coarseLevels == 0` IS off (Options.isEnabled),
         // so `HYPERFOCAL_PMAX_DARK_COARSE=0` is the debloom ablation switch.
-        // (A `HYPERFOCAL_PMAX_FOCUS_GATE` force-on used to exist because the
-        // default was off; it is redundant now that the default is on.)
         let env = ProcessInfo.processInfo.environment
         let fgCoarse = Int(env["HYPERFOCAL_PMAX_DARK_COARSE"] ?? "") ?? options.coarseLevels
         let fgThreshold = Float(env["HYPERFOCAL_PMAX_FOCUS_THRESH"] ?? "") ?? options.threshold
@@ -2211,8 +2211,8 @@ public enum PyramidFusion {
         // The textured base and the squared-luma energy ablation force the
         // CPU path — silently taking a GPU path that ignores them would
         // measure the wrong configuration. Smoothed selection, the Burt
-        // expand and the envelope discipline run on every engine (ported
-        // 2026-07-28), configured once here via GPUSelect.
+        // expand and the envelope discipline run on every engine,
+        // configured once here via GPUSelect.
         if texBase { log?("pmax: textured base on — CPU engine") }
         if smoothSq { log?("pmax: squared-luma energy ablation — CPU engine") }
         // Background governance runs in two arms with different ship states.
@@ -2954,10 +2954,9 @@ public enum PyramidFusion {
         /// decimation grid — so bands computed against it keep more residual
         /// low-frequency, which is extra bloom for max-selection to pick up.
         /// Collapse and band computation must switch together (either operator
-        /// reconstructs exactly when used for both). Shipped default
-        /// (2026-07-28); `HYPERFOCAL_PMAX_EXPAND5=0` is the ablation switch.
-        /// Operator dispatch for band computation — Burt expand when the
-        /// experiment is on, the shipped bilinear otherwise.
+        /// reconstructs exactly when used for both). The default operator;
+        /// `HYPERFOCAL_PMAX_EXPAND5=0` is the ablation switch, and `upsample`
+        /// dispatches to the bilinear only then.
         @inline(__always)
         func upsample(_ coarse: UnsafePointer<Float16>, nw: Int, nh: Int,
                       x: Int, y: Int, sx: Float, sy: Float) -> SIMD4<Float> {

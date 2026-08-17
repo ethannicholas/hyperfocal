@@ -52,10 +52,10 @@ public let adobeDNGConverterDownloadURL =
 ///
 /// The cache is **scoped to the process**, not kept: it exists so one stack's
 /// frames can be decoded repeatedly within a run, and it is emptied on the way
-/// out (see `purgeCache`). It used to live in `%LOCALAPPDATA%` and grow without
-/// limit — 10 GB after a few sessions, keyed by *path*, so re-importing the same
-/// frames from a copy silently stored them twice, with no UI anywhere that
-/// admitted the directory existed.
+/// out (see `purgeCache`). Keep it that way — a persistent on-disk cache keyed
+/// by *path* grows without limit (10 GB after a few sessions), silently stores
+/// re-imported copies of the same frames twice, and has no UI anywhere that
+/// admits the directory exists.
 ///
 /// Windows only for now; the converter-location and launch seams are the parts a
 /// Linux/Wine path would later plug into.
@@ -342,13 +342,13 @@ public final class RawConverter {
         // cache — the converter always writes "<stem>.dng" next to `-d`.
         //
         // The name must be unique per invocation, not a hash of what is being
-        // converted. It used to be the latter, which meant two processes
-        // converting the same stack — a second app instance, or a CLI run
-        // beside the app — picked the same scratch directory, and whichever
-        // got there second deleted it out from under the first. The converter
-        // answers a missing `-d` by writing nothing at all and still exiting
-        // 0 (measured), so the loser saw "could not convert this file" with no
-        // hint why. UUID costs nothing and the collision cannot happen.
+        // converted: with a content-derived name, two processes converting the
+        // same stack — a second app instance, or a CLI run beside the app —
+        // pick the same scratch directory, and whichever gets there second
+        // deletes it out from under the first. The converter answers a missing
+        // `-d` by writing nothing at all and still exiting 0 (measured), so
+        // the loser sees "could not convert this file" with no hint why. UUID
+        // costs nothing and the collision cannot happen.
         let tmp = fm.temporaryDirectory
             .appendingPathComponent(RawConverter.scratchPrefix + UUID().uuidString,
                                     isDirectory: true)

@@ -53,16 +53,15 @@ struct DebugWgpu: ParsableCommand {
     @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (unwarped frames).")
     var dmapFloor: Double = 90
 
-    // Warped frames used to carry a relaxed floor (71) because the WGSL
-    // kernels were f32 under f16 storage: only this backend resampled in f32
-    // and stored through half, so wherever its result straddled a rounding
-    // boundary the argmax flipped a frame index. The half-storage port removed
-    // that asymmetry and the measured figure went 74.0 → 100.1 dB, so warped
-    // frames are back on the same bar as everything else. Exception: llvmpipe
-    // still measures 74.1 — its warp arithmetic straddles the same boundaries
-    // for its own reasons — so the llvmpipe CI job passes an explicit
-    // --dmap-warp-floor 71 rather than relaxing this default for the adapters
-    // that do clear 90. See WgpuParity.runDMap.
+    // Warped frames share the 90 dB bar because the WGSL kernels resample
+    // through the same half storage the CPU path uses (measured 100.1 dB).
+    // The trap that would break this: a backend resampling in f32 and storing
+    // through half — wherever its result straddles a rounding boundary the
+    // argmax flips a frame index, and the parity drops into the 70s.
+    // Exception: llvmpipe measures 74.1 — its warp arithmetic straddles the
+    // same boundaries for its own reasons — so the llvmpipe CI job passes an
+    // explicit --dmap-warp-floor 71 rather than relaxing this default for the
+    // adapters that do clear 90. See WgpuParity.runDMap.
     @Option(help: "Fail below this minimum CPU↔GPU dmap PSNR in dB (warped frames).")
     var dmapWarpFloor: Double = 90
 
@@ -301,11 +300,11 @@ struct Fuse: ParsableCommand {
 
     // No separate on/off flag: `pmax-coarse-levels` is both the off-switch and
     // the strength dial, exactly as the app's single Debloom levels slider is
-    // (AppModel gates on `pmaxCoarseLevels > 0`). There used to be a
-    // `--pmax-debloom` boolean here defaulting to false, which meant the CLI
-    // shipped debloom OFF while the app shipped it ON at the same 5 levels —
-    // so every measurement taken through the CLI described a configuration no
-    // user ever saw. One control, one default, no way to drift.
+    // (AppModel gates on `pmaxCoarseLevels > 0`). A separate boolean here is
+    // the drift trap: a CLI whose flag defaults debloom OFF while the app
+    // ships it ON makes every measurement taken through the CLI describe a
+    // configuration no user ever sees. One control, one default, no way to
+    // drift.
     @Option(name: .customLong("pmax-coarse-levels"),
             help: ArgumentHelp("PMax debloom: number of coarsest band levels to focus-gate, "
                 + "suppressing highlight bloom (defocused bright features spreading "

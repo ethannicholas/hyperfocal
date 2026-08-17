@@ -1,7 +1,7 @@
-// Phase 2 shell: sidebar (stack list, fusion sliders, fuse, tone, export)
-// + output pane with Result/Depth toggle — mirroring the native app's
-// layout so the two can be compared side-by-side on one machine. Still
-// deliberately spartan; it proves the bridge surface, not the chrome.
+// The shell's main window: sidebar (stack list, fusion sliders, fuse,
+// tone, export) + output pane with Result/Depth toggle — mirroring the
+// native app's layout so the two can be compared side-by-side on one
+// machine.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs

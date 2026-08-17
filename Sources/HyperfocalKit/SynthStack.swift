@@ -20,12 +20,12 @@ public enum SynthStack {
         /// sign-inverted contamination case: the backdrop's bloom spills
         /// INTO the dark subject, so this measures whether the debloom
         /// family defends a subject the scene-relative "near-black" cut
-        /// claims. (Measured 2026-08-17: keep-darkest is the correct
-        /// defense here — darkest = least bright-contaminated — so gating
-        /// the near-black arm off on bright fields costs 2.9 dB on this
-        /// scene.) Pair with `flicker` to also exercise darkest-frame
-        /// selection on a bright field, where un-normalized exposure makes
-        /// "darkest" mean "dimmest-exposed".
+        /// claims. (Measured: keep-darkest is the correct defense here —
+        /// darkest = least bright-contaminated — so gating the near-black
+        /// arm off on bright fields costs 2.9 dB on this scene.) Pair with
+        /// `flicker` to also exercise darkest-frame selection on a bright
+        /// field, where un-normalized exposure makes "darkest" mean
+        /// "dimmest-exposed".
         case brightObject
         /// Bright LOW-CONTRAST object over a near-white far background —
         /// white-on-white. Here defocus DIMS the subject (its faint bright

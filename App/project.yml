@@ -171,7 +171,7 @@ targets:
               public.filename-extension: [tif, tiff]
               public.mime-type: [image/tiff]
 
-  # The Qt shell's C-ABI bridge is NOT built here anymore: it is a SwiftPM
+  # The Qt shell's C-ABI bridge is NOT built here: it is a SwiftPM
   # dynamic-library product (HyperfocalBridge in ../Package.swift, over the
   # AppCore module) so the same product definition carries to Linux. See
   # Scripts/build.sh (--qt).

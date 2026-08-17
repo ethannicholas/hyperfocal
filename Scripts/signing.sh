@@ -9,9 +9,9 @@
 # App/project.yml (CODE_SIGN_IDENTITY "-", CODE_SIGN_STYLE Manual) rather
 # than here, so that opening the generated project in Xcode.app and pressing
 # Run works too. Nobody cloning the repo holds a certificate for this
-# project's team, and the project used to demand one: the first build on a
-# machine without it failed with `No signing certificate "Mac Development"
-# found`, which is the whole experience of trying Hyperfocal from source.
+# project's team, so a default that demands one makes the first build fail
+# with `No signing certificate "Mac Development" found` — which would be
+# the whole experience of trying Hyperfocal from source.
 # Ad-hoc costs nothing locally — the sandbox container is keyed to the bundle
 # ID, and Xcode still injects get-task-allow into Debug builds, so the
 # debugger attaches.

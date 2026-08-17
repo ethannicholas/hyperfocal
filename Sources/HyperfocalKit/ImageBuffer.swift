@@ -53,9 +53,9 @@ public struct ImageBuffer {
     }
 
     /// Narrows an f32 RGBA plane straight out of foreign memory — the CImaging
-    /// decoders hand back a `float*` they own, so this replaces what used to be
-    /// a full-size `Array(UnsafeBufferPointer(...))` copy rather than adding a
-    /// pass, and lands half the bytes.
+    /// decoders hand back a `float*` they own, so narrowing directly replaces
+    /// the full-size `Array(UnsafeBufferPointer(...))` copy that would
+    /// otherwise be needed, and lands half the bytes.
     public init(width: Int, height: Int, floatPixels src: UnsafePointer<Float>) {
         let count = width * height * 4
         self.width = width

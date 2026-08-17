@@ -830,8 +830,7 @@ public final class MetalEngine {
     }
 
     // Scale-and-narrow: divides the f32 base accumulator by the frame count
-    // and lands it in the half4 buffer the collapse chain runs on. Folds in
-    // what used to be a separate blit copy of the base.
+    // and lands it in the half4 buffer the collapse chain runs on.
     kernel void pyr_scale4(device half4* dst [[buffer(0)]],
                            device const float4* src [[buffer(1)]],
                            constant float& s [[buffer(2)]],

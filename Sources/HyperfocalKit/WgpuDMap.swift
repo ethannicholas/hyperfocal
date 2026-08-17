@@ -139,8 +139,7 @@ public enum WgpuDMap {
         // f16, like `ImageBuffer.pixels` and the spill payload.
         var warpedHost: [Float16] = []
         // RGBA storage is f16 on both sides (WgpuEngine's `Half4`), so every
-        // host↔device transfer below is a plain copy — no widening pass, and
-        // half the bytes of the f32 staging this path used to carry.
+        // host↔device transfer below is a plain copy — no widening pass.
         func uploadHalves(_ src: UnsafePointer<Float16>, count: Int,
                           to buf: WgpuEngine.Buffer) {
             engine.upload(src, byteCount: count * 2, to: buf)

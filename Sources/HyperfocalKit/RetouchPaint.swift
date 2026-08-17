@@ -8,8 +8,8 @@ import Dispatch
 /// run ~30x slower (measured 3 ms per r=25 stamp, 27 ms at r=150, on a
 /// 45 MP canvas). At those costs a drag's stamps outrun the event loop:
 /// mouse events coalesce, sample points spread out, and strokes render as
-/// straight polygon segments — Debug builds were unpaintable on large
-/// stacks.
+/// straight polygon segments — a Debug build running them -Onone is
+/// unpaintable on large stacks.
 ///
 /// All functions take base pointers into full `width`-stride interleaved
 /// planes (RGBA f16 pixels, RGBA8 display bytes, scalar Float depth,

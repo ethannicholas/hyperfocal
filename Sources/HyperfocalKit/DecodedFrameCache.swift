@@ -10,7 +10,7 @@ import Foundation
 /// then throws it away to keep 1/16th of it as luminance. Fusion then decodes
 /// the same file again. On the 78 × 45 MP NEF reference stack that is ~9.5 s of
 /// registration and ~6.9 s of fusion decode-wait out of ~20 s — against 0.05 s
-/// of GPU compute (M5 Max, 2026-08-11). Decode *is* the wall clock; this class
+/// of GPU compute (M5 Max). Decode *is* the wall clock; this class
 /// deletes half of it.
 ///
 /// **Reuse is exact, not approximate.** Registration's RAW path and fusion's

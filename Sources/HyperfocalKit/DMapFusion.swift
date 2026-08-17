@@ -36,7 +36,7 @@ public enum DMapFusion {
         /// Absolute pixels on purpose: this tracks the *noise* scale, which is
         /// per-pixel whatever the frame's resolution. It costs sensitivity to
         /// detail finer than the sigma, so it stays well under the pooling
-        /// `sharpnessSigma` that follows. 0 disables (the pre-2026-07 measure).
+        /// `sharpnessSigma` that follows. 0 disables (the raw, un-blurred measure).
         ///
         /// The default sits at the conservative end of a plateau: across the
         /// nine sample stacks σ 1…2 all score within 0.2 points of each other
@@ -1144,8 +1144,8 @@ public enum DMapFusion {
                                 while dy <= radius {
                                     // Ternary clamps: Swift.min/max(Int,_)
                                     // stay outlined specialized calls per tap
-                                    // at -O on the Mac toolchain (profiled
-                                    // 2026-07-21); ternaries compile to csel.
+                                    // at -O on the Mac toolchain (profiled);
+                                    // ternaries compile to csel.
                                     let y0 = y + dy
                                     let yy = y0 < 0 ? 0 : (y0 >= height ? height - 1 : y0)
                                     var dx = -radius

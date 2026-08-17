@@ -15,7 +15,7 @@ import simd
 // absent; on Apple platforms the engine keeps using the real `simd`.
 //
 // Performance contract (learned the hard way — Windows/arm64 debug -O,
-// measured on the Lanczos warp inner loop, 2026-07-19):
+// measured on the Lanczos warp inner loop):
 // - Concrete functions here must be `@inlinable` (bodies serialized).
 //   Debug builds compile per-file (no WMO; it breaks SwiftPM's incremental
 //   driver), so non-inlinable helpers stay opaque cross-file calls.
@@ -30,7 +30,7 @@ import simd
 // Mac toolchain (Swift 6.2, -O) the stdlib's GENERIC pointwiseMin/Max leaves
 // its guts witness-dispatched even in release — `FloatingPoint.maximum` and
 // `SIMDStorage.subscript` through witness tables, measured 33% of the warp's
-// samples (Instruments, 2026-07-21) — while Apple's `simd` module functions
+// samples (Instruments) — while Apple's `simd` module functions
 // are concrete and lower to single vector instructions. Off-Apple the
 // generic specializes fine (their 41 ns/px split was measured WITH
 // pointwiseMin), so the shim keeps it. Concrete + @inlinable means it
@@ -59,8 +59,8 @@ public func hfMax(_ a: SIMD4<Float>, _ b: SIMD4<Float>) -> SIMD4<Float> {
 // arithmetic happens in f32 registers. These are the only sanctioned way to
 // cross that boundary in a per-pixel loop.
 //
-// Codegen contract (measured on Swift 6.2 / arm64 `-O`, `swiftc -emit-assembly`,
-// 2026-07-26) — the two directions are NOT symmetric, and picking the wrong
+// Codegen contract (measured on Swift 6.2 / arm64 `-O`, `swiftc -emit-assembly`)
+// — the two directions are NOT symmetric, and picking the wrong
 // form in either one falls off a cliff exactly like the generic-SIMD trap above:
 //
 // - WIDENING (f16→f32) must go through the SCALAR-ELEMENT form,
@@ -245,9 +245,9 @@ public func simd_length(_ v: SIMD2<Float>) -> Float {
 }
 
 // Implemented on the stdlib's pointwiseMin/Max, never on masked
-// `.replacing(with:where:)`: the mask form compiled to an unspecialized
-// generic path that cost 3215 ns/px vs 44 ns/px in the Lanczos warp's
-// inner loop (73x — it WAS the CPU fusion bottleneck, measured 2026-07-19).
+// `.replacing(with:where:)`: the mask form compiles to an unspecialized
+// generic path that costs 3215 ns/px vs 44 ns/px in the Lanczos warp's
+// inner loop — a 73x cliff that makes it THE CPU fusion bottleneck.
 @inlinable
 public func simd_min<V: SIMD>(_ a: V, _ b: V) -> V where V.Scalar: Comparable {
     pointwiseMin(a, b)

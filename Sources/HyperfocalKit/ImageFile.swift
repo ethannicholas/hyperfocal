@@ -70,8 +70,8 @@ public enum ImageFile {
         /// Apple, where there is no cheap route to luminance) *and* the caller
         /// asked for it. nil everywhere else, and callers must treat nil as the
         /// normal case rather than a failure. Handing it back costs nothing: it
-        /// is a retain of a buffer that was already built and was previously
-        /// dropped on the floor. See `DecodedFrameCache`.
+        /// is a retain of a buffer that was already built and would otherwise
+        /// be dropped on the floor. See `DecodedFrameCache`.
         public var source: ImageBuffer? = nil
     }
 

@@ -1106,8 +1106,7 @@ static hf_status decodeRAWGray8Half(const char* path, int min_longest,
     // Heap-allocated deliberately: LibRaw is hundreds of KB of struct, this
     // static function inlines into hf_decode_gray8_scaled, and the fallback
     // path there calls hf_decode_raw (its own stack LibRaw) — two LibRaw
-    // frames overflowed the ~512 KB worker-thread stack (0xC00000FD,
-    // reproduced on the FULLGRAY ablation path 2026-07-21).
+    // frames overflow the ~512 KB worker-thread stack (0xC00000FD).
     auto rawp = std::make_unique<LibRaw>();
     LibRaw& raw = *rawp;
     raw.imgdata.params.use_camera_wb = 1;
@@ -1866,8 +1865,8 @@ static bool registerDebug() {
 static int siftNFeatures() {
     static const int v = [] {
         const char* e = std::getenv("HYPERFOCAL_SIFT_NFEATURES");
-        // 2000 (from 4000, 2026-07-20): at the 1600 detect bound, matching
-        // is -77% (0.17 s/pair) with >=630 ratio-test survivors, residuals
+        // 2000: at the 1600 detect bound, matching costs -77% vs a 4000
+        // detect (0.17 s/pair) with >=630 ratio-test survivors, residuals
         // flat, and ground-truth PSNR unchanged (50.14 vs 50.29 dB).
         return e ? std::atoi(e) : 2000;
     }();

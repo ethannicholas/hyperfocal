@@ -842,9 +842,9 @@ void runSelfTest(QQmlApplicationEngine *engine, SelfTest *state) {
     poll->start(200);
 
     // No backstop here: main() already bounds the whole run with the
-    // HFQT_SELFTEST_TIMEOUT watchdog (same 5-minute default this duplicate
-    // used to hard-code, but overridable — a 45 MP raw journey on a 2-core
-    // machine legitimately outlives 5 minutes).
+    // HFQT_SELFTEST_TIMEOUT watchdog (5-minute default, overridable — a
+    // 45 MP raw journey on a 2-core machine legitimately outlives 5
+    // minutes).
 }
 
 }  // namespace
@@ -897,11 +897,10 @@ int main(int argc, char *argv[]) {
     const QString forcedLang = QString::fromLocal8Bit(qgetenv("HFQT_LANG"));
     const bool selftest = argc >= 2
         && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--selftest");
-    // A bare `--selftest` used to fall through to app.exec() and launch an
-    // ordinary window: it reads as a hung test rather than a misuse, and cost
-    // a debugging detour. Reject it here — before the QML engine is built, so
-    // nothing flashes on screen — since no form of `--selftest` was ever
-    // meant to start the GUI.
+    // A bare `--selftest` must never fall through to app.exec() and launch
+    // an ordinary window: that reads as a hung test rather than a misuse.
+    // Reject it here — before the QML engine is built, so nothing flashes on
+    // screen — since no form of `--selftest` is meant to start the GUI.
     if (selftest && argc < 4) {
         // Named from the running binary rather than a literal: the file is
         // Hyperfocal.exe on Windows and hyperfocal-qt elsewhere (QtShell/
@@ -917,12 +916,11 @@ int main(int argc, char *argv[]) {
                "       HFQT_SELFTEST_TIMEOUT (seconds, 0 disables the watchdog)";
         return 2;
     }
-    // Arity was never the only way to get a window instead of a test. A
-    // stack directory that is missing or empty passes the check above, then
-    // the run simply never reaches its export and app.exec() sits there with
-    // a window open — indistinguishable from a slow fuse, and it cost a
-    // debugging detour of its own. Validate the inputs here, beside the arity
-    // check and still before the QML engine exists.
+    // Arity is not the only way to get a window instead of a test. A stack
+    // directory that is missing or empty passes the check above, then the
+    // run simply never reaches its export and app.exec() sits there with a
+    // window open — indistinguishable from a slow fuse. Validate the inputs
+    // here, beside the arity check and still before the QML engine exists.
     if (selftest) {
         const QDir dir(QString::fromLocal8Bit(argv[2]));
         if (!dir.exists()) {
@@ -946,15 +944,14 @@ int main(int argc, char *argv[]) {
     // go through the translator above; everything AppCore owns — the menu
     // titles, the entire left panel, the pane titles ("Output", "…
     // (aligned)"), the zoom bar, status text, undo names — arrives through
-    // the bridge, whose Swift side used to resolve a locale of its own. With
-    // HFQT_LANG set that side never heard about it and stayed English, so a
-    // localized run was half translated (found while capturing store media).
-    // hf_set_language hands it the tag settled on here, including the "en"
-    // and no-catalog cases: forcing English is exactly what the selftest
-    // wants, whose assertions compare against English bridge strings and
-    // until now passed only because the machine's locale happened to be
-    // English. It must come before the QML engine, which reads bridge
-    // strings while building the first window.
+    // the bridge. Left to resolve a locale of its own, the Swift side never
+    // hears about HFQT_LANG and stays English, leaving a localized run half
+    // translated. hf_set_language hands it the tag settled on here,
+    // including the "en" and no-catalog cases: forcing English is exactly
+    // what the selftest wants, whose assertions compare against English
+    // bridge strings and must pass whatever the machine's locale is. It
+    // must come before the QML engine, which reads bridge strings while
+    // building the first window.
     QString language = QStringLiteral("en");
     if (!selftest && forcedLang != QStringLiteral("en")) {
         const QStringList tags = forcedLang.isEmpty()

@@ -36,8 +36,8 @@ final class FramePrefetcher {
     /// worker per window slot, i.e. as much concurrency as `lookahead` (and
     /// therefore memory) allows.
     ///
-    /// The RAW cap is an **Apple-only** fact, and mis-applying it off Apple
-    /// cost more than it ever saved there. On Apple, RAW decode runs through
+    /// The RAW cap is an **Apple-only** fact — applying it off Apple costs
+    /// far more than it saves. On Apple, RAW decode runs through
     /// the internally-parallel (GPU) RAW engine, where extra concurrency only
     /// contends — measured on 45 MP NEFs, 4 concurrent decodes run ~65%
     /// SLOWER per frame than serial (0.84 vs 0.48 s/frame) and 2-way ties

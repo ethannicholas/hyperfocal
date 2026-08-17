@@ -10,7 +10,7 @@ import simd
 import CImaging
 #endif
 #if HYPERFOCAL_HAVE_OPENCV
-import COpenCVRegister  // macOS Phase 1.5 A/B: OpenCV registration alongside Vision
+import COpenCVRegister  // OpenCV registration also builds on macOS, for A/B against Vision
 #endif
 
 public enum AlignError: Error, CustomStringConvertible {
@@ -23,10 +23,11 @@ public enum AlignError: Error, CustomStringConvertible {
     /// Two frames reached the registrar at different sizes. Data, not a
     /// programmer error: a folder of mixed-resolution images is something a
     /// user can hand us, and the registration-gray decode has its own scale
-    /// policy that must agree across frames. This used to be a `precondition`,
-    /// which took the whole app down with an illegal-instruction crash and no
-    /// message — on Windows that reads as the app simply vanishing. The sizes
-    /// ride along because they are the only clue to *why* they disagreed.
+    /// policy that must agree across frames. A `precondition` here takes the
+    /// whole app down with an illegal-instruction crash and no message — on
+    /// Windows that reads as the app simply vanishing — so keep this a
+    /// recoverable error. The sizes ride along because they are the only clue
+    /// to *why* they disagreed.
     case frameSizeMismatch(fixed: (w: Int, h: Int), moving: (w: Int, h: Int))
 
     /// This text is the body of the app's "Fuse failed" alert (and the CLI's
@@ -101,15 +102,14 @@ public enum Aligner {
     /// Full-length frame→reference transforms plus any quality flags raised
     /// along the way. Flagged frames get best-effort transforms (see
     /// `transformsAndQuality`); the chain itself only runs through good frames,
-    /// so one bad frame can no longer corrupt the frames beyond it.
+    /// so one bad frame cannot corrupt the frames beyond it.
     public struct RegistrationOutput {
         public let transforms: [simd_float3x3]
         public let issues: [FrameQualityIssue]
     }
 
-    /// Strict variant: throws if any frame failed to register (the historical
-    /// behavior). Exposure/misalignment flags don't throw — those frames were
-    /// always fused silently before detection existed.
+    /// Strict variant: throws if any frame failed to register.
+    /// Exposure/misalignment flags don't throw — flagged frames fuse anyway.
     public static func transforms(forFrames urls: [URL],
                                   log: ((String) -> Void)? = nil,
                                   cancellation: CancellationToken? = nil,
@@ -270,7 +270,7 @@ public enum Aligner {
         guard kept.count >= 2 else { throw AlignError.tooFewGoodFrames(good: kept.count) }
 
         // Register consecutive kept pairs concurrently; failures are data, not
-        // errors (a bad frame shouldn't abort the whole fuse anymore).
+        // errors (a bad frame must not abort the whole fuse).
         enum Pair {
             case ok(h: simd_float3x3, residual: Float)
             case failed
@@ -558,35 +558,32 @@ public enum Aligner {
     ///
     /// **cores − 1, bounded by memory and by
     /// what the registrar wants** (`registrarFanOutCeiling` — Vision takes the
-    /// full width, OpenCV still caps at 4; read that first, the split is the
-    /// non-obvious part). It used to be `min(4, cores −
-    /// 1)`, where the 4 was historical and the `min` existed only so a 2-core
-    /// VM wouldn't starve (4 concurrent SIFT registrations, each with OpenCV's
-    /// own internal parallelism, monopolized it for the whole pass). That
-    /// low-end floor is preserved exactly — a 2-core VM still resolves to 1 —
-    /// but the ceiling is gone, because on anything wide the 4 *was* the
-    /// binding term and registration is the dominant cost in the fastest
-    /// configuration (~55% of pmax/gpu wall on both Apple reference machines).
+    /// full width, OpenCV caps at 4; read that first, the split is the
+    /// non-obvious part). The `cores − 1` keeps a 2-core VM at 1 worker —
+    /// concurrent SIFT registrations, each with OpenCV's own internal
+    /// parallelism, monopolize it for the whole pass. There is deliberately no
+    /// fixed ceiling above that: registration is the dominant cost in the
+    /// fastest configuration (~55% of pmax/gpu wall on both Apple reference
+    /// machines), and the pass scales.
     ///
     /// This pass is embarrassingly parallel — per-frame decode+gradient+detect,
     /// then per-pair matching — and it scales nearly linearly to the core
-    /// count. Measured interleaved on the **M5 Max** (18 cores, 2026-08-11),
+    /// count. Measured interleaved on the **M5 Max** (18 cores),
     /// 12 MP × 17 synth, best of 3, registration wall only:
     ///
     ///     workers  1      2      4      8      12     18
     ///     seconds  2.99   1.70   1.10   0.83   0.69   0.56
     ///
-    /// i.e. 1.97× against the old cap of 4, and 5.3× against serial. The
-    /// non-monotonic step at 12–16 is wave quantization, not saturation: 17
-    /// units over 16 workers is a full wave plus a straggler, so the honest
-    /// reading is "scales to the core count", not "peaks at 18".
+    /// i.e. 1.97× for the full width against a cap of 4, and 5.3× against
+    /// serial. The non-monotonic step at 12–16 is wave quantization, not
+    /// saturation: 17 units over 16 workers is a full wave plus a straggler,
+    /// so the honest reading is "scales to the core count", not "peaks at 18".
     ///
-    /// Two older observations this corrects. Earlier measurements recorded
-    /// registration as ~1.7 s at 12 MP on *both* the 8-core M1 Pro and the
-    /// 10-core M1 Max and concluded Vision's cost was "effectively serial per
-    /// frame pair" — but both machines were pinned at 4 workers, so the
-    /// constant was this cap, not Vision. And the cap is why the extra cores
-    /// bought nothing: the measurement could not see past its own limiter.
+    /// A trap for anyone re-measuring: numbers taken *under* a worker cap see
+    /// the cap, not the registrar. Registration measuring ~1.7 s at 12 MP on
+    /// both an 8-core and a 10-core machine looks like "Vision is effectively
+    /// serial per frame pair" — but with both pinned at 4 workers the constant
+    /// is the cap, and the measurement cannot see past its own limiter.
     ///
     /// The memory term is belt-and-braces, and deliberately loose. Only the
     /// gradient plane is retained per frame (~1/16 of the float image); the
@@ -621,7 +618,7 @@ public enum Aligner {
     /// the *same* decoder, deliberately not restated: CIRAW is internally
     /// parallel, so concurrent decodes contend instead of scaling.
     ///
-    /// Measured on the 78 × 45 MP NEF reference stack (M5 Max, 2026-08-11),
+    /// Measured on the 78 × 45 MP NEF reference stack (M5 Max),
     /// sweeping `HYPERFOCAL_REGISTER_WORKERS`, registration wall / peak memory:
     ///
     ///     workers   2       4       8       12      17
@@ -656,10 +653,10 @@ public enum Aligner {
     /// pool of its own that we can see, and it scales nearly linearly to the
     /// core count — measured on the M5 Max (see `registrationConcurrency`).
     ///
-    /// **OpenCV SIFT keeps the historical 4, pending measurement.** Its detect
+    /// **OpenCV SIFT caps at 4, pending measurement.** Its detect
     /// is internally parallel, so N concurrent detections oversubscribe the
     /// machine N× — a mechanically different situation from Vision's, and the
-    /// failure mode the original cap was written against (a 2-core VM went
+    /// failure mode the cap exists for (a 2-core VM goes
     /// unusable for the whole pass at 4). Lifting it here would ship an
     /// unmeasured change to Windows and Linux, and it could not be measured on
     /// the machine that found the Vision win: the macOS OpenCV A/B build needs
@@ -683,7 +680,7 @@ public enum Aligner {
     /// Lock-guarded results box for `boundedConcurrentMap`: a reference the
     /// operations capture immutably (captured `var`s in concurrently-
     /// executing code are Swift 6 errors; the lock provides the actual
-    /// synchronization, exactly as before).
+    /// synchronization).
     private final class ConcurrentMapState<T> {
         var results: [T?]
         var firstError: Error?
@@ -729,21 +726,21 @@ public enum Aligner {
     /// registration" bound (validated on macOS via the Phase 1.5 A/B; applied
     /// on every OpenCV path). Synth frames (≤900 px) sit below this, so the
     /// synth gates are unaffected.
-    /// SIFT input bound. 1200 (from 2500 via 1600, 2026-07-20): detect is
-    /// the registration wall-clock wall and scales with area. Measured at
-    /// each step on the 82 × 11 MP sample stack + a 3600×2400 jittered
+    /// SIFT input bound. 1200: detect is the registration wall-clock wall
+    /// and scales with area. Measured at each step on the 82 × 11 MP
+    /// sample stack + a 3600×2400 jittered
     /// ground-truth synth: pair residuals flat, ratio-test matches high,
     /// zero rejects/flags, truth PSNR 50.26 dB at 1200 (50.29 at 1600,
     /// 49.62 at 2500) — and 1000 also passed (50.17), so 1200 is landed
     /// with a tested step of margin below it.
-    /// 45 MP re-verify (2026-07-20, macOS A/B, 60-frame Fluorite NEF
+    /// 45 MP re-verify (macOS A/B, 60-frame Fluorite NEF
     /// stack): the **1600** bound + 2000 cap passed quality-neutral vs
     /// the 2500/uncapped baseline — crop sizes within a few px,
     /// new↔Vision 33.3 dB vs baseline↔Vision 34.1 dB (cross-transform
     /// comparisons bottom out near there), 8× amplified diff black in the
     /// background with only texture-grain resampling differences, and 1:1
     /// silhouette crops indistinguishable. **1200 FAILED that bar at
-    /// 45 MP** (same day, same stack, bound isolated on one binary via
+    /// 45 MP** (same stack, bound isolated on one binary via
     /// the env override): 1600↔1200 only 30.4 dB — ~3.5 dB beyond the
     /// same-family noise floor — the common-coverage crop grew ~10 px
     /// (under-estimated motion), and the amplified diff shows
@@ -767,9 +764,9 @@ public enum Aligner {
     /// Registration gray-decode scale policy (the CImaging JPEG path): the
     /// decoded longest side must stay >= max(1000, full/5). 1000 is the
     /// ground-truth-passing step below the 1200 SIFT bound (50.17 dB vs
-    /// 50.26, 2026-07-20 ablation), so a 4000-px frame decodes 1/4 to 1000
-    /// and SIFT runs there; the /5 term mirrors the bound's scale floor so
-    /// large frames can never decode below the scale the 45 MP A/B
+    /// 50.26 in the ground-truth ablation), so a 4000-px frame decodes 1/4
+    /// to 1000 and SIFT runs there; the /5 term mirrors the bound's scale
+    /// floor so large frames can never decode below the scale the 45 MP A/B
     /// validated (1/4 itself is a gentler reduction than the floor's 5x,
     /// and 1/8 can never satisfy L/8 >= L/5). Note HYPERFOCAL_REGISTER_MAXSIDE
     /// ablations above the decoded size need HYPERFOCAL_REGISTER_FULLGRAY=1

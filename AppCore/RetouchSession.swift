@@ -37,11 +37,11 @@ public final class RetouchSession: ObservableObject {
             // selected, the pane must never show fewer pixels than the
             // canvas (every legitimate writer is a full-res render; only
             // the PMax layer legitimately shows low-res build previews).
-            // The 2026-07 stomp (stale-generation PMax previews over a
-            // cache-hit frame) is fixed; if blur ever recurs, this names
-            // the moment in `log show --predicate 'subsystem ==
-            // "org.hyperfocal"'` instead of leaving another unreproducible
-            // report.
+            // The known stomp (stale-generation PMax previews over a
+            // cache-hit frame) is guarded in selectSource; if blur ever
+            // recurs, this names the moment in `log show --predicate
+            // 'subsystem == "org.hyperfocal"'` instead of leaving another
+            // unreproducible report.
             guard let image = sourceDisplay, sourceIndex < urls.count,
                   image.width > 0, image.width < width / 2 else { return }
             Self.log.fault("""
@@ -420,7 +420,7 @@ public final class RetouchSession: ObservableObject {
             return
         }
         lastFrameSourceIndex = clamped
-        // Navigating away no longer cancels a building PMax layer — it keeps
+        // Navigating away leaves a building PMax layer running — it keeps
         // building in the background and caches, so returning to it is instant.
         let changed = clamped != sourceIndex
         sourceIndex = clamped

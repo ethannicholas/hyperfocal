@@ -46,8 +46,8 @@ struct FuseSettings: Equatable, Codable {
 /// The PMax-specific parameters a PMax result was produced with — staleness
 /// tracking for the PMax pass, the analogue of `FuseSettings` for DMap.
 /// Codable because it rides in the project manifest alongside the saved PMax
-/// image (which used to be regenerated on every reopen — a full background
-/// re-fuse between "open project" and painting from the PMax layer).
+/// image — persisting both is what spares a reopen the full background
+/// re-fuse between "open project" and painting from the PMax layer.
 struct PMaxSettings: Equatable, Codable {
     var align: Bool
     var useGPU: Bool

@@ -91,13 +91,13 @@ public enum WarpBench {
         }
 
         // Add experimental variants here as extra bench() lines and diff them
-        // against production. Milestones on the 2-core dev VM (2026-07-20):
-        // tap-at-a-time loop 42.2-43.0 ns/px; SIMD8 pair taps 40.4-41.4
-        // (landed, 151.2 dB vs the old loop). Dead ends, measured: vectorized
-        // LUT weights 16.6 vs 9.0 ns/set scalar (any SIMD8<Int32> conversion
-        // init is an unspecialized generic, ~250 ns/call); Chebyshev weights
-        // (Mac, reverted); register-captured anti-ring pixels and a single
-        // SIMD4 store — both within noise. Loop cost split at 41 ns/px:
+        // against production. On the 2-core dev VM, production's SIMD8 pair
+        // taps run 40.4-41.4 ns/px (a tap-at-a-time loop measures 42.2-43.0,
+        // 151.2 dB apart). Dead ends, measured: vectorized LUT weights 16.6
+        // vs 9.0 ns/set scalar (any SIMD8<Int32> conversion init is an
+        // unspecialized generic, ~250 ns/call); Chebyshev weights (Mac —
+        // no win); register-captured anti-ring pixels and a single SIMD4
+        // store — both within noise. Loop cost split at 41 ns/px:
         // weights ~16, interior taps ~7, homography/divides/clamp/store ~19.
         bench("production", Warp.applyLanczos3, isReference: true)
     }

@@ -250,14 +250,14 @@ public func hf_ui_string(_ key: UnsafePointer<CChar>?,
 /// installs a translator for its own `qsTr`/`tr` half. Everything else the
 /// window shows originates in AppCore and arrives through this bridge — menu
 /// titles, the whole left panel, pane titles ("Output", "… (aligned)"), the
-/// zoom bar, status text, undo names — and that half used to resolve its own
-/// locale independently, so it stayed English while the QML around it
-/// translated. This settles both halves from the shell's one decision.
+/// zoom bar, status text, undo names. If that half resolves its own locale
+/// independently, it stays English while the QML around it translates — this
+/// call settles both halves from the shell's one decision.
 ///
 /// Pass "en" (or any tag the catalog doesn't ship) to force English, which is
 /// what the selftest wants: its assertions compare against English bridge
-/// strings, and until now they only passed because the machine's own locale
-/// happened to be English.
+/// strings, and must not lean on the machine's own locale happening to be
+/// English.
 ///
 /// Call before the first string is read (the shared strings are lazy
 /// globals). Returns 1 when the catalog ships the language, 0 when the

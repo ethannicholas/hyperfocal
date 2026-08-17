@@ -2,8 +2,8 @@ import AppKit
 import UniformTypeIdentifiers
 import HyperfocalKit
 
-// The option enums stayed nested in AppModel when these views moved out of
-// it (Phase 0b dialog seam); alias them so the moved code reads unchanged.
+// The option enums are nested in AppModel; alias them so the dialog code
+// reads unqualified.
 private typealias ExportFormat = AppModel.ExportFormat
 private typealias ExportColorSpace = AppModel.ExportColorSpace
 private typealias AnimationFormat = AppModel.AnimationFormat
@@ -12,12 +12,10 @@ private typealias AnimationStrength = AppModel.AnimationStrength
 private typealias AnimationDuration = AppModel.AnimationDuration
 private typealias AnimationFPS = AppModel.AnimationFPS
 
-/// AppKit implementation of DialogService — the NSAlert/NSOpenPanel/
-/// NSSavePanel presentations AppModel used to run inline, moved behind the
-/// dialog seam byte-for-byte so
-/// behavior is unchanged. Holds the model weakly: the accessory views bind
-/// panel options (export format, animation settings) to the same persisted
-/// settings the engine reads.
+/// AppKit implementation of DialogService — AppModel's NSAlert/NSOpenPanel/
+/// NSSavePanel presentations, behind the dialog seam. Holds the model
+/// weakly: the accessory views bind panel options (export format, animation
+/// settings) to the same persisted settings the engine reads.
 final class MacDialogService: DialogService {
 
     private weak var model: AppModel?
@@ -272,7 +270,7 @@ final class AnimationOptionsView: NSView {
     required init?(coder: NSCoder) { fatalError("unused") }
 
     /// Selection → case by position: popup titles are localized display
-    /// names, so they can no longer round-trip through rawValue.
+    /// names, so they cannot round-trip through rawValue.
     private func selected<Choice: DisplayNamed>(
         _ popup: NSPopUpButton, _ kind: Choice.Type) -> Choice? {
         let index = popup.indexOfSelectedItem

@@ -6,11 +6,11 @@ import Foundation
 /// regularized decision was wrong.
 ///
 /// Storage is 16-bit fixed point against a global-max scale — the exact
-/// quantization the project file has always applied, so a fresh fuse and a
-/// reopened project now retain identical values. The Float planes it is built
-/// from are fusion-pass transients; keeping them retained as Float doubled
-/// this structure's resident cost for precision the format never preserved
-/// (573 MB → 286 MB on a 250-frame 36.6 MP stack).
+/// quantization the project file applies, so a fresh fuse and a reopened
+/// project retain identical values. The Float planes it is built from are
+/// fusion-pass transients; retaining them as Float would double this
+/// structure's resident cost (573 MB vs 286 MB on a 250-frame 36.6 MP stack)
+/// for precision the format never preserves.
 public struct FrameSharpness {
     public let fullWidth: Int
     public let fullHeight: Int

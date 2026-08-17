@@ -10,17 +10,18 @@
 
 $ErrorActionPreference = 'Stop'
 
-# Prepend a directory to PATH unless it is already on it. Every load used to
-# prepend another copy of everything it resolved, and the vcvarsall import
-# below re-emits the WHOLE PATH on top of that, so each load grew it by ~500
-# characters. Scripts\build.ps1 dot-sources this file, so a terminal that runs
-# Scripts\run.ps1 a dozen times crosses ~8000 characters - and there the
-# `cmd /c vcvarsall && set` round-trip comes back truncated, so the import
-# silently installs a half-initialized environment. The tail of PATH is what
-# gets cut, which is exactly where the toolchains live: cl goes first, then
-# swift, and the build dies with "The term 'swift' is not recognized" in a
-# shell that worked ten minutes earlier. Idempotent loads keep PATH bounded
-# however many times the build runs from one terminal.
+# Prepend a directory to PATH unless it is already on it. Without the
+# already-on-it check, every load prepends another copy of everything it
+# resolves, and the vcvarsall import below re-emits the WHOLE PATH on top of
+# that, so each load grows it by ~500 characters. Scripts\build.ps1
+# dot-sources this file, so a terminal that runs Scripts\run.ps1 a dozen
+# times crosses ~8000 characters - and there the `cmd /c vcvarsall && set`
+# round-trip comes back truncated, so the import silently installs a
+# half-initialized environment. The tail of PATH is what gets cut, which is
+# exactly where the toolchains live: cl goes first, then swift, and the
+# build dies with "The term 'swift' is not recognized" in a shell that
+# worked ten minutes earlier. Idempotent loads keep PATH bounded however
+# many times the build runs from one terminal.
 function Add-PathDir {
     param([string]$Dir)
     if (-not $Dir) { return }
@@ -163,13 +164,13 @@ if ((Test-Path "$installer\vswhere.exe") -and -not $vcvarsDone) {
                    else { Join-Path $env:SystemRoot 'System32\cmd.exe' }
         $emitted = & $comSpec /c "`"$vcvars`" $arch > nul 2>&1 && set"
         # Nothing is applied unless what came back is a *complete* environment.
-        # The import copies every line verbatim, so a partial or truncated
-        # `set` dump used to be installed as-is - replacing PATH with one that
-        # has neither System32 nor the toolchains on it. That shell then failed
-        # every later build ("the term 'swift' is not recognized", then 'cmd'),
-        # and nothing said the environment had been overwritten. System32 is
-        # the canary: vcvarsall always emits it, so its absence means the dump
-        # is not one to trust.
+        # The import copies every line verbatim, so installing a partial or
+        # truncated `set` dump would replace PATH with one that has neither
+        # System32 nor the toolchains on it. That shell then fails every later
+        # build ("the term 'swift' is not recognized", then 'cmd'), and
+        # nothing says the environment has been overwritten. System32 is the
+        # canary: vcvarsall always emits it, so its absence means the dump is
+        # not one to trust.
         $system32 = (Join-Path $env:SystemRoot 'System32').TrimEnd('\')
         $emittedPath = @($emitted | Where-Object { $_ -match '^Path=' } |
                          Select-Object -First 1) -replace '^Path=', ''

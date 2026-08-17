@@ -75,8 +75,8 @@ enum AboutWindow {
 
         // Margins as pinning constraints in a container, not stack
         // edgeInsets: insets don't reach the window's fitting size when the
-        // stack IS the content view, which shipped a window with no side
-        // margins at all.
+        // stack IS the content view, leaving a window with no side margins
+        // at all.
         let container = NSView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
