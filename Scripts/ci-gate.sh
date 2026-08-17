@@ -199,20 +199,30 @@ if [ "$(uname)" = Darwin ]; then
     gate dmap 50.0 "$WORK/synth-big" dmap-big
     gate pmax 49.0 "$WORK/synth-big" pmax-big
 else
-    # NOT YET CALIBRATED off Apple, and deliberately not given a guessed
-    # floor: registration is OpenCV SIFT there, not Vision, and the two have
-    # opposite scale sensitivity (that is precisely the error that produced
-    # the dead end above — reasoning from SIFT's measured scale-tolerance to
-    # Vision's). A floor loose enough to be safe would be too loose to catch
-    # anything, which is worse than an honest gap. First Linux/Windows
-    # session: run this, read the two numbers, and paste them in ~2 dB down.
-    "$BIN" fuse "$WORK"/synth-big/frame_*.tif -o "$WORK/out-dmap-big.tif" \
-        --method dmap --color-space p3
-    "$BIN" fuse "$WORK"/synth-big/frame_*.tif -o "$WORK/out-pmax-big.tif" \
-        --method pmax --color-space p3
-    echo "dmap-big: $("$BIN" compare "$WORK/out-dmap-big.tif" "$WORK/synth-big/ground_truth.tif") (UNCALIBRATED — not gated)"
-    echo "pmax-big: $("$BIN" compare "$WORK/out-pmax-big.tif" "$WORK/synth-big/ground_truth.tif") (UNCALIBRATED — not gated)"
-    echo "== NOTE: registration-scale floors need calibrating on this platform (see Scripts/ci-gate.sh)"
+    # Calibrated 2026-08-17, the session this section's note was waiting for.
+    # Registration here is OpenCV SIFT, not Vision, so the numbers are its
+    # own — measured on all three non-Apple surfaces CI and development
+    # actually use:
+    #
+    #                   dmap-big   pmax-big
+    #   Linux aarch64      51.15      50.24   (CI container, CPU engine)
+    #   Windows arm64      51.65      50.64   (CI runner, CPU engine)
+    #   Windows x64        51.42      50.54   (dev box, wgpu/Vulkan)
+    #
+    # A 0.5 dB spread across two architectures and three engines, and
+    # bit-stable across repeat runs on one machine (rep1 vs rep2 compared
+    # inf dB), so the variation is the platform, not run-to-run noise. The
+    # floors sit ~2 dB under the LOWEST of the three, matching the Darwin
+    # convention above; that still leaves ~4 dB of separation from the 45.60
+    # a real registration regression produced there.
+    #
+    # These are shared by Linux and Windows because the script has one
+    # non-Darwin branch. Do not tighten them toward any single platform's
+    # measurement — the arm64/x64 gap is real, and other fixtures show it
+    # much wider (bright-pmax measures 37.82 on both CI platforms and 34.98
+    # on the x64 dev box).
+    gate dmap 49.0 "$WORK/synth-big" dmap-big
+    gate pmax 48.0 "$WORK/synth-big" pmax-big
 fi
 
 # DNG round-trip: exporting through our DNG writer and decoding back (LibRaw
