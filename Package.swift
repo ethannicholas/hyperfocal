@@ -467,6 +467,16 @@ if wgpuEnabled {
         kitLinkerSettings.append(.unsafeFlags(["\(wgpuRoot)/lib/libwgpu_native.a"]))
     } else {
         kitLinkerSettings.append(.linkedLibrary("wgpu_native"))
+        // Dev builds load the dylib straight from the prebuilt tree: without
+        // this rpath, every HYPERFOCAL_WGPU=1 binary aborts at launch
+        // ("Library not loaded: @rpath/libwgpu_native.dylib") unless the
+        // dylib is hand-staged beside it — the source of three identical
+        // crash reports across two sessions. Shipped configurations are
+        // unaffected: macOS never ships wgpu, Windows resolves the DLL
+        // beside the exe, and a Linux package must stage the .so itself
+        // (this extra search path simply never matches there).
+        kitLinkerSettings.append(.unsafeFlags(
+            ["-Xlinker", "-rpath", "-Xlinker", "\(wgpuRoot)/lib"]))
     }
     #endif
 }
