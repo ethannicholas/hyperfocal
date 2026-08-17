@@ -62,20 +62,37 @@ public final class WgpuEngine {
     private var pipelines: [String: WGPUComputePipeline] = [:]
     private let lock = NSLock()
 
-    private init?() {
-        guard let instance = wgpuCreateInstance(nil) else { return nil }
+    /// HYPERFOCAL_WGPU_TIMING=1 prints the cost of engine bring-up and of every
+    /// pipeline compile to stderr.
+    static let timing = ProcessInfo.processInfo.environment["HYPERFOCAL_WGPU_TIMING"] == "1"
+    static func stamp(_ what: String, _ t0: Date) {
+        guard timing else { return }
+        let pad = what.padding(toLength: max(what.count, 30), withPad: " ",
+                               startingAt: 0)
+        FileHandle.standardError.write(Data(String(
+            format: "wgpu timing: %@ %.3fs\n", pad,
+            Date().timeIntervalSince(t0)).utf8))
+    }
 
-        func sv(_ s: WGPUStringView) -> String {
-            guard let d = s.data else { return "" }
-            return String(decoding: UnsafeRawBufferPointer(start: d, count: s.length),
-                          as: UTF8.self)
+    /// Creates an instance restricted to `backends` and asks it for an adapter,
+    /// releasing the instance again when there is none. Returns both, because
+    /// the adapter is only valid while its instance lives.
+    private static func requestAdapter(backends: WGPUInstanceBackend)
+        -> (instance: WGPUInstance, adapter: WGPUAdapter)? {
+        var extras = WGPUInstanceExtras()
+        extras.chain.sType = WGPUSType(rawValue: WGPUSType_InstanceExtras.rawValue)
+        extras.backends = backends
+        let instanceOpt: WGPUInstance? = withUnsafeMutablePointer(to: &extras) { p in
+            var desc = WGPUInstanceDescriptor()
+            desc.nextInChain = UnsafeMutableRawPointer(p)
+                .assumingMemoryBound(to: WGPUChainedStruct.self)
+            return wgpuCreateInstance(&desc)
         }
+        guard let instance = instanceOpt else { return nil }
 
-        // Adapter + device requests are callback-shaped; wgpu-native resolves
-        // them from wgpuInstanceProcessEvents, typically on the first pump.
         var adapter: WGPUAdapter? = nil
         var options = WGPURequestAdapterOptions()
-        options.forceFallbackAdapter = WGPUBool(Self.forceFallbackAdapter ? 1 : 0)
+        options.forceFallbackAdapter = WGPUBool(forceFallbackAdapter ? 1 : 0)
         var adapterCB = WGPURequestAdapterCallbackInfo()
         adapterCB.mode = WGPUCallbackMode_AllowProcessEvents
         adapterCB.callback = { status, adapter, _, ud1, _ in
@@ -94,6 +111,51 @@ public final class WgpuEngine {
             wgpuInstanceRelease(instance)
             return nil
         }
+        return (instance, adapter)
+    }
+
+    private init?() {
+        func sv(_ s: WGPUStringView) -> String {
+            guard let d = s.data else { return "" }
+            return String(decoding: UnsafeRawBufferPointer(start: d, count: s.length),
+                          as: UTF8.self)
+        }
+
+        // Adapter + device requests are callback-shaped; wgpu-native resolves
+        // them from wgpuInstanceProcessEvents, typically on the first pump.
+        //
+        // ENUMERATE VULKAN FIRST, and fall back to everything only when it
+        // yields no adapter. An all-backends instance enumerates DX12 too, and
+        // wgpu's DX12 enumeration creates and destroys a probe D3D12 device per
+        // adapter — measured on a Windows box with three DX12 adapters (a
+        // discrete NVIDIA, an integrated AMD, and Microsoft's Basic Render
+        // Driver), `ID3D12Device::Release` blocked 4.6-15 s EACH, with zero CPU
+        // time, so the process paid ~25 s of pure waiting before decoding a
+        // single frame. Vulkan-only enumeration on the same machine: 3 ms — and
+        // the adapter chosen was the Vulkan one anyway, so nothing about which
+        // GPU runs the work changes. The slow teardown is that machine's
+        // problem (it reproduces in a 40-line DXGI program with no wgpu
+        // involved), but enumerating a backend we do not use is ours.
+        //
+        // Vulkan covers every shipping surface: it is the primary backend on
+        // Windows and Linux, and llvmpipe (the Linux software adapter the
+        // parity suite forces) is a Vulkan adapter. The fallback exists for
+        // what Vulkan cannot reach — WARP, which is DX12-only, hence also the
+        // straight-to-all path when a fallback adapter is explicitly asked for
+        // — and for any machine with no Vulkan ICD at all.
+        let tAdapter = Date()
+        var picked: (instance: WGPUInstance, adapter: WGPUAdapter)? = nil
+        if !Self.forceFallbackAdapter {
+            picked = Self.requestAdapter(backends: WGPUInstanceBackend_Vulkan)
+            Self.stamp("requestAdapter (vulkan)", tAdapter)
+        }
+        if picked == nil {
+            let tAll = Date()
+            picked = Self.requestAdapter(backends: WGPUInstanceBackend_All)
+            Self.stamp("requestAdapter (all)", tAll)
+        }
+        guard let (instance, adapter) = picked else { return nil }
+        Self.stamp("requestAdapter", tAdapter)
 
         var info = WGPUAdapterInfo()
         wgpuAdapterGetInfo(adapter, &info)
@@ -105,6 +167,7 @@ public final class WgpuEngine {
         var limits = WGPULimits()
         _ = wgpuAdapterGetLimits(adapter, &limits)
 
+        let tDevice = Date()
         var device: WGPUDevice? = nil
         var devCB = WGPURequestDeviceCallbackInfo()
         devCB.mode = WGPUCallbackMode_AllowProcessEvents
@@ -130,7 +193,9 @@ public final class WgpuEngine {
             return nil
         }
         wgpuAdapterRelease(adapter)
+        Self.stamp("requestDevice", tDevice)
 
+        let tModule = Date()
         var wgsl = WGPUShaderSourceWGSL()
         wgsl.chain.sType = WGPUSType_ShaderSourceWGSL
         let shader: WGPUShaderModule? = Self.kernelSource.withCString { code in
@@ -148,6 +213,8 @@ public final class WgpuEngine {
             return nil
         }
 
+        Self.stamp("createShaderModule", tModule)
+
         self.instance = instance
         self.device = device
         self.queue = queue
@@ -160,6 +227,7 @@ public final class WgpuEngine {
         lock.lock()
         defer { lock.unlock() }
         if let p = pipelines[name] { return p }
+        let tPipeline = Date()
         var desc = WGPUComputePipelineDescriptor()
         desc.compute.module = shader
         let p: WGPUComputePipeline? = name.withCString { entry in
@@ -167,6 +235,7 @@ public final class WgpuEngine {
             return wgpuDeviceCreateComputePipeline(device, &desc)
         }
         guard let p else { throw StackError.metal("missing wgpu kernel \(name)") }
+        Self.stamp("pipeline \(name)", tPipeline)
         pipelines[name] = p
         return p
     }
