@@ -1761,15 +1761,88 @@ public enum PyramidFusion {
         /// `HYPERFOCAL_PMAX_GOV_RADIUS` env override. Requires the focus gate
         /// (`isEnabled`); enabling it routes the fuse to the CPU engine.
         public var backgroundGovernanceRadius: Int
+        /// Normalize per-frame exposure flicker before any selection is made
+        /// — the same correction DMap has always applied (bias-audit A0).
+        /// Without it every keep-darkest / keep-brightest / argmin-luminance
+        /// decision in the debloom family runs on raw exposure, so 1-2%
+        /// shutter or LED flicker is signal to it and "darkest frame"
+        /// degenerates to "dimmest-exposed frame". Same default and
+        /// semantics as `DMapFusion.Options.normalizeExposure`; both
+        /// surfaces expose the two through one control.
+        public var normalizeExposure: Bool
         public var isEnabled: Bool { coarseLevels > 0 }
         public init(coarseLevels: Int = 5, threshold: Float = 0.07,
                     smoothedSelection: Bool = true, texturedBase: Bool = false,
-                    backgroundGovernanceRadius: Int = 0) {
+                    backgroundGovernanceRadius: Int = 0,
+                    normalizeExposure: Bool = true) {
             self.coarseLevels = coarseLevels
             self.threshold = threshold
             self.smoothedSelection = smoothedSelection
             self.texturedBase = texturedBase
             self.backgroundGovernanceRadius = backgroundGovernanceRadius
+            self.normalizeExposure = normalizeExposure
+        }
+    }
+
+    /// Streaming exposure normalization for the PMax paths (bias-audit A0).
+    /// DMap measures per-frame channel means, chains gains against frame 0,
+    /// and multiplies them in at render; PMax has no separate render pass —
+    /// selection IS the render — so the chain scales each frame at ingest
+    /// instead, before any energy table, luminance argmin, or envelope sees
+    /// it. Gains are global scalars, so scaling the decoded frame commutes
+    /// with the (possibly on-device) warp, and one CPU-side implementation
+    /// serves all three engines. The output leaves ingest anchored to frame
+    /// 0's exposure; `finish()` supplies the geometric-mean re-anchor
+    /// (`DMapFusion.renderGains`' convention — no single frame's flicker may
+    /// set the output's exposure) to apply once, after governance, plus the
+    /// per-frame render gains retouch needs to stamp matching pixels.
+    /// Gains within 0.05% of unity snap to exactly 1 so an unflickered
+    /// stack's fuse stays bit-identical to an unnormalized one.
+    final class ExposureChain {
+        private(set) var applied: [SIMD3<Float>] = []
+        private var meanRGB0 = SIMD3<Float>(repeating: 1)
+        let enabled: Bool
+        init(enabled: Bool) { self.enabled = enabled }
+
+        /// Measure + scale a decoded frame, in stream order (frame 0 first —
+        /// the same chained contract the DMap loops rely on).
+        func ingest(_ img: inout ImageBuffer, at fi: Int) {
+            guard enabled else { return }
+            precondition(fi == applied.count, "exposure chain needs stream order")
+            let mean = DMapFusion.meanChannels(pixels: img.pixels)
+            if fi == 0 { meanRGB0 = mean }
+            var g = (meanRGB0 / pointwiseMax(mean, .init(repeating: 1e-6)))
+                .clamped(lowerBound: .init(repeating: 0.5),
+                         upperBound: .init(repeating: 2))
+            if abs(g.x - 1) < 5e-4, abs(g.y - 1) < 5e-4, abs(g.z - 1) < 5e-4 {
+                g = .one
+            }
+            if g != .one { img.scaleRGB(by: g) }
+            applied.append(g)
+        }
+
+        /// Re-apply a frame's recorded gain (governance re-decodes frames for
+        /// its committed render; those pixels must match the ingested ones).
+        func reapply(_ img: inout ImageBuffer, at fi: Int) {
+            guard enabled, fi < applied.count else { return }
+            let g = applied[fi]
+            if g != .one { img.scaleRGB(by: g) }
+        }
+
+        /// The end-of-fuse re-anchor and the per-frame render gains, nil when
+        /// no frame needed correction (output already untouched).
+        func finish() -> (outputScale: SIMD3<Float>, gains: [SIMD3<Float>])? {
+            guard enabled, applied.contains(where: { $0 != .one }) else { return nil }
+            var logSum = SIMD3<Float>()
+            for g in applied {
+                logSum += SIMD3(Foundation.log(max(g.x, 1e-6)),
+                                Foundation.log(max(g.y, 1e-6)),
+                                Foundation.log(max(g.z, 1e-6)))
+            }
+            let s = logSum / Float(applied.count)
+            let ref = SIMD3<Float>(exp(s.x), exp(s.y), exp(s.z))
+            guard ref.min() > 0 else { return nil }
+            return (SIMD3<Float>(repeating: 1) / ref, applied.map { $0 / ref })
         }
     }
 
@@ -1815,7 +1888,8 @@ public enum PyramidFusion {
                             progress: ((Double, Int, ImageBuffer?) -> Void)? = nil,
                             cancellation: CancellationToken? = nil,
                             options: Options = Options(),
-                            onSharpness: ((FrameSharpness) -> Void)? = nil)
+                            onSharpness: ((FrameSharpness) -> Void)? = nil,
+                            onGains: (([SIMD3<Float>]) -> Void)? = nil)
         throws -> ImageBuffer {
         let warp = source.transforms.map {
             PyramidWarp(transforms: $0, outputWidth: source.outputWidth,
@@ -1826,7 +1900,7 @@ public enum PyramidFusion {
                         cancellation: cancellation,
                         decodeWorkers: FramePrefetcher.workers(for: source.urls),
                         options: options,
-                        onSharpness: onSharpness) { i in
+                        onSharpness: onSharpness, onGains: onGains) { i in
             try source.decodedFrame(at: i)
         }
     }
@@ -1852,6 +1926,7 @@ public enum PyramidFusion {
                             decodeLookahead: Int? = nil,
                             options: Options = Options(),
                             onSharpness: ((FrameSharpness) -> Void)? = nil,
+                            onGains: (([SIMD3<Float>]) -> Void)? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
         // Settings, with env overrides for tuning/ablation — `options` is
@@ -1927,18 +2002,25 @@ public enum PyramidFusion {
         let preferGPU = preferGPU && !texBase && !smoothSq
         let gpuSelect = GPUSelect(smoothed: smoothSel, burt: expand5,
                                   clamp: envClamp, veto: texVeto)
+        // One chain per fuse, shared with whichever engine runs (a GPU
+        // failure falls back to CPU with a FRESH chain — the failed
+        // attempt's partial ingests must not leak into the retry).
         #if canImport(Metal)
         if preferGPU, MetalEngine.shared != nil {
             do {
-                return try GPUPyramid.fuse(frameCount: frameCount, warp: warp,
-                                           log: log, progress: progress,
-                                           cancellation: cancellation,
-                                           decodeWorkers: decodeWorkers,
-                                           decodeLookahead: decodeLookahead,
-                                           focusGate: gpuFocusGate,
-                                           select: gpuSelect,
-                                           governance: gpuGovernance,
-                                           onSharpness: onSharpness, frame: frame)
+                let exposure = ExposureChain(enabled: options.normalizeExposure)
+                var out = try GPUPyramid.fuse(frameCount: frameCount, warp: warp,
+                                              log: log, progress: progress,
+                                              cancellation: cancellation,
+                                              decodeWorkers: decodeWorkers,
+                                              decodeLookahead: decodeLookahead,
+                                              focusGate: gpuFocusGate,
+                                              select: gpuSelect,
+                                              governance: gpuGovernance,
+                                              exposure: exposure,
+                                              onSharpness: onSharpness, frame: frame)
+                finishExposure(exposure, out: &out, onGains: onGains, log: log)
+                return out
             } catch let error as StackError {
                 log?("GPU pyramid failed (\(error)); falling back to CPU")
             }
@@ -1947,20 +2029,25 @@ public enum PyramidFusion {
         #if HYPERFOCAL_HAVE_WGPU
         if preferGPU, let engine = WgpuEngine.shared, engine.usableForAutoSelection {
             do {
-                return try WgpuPyramid.fuse(frameCount: frameCount, warp: warp,
-                                            log: log, progress: progress,
-                                            cancellation: cancellation,
-                                            decodeWorkers: decodeWorkers,
-                                            decodeLookahead: decodeLookahead,
-                                            focusGate: gpuFocusGate,
-                                            select: gpuSelect,
-                                            governance: gpuGovernance,
-                                            onSharpness: onSharpness, frame: frame)
+                let exposure = ExposureChain(enabled: options.normalizeExposure)
+                var out = try WgpuPyramid.fuse(frameCount: frameCount, warp: warp,
+                                               log: log, progress: progress,
+                                               cancellation: cancellation,
+                                               decodeWorkers: decodeWorkers,
+                                               decodeLookahead: decodeLookahead,
+                                               focusGate: gpuFocusGate,
+                                               select: gpuSelect,
+                                               governance: gpuGovernance,
+                                               exposure: exposure,
+                                               onSharpness: onSharpness, frame: frame)
+                finishExposure(exposure, out: &out, onGains: onGains, log: log)
+                return out
             } catch let error as StackError {
                 log?("wgpu pyramid failed (\(error)); falling back to CPU")
             }
         }
         #endif
+        let exposure = ExposureChain(enabled: options.normalizeExposure)
         var levels = 0
         var fused: [ImageBuffer]? = nil
         var workspace: CPUWorkspace? = nil
@@ -2039,7 +2126,9 @@ public enum PyramidFusion {
         for _ in 0..<frameCount {
             try cancellation?.checkCancelled()
             var t0 = now()
-            let (fi, img) = try prefetcher.next()
+            let (fi, rawImg) = try prefetcher.next()
+            var img = rawImg
+            exposure.ingest(&img, at: fi)
             tDecode += now() - t0
             if workspace == nil {
                 // Canvas = the warp's output size (common-coverage crop) or
@@ -2472,9 +2561,33 @@ public enum PyramidFusion {
                                  blockEnergy: govBlockEnergy,
                                  blockCells: govBlockCells, radius: govRadius,
                                  warp: warp, env: env, log: log,
-                                 cancellation: cancellation, frame: frame)
+                                 cancellation: cancellation) { fi in
+                var f = try frame(fi)
+                exposure.reapply(&f, at: fi)
+                return f
+            }
         }
+        finishExposure(exposure, out: &out, onGains: onGains, log: log)
         return out
+    }
+
+    /// The exposure chain's end-of-fuse step, shared by the three engine
+    /// paths: re-anchor the output to the stack's geometric-mean exposure
+    /// and hand the per-frame render gains to the caller (retouch stamps
+    /// frames through them, exactly as with DMap's `Output.gains`).
+    static func finishExposure(_ exposure: ExposureChain, out: inout ImageBuffer,
+                               onGains: (([SIMD3<Float>]) -> Void)?,
+                               log: ((String) -> Void)?) {
+        guard let fin = exposure.finish() else { return }
+        out.scaleRGB(by: fin.outputScale)
+        var lo = fin.gains[0], hi = fin.gains[0]
+        for g in fin.gains {
+            lo = pointwiseMin(lo, g)
+            hi = pointwiseMax(hi, g)
+        }
+        log?(String(format: "pmax exposure gains r %.4f…%.4f g %.4f…%.4f b %.4f…%.4f",
+                    lo.x, hi.x, lo.y, hi.y, lo.z, hi.z))
+        onGains?(fin.gains)
     }
 
     /// In-memory convenience for small stacks and tests.

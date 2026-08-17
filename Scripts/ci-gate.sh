@@ -83,11 +83,13 @@ fi
 #  - object: bright subject over a near-black backdrop — the halo /
 #    defocus-spill class.
 #  - brightObject (+2% flicker): dark subject over a near-white sweep —
-#    the sign-inverted-membership class. The PMax floor sits ~11 dB
-#    under DMap's because PMax applies no exposure normalization, so
-#    darkest-frame selection reads flicker as signal; exposure-
-#    normalization work should RAISE its number (then re-raise the
-#    floor), and any deepening of the bias fails it.
+#    the sign-inverted-membership class. Before PMax normalized exposure
+#    (bias-audit A0) its number sat at 35.58, ~11 dB under DMap's —
+#    darkest-frame selection read the flicker as signal; normalization
+#    lifted it to 40.18 and the floor fences the normalized baseline.
+#    The remaining gap to DMap (~6.6 dB) is the un-remediated rest of
+#    the family (darkest-base and friends), so later remediations
+#    should raise this number again — re-raise the floor when they do.
 #  - foreground (sensor noise, no breathing/jitter): a lit near layer
 #    the sweep never reaches — the never-focused-foreground class.
 #    Noise is load-bearing: it floors the energy ratios the way real
@@ -105,7 +107,7 @@ if [ "$(uname)" = Darwin ]; then
     gate dmap 33.5 "$WORK/synth-object" object-dmap
     gate pmax 33.2 "$WORK/synth-object" object-pmax
     gate dmap 46.3 "$WORK/synth-bright" bright-dmap
-    gate pmax 35.0 "$WORK/synth-bright" bright-pmax
+    gate pmax 39.7 "$WORK/synth-bright" bright-pmax
     gate dmap 36.4 "$WORK/synth-fg" fg-dmap
 else
     report dmap "$WORK/synth-object" object-dmap

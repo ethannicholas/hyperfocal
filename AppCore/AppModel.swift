@@ -1204,7 +1204,8 @@ public final class AppModel: ObservableObject {
         config.method = fusionMethod
         // No on/off decision here: coarseLevels == 0 disables, inside Options.
         config.pmax = PyramidFusion.Options(
-            coarseLevels: pmaxCoarseLevels, threshold: Float(pmaxFocusThreshold))
+            coarseLevels: pmaxCoarseLevels, threshold: Float(pmaxFocusThreshold),
+            normalizeExposure: normalizeExposure)
         config.dmap = DMapFusion.Options(sharpnessSigma: Float(sharpnessSigma),
                                            blendRadius: Float(blendRadius),
                                            noiseFloor: Float(noiseFloor),
@@ -1226,7 +1227,8 @@ public final class AppModel: ObservableObject {
 
     private func currentPMaxSettings() -> PMaxSettings {
         PMaxSettings(align: alignFrames, useGPU: useGPU,
-                     coarseLevels: pmaxCoarseLevels, threshold: pmaxFocusThreshold)
+                     coarseLevels: pmaxCoarseLevels, threshold: pmaxFocusThreshold,
+                     normalizeExposure: normalizeExposure)
     }
 
     // MARK: - Session persistence

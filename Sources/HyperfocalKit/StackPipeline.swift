@@ -217,6 +217,7 @@ public enum StackPipeline {
             }
             let image: ImageBuffer
             var pmaxSharpness: FrameSharpness? = nil
+            var pmaxGains: [SIMD3<Float>]? = nil
             let onSharpness: ((FrameSharpness) -> Void)? =
                 configuration.retainPMaxSharpness ? { pmaxSharpness = $0 } : nil
             if let cache = configuration.warpedFrameCache, cache.isComplete,
@@ -237,7 +238,8 @@ public enum StackPipeline {
                     cancellation: cancellation,
                     decodeWorkers: 2, decodeLookahead: 2,
                     options: configuration.pmax,
-                    onSharpness: onSharpness) { try cache.frame($0) }
+                    onSharpness: onSharpness,
+                    onGains: { pmaxGains = $0 }) { try cache.frame($0) }
             } else {
                 if configuration.warpedFrameCache != nil {
                     log?("pmax: warped-frame cache doesn't cover this fuse "
@@ -247,10 +249,11 @@ public enum StackPipeline {
                     source: source, preferGPU: configuration.preferGPU, log: log,
                     progress: pmaxProgress,
                     cancellation: cancellation, options: configuration.pmax,
-                    onSharpness: onSharpness)
+                    onSharpness: onSharpness, onGains: { pmaxGains = $0 })
             }
             output = DMapFusion.Output(image: image, depthMap: ImageBuffer(width: 0, height: 0),
-                                       depth: [], sharpness: pmaxSharpness, gains: nil)
+                                       depth: [], sharpness: pmaxSharpness,
+                                       gains: pmaxGains)
         case .dmap:
         // A GPU failure costs the user a slower fuse, never their export: the
         // CPU engine is a complete implementation, so fall back to it rather

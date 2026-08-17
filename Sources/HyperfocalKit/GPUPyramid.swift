@@ -37,6 +37,7 @@ enum GPUPyramid {
                      focusGate: PyramidFusion.GPUFocusGate? = nil,
                      select selOpts: PyramidFusion.GPUSelect = .plain,
                      governance: PyramidFusion.GPUGovernance? = nil,
+                     exposure: PyramidFusion.ExposureChain? = nil,
                      onSharpness: ((FrameSharpness) -> Void)? = nil,
                      frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         guard let engine = MetalEngine.shared else {
@@ -225,7 +226,8 @@ enum GPUPyramid {
             try cancellation?.checkCancelled()
             var imgOpt: ImageBuffer! = nil
             try bucket(&tDecodeWait) { imgOpt = try prefetcher.next().image }
-            let img: ImageBuffer = imgOpt
+            var img: ImageBuffer = imgOpt
+            exposure?.ingest(&img, at: fi)
             if fi == 0 {
                 srcWidth = img.width
                 srcHeight = img.height
@@ -840,7 +842,11 @@ enum GPUPyramid {
                 blockEnergy: govBlockEnergy, blockCells: govBlock.cells,
                 radius: governance.radius, warp: warp,
                 env: ProcessInfo.processInfo.environment,
-                log: log, cancellation: cancellation, frame: frame)
+                log: log, cancellation: cancellation) { fi in
+                var f = try frame(fi)
+                exposure?.reapply(&f, at: fi)
+                return f
+            }
         }
         return out
     }

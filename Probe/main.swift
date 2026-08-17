@@ -764,7 +764,8 @@ Task { @MainActor in
     pmaxStack.pmax = output.image  // stands in for a PMax render
     pmaxStack.resultMethod = .pmax
     pmaxStack.pmaxFusedSettings = PMaxSettings(align: true, useGPU: false,
-                                               coarseLevels: 5, threshold: 0.1)
+                                               coarseLevels: 5, threshold: 0.1,
+                                               normalizeExposure: true)
     var pmaxOnly = ProjectStore.StackPayload(
         name: "pmax-primary", frameURLs: Array(urls), includedURLs: Set(urls),
         transforms: nil, result: nil)
@@ -1098,6 +1099,16 @@ Task { @MainActor in
               config.pmax.backgroundGovernanceRadius
                   == enginePMax.backgroundGovernanceRadius else {
             print("probe: PMAX BACKGROUND GOVERNANCE DEFAULT CHANGED WITHOUT UI SURFACE")
+            exit(1)
+        }
+        // Exposure normalization (bias-audit A0) is one concept with one
+        // control across BOTH algorithms — the two engine defaults must
+        // agree with each other and ship on (the app feeds its single
+        // normalizeExposure setting into both Options).
+        guard enginePMax.normalizeExposure == engineDMap.normalizeExposure,
+              enginePMax.normalizeExposure,
+              config.pmax.normalizeExposure == enginePMax.normalizeExposure else {
+            print("probe: EXPOSURE NORMALIZATION DEFAULTS DIVERGE ACROSS ALGORITHMS")
             exit(1)
         }
     }

@@ -53,6 +53,30 @@ struct PMaxSettings: Equatable, Codable {
     var useGPU: Bool
     var coarseLevels: Int
     var threshold: Double
+    var normalizeExposure: Bool
+
+    init(align: Bool, useGPU: Bool, coarseLevels: Int, threshold: Double,
+         normalizeExposure: Bool) {
+        self.align = align
+        self.useGPU = useGPU
+        self.coarseLevels = coarseLevels
+        self.threshold = threshold
+        self.normalizeExposure = normalizeExposure
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        align = try c.decode(Bool.self, forKey: .align)
+        useGPU = try c.decode(Bool.self, forKey: .useGPU)
+        coarseLevels = try c.decode(Int.self, forKey: .coarseLevels)
+        threshold = try c.decode(Double.self, forKey: .threshold)
+        // Snapshots written before PMax normalized exposure default to its
+        // default (its introduction changes flickered fuses, so a missing
+        // key must not fail the project decode — same convention as
+        // FuseSettings.useGPU).
+        normalizeExposure = try c.decodeIfPresent(Bool.self,
+                                                  forKey: .normalizeExposure) ?? true
+    }
 }
 
 /// One focus stack in a project: its frames, per-frame inclusion, and — once

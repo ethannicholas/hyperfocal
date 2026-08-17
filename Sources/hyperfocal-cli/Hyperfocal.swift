@@ -146,8 +146,8 @@ struct FusionOptions: ParsableArguments {
     var peakConcentration: Float = DMapFusion.Options().peakConcentration
 
     @Flag(inversion: .prefixedNo,
-          help: "DMap: normalize per-frame exposure flicker before blending.")
-    var normalizeExposure: Bool = true
+          help: "Normalize per-frame exposure flicker before fusing (both methods).")
+    var normalizeExposure: Bool = DMapFusion.Options().normalizeExposure
 
     @Option(help: "DMap: guided-filter window radius in full-resolution pixels.")
     var guidedRadius: Float = DMapFusion.Options().guidedRadius
@@ -338,7 +338,8 @@ struct Fuse: ParsableCommand {
         PyramidFusion.Options(coarseLevels: pmaxCoarseLevels,
                               threshold: pmaxFocusThreshold,
                               smoothedSelection: pmaxSmoothSelection,
-                              texturedBase: pmaxTexturedBase)
+                              texturedBase: pmaxTexturedBase,
+                              normalizeExposure: fusion.normalizeExposure)
     }
 
     @Flag(name: .shortAndLong, help: "Print progress.")
