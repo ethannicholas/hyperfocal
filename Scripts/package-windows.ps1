@@ -18,7 +18,7 @@
 # what the store-media capture driver screenshots. Both want the loose
 # files, and both get them from a normal run; neither needs packing skipped.
 # There is deliberately no flag to skip it: packing measures 6.4 s for this
-# payload (1468 files -> 83.3 MB), which buys nothing worth the risk of
+# payload (1472 files -> 87.5 MB), which buys nothing worth the risk of
 # leaving dist\ holding a layout and an .msix that disagree - and the .msix is
 # the artifact that gets submitted.
 #
@@ -244,24 +244,83 @@ Write-Host "== runtime sources:"
 Write-Host "   swift : $swiftRuntime"
 Write-Host "   vcpkg : $vcpkgBin"
 
+# Qt, via windeployqt - the supported way, and the one that keeps every Qt
+# library a separate DLL rather than statically linked. That is not on its own
+# the compliance route (see the header: section 4(d)(0) is satisfied by public MIT
+# source), but a static Qt would put the whole app under section 4's relinking
+# duty in a form the release model cannot absorb, so it stays asserted below.
+#
+# This must run BEFORE the import walk. windeployqt is what puts the Qt DLLs
+# and plugins into the layout, and they carry runtime dependencies nothing
+# else in the build declares - MSVCP140_1.dll and MSVCP140_2.dll among them.
+# A walk that runs first reaches Qt6Gui.dll by name, cannot resolve it (the Qt
+# kit is not one of the search directories), takes it for an operating-system
+# DLL, and so never asks what it imports; the package then ships without the
+# CRT half of Qt's dependencies and fails to launch anywhere the VC
+# redistributable is not already installed.
+#
+# --no-compiler-runtime: windeployqt otherwise drops an 11 MB
+# vc_redist.<arch>.exe INSTALLER into the package (it does this by default,
+# not only under --compiler-runtime). The MSVC runtime belongs here
+# app-locally, which the walk below stages from the VC redistributable, and an
+# installer executable inside the payload is not something an MSIX can run
+# anyway.
+Write-Host "== windeployqt"
+& "$QtKit\bin\windeployqt.exe" --release --no-compiler-runtime `
+    --qmldir (Join-Path $root 'QtShell') `
+    (Join-Path $stage 'Hyperfocal.exe')
+if ($LASTEXITCODE) { throw "windeployqt failed" }
+
+# The bridge is loaded by name from the app directory, so it is staged
+# explicitly rather than discovered.
+$bridgeDll = Join-Path $bridgeDir 'HyperfocalBridge.dll'
+if (-not (Test-Path $bridgeDll)) { throw "no bridge DLL at $bridgeDll" }
+Copy-Item $bridgeDll $stage
+
 # Transitive import walk. Hardcoding a DLL list is how a package ships broken
 # after a dependency changes: ask the binaries instead. Anything that resolves
-# in our own runtime directories gets copied; everything else (kernel32,
-# user32, the api-ms-win-* set) is a system DLL and deliberately left alone.
-$searchDirs = @($stage, $swiftRuntime, $vcpkgBin, $wgpuLib) | Where-Object { Test-Path $_ }
+# in our own runtime directories gets copied into the package ROOT - the
+# application directory, and the one place the loader searches for every binary
+# in the package, plugins in subdirectories included. Everything else
+# (kernel32, user32, the api-ms-win-* set) is an operating-system DLL and
+# deliberately left alone; Scripts\check-package-deps.ps1, at the end of this
+# block, is what decides whether "everything else" really was the operating
+# system - a question this walk cannot answer, because a DLL it fails to
+# resolve looks identical whether it is part of Windows or merely installed on
+# the machine doing the packaging.
+#
+# The seed is EVERY binary now staged, not just the executable and the bridge.
+# A queue seeded with two roots only walks what those two reach, and Qt's DLLs
+# and plugins arrive from windeployqt with no import edge from either.
+#
+# Search order puts the VC redistributable ahead of the Swift runtime because
+# both carry the CRT and they track different toolsets: MSVCP140_1/MSVCP140_2
+# exist only in the former, so taking the rest from the latter would ship a
+# mixed-version CRT. One source, one version - asserted by the audit below.
+$vcRedistDirs = @()
+if ($env:VCToolsRedistDir) {
+    $vcRedistDirs = @(Get-ChildItem (Join-Path $env:VCToolsRedistDir $arch) -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'Microsoft.VC*' } |
+        Select-Object -ExpandProperty FullName)
+}
+if (-not $vcRedistDirs) {
+    throw "no VC redistributable directories under '$env:VCToolsRedistDir\$arch' - the MSVC runtime must ship app-locally, and this is where it comes from"
+}
+Write-Host "   redist: $(($vcRedistDirs | Split-Path -Leaf) -join ', ')"
+
+$searchDirs = @(@($stage) + $vcRedistDirs + @($swiftRuntime, $vcpkgBin, $wgpuLib) |
+    Where-Object { $_ -and (Test-Path $_) })
 function Get-Imports([string]$binary) {
     (& dumpbin /nologo /dependents $binary) |
         ForEach-Object { if ($_ -match '^\s{4}(\S+\.[Dd][Ll][Ll])\s*$') { $Matches[1] } }
 }
 $copied = New-Object 'System.Collections.Generic.HashSet[string]'
 $queue = New-Object 'System.Collections.Generic.Queue[string]'
-$queue.Enqueue((Join-Path $stage 'Hyperfocal.exe'))
-# The bridge is loaded by name from the same directory, so seed it explicitly.
-$bridgeDll = Join-Path $bridgeDir 'HyperfocalBridge.dll'
-if (-not (Test-Path $bridgeDll)) { throw "no bridge DLL at $bridgeDll" }
-Copy-Item $bridgeDll $stage
-[void]$copied.Add('hyperfocalbridge.dll')
-$queue.Enqueue((Join-Path $stage 'HyperfocalBridge.dll'))
+foreach ($pe in (Get-ChildItem $stage -Recurse -File -Include '*.dll', '*.exe')) {
+    [void]$copied.Add($pe.Name.ToLower())
+    $queue.Enqueue($pe.FullName)
+}
+$seeded = $copied.Count
 
 while ($queue.Count -gt 0) {
     $current = $queue.Dequeue()
@@ -269,14 +328,14 @@ while ($queue.Count -gt 0) {
         if ($copied.Contains($dep.ToLower())) { continue }
         $src = $searchDirs | ForEach-Object { Join-Path $_ $dep } |
                Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $src) { continue }        # system DLL - not ours to ship
+        if (-not $src) { continue }        # operating system - not ours to ship
         [void]$copied.Add($dep.ToLower())
         $dest = Join-Path $stage $dep
         if (-not (Test-Path $dest)) { Copy-Item $src $dest }
         $queue.Enqueue($dest)
     }
 }
-Write-Host "== $($copied.Count) runtime DLLs resolved from swift/vcpkg/wgpu"
+Write-Host "== import walk: $seeded binaries deployed, $($copied.Count - $seeded) runtime DLLs resolved from redist/swift/vcpkg/wgpu"
 
 # The import walk finds wgpu only if the bridge was actually built against
 # it. Without this assertion a release silently reverts to CPU fusion the
@@ -285,29 +344,11 @@ if (-not (Test-Path (Join-Path $stage 'wgpu_native.dll'))) {
     throw "wgpu_native.dll not staged - the bridge was not built with the GPU backend (stale .build? drop -SkipBuild)"
 }
 
-# Qt, via windeployqt - the supported way, and the one that keeps every Qt
-# library a separate DLL rather than statically linked. That is not on its own
-# the compliance route (see the header: section 4(d)(0) is satisfied by public MIT
-# source), but a static Qt would put the whole app under section 4's relinking
-# duty in a form the release model cannot absorb, so it stays asserted below.
-#
-# --no-compiler-runtime: windeployqt otherwise drops an 11 MB
-# vc_redist.<arch>.exe INSTALLER into the package (it does this by default,
-# not only under --compiler-runtime). The MSVC runtime it would install is
-# already here app-locally - the Swift runtime redistributable ships
-# MSVCP140/VCRUNTIME140/CONCRT140 and the import walk above picks them up -
-# and an installer executable inside the payload is not something an MSIX can
-# run anyway. The assertion below keeps the app-local copies honest.
-Write-Host "== windeployqt"
-& "$QtKit\bin\windeployqt.exe" --release --no-compiler-runtime `
-    --qmldir (Join-Path $root 'QtShell') `
-    (Join-Path $stage 'Hyperfocal.exe')
-if ($LASTEXITCODE) { throw "windeployqt failed" }
-foreach ($dll in @('VCRUNTIME140.dll', 'MSVCP140.dll')) {
-    if (-not (Test-Path (Join-Path $stage $dll))) {
-        throw "$dll missing - the MSVC runtime must ship app-locally"
-    }
-}
+# The gate. Everything above decides what to ship; this decides whether what
+# was shipped can launch on a machine that is not this one - which no amount of
+# running it here can establish, since the machine that packages the app is by
+# definition the one machine with every build-time dependency installed.
+& (Join-Path $root 'Scripts\check-package-deps.ps1') -Stage $stage -Arch $arch
 
 # LGPL checklist (e): the GPLv3-only shader compiler must never ship. It is
 # not deployed today; assert it so a future windeployqt or CMake change can't
@@ -331,6 +372,38 @@ Copy-Item (Join-Path $root 'Packaging\notices\windows-linux\NOTICE.md') $stage
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $stage 'LICENSE.txt')
 New-Item -ItemType Directory -Force (Join-Path $stage 'licenses') | Out-Null
 Copy-Item (Join-Path $root 'licenses\*.txt') (Join-Path $stage 'licenses')
+
+# The runtime list is derived from what the package actually contains, never
+# kept in step by hand: a hand-written one goes stale the moment the import
+# walk stages one more CRT DLL, and a compliance document that under-reports
+# the redistributable it ships is the same class of defect as shipping one it
+# does not disclose. Single backticks in the output, hence two here - a
+# double-quoted here-string eats one.
+$crtStaged = @(Get-ChildItem (Join-Path $stage '*') -File -Include 'msvcp140*.dll', 'vcruntime140*.dll', 'concrt140*.dll', 'vcomp140*.dll' |
+    Sort-Object Name | ForEach-Object { '`' + $_.Name + '`' })
+if (-not $crtStaged) { throw 'no MSVC runtime staged - it must ship app-locally' }
+$crtList = if ($crtStaged.Count -eq 1) { $crtStaged[0] }
+           else { ($crtStaged[0..($crtStaged.Count - 2)] -join ', ') + ' and ' + $crtStaged[-1] }
+
+# Wrapped to 78 columns like the rest of the document. A generated sentence
+# spliced into hand-wrapped prose is otherwise obvious at a glance, and the
+# list grows every time the runtime does.
+$crtText = "$crtList ship app-locally as ""Distributable Code"" under the " +
+    "Microsoft Software License Terms for Visual Studio. They are staged from " +
+    "the Visual C++ redistributable directory of the toolset this package was " +
+    "built with, all from that one source, so the runtime is a single " +
+    "consistent version."
+$crtLines = New-Object System.Collections.ArrayList
+$crtLine = ''
+foreach ($word in ($crtText -split ' ')) {
+    if ($crtLine -and ($crtLine.Length + 1 + $word.Length) -gt 78) {
+        [void]$crtLines.Add($crtLine)
+        $crtLine = $word
+    } elseif ($crtLine) { $crtLine = "$crtLine $word" }
+    else { $crtLine = $word }
+}
+if ($crtLine) { [void]$crtLines.Add($crtLine) }
+$crtParagraph = $crtLines -join "`r`n"
 
 $compliance = @"
 # Hyperfocal $Version ($build) - Windows package compliance
@@ -395,9 +468,7 @@ deliberately so the package still runs on GPU-less machines. See ``NOTICE.md``.
 
 ## Microsoft Visual C++ runtime
 
-``MSVCP140.dll``, ``VCRUNTIME140.dll``, ``VCRUNTIME140_1.dll`` and
-``CONCRT140.dll`` ship app-locally as "Distributable Code" under the Microsoft
-Software License Terms for Visual Studio.
+$crtParagraph
 
 ## Swift runtime and ICU
 
