@@ -43,6 +43,13 @@ if(NOT HYPERFOCAL_BRIDGE_DIR)
     message(FATAL_ERROR "Pass -DHYPERFOCAL_BRIDGE_DIR=<dir with libHyperfocalBridge> (see Scripts/build.sh)")
 endif()
 # SwiftPM names the product libHyperfocalBridge.dylib / .so per platform.
+# Drop any cached hit first: find_library caches, so re-configuring an existing
+# build dir with a different HYPERFOCAL_BRIDGE_DIR (debug <-> release) kept the
+# previous configuration's library and linked it silently — which surfaces as
+# unresolved hf_* symbols naming functions that plainly exist, because the stale
+# library predates them. The search is one directory with NO_DEFAULT_PATH, so
+# repeating it every configure costs nothing.
+unset(HYPERFOCAL_BRIDGE_LIB CACHE)
 find_library(HYPERFOCAL_BRIDGE_LIB HyperfocalBridge
              PATHS "${HYPERFOCAL_BRIDGE_DIR}" NO_DEFAULT_PATH)
 if(NOT HYPERFOCAL_BRIDGE_LIB)
