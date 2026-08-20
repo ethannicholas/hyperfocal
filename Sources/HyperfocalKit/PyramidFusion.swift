@@ -6,11 +6,11 @@ import simd
 
 /// Per-frame alignment for a pyramid fusion whose `frame` closure returns
 /// *unwarped* frames. The GPU path applies these homographies on-device
-/// (`warp_lanczos3`) — on the CPU the Lanczos warp is ~55% of GPU-fusion
-/// wall-clock on a 50×45 MP stack; the CPU path applies the identical
+/// (`warp_lanczos3`) â€” on the CPU the Lanczos warp is ~55% of GPU-fusion
+/// wall-clock on a 50Ã—45 MP stack; the CPU path applies the identical
 /// `Warp.apply` after decode, so output doesn't depend on the engine.
 public struct PyramidWarp {
-    public let transforms: [simd_float3x3]  // frame → reference, per frame
+    public let transforms: [simd_float3x3]  // frame â†’ reference, per frame
     /// Output canvas (common-coverage crop); nil = the frame's own size.
     public let outputWidth: Int?
     public let outputHeight: Int?
@@ -22,7 +22,7 @@ public struct PyramidWarp {
         self.outputHeight = outputHeight
     }
 
-    /// CPU application — must stay behavior-identical to `StackSource.frame`.
+    /// CPU application â€” must stay behavior-identical to `StackSource.frame`.
     func apply(_ img: ImageBuffer, at index: Int) -> ImageBuffer {
         let t = transforms[index]
         let w = outputWidth ?? img.width
@@ -44,14 +44,14 @@ public enum PyramidFusion {
 
     /// Full-res footprint of one source-envelope cell (see the envelope
     /// clamp in `fuse`). Regional on purpose: per-pixel energy policing
-    /// would flatten noise pixel by pixel — the deadening failure — while a
+    /// would flatten noise pixel by pixel â€” the deadening failure â€” while a
     /// 32 px cell only asks that a neighborhood carry no more focus energy
     /// than the liveliest single frame does there.
     static let envCell = 32
     /// Octaves the output clamp bounds. One, deliberately: the octave sweep
     /// was measured, and every scale added past the finest trades
     /// fabrication for deadening (defocused-foliage stack, envelope tiles
-    /// high/low: 1 octave 23/0, 3 octaves 23/10 — and pre-collapse
+    /// high/low: 1 octave 23/0, 3 octaves 23/10 â€” and pre-collapse
     /// per-level bounding, the extreme of the same idea, 24/37). The
     /// engine-side band measure and an output-quality measure only track
     /// each other loosely per region, so scalar energy accounting beyond
@@ -62,21 +62,21 @@ public enum PyramidFusion {
 
     /// Debloom membership for each gated band level: where the focus-gated
     /// tracks (A/B) are trusted over the plain max-energy selection (track C).
-    /// **Shared by the CPU and GPU merges** — the gate is thresholds, a
+    /// **Shared by the CPU and GPU merges** â€” the gate is thresholds, a
     /// morphology pass and a reduction, and duplicating that arithmetic per
     /// backend is exactly how the paths drift apart, so every backend calls
     /// this and only the buffer plumbing differs. Returns one mask per level
     /// (empty for ungated levels), plus stats for logging.
     ///
     /// The membership is the union of two independent proofs that a pixel is
-    /// background that can be bloomed into (never a bright in-focus feature —
+    /// background that can be bloomed into (never a bright in-focus feature â€”
     /// the thing debloom must not dim):
     ///
-    /// 1. **Near-black** — its darkest rendition is near black, so nothing
+    /// 1. **Near-black** â€” its darkest rendition is near black, so nothing
     ///    bright lives there. `1 - smoothstep(lo, hi, lumMin0)`. This is the
     ///    only term that engages on a dark backdrop, and the only one that
     ///    reaches *inside* the subject (dark crevices beside bright lettering).
-    /// 2. **Open background** — it belongs to a connected smooth field that
+    /// 2. **Open background** â€” it belongs to a connected smooth field that
     ///    (a) reaches the frame border without crossing sharp structure,
     ///    (b) never comes into focus anywhere in the sweep, and (c) is
     ///    contaminated *additively* where it is contaminated at all. This is
@@ -87,16 +87,16 @@ public enum PyramidFusion {
     ///      connectivity) is what protects bright feature *interiors*: half
     ///      the train stack's top-1% highlights have no fine detail in any
     ///      frame (smooth painted surfaces), and an unenclosed focus test
-    ///      dims them 9%. The close radius stays small (gaps ≤ ~2·8 px at
-    ///      2562 px) — a large radius fills the concave backdrop margin
+    ///      dims them 9%. The close radius stays small (gaps â‰¤ ~2Â·8 px at
+    ///      2562 px) â€” a large radius fills the concave backdrop margin
     ///      around a convex silhouette, switching the fix off in exactly the
     ///      band it exists for. Full enclosure is what fills wide interiors.
     ///    - The never-focuses clause (per-component median of focus
     ///      max/min over frames) is what protects an in-focus *background*:
     ///      the white-marble stack's substrate carries real texture whose
     ///      absolute energy overlaps a bright backdrop's noise floor, so no
-    ///      threshold on energy alone separates them — but its energy MOVES
-    ///      with the sweep (median ratio ≈ 5000 vs ≈ 2 on the never-focused
+    ///      threshold on energy alone separates them â€” but its energy MOVES
+    ///      with the sweep (median ratio â‰ˆ 5000 vs â‰ˆ 2 on the never-focused
     ///      backdrop). Judged per component because the ratio is locally
     ///      contaminated near silhouettes (edge-blur leakage), which a
     ///      component median cannot be swayed by. The cutoff scales with
@@ -105,7 +105,7 @@ public enum PyramidFusion {
     ///
     /// In open-background cells, track B is additionally *sign-aware*: the
     /// merge chooses per cell between the darkest and the brightest
-    /// unfocused rendition — whichever luminance lands closer to the
+    /// unfocused rendition â€” whichever luminance lands closer to the
     /// **clean-field plane** this function reconstructs (push-pull from the
     /// component's uncontaminated pixels). Keep-darkest alone is only "least
     /// contaminated" when the contamination is additive; where a *dark*
@@ -117,7 +117,7 @@ public enum PyramidFusion {
     /// on the uncontaminated side, so choosing between the two extremes
     /// against the clean field is exact wherever contamination is one-sided
     /// per cell. The choice is scoped to open-background cells (near-black
-    /// crevices inside a subject keep plain darkest — the clean field is
+    /// crevices inside a subject keep plain darkest â€” the clean field is
     /// extrapolated there and must not flip them toward bright).
     ///
     /// Env: `HYPERFOCAL_PMAX_NEARBLACK_LO` / `_HI` (default 0.15 / 0.35, as a
@@ -146,7 +146,7 @@ public enum PyramidFusion {
         // content is a large minority of the frame; a specimen against a dark
         // backdrop can be 2-3% of pixels, so p95 lands inside the background
         // (measured 0.058 on Azurite against a p99 of 0.418) and drags the
-        // thresholds onto the physical rim tail — gating debloom off in exactly
+        // thresholds onto the physical rim tail â€” gating debloom off in exactly
         // the band it is needed.
         let scale = max(PlaneMath.percentileLow(lumMin0, pct), 1e-6)
         let lo = lo0 * scale, hi = hi0 * scale
@@ -157,8 +157,8 @@ public enum PyramidFusion {
         if !off {
             for i in m0.indices { m0[i] = 1 - PlaneMath.smoothstep(lo, hi, lumMin0[i]) }
             // Texture veto (see `nearBlackTextureVeto`): where the darkest
-            // rendition provably isn't the true background — live defocused
-            // texture — the cell leaves the membership and falls to the
+            // rendition provably isn't the true background â€” live defocused
+            // texture â€” the cell leaves the membership and falls to the
             // plain track, which the envelope clamp bounds.
             if let veto = nearBlackVeto, veto.count == m0.count {
                 for i in m0.indices where veto[i] > 0 { m0[i] *= 1 - veto[i] }
@@ -183,7 +183,7 @@ public enum PyramidFusion {
             }
         }
         // Double accumulator: a Float sum saturates near 2^24, and a 45 MP
-        // plane has ~3x that many elements — the logged mean pinned at ~0.39
+        // plane has ~3x that many elements â€” the logged mean pinned at ~0.39
         // regardless of the mask until this was widened.
         let mean = Float(m0.reduce(0.0) { $0 + Double($1) } / Double(max(m0.count, 1)))
         var masks = [[Float]](repeating: [], count: levels)
@@ -210,10 +210,10 @@ public enum PyramidFusion {
 
     /// Never-focuses cutoff for per-pixel focus max/min ratios: max/min of
     /// pure noise grows with the frame count (extreme order statistics), so
-    /// the cutoff does too — measured 1.9 at N=6, 8.3 at N=63 for
+    /// the cutoff does too â€” measured 1.9 at N=6, 8.3 at N=63 for
     /// never-focused backdrops. Shared by the open-background membership
     /// (component median vs the cut) and the envelope clamp (per-pixel ramp
-    /// cut..3·cut): per-pixel ratio scales are stack-dependent (a small
+    /// cut..3Â·cut): per-pixel ratio scales are stack-dependent (a small
     /// JPEG stack's sharpest pixels top out near 84 where a deep 45 MP
     /// sweep's run past 5000), so only an N-anchored cut transfers.
     static func neverFocusRatioCut(frameCount: Int) -> Float {
@@ -221,8 +221,8 @@ public enum PyramidFusion {
     }
 
     /// Near-black texture veto: cells where the near-black keep-darkest
-    /// track's scene model — a FLAT dark backdrop whose darkest rendition is
-    /// its true value — provably does not hold, because the cell's level-0
+    /// track's scene model â€” a FLAT dark backdrop whose darkest rendition is
+    /// its true value â€” provably does not hold, because the cell's level-0
     /// band energy BREATHES with the sweep. Defocused live texture (bokeh
     /// mottle, out-of-focus foliage) breathes 4-30x across a sweep as the
     /// bokeh scale changes; a flat backdrop's noise floor breathes 1.2-1.5x
@@ -231,12 +231,12 @@ public enum PyramidFusion {
     /// a dark defocused garden at 0.31-0.68x the liveliest source frame,
     /// 33 of 60 background tiles outside the source envelope). Vetoed cells
     /// fall to the plain selection track, which the envelope clamp then
-    /// bounds — the veto without the clamp would trade deadening for
+    /// bounds â€” the veto without the clamp would trade deadening for
     /// max-of-N fabrication, so they engage together (`smoothedSelection`).
     ///
     /// Same discipline as the clean-field flatness gate: a scene statistic
     /// decides where the mechanism's model holds, with a margin against
-    /// engine drift, and everything else keeps shipped behavior — including
+    /// engine drift, and everything else keeps shipped behavior â€” including
     /// every cell within one cell of sharp structure (the silhouette hug
     /// band is debloom's territory, and bloom itself breathes with the
     /// sweep, so the statistic cannot be trusted beside the subject).
@@ -252,8 +252,8 @@ public enum PyramidFusion {
               focusMax0.count == width * height else { return nil }
         // The sweep-ratio cut scales with the frame count: a flat backdrop's
         // pooled noise ratio is an extreme-order statistic, measured to
-        // follow 1 + c·√(2·ln N) (train N=6: p50 1.27; bug N=13: p50 1.34 —
-        // both give c ≈ 0.15; per-cell p99 tails give c ≈ 0.37). The cut's
+        // follow 1 + cÂ·âˆš(2Â·ln N) (train N=6: p50 1.27; bug N=13: p50 1.34 â€”
+        // both give c â‰ˆ 0.15; per-cell p99 tails give c â‰ˆ 0.37). The cut's
         // ramp sits above the noise tail and below the mottle population
         // (a defocused garden at N=11 measures p50 2.2).
         let spread = (2 * log(Float(max(frameCount, 2)))).squareRoot()
@@ -266,10 +266,10 @@ public enum PyramidFusion {
         // the darkest rendition's energy is quantization junk (a
         // crushed-black JPEG backdrop pools band energy at f16 zero in some
         // frames, and noise/zero read as ratios of 10^5 on a stack whose
-        // backdrop is genuinely flat — the corpus README's low-signal
+        // backdrop is genuinely flat â€” the corpus README's low-signal
         // lesson, hit here on the dark-backdrop acceptance stack). Real
         // breathing texture keeps its min well above zero (a mottled garden
-        // at ratio 2-28 still has min ≥ ~4% of the population's upper end).
+        // at ratio 2-28 still has min â‰¥ ~4% of the population's upper end).
         // Judged against the eligible population's own p90, so it needs no
         // absolute unit.
         var eligible: [(i: Int, ratio: Float)] = []
@@ -284,7 +284,7 @@ public enum PyramidFusion {
                 }
                 if nearSharp { continue }
                 let i = gy * gw + gx
-                // √ because the pooled energies are squared — the ratio and
+                // âˆš because the pooled energies are squared â€” the ratio and
                 // its measured populations are in amplitude units.
                 eligible.append((i, (envMax0[i] / max(env0Min[i], 1e-12)).squareRoot()))
                 maxes.append(envMax0[i])
@@ -297,14 +297,14 @@ public enum PyramidFusion {
         }
         let floorLo = Float(env["HYPERFOCAL_PMAX_TEX_FLOOR"] ?? "") ?? 0.01
         let floor = floorLo * q(sortedMax, 0.9)
-        // Visibility floor on the max rendition, in absolute units — the
+        // Visibility floor on the max rendition, in absolute units â€” the
         // engine's planes are [0, 1] luminance, so this is scene-anchored,
         // not a magic number: a cell whose LIVELIEST rendition pools less
         // squared band energy than a ~0.6/255 mean amplitude carries no
         // texture worth releasing keep-darkest for, and at those levels the
         // whole ratio population is quantization noise (measured: a black
         // backdrop's cells sit at p90 2.0e-6 with ratios into the hundreds;
-        // real dark-garden mottle starts at p10 1.5e-5 — the cut is the
+        // real dark-garden mottle starts at p10 1.5e-5 â€” the cut is the
         // geometric middle of that gap).
         let visFloor = Float(env["HYPERFOCAL_PMAX_TEX_VIS"] ?? "") ?? 5.5e-6
         var grid = [Float](repeating: 0, count: gw * gh)
@@ -347,11 +347,11 @@ public enum PyramidFusion {
     /// first and measurably fails BOTH ways: a mosaic's bands come from
     /// different frames and partially cancel on reconstruction, so
     /// per-level parity collapses to 0.5-0.8x in the output (37 of 77
-    /// tiles pushed below the envelope's low side) — while spatial
+    /// tiles pushed below the envelope's low side) â€” while spatial
     /// cherry-picking (each cell's bound is ITS liveliest frame) still
     /// summed above any single frame per tile (24 tiles left high). The
     /// collapsed image's own band, measured against the frames' same-
-    /// operator bands, is the quantity the envelope constrains — coherence
+    /// operator bands, is the quantity the envelope constrains â€” coherence
     /// losses and cross-frame mosaicking are already inside it.
     ///
     /// Where a frame really resolves detail the clamp stands down; it only
@@ -361,12 +361,12 @@ public enum PyramidFusion {
     ///
     /// "Never focused" is the per-pixel FOCUS SWEEP RATIO
     /// (focusMax0 / focusMin0) against the shared N-anchored cutoff
-    /// (`neverFocusRatioCut`, ramp cut..3·cut), not an absolute energy
+    /// (`neverFocusRatioCut`, ramp cut..3Â·cut), not an absolute energy
     /// test: energetic defocused foliage sits above any absolute cut (an
     /// absolute membership left 25 foliage tiles unclamped at up to 2.8x),
-    /// while an in-focus low-energy background — real texture whose
+    /// while an in-focus low-energy background â€” real texture whose
     /// absolute energy overlaps a backdrop's noise floor, the regime the
-    /// open-background never-focuses clause exists for — must NOT be
+    /// open-background never-focuses clause exists for â€” must NOT be
     /// clamped, because fused output legitimately exceeds the best single
     /// frame there (fusion gain, measured 1.3-1.8x on real subjects).
     /// Pixels whose min-focus is degenerate (zero-coverage warp borders
@@ -382,12 +382,12 @@ public enum PyramidFusion {
         let (w0, h0) = (out.width, out.height)
         guard focusMin0.count == focusMax0.count,
               focusMax0.count == w0 * h0 else { return }
-        // The membership is judged per PIXEL and pooled as a fraction —
+        // The membership is judged per PIXEL and pooled as a fraction â€”
         // pooling max/min planes first compresses the ratio so badly that
         // subject cells read like background (measured: cell-mean ratios
         // p50 3.1 on a stack whose per-pixel focusing content runs into the
         // thousands, which engaged the clamp on 98% of cells, subject
-        // included — and the subject's fusion gain, fused fine energy at
+        // included â€” and the subject's fusion gain, fused fine energy at
         // 1.3-1.8x any single frame, is legitimate and must never clamp).
         let rC = neverFocusRatioCut(frameCount: frameCount)
         let rLo = Float(env["HYPERFOCAL_PMAX_ENV_RLO"] ?? "") ?? rC
@@ -410,7 +410,7 @@ public enum PyramidFusion {
         // The output's own Gaussian pyramid over the clamped octaves, with
         // the pipeline's operators, so each octave band is the same measure
         // the per-frame envelope was pooled in. Bands are scaled per cell
-        // and the pyramid reassembled — exact telescoping, so untouched
+        // and the pyramid reassembled â€” exact telescoping, so untouched
         // cells reconstruct bit-identically up to f16 storage.
         let octaves = min(envClampOctaves, envMax.count)
         var gauss: [ImageBuffer] = [out]
@@ -459,7 +459,7 @@ public enum PyramidFusion {
                     guard wNf > 0 else { continue }
                     let fe = outPool[i], ee = envMax[l][i]
                     guard ee > 0, fe > ee, fe > 1e-12 else { continue }
-                    // Energies are squared, so detail scales by √ratio; the
+                    // Energies are squared, so detail scales by âˆšratio; the
                     // ramp keeps cells just past the envelope continuous
                     // with untouched neighbours (full correction from 1.4x).
                     let r = fe / ee
@@ -480,8 +480,8 @@ public enum PyramidFusion {
             }
         }
         guard totalClamped > 0 else { return }
-        // Accumulate the CORRECTION (s−1)·band per octave, expanded up the
-        // pyramid, and add it once — mathematically the same as scaling the
+        // Accumulate the CORRECTION (sâˆ’1)Â·band per octave, expanded up the
+        // pyramid, and add it once â€” mathematically the same as scaling the
         // bands and reassembling, but exact zeros propagate through the
         // linear expand, so pixels outside every clamped cell (the whole
         // subject) stay bit-identical instead of paying an f16 roundtrip.
@@ -541,9 +541,9 @@ public enum PyramidFusion {
         log?("pmax: envelope clamp engaged (\(totalClamped) cells)")
     }
 
-    /// The open-background membership — true where the pixel belongs to a
+    /// The open-background membership â€” true where the pixel belongs to a
     /// connected never-sharp field that reaches the frame border and whose
-    /// focus energy never moves with the sweep (see `debloomMasks`) — plus
+    /// focus energy never moves with the sweep (see `debloomMasks`) â€” plus
     /// the clean-field luminance grid reconstructed from the open field's
     /// uncontaminated pixels, which the merge's sign-aware track-B choice
     /// compares renditions against. Nil when the planes are unavailable (a
@@ -594,7 +594,7 @@ public enum PyramidFusion {
     /// (`openBackground`) and background governance (`governBackground`):
     /// sharp-structure close, border-connected components of the open field,
     /// and the candidate test (size floor, border contact, clean-anchor
-    /// floor, never-focuses ratio median). One function on purpose — two
+    /// floor, never-focuses ratio median). One function on purpose â€” two
     /// copies of these thresholds is how the two consumers would drift.
     static func openFieldCandidates(focusMax0: [Float], focusMin0: [Float],
                                     lumMin0: [Float], lumMax0: [Float],
@@ -629,11 +629,11 @@ public enum PyramidFusion {
             // ~11), so the amplified regions excluded themselves from the
             // membership that would fix them. The cutoff is the same
             // frame-count-scaled never-focuses formula the component test
-            // uses — a higher cut (50) was tried and dissolved the SUBJECT
+            // uses â€” a higher cut (50) was tried and dissolved the SUBJECT
             // (a hairy insect body reads 20-50:1), which nothing in the
             // acceptance criteria measures directly and per-coefficient
             // selection exists to protect. The clean-field membership keeps
-            // the energy-only test verbatim — its flatness gate already
+            // the energy-only test verbatim â€” its flatness gate already
             // returns textured components to shipped behavior, so widening
             // its field would only churn.
             let sharpCut = Float(env["HYPERFOCAL_PMAX_GOV_SHARP"] ?? "") ?? ratioCut
@@ -645,7 +645,7 @@ public enum PyramidFusion {
             for i in sharp.indices { sharp[i] = focusMax0[i] > t }
         }
         // Subject support = close(sharp, r): sharp structure plus the narrow
-        // gaps between it. Small r on purpose — see the doc comment above.
+        // gaps between it. Small r on purpose â€” see the doc comment above.
         var subject = Morphology.dilate(sharp, width: width, height: height, radius: r)
         subject = Morphology.erode(subject, width: width, height: height, radius: r)
         if governance {
@@ -653,9 +653,9 @@ public enum PyramidFusion {
             // thin-vs-thick is the discriminator the ratio test cannot be.
             // Two measured hole classes punch through otherwise governed
             // fields and each keeps a patch of shipped max-of-N sparkle
-            // plus a seam ring: isolated noise-speck ISLANDS (small — tiles
-            // stuck at 1.4-1.5× the liveliest frame with 94% weight), and
-            // defocused petal-edge RIDGES attached to the subject (thin —
+            // plus a seam ring: isolated noise-speck ISLANDS (small â€” tiles
+            // stuck at 1.4-1.5Ã— the liveliest frame with 94% weight), and
+            // defocused petal-edge RIDGES attached to the subject (thin â€”
             // breathing bokeh edges read "sharp" by ratio, and no ratio cut
             // separates them from a subject body without dissolving the
             // subject too). Opening removes both while the thick subject
@@ -710,19 +710,19 @@ public enum PyramidFusion {
 
     /// Clean-anchor accumulation and per-component flatness sigma. Shared by
     /// the clean-field membership (`openBackground` keeps components BELOW
-    /// the cut — flat backdrops, the only thing the clean field faithfully
+    /// the cut â€” flat backdrops, the only thing the clean field faithfully
     /// models) and background governance (`governBackground` governs the
     /// textured complement), so the two scopes stay complementary by
     /// construction: one measurement, one cut, no component served by both
     /// mechanisms. `sigma` is +infinity where a component has too few anchor
-    /// cells to judge (< 30) — "not provably flat".
+    /// cells to judge (< 30) â€” "not provably flat".
     ///
-    /// Anchors are the midrange of the per-pixel min/max — where the
-    /// renditions agree, that IS the clean value — with weight fading as
+    /// Anchors are the midrange of the per-pixel min/max â€” where the
+    /// renditions agree, that IS the clean value â€” with weight fading as
     /// contamination grows; anchoring instead of filtering is what keeps the
     /// subject from dragging the estimate. Flatness is judged on the anchors
     /// with the large-scale gradient removed: sigma of the anchor-cell mean
-    /// minus its 9×9-cell box mean. Measured: flat backdrops sit at
+    /// minus its 9Ã—9-cell box mean. Measured: flat backdrops sit at
     /// 0.001-0.003 (their noise floor), textured ones at 0.005-0.04; the cut
     /// (`HYPERFOCAL_PMAX_BG_FLAT`, default 0.0035) sits at the geometric
     /// middle of that gap so a borderline component cannot flip open on one
@@ -828,9 +828,9 @@ public enum PyramidFusion {
         return out
     }
 
-    /// Land one decoded frame on the workspace's level-0 canvas — the
+    /// Land one decoded frame on the workspace's level-0 canvas â€” the
     /// warp/copy step shared by the streaming loop and the governance second
-    /// pass. Identity transform on an uncropped canvas needs no warp — the
+    /// pass. Identity transform on an uncropped canvas needs no warp â€” the
     /// same fast path `PyramidWarp.apply` / the GPU paths take; warped frames
     /// resample directly into the workspace's level 0.
     static func installFrame(_ img: ImageBuffer, at fi: Int, warp: PyramidWarp?,
@@ -854,7 +854,7 @@ public enum PyramidFusion {
         }
     }
 
-    /// 3×3 box smooth of a cell-grid plane — the frame map's transition
+    /// 3Ã—3 box smooth of a cell-grid plane â€” the frame map's transition
     /// feather. With the bilinear upsample to full resolution this widens the
     /// membership and map-transition seams to one-to-two cells (8-16 px) in
     /// image space.
@@ -876,8 +876,8 @@ public enum PyramidFusion {
 
     /// The hybrid background renderer's second pass (design note
     /// `2026-07-28-pmax-hybrid-background-renderer.md`): in never-focused
-    /// open-background regions, commit each region to ONE frame — the
-    /// regularized frame map's choice — and render that frame faithfully,
+    /// open-background regions, commit each region to ONE frame â€” the
+    /// regularized frame map's choice â€” and render that frame faithfully,
     /// the way DMap renders everything, while the subject keeps the
     /// per-coefficient contest. Per-coefficient/per-level independent max
     /// selection has no right answer in a region no frame ever focuses: it
@@ -897,14 +897,14 @@ public enum PyramidFusion {
     /// `openFieldCandidates`' governance variant (subject = focusing
     /// content, opened so noise-speck islands and petal-edge ridges melt)
     /// restricted to components that are not provably flat (the flatness
-    /// gate's retirement path — governance takes over exactly where the
+    /// gate's retirement path â€” governance takes over exactly where the
     /// gate excludes the clean field); eligibility within it is
     /// confidence-seeded propagation bounded by `radius`, plus
     /// self-commitment for cells whose energy moves at all. The frame per
     /// 64 px block is the measured level-0 energy argmax over ALL frames
     /// (re-measured over membership cells only among the dominant few),
     /// with near-tie hysteresis so adjacent blocks coalesce, and the render
-    /// is a convex per-pixel composite in IMAGE space — bounded by its
+    /// is a convex per-pixel composite in IMAGE space â€” bounded by its
     /// sources, so it cannot undershoot the frame floor or exceed every
     /// source the way band-space blending measurably did.
     static func governBackground(ws: CPUWorkspace, out: inout ImageBuffer,
@@ -930,21 +930,21 @@ public enum PyramidFusion {
                                  env: "HYPERFOCAL_DUMP_GOV_CELLARG")
         }
 
-        // Tier L: LIT never-focused membership — scene material the stack's
+        // Tier L: LIT never-focused membership â€” scene material the stack's
         // sweep never reaches (started past the nearest structure / ended
         // before the farthest), the PMax mirror of DMap's tier R. Neither
         // existing arm can see it: the near-black arm requires darkness, and
-        // the open-background arm requires ≥100 pixels whose renditions
-        // agree within an absolute 0.02 — a bright defocused foreground
+        // the open-background arm requires â‰¥100 pixels whose renditions
+        // agree within an absolute 0.02 â€” a bright defocused foreground
         // swings far past both. Membership is per-pixel: lit in its darkest
         // frame (the same scene-relative 0.05 knee DMap's spill/rescue
-        // partition uses — a DARK pixel whose energy never moves is
+        // partition uses â€” a DARK pixel whose energy never moves is
         // backdrop, and stays with the shipped tracks), never sharp by
         // energy, and never moving by the N-anchored ratio (both together,
         // so no focusing content can qualify by either test alone), closed
         // to bridge bokeh gaps. Components below the size floor stay
         // shipped. Deliberately no border-contact, clean-anchor, or
-        // flatness clause — those identify BACKDROPS, and tier L's members
+        // flatness clause â€” those identify BACKDROPS, and tier L's members
         // are scene material wherever they sit.
         let litOff = env["HYPERFOCAL_PMAX_LIT_OFF"] != nil
         let litFrac = Float(env["HYPERFOCAL_PMAX_LIT_FRAC"] ?? "") ?? 0.05
@@ -953,7 +953,7 @@ public enum PyramidFusion {
         let lbw = (lgw + blockCells - 1) / blockCells
         let lbh = (lgh + blockCells - 1) / blockCells
         // Per-block committed frame for tier-L blocks, -1 elsewhere. Filled
-        // here — the commitment is part of ADMISSION: a lit component whose
+        // here â€” the commitment is part of ADMISSION: a lit component whose
         // mass curve holds no significant bump has no honest frame to
         // commit to, and admitting it anyway would hand its blocks to the
         // per-block argmax, whose scatter inside a never-focused region is
@@ -967,33 +967,33 @@ public enum PyramidFusion {
             // Membership at CELL level: lit AND not-confident, the exact
             // mirror of DMap tier R's "lit no-signal" partition, built from
             // the same scale-free discriminators governance already trusts.
-            // Per-pixel absolute tests (never sharp below 0.15 × p99
+            // Per-pixel absolute tests (never sharp below 0.15 Ã— p99
             // energy, never moving below the N-anchored ratio) detonate at
             // full resolution: linear-light p99 is specular-dominated, so
             // most of a 45 MP scene reads "never sharp", one 27 M px
             // component swallows subject and blob alike, and its mass curve
-            // — bokeh sweeps included — commits the lot to a mid-stack frame
+            // â€” bokeh sweeps included â€” commits the lot to a mid-stack frame
             // at a marginal z of exactly 1.5 (why the significance floor
             // below sits at 2). The cell-ratio test has no such anchor: in-focus
-            // texture moves 100–5000:1 across the sweep, defocused-garden
-            // bokeh 5–30:1, a never-focused foreground's residual bump
-            // 2–4:1, noise 1.1–1.3:1 — the same population figures the
+            // texture moves 100â€“5000:1 across the sweep, defocused-garden
+            // bokeh 5â€“30:1, a never-focused foreground's residual bump
+            // 2â€“4:1, noise 1.1â€“1.3:1 â€” the same population figures the
             // confidence cut below was calibrated on.
             let litCut = litFrac * max(PlaneMath.percentileLow(lumMax0, 0.95), 1e-6)
             let cellLumMin = DMapFusion.boxDownsample(lumMin0, width: w, height: h,
                                                       factor: f0)
             // Two ratio cuts with distinct roles, and the measurements that
             // forced the split: the CORE (< 4, the BFS confidence family)
-            // is what components and the z decision are built from — at 30
+            // is what components and the z decision are built from â€” at 30
             // the blob merged with the mid-ground's own bokeh fields
-            // (also 5–30) and the merged giant's mass curve diluted below
+            // (also 5â€“30) and the merged giant's mass curve diluted below
             // every z, so nothing committed at all. The EXPANSION cut
             // (< 30) is rendering coverage only: glints inside a
             // never-focused region clear 4 (their bump is real) but ride
             // the bokeh family, and excluding them left max-of-N wash
             // islands speckled through committed content. Expansion is a
-            // bounded BFS from committed cores — cell-blocked by focusing
-            // texture (100–5000, far above both cuts), distance-blocked
+            // bounded BFS from committed cores â€” cell-blocked by focusing
+            // texture (100â€“5000, far above both cuts), distance-blocked
             // from the mid-ground fields the core cut exists to keep out.
             let coreRatio = Float(env["HYPERFOCAL_PMAX_LIT_CORE"] ?? "") ?? 4
             let expandRatio = Float(env["HYPERFOCAL_PMAX_LIT_RATIO"] ?? "") ?? 30
@@ -1005,13 +1005,13 @@ public enum PyramidFusion {
             // Coverage-rim guard: registration is estimated, so a partially
             // dark sliver of the warp border survives the common-coverage
             // crop, and with focus breathing its width shrinks monotonically
-            // through the sweep — a fake edge-frame energy bump in any
+            // through the sweep â€” a fake edge-frame energy bump in any
             // border-touching component (measured on a low-contrast synth
             // scene: the rim's curve read z 16 at frame 0 and committed 96%
             // of a scene with no never-focused region at all; ring p99 was
-            // 30x the interior's). The outer cell ring leaves MEMBERSHIP —
+            // 30x the interior's). The outer cell ring leaves MEMBERSHIP â€”
             // and with it the components, block majorities, and mass curves
-            // — but stays reachable by the expansion BFS, so a real
+            // â€” but stays reachable by the expansion BFS, so a real
             // committed region still renders its own edge cells by
             // inheritance instead of leaving a shipped-rendered ring.
             let edgeCells = 2
@@ -1028,11 +1028,11 @@ public enum PyramidFusion {
             }
             // Fill enclosed holes: glints inside a never-focused region are
             // "confident" (their bump clears the ratio) yet belong to the
-            // region — excluded, they render as max-of-N wash islands inside
+            // region â€” excluded, they render as max-of-N wash islands inside
             // committed content, a patchwork of visibly different blur.
             // Hole-filling (complement components that touch no grid border,
             // below a size ceiling) admits them without moving the OUTER
-            // boundary one cell — the conservative-subject-mask lesson from
+            // boundary one cell â€” the conservative-subject-mask lesson from
             // the governance review; a morphological close was rejected for
             // exactly that reason (it also claims concave subject inlets).
             let holes = Morphology.components(open: m.map { !$0 },
@@ -1041,8 +1041,8 @@ public enum PyramidFusion {
                                 // far below any real scene region
             // Per-cell focusing veto on hole admission (the governance
             // review's "sharp sub-content replaced by blur" class): an
-            // enclosed FOCUSING pocket — real scene content the sweep does
-            // reach, visible through the never-focused layer — must not be
+            // enclosed FOCUSING pocket â€” real scene content the sweep does
+            // reach, visible through the never-focused layer â€” must not be
             // filled. Unvetoed, its cells join the component, its blocks'
             // sharp mid-sweep energy (tens of times the layer's) enters the
             // mass curve, and the argmax leaves the NEAR window: one pocket
@@ -1052,7 +1052,7 @@ public enum PyramidFusion {
             // cell-ratio cut: glints ride the bokeh family (5-30) and stay
             // admitted; focusing texture (>30, measured 40+ even on noisy
             // synth and 100-5000 on real stacks) is excluded from the
-            // fill, the curve, and the committed render — it keeps
+            // fill, the curve, and the committed render â€” it keeps
             // per-coefficient selection, which is what protects sharpness.
             for i in m.indices where holes.labels[i] > 0 && m30[i] {
                 let c = Int(holes.labels[i]) - 1
@@ -1068,7 +1068,7 @@ public enum PyramidFusion {
                      + "\(comps.count) comps, top sizes \(Array(sizes)), "
                      + "litCut \(litCut)")
             }
-            // Size floor in cells (64 px² each): regions, not speckle — and
+            // Size floor in cells (64 pxÂ² each): regions, not speckle â€” and
             // small enough that a real never-focused band still qualifies.
             let minCells = 256
             let litKeep = (0..<comps.count).map { comps.sizes[$0] >= minCells }
@@ -1084,7 +1084,7 @@ public enum PyramidFusion {
                 // expansion BFS: inherited rendering must not walk into
                 // coherent-focusing content either (a pocket too
                 // ratio-strong for membership is NOT labeled, so the veto
-                // above never examines it — expansion was how it still got
+                // above never examines it â€” expansion was how it still got
                 // painted with the committed frame).
                 var vetoCell = [Bool](repeating: false, count: lgw * lgh)
                 var vetoCoherent = [Bool](repeating: false, count: lgw * lgh)
@@ -1094,7 +1094,7 @@ public enum PyramidFusion {
                         // Canvas-edge blocks stay out of the mass curve:
                         // blockEnergy sums the WHOLE 64-px block, so even
                         // with the rim cells de-membered above, an edge
-                        // block's energy still carries the coverage rim —
+                        // block's energy still carries the coverage rim â€”
                         // whose breathing-scaled width is what fakes the
                         // edge-frame bump. Their cells still RENDER
                         // committed via the full-res membership; they just
@@ -1127,8 +1127,8 @@ public enum PyramidFusion {
                 // Per-cell focusing veto, BEFORE the commitment decision
                 // (the governance review's "sharp sub-content replaced by
                 // blur"): a committed region may enclose sub-content the
-                // sweep DOES reach — deep dim background seen through a
-                // hole in the near layer — whose late energy both poisons
+                // sweep DOES reach â€” deep dim background seen through a
+                // hole in the near layer â€” whose late energy both poisons
                 // the region's mass curve (one 128-cell pocket moved the
                 // fixture band's argmax 0 -> 10 and silently killed the
                 // whole commitment) and, if the region still commits,
@@ -1136,14 +1136,14 @@ public enum PyramidFusion {
                 // cannot separate it from bokeh in the overlapping band;
                 // the per-cell energy ARGMAX can: genuine focusing content
                 // coheres with its neighbors at its true focus frame
-                // (fixture pocket: 100% of cells within ±window), while
+                // (fixture pocket: 100% of cells within Â±window), while
                 // never-focused mottle scatters (measured p50 coherence
                 // 0.24 across a 45 MP committed region). The reference is
-                // the NEAR-window argmax of the component's own curve —
-                // the only frame tier L may commit to — so the veto needs
+                // the NEAR-window argmax of the component's own curve â€”
+                // the only frame tier L may commit to â€” so the veto needs
                 // no committed frame to exist yet. Vetoed cells: INTERIOR
                 // only (the region's outermost rows are feather mixtures
-                // whose sliver of adjacent sharp content reads coherent —
+                // whose sliver of adjacent sharp content reads coherent â€”
                 // a 73-cell false pocket along the fixture band's top
                 // feather cost 5.5 dB of committed benefit), in clusters
                 // of >= 16 cells (isolated coherence accidents and lone
@@ -1215,7 +1215,7 @@ public enum PyramidFusion {
                     var kept = 0
                     var pockets = Set<Int32>()
                     // Cluster ANCHOR argmax (median of the core): growth
-                    // and every later comparison are judged against it —
+                    // and every later comparison are judged against it â€”
                     // judging against the frontier cell lets a smooth
                     // argmax gradient chain-drift the growth arbitrarily
                     // far (measured on the motivating stack: a frame-116
@@ -1246,7 +1246,7 @@ public enum PyramidFusion {
                     // anchor): the coherence test plus the interior erosion
                     // structurally confine the core to the pocket's inside
                     // (a 128-cell pocket cores at ~46), which can leave
-                    // every block under the veto-majority rule below — the
+                    // every block under the veto-majority rule below â€” the
                     // curve stays poisoned and nothing commits. The
                     // surrounding never-focused cells, whose argmaxes don't
                     // match the anchor, block the growth.
@@ -1296,19 +1296,19 @@ public enum PyramidFusion {
                     }
                 }
                 // Significance floor 2: the tier-R populations put flat
-                // noise at ≤ 1.3 whatever the component size and genuine
+                // noise at â‰¤ 1.3 whatever the component size and genuine
                 // bumps at 2.5+; a floor of 1.5 admits a scene-swallowing
                 // component at exactly 1.5 (see the membership comment).
                 let zLo = Float(env["HYPERFOCAL_PMAX_LIT_Z"] ?? "") ?? 2
                 // NEAR-boundary argmaxes only, each exclusion forced by a
-                // measurement. Mid-stack: the core cut's low end (2–4)
+                // measurement. Mid-stack: the core cut's low end (2â€“4)
                 // overlaps faint-but-real focusing texture (the measured
-                // 3–8 no-man's land), and whole-region commitment painted
+                // 3â€“8 no-man's land), and whole-region commitment painted
                 // this stack's mid-scene moss pockets with a defocused
-                // frame — the governance review's "sharp sub-content
+                // frame â€” the governance review's "sharp sub-content
                 // replaced by blur" failure re-measured. FAR boundary: a
                 // lit background is a focus continuum running off the
-                // sweep's far end — its content peaks across many late
+                // sweep's far end â€” its content peaks across many late
                 // frames, and committing the lot to the last one failed
                 // C7 (+0.9% background lift) and C8 (121 clustered blur
                 // cells) on the lit-garden acceptance stack while touching
@@ -1427,14 +1427,14 @@ public enum PyramidFusion {
         // subject test, where bright feature interiors stay enclosed) shows
         // a provably TEXTURED open component. Governance's own widened
         // subject test below merges never-focusing painted surfaces into
-        // the open field — necessary to reach amplified texture, but it
+        // the open field â€” necessary to reach amplified texture, but it
         // destroys the component partition this judgment needs (a flat
         // backdrop merged with the subject's smooth roofs read "textured",
         // and the whole stack got repainted). The cut (0.006) sits in the
         // measured gap between the flattest textured background (0.008) and
         // the most textured flat one (0.0042); components between the
-        // clean-field cut (0.0035) and this one get NEITHER mechanism —
-        // shipped behavior — which is the safe default for a border case.
+        // clean-field cut (0.0035) and this one get NEITHER mechanism â€”
+        // shipped behavior â€” which is the safe default for a border case.
         let govFlatCut = Float(env["HYPERFOCAL_PMAX_GOV_FLAT"] ?? "") ?? 0.006
         // The textured-open-background arm is the still-experimental half
         // (its radius-6 calibration is the one manual review rejected):
@@ -1459,7 +1459,7 @@ public enum PyramidFusion {
             // Governance's open-background membership is the TEXTURED
             // complement of the clean-field scope: candidate components that
             // are NOT provably flat. Flat components keep the shipped
-            // clean-field/near-black rendering — it is a faithful model
+            // clean-field/near-black rendering â€” it is a faithful model
             // exactly there, and governing them repainted healthy backdrops
             // wholesale.
             let flat = componentFlatness(comps: open.comps, candidate: open.candidate,
@@ -1481,7 +1481,7 @@ public enum PyramidFusion {
         // stack gate exists to skip).
         guard litMember + member > 0 else {
             log?("pmax gov: no textured open background and no lit "
-                 + "never-focused region — pass skipped")
+                 + "never-focused region â€” pass skipped")
             return
         }
         DMapFusion.dumpPlane(govBg, env: "HYPERFOCAL_DUMP_GOV_BG")
@@ -1490,13 +1490,13 @@ public enum PyramidFusion {
         let gw = (w + f - 1) / f, gh = (h + f - 1) / f
         let cells = gw * gh
         // Confidence is scale-free: a cell is confident when its energy MOVES
-        // with the sweep — the baseline-subtracted vote (max − min) must
+        // with the sweep â€” the baseline-subtracted vote (max âˆ’ min) must
         // clear a multiple of the cell's own baseline, i.e. a max/min ratio,
         // the same discriminator family as the never-focuses component test
-        // (noise breathes ~2:1, bokeh 5-30:1, focusing content 100-5000:1) —
+        // (noise breathes ~2:1, bokeh 5-30:1, focusing content 100-5000:1) â€”
         // plus an absolute floor against dark-noise cells whose near-zero
         // baseline explodes the ratio. A first formulation cut the raw vote
-        // at 0.02 × its p99, which landed BELOW the vote median on two
+        // at 0.02 Ã— its p99, which landed BELOW the vote median on two
         // corpus stacks: half of every backdrop was "confident" by noise,
         // and the map was per-cell patchwork instead of regional commitment.
         let ratioCut = Float(env["HYPERFOCAL_PMAX_GOV_RATIO"] ?? "") ?? 4
@@ -1511,11 +1511,11 @@ public enum PyramidFusion {
         // Eligibility: a cell is governed when it is confident itself, a
         // confident cell reaches it (multi-source BFS, 8-connected, so
         // `radius` is a Chebyshev reach in image space), or its own energy
-        // moves with the sweep at all (the self tier — leaving weak-textured
+        // moves with the sweep at all (the self tier â€” leaving weak-textured
         // cells ungoverned interleaves governed/ungoverned at cell scale,
         // which dilutes every weight to ~0.5, and a half-weight blend of
         // decorrelated fields carries HALF their energy). Truly floorless
-        // cells (max == min) outside every seed's reach stay unassigned —
+        // cells (max == min) outside every seed's reach stay unassigned â€”
         // the baseline-subtraction rule. WHICH frame a cell renders is
         // decided per block below, from measured energies; eligibility and
         // identity are deliberately separate questions.
@@ -1561,19 +1561,19 @@ public enum PyramidFusion {
             }
         }
         guard governed > 0 else {
-            log?("pmax gov: no cell reaches a confident vote — pass skipped")
+            log?("pmax gov: no cell reaches a confident vote â€” pass skipped")
             return
         }
         // Commit per BLOCK against the MEASURED energy table: each block of
-        // `blockCells`² cells takes the frame with the most summed level-0
-        // energy over the sweep — for a never-focused region that IS the
+        // `blockCells`Â² cells takes the frame with the most summed level-0
+        // energy over the sweep â€” for a never-focused region that IS the
         // liveliest available rendition, and beside a silhouette the sharp
         // frame's edge tail dominates the sum, so the band gets the
         // subject-sharp frame exactly as the prototype's propagation did.
         // Two measured failures force the block granularity: per-cell
         // commitment (even mode-regularized) puts a seam every few cells,
         // and with an 8-24 px feather against ~100 px acceptance tiles most
-        // of every tile was transition — decorrelated blends deadened it
+        // of every tile was transition â€” decorrelated blends deadened it
         // (energy is quadratic in blend weight) while the seams themselves
         // fabricated. Regions must be much larger than the feather, and the
         // feather much larger than a cell; blocks of 8 cells (64 px) keep
@@ -1584,7 +1584,7 @@ public enum PyramidFusion {
         // (max/min over frames at block scale). On a flat backdrop the
         // argmax is noise, adjacent blocks commit to arbitrary frames whose
         // glow/vignette/exposure differ slightly, and the composite paints
-        // a block-scale luminance mosaic — measured: 2.25% of a flat
+        // a block-scale luminance mosaic â€” measured: 2.25% of a flat
         // backdrop under the C4 frame floor, in clean 64 px rectangles. A
         // flat block also has nothing to GAIN from commitment: every
         // rendition agrees there. Block-scale noise ratios sit at ~1.1-1.3
@@ -1623,11 +1623,11 @@ public enum PyramidFusion {
         }
         // The selective second pass re-decodes only the frames that win
         // significant mass, capped (a full-field textured background can
-        // legitimately want many — its liveliest frame varies continuously
+        // legitimately want many â€” its liveliest frame varies continuously
         // with background depth, and capping at 4 measurably deadened tiles
-        // to 0.5-0.8× the liveliest rendition). Blocks whose winner did not
+        // to 0.5-0.8Ã— the liveliest rendition). Blocks whose winner did not
         // make the cut fall back to the best RANKED frame by the same
-        // table — a measured second choice, not a frame-index guess.
+        // table â€” a measured second choice, not a frame-index guess.
         // Tier-L committed frames join unconditionally: their blocks render
         // that frame and no other, so it must be decoded.
         let maxDom = max(Int(env["HYPERFOCAL_PMAX_GOV_FRAMES"] ?? "") ?? 8, 1)
@@ -1637,20 +1637,31 @@ public enum PyramidFusion {
             .prefix(maxDom).map { $0 }
         for b in 0..<(bw * bh) where litBlockFrame[b] >= 0 {
             let fr = Int(litBlockFrame[b])
-            if !dominant.contains(fr) { dominant.append(fr) }
+            // Concatenation, not append: at -Onone the Windows toolchain emits
+            // its own copy of the Array<Int>.append prespecialization that
+            // swiftSwiftOnoneSupport.dll already exports, and lld-link rejects
+            // the duplicate when the output is a DLL — so a debug
+            // HyperfocalBridge.dll (i.e. Scripts/build.ps1, the whole Windows
+            // dev loop) fails to link while hyperfocal-cli.exe builds fine.
+            // Other Array<Int>.append sites in the Kit do not trip it, so this
+            // is a workaround for a toolchain bug, not a rule: if the dev-loop
+            // link breaks again on $sSa6appendyyxnFSi_Tg5, this is the shape of
+            // the cause. The copy is bounded by the frame count and runs only
+            // for frames not already dominant, so the cost is noise.
+            if !dominant.contains(fr) { dominant = dominant + [fr] }
         }
         guard !dominant.isEmpty else {
-            log?("pmax gov: no frame wins significant mass — pass skipped")
+            log?("pmax gov: no frame wins significant mass â€” pass skipped")
             return
         }
         // The block CHOICE re-measures the dominant frames' level-0 energy
-        // over the MEMBERSHIP cells only (re-decode: ≤ 8 frames, and level 0
+        // over the MEMBERSHIP cells only (re-decode: â‰¤ 8 frames, and level 0
         // dominates pyramid cost). The streaming table sums every cell in
         // the block, and beside the subject that lets subject cells hand the
-        // block to the subject-sharp frame — whose background is maximally
+        // block to the subject-sharp frame â€” whose background is maximally
         // defocused exactly there (measured: subject-adjacent tiles at
-        // 0.19× the liveliest rendition). Background-only sums still give
-        // the silhouette band to the sharp frame — its edge tail is the
+        // 0.19Ã— the liveliest rendition). Background-only sums still give
+        // the silhouette band to the sharp frame â€” its edge tail is the
         // dominant energy IN the band cells.
         var domCell = [[Float]](repeating: [], count: dominant.count)
         for (k, fr) in dominant.enumerated() {
@@ -1694,7 +1705,7 @@ public enum PyramidFusion {
         // of each other coalesce onto the locally most common frame. Every
         // block boundary between two committed frames is a seam, and where
         // the stack breathes (or a frame registers imperfectly) the two
-        // sides' bokeh is mutually displaced — the blend prints ghosted
+        // sides' bokeh is mutually displaced â€” the blend prints ghosted
         // edges the focus measure reads as fabricated energy. Fewer, larger
         // regions put the seams where the energy actually changes hands.
         for _ in 0..<2 {
@@ -1768,7 +1779,7 @@ public enum PyramidFusion {
         // Full-res weight for one frame's regions: the smoothed cell grid
         // carries the 1-2 cell (8-16 px) feather at membership and
         // map-transition seams; the frames partition the governed area, so
-        // the weights sum to ≤ 1 everywhere by construction.
+        // the weights sum to â‰¤ 1 everywhere by construction.
         func frameWeight(for fr: Int) -> [Float] {
             var cw = [Float](repeating: 0, count: cells)
             for i in 0..<cells where assign[i] == Int32(fr) { cw[i] = 1 }
@@ -1778,11 +1789,11 @@ public enum PyramidFusion {
             for i in wp.indices { wp[i] *= m0[i] }
             return wp
         }
-        // Composite in IMAGE space — the way DMap renders everything, which
+        // Composite in IMAGE space â€” the way DMap renders everything, which
         // is the design's stated model. At weight 1 this is identical to
         // substituting the frame's pyramid at every level (the collapse of a
         // frame's own pyramid IS the frame); in the feather it is a convex
-        // per-pixel blend, so the result is bounded by its sources — no
+        // per-pixel blend, so the result is bounded by its sources â€” no
         // pixel can undershoot the frame floor (C4) or exceed every source
         // (C2). Blending BAND COEFFICIENTS per level was measured worse
         // twice: transition widths that differ per level in image space
@@ -1865,7 +1876,7 @@ public enum PyramidFusion {
             let fine = gaussians[l]
             let up = Filters.resizeBilinear(gaussians[l + 1], toWidth: fine.width, toHeight: fine.height)
             var band = ImageBuffer(width: fine.width, height: fine.height)
-            // Difference in f32, then narrow — subtracting two halves at f16
+            // Difference in f32, then narrow â€” subtracting two halves at f16
             // would quantize the band before it is ever stored.
             band.pixels.withUnsafeMutableBufferPointer { bpBuf in
                 let bp = bpBuf.baseAddress!
@@ -1934,7 +1945,7 @@ public enum PyramidFusion {
     /// untouched. Runs on the CPU, Metal and wgpu paths; the near-black gate
     /// that keeps track B out of the regime it is invalid in is built by shared
     /// code (`debloomMasks`) that every backend calls.
-    /// PMax's settings — the per-algorithm settings object, and the single
+    /// PMax's settings â€” the per-algorithm settings object, and the single
     /// source of its shipped defaults. Deliberately parallel to
     /// `DMapFusion.Options`: same name, same non-optional usage, same
     /// "construct it and mutate fields" shape, so neither algorithm's
@@ -1952,7 +1963,7 @@ public enum PyramidFusion {
     /// ever sees. `isEnabled` lives here so no caller has to decide what
     /// "off" means.
     public struct Options: Sendable {
-        /// Number of coarsest band levels to focus-gate. 0 disables the gate —
+        /// Number of coarsest band levels to focus-gate. 0 disables the gate â€”
         /// this one value is both the off-switch and the strength dial, which
         /// is exactly what the app's single "Debloom levels" slider drives.
         public var coarseLevels: Int
@@ -1961,7 +1972,7 @@ public enum PyramidFusion {
         /// (default ON). The level-0 grit blur exists because the
         /// max-selector can't tell focused detail from isolated
         /// noise; the same failure repeats at coarse levels with bloom in the
-        /// noise role — a defocused bright feature's smooth gradient wins
+        /// noise role â€” a defocused bright feature's smooth gradient wins
         /// scattered coarse cells against a sharp frame whose energy is dense
         /// but locally lower, and the winners reconstruct as a milky veil over
         /// lit surfaces (where the near-black debloom gate correctly stands
@@ -1971,10 +1982,10 @@ public enum PyramidFusion {
         /// same mechanism grit suppression uses at level 0. Found via the
         /// train stack's blown-text veil: +33 p99 luminance over the sharp
         /// source frame at baseline, +25 with this alone, +19.5 combined with
-        /// the Burt expand — the sharp frame itself is the ground truth, and
+        /// the Burt expand â€” the sharp frame itself is the ground truth, and
         /// the research doc carries the full measurements. Enabling brings
         /// the source-envelope discipline with it (the output clamp and the
-        /// near-black texture veto — see `applyEnvelopeClamp` /
+        /// near-black texture veto â€” see `applyEnvelopeClamp` /
         /// `nearBlackTextureVeto`), and forces the CPU engine until the GPU
         /// ports land.
         public var smoothedSelection: Bool
@@ -1984,15 +1995,15 @@ public enum PyramidFusion {
         /// least-bloomed) but on bright scenes it can only darken; a
         /// texture-winner picks the in-focus frame's low-pass on any backdrop
         /// polarity. Measured on the train stack: fixes darkest-base's global
-        /// −2.8 luminance dim but worsens peak veil (+36 vs +33 p99) — not a
+        /// âˆ’2.8 luminance dim but worsens peak veil (+36 vs +33 p99) â€” not a
         /// win standalone; kept for the follow-up that adds an entropy term to
         /// the winner statistic. Enabling forces the CPU engine.
         public var texturedBase: Bool
         /// Hybrid background governance (design note
         /// `2026-07-28-pmax-hybrid-background-renderer.md`): the frame map's
         /// nearest-confident-cell propagation bound, in sharpness-grid cells
-        /// (`DMapFusion.sharpnessDownsample` px each, so 6 ≈ the prototype's
-        /// 48 px). 0 = off, shipped behavior — one value is both the off
+        /// (`DMapFusion.sharpnessDownsample` px each, so 6 â‰ˆ the prototype's
+        /// 48 px). 0 = off, shipped behavior â€” one value is both the off
         /// switch and the reach dial, matching the `coarseLevels` pattern.
         /// Experimental and default-off: until the ship-on decision there is
         /// deliberately no CLI @Option or app control (the dual-UI surface
@@ -2001,7 +2012,7 @@ public enum PyramidFusion {
         /// (`isEnabled`); enabling it routes the fuse to the CPU engine.
         public var backgroundGovernanceRadius: Int
         /// Normalize per-frame exposure flicker before any selection is made
-        /// — the same correction DMap has always applied (bias-audit A0).
+        /// â€” the same correction DMap has always applied (bias-audit A0).
         /// Without it every keep-darkest / keep-brightest / argmin-luminance
         /// decision in the debloom family runs on raw exposure, so 1-2%
         /// shutter or LED flicker is signal to it and "darkest frame"
@@ -2025,14 +2036,14 @@ public enum PyramidFusion {
 
     /// Streaming exposure normalization for the PMax paths (bias-audit A0).
     /// DMap measures per-frame channel means, chains gains against frame 0,
-    /// and multiplies them in at render; PMax has no separate render pass —
-    /// selection IS the render — so the chain scales each frame at ingest
+    /// and multiplies them in at render; PMax has no separate render pass â€”
+    /// selection IS the render â€” so the chain scales each frame at ingest
     /// instead, before any energy table, luminance argmin, or envelope sees
     /// it. Gains are global scalars, so scaling the decoded frame commutes
     /// with the (possibly on-device) warp, and one CPU-side implementation
     /// serves all three engines. The output leaves ingest anchored to frame
     /// 0's exposure; `finish()` supplies the geometric-mean re-anchor
-    /// (`DMapFusion.renderGains`' convention — no single frame's flicker may
+    /// (`DMapFusion.renderGains`' convention â€” no single frame's flicker may
     /// set the output's exposure) to apply once, after governance, plus the
     /// per-frame render gains retouch needs to stamp matching pixels.
     /// Gains within 0.05% of unity snap to exactly 1 so an unflickered
@@ -2043,7 +2054,7 @@ public enum PyramidFusion {
         let enabled: Bool
         init(enabled: Bool) { self.enabled = enabled }
 
-        /// Measure + scale a decoded frame, in stream order (frame 0 first —
+        /// Measure + scale a decoded frame, in stream order (frame 0 first â€”
         /// the same chained contract the DMap loops rely on).
         func ingest(_ img: inout ImageBuffer, at fi: Int) {
             guard enabled else { return }
@@ -2098,14 +2109,14 @@ public enum PyramidFusion {
     /// accumulate the cell/block energy tables (a per-frame cell-grid
     /// reduction of the same grit-blurred level-0 energy the CPU pools) and
     /// then run the SHARED `governBackground` as a post-pass on the
-    /// collapsed image — decision code identical across engines by
+    /// collapsed image â€” decision code identical across engines by
     /// construction, only the table accumulation is per-engine.
     struct GPUGovernance {
         let radius: Int
     }
 
     /// Selection configuration for the GPU paths, resolved from `Options` +
-    /// env by `fuse` exactly once — the GPU paths receive it and never
+    /// env by `fuse` exactly once â€” the GPU paths receive it and never
     /// re-derive it (re-deriving per backend is how paths drift). `clamp`
     /// and `veto` (the source-envelope discipline) additionally require the
     /// focus gate's planes, matching the CPU path's condition.
@@ -2120,7 +2131,7 @@ public enum PyramidFusion {
 
     /// Fuses a StackSource: frames decode (prefetched) without warping, and
     /// alignment applies on the GPU when one is available. Prefer this over
-    /// the closure form for aligned sources — `source.frame` warps on the
+    /// the closure form for aligned sources â€” `source.frame` warps on the
     /// CPU, which costs more than the fusion itself on big stacks.
     public static func fuse(source: StackSource, preferGPU: Bool = true,
                             log: ((String) -> Void)? = nil,
@@ -2146,12 +2157,12 @@ public enum PyramidFusion {
 
     /// Streams frames in a single pass: only the running fused pyramid, per-level
     /// winner energies, and the current frame's pyramid are resident. Runs on
-    /// the GPU when one is available (same algorithm, ≥ 60 dB agreement;
+    /// the GPU when one is available (same algorithm, â‰¥ 60 dB agreement;
     /// `preferGPU: false` forces the CPU path), falling back to the CPU on
     /// Metal errors. Every path prefetches: `frame` may be invoked
     /// concurrently from background threads, so it must be stateless across
     /// calls (all in-tree closures are). `progress` receives, on the GPU path,
-    /// a low-res collapse of the forming pyramid to display (nil on CPU —
+    /// a low-res collapse of the forming pyramid to display (nil on CPU â€”
     /// collapsing per frame there would double the work).
     ///
     /// With `warp`, `frame` must return unwarped frames; alignment happens
@@ -2168,7 +2179,7 @@ public enum PyramidFusion {
                             onGains: (([SIMD3<Float>]) -> Void)? = nil,
                             frame: @escaping (Int) throws -> ImageBuffer) throws -> ImageBuffer {
         precondition(frameCount > 0)
-        // Settings, with env overrides for tuning/ablation — `options` is
+        // Settings, with env overrides for tuning/ablation â€” `options` is
         // authoritative, exactly as `DMapFusion.Options` is for dmap. There is
         // no separate enable var: `coarseLevels == 0` IS off (Options.isEnabled),
         // so `HYPERFOCAL_PMAX_DARK_COARSE=0` is the debloom ablation switch.
@@ -2180,7 +2191,7 @@ public enum PyramidFusion {
         // Focus-gate config for the GPU paths (nil = standard PMax).
         let gpuFocusGate = focusGateEnabled
             ? GPUFocusGate(coarseLevels: fgCoarse, threshold: fgThreshold) : nil
-        // Smoothed selection (shipped ON — see Options) / textured base
+        // Smoothed selection (shipped ON â€” see Options) / textured base
         // (experiment, off): env-overridable both ways ("0"/"1") like the
         // gate above.
         let smoothSel = (env["HYPERFOCAL_PMAX_SMOOTH_SEL"].map { $0 != "0" })
@@ -2189,10 +2200,10 @@ public enum PyramidFusion {
         // levelBandEnergy): squared band luminance instead of abs-sum RGB.
         let smoothSq = env["HYPERFOCAL_PMAX_SMOOTH_SQ"].map { $0 != "0" } ?? false
         // Burt expand instead of bilinear for band computation AND collapse
-        // (see upsampleBurtAt — they must switch together). Always on: this
+        // (see upsampleBurtAt â€” they must switch together). Always on: this
         // is operator correctness (the bilinear expand was leakier than the
         // proper reconstruction low-pass AND mismatched with the
-        // corner-aligned decimation grid), not a preference — the env var is
+        // corner-aligned decimation grid), not a preference â€” the env var is
         // the ablation switch, not a configuration surface.
         let expand5 = env["HYPERFOCAL_PMAX_EXPAND5"].map { $0 != "0" } ?? true
         let texBase = (env["HYPERFOCAL_PMAX_TEX_BASE"].map { $0 != "0" })
@@ -2201,7 +2212,7 @@ public enum PyramidFusion {
         // its own option (they are one shippable behavior: smoothing removes
         // unsupported wins, the clamp bounds what selection may fabricate in
         // never-focused cells, and the texture veto keeps keep-darkest out of
-        // live texture — the veto without the clamp would trade deadening for
+        // live texture â€” the veto without the clamp would trade deadening for
         // fabrication). Env kill-switches are for ablation only. Both need
         // the focus gate's full-res planes, so they stand down with it.
         let envClamp = smoothSel && focusGateEnabled
@@ -2209,15 +2220,15 @@ public enum PyramidFusion {
         let texVeto = envClamp
             && (env["HYPERFOCAL_PMAX_NB_TEX_VETO"].map { $0 != "0" } ?? true)
         // The textured base and the squared-luma energy ablation force the
-        // CPU path — silently taking a GPU path that ignores them would
+        // CPU path â€” silently taking a GPU path that ignores them would
         // measure the wrong configuration. Smoothed selection, the Burt
         // expand and the envelope discipline run on every engine,
         // configured once here via GPUSelect.
-        if texBase { log?("pmax: textured base on — CPU engine") }
-        if smoothSq { log?("pmax: squared-luma energy ablation — CPU engine") }
+        if texBase { log?("pmax: textured base on â€” CPU engine") }
+        if smoothSq { log?("pmax: squared-luma energy ablation â€” CPU engine") }
         // Background governance runs in two arms with different ship states.
         // Tier L (lit never-focused regional commitment) ships ON whenever
-        // the focus gate is enabled — the debloom slider's 0 is its off
+        // the focus gate is enabled â€” the debloom slider's 0 is its off
         // switch, and HYPERFOCAL_PMAX_LIT_OFF is the ablation. The textured
         // -open-background arm stays experimental behind
         // Options.backgroundGovernanceRadius / HYPERFOCAL_PMAX_GOV_RADIUS
@@ -2240,7 +2251,7 @@ public enum PyramidFusion {
         let gpuSelect = GPUSelect(smoothed: smoothSel, burt: expand5,
                                   clamp: envClamp, veto: texVeto)
         // One chain per fuse, shared with whichever engine runs (a GPU
-        // failure falls back to CPU with a FRESH chain — the failed
+        // failure falls back to CPU with a FRESH chain â€” the failed
         // attempt's partial ingests must not leak into the retry).
         #if canImport(Metal)
         if preferGPU, MetalEngine.shared != nil {
@@ -2291,13 +2302,13 @@ public enum PyramidFusion {
         // Winner energy per band-pass level, updated as frames stream through.
         var bestEnergy: [[Float]] = []
         // Experiment: darkest-frame base instead of a flat average. The base
-        // (coarsest Gaussian) low-pass carries the bloom halo — a bright feature
+        // (coarsest Gaussian) low-pass carries the bloom halo â€” a bright feature
         // defocused in some frames spreads into its dark surround, and averaging
         // paints that spread into the low frequencies. The least-luminous frame
         // at each base cell is the least-bloomed (spill floor logic), so keeping
         // it kills the halo. Env-gated for A/B.
         // Focus-gated coarse selection (see Options): the bloom is a
-        // low-frequency spread that enters through the coarse band levels — a
+        // low-frequency spread that enters through the coarse band levels â€” a
         // defocused bright feature's smooth bright gradient wins the
         // max-|Laplacian| selection over the dark in-focus neighbour. On the
         // coarsest `darkCoarse` band levels, keep max-energy only where a frame
@@ -2310,7 +2321,7 @@ public enum PyramidFusion {
         let useDarkBase = (env["HYPERFOCAL_PMAX_DARKBASE"] != nil || focusGate) && !texBase
         var baseBestLum: [Float] = []
         // Textured-base winner: highest local deviation of the base Gaussian
-        // per cell (−1 so the first frame installs unconditionally).
+        // per cell (âˆ’1 so the first frame installs unconditionally).
         var baseBestDev: [Float] = []
         // f32 sum of every frame's coarsest Gaussian, for the averaged base.
         // See the accumulation site for why this one buffer resists f16.
@@ -2335,12 +2346,12 @@ public enum PyramidFusion {
         // Governance frame-map inputs: per-cell extrema of the box-pooled
         // level-0 focus (cell = the sharpness grid,
         // `DMapFusion.sharpnessDownsample` px), plus the per-block per-frame
-        // energy table the block commitment reads — blocks × frames is tiny
-        // (a few MB at 45 MP × 80 frames), so the frame decision is a direct
+        // energy table the block commitment reads â€” blocks Ã— frames is tiny
+        // (a few MB at 45 MP Ã— 80 frames), so the frame decision is a direct
         // measurement over ALL frames, not an inference from argmax votes.
         var govCellMax: [Float] = []
         var govCellMin: [Float] = []
-        // Per-cell argmax frame of the level-0 cell energy — the raw
+        // Per-cell argmax frame of the level-0 cell energy â€” the raw
         // material of the protection-side focusing veto: genuine focusing
         // content coheres with its neighbors' argmaxes at its true focus
         // frame, never-focused mottle scatters (measured <50% agreement at
@@ -2350,7 +2361,7 @@ public enum PyramidFusion {
         var govGw = 0, govBw = 0
         let govBlockCells = max(Int(env["HYPERFOCAL_PMAX_GOV_BLOCK"] ?? "") ?? 8, 1)
         var sharpnessPlanes: [[Float]] = []
-        // Wall-clock phase buckets, reported through `log` at the end — the
+        // Wall-clock phase buckets, reported through `log` at the end â€” the
         // GPU path's discipline: optimization here must start from
         // measurements, not vibes. `decode` is time *blocked on* the
         // prefetcher, not decode execution.
@@ -2358,7 +2369,7 @@ public enum PyramidFusion {
         func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
         // Decode on background threads while this thread fuses the previous
-        // frame — same overlap (and same concurrent-invocation contract on
+        // frame â€” same overlap (and same concurrent-invocation contract on
         // `frame`) as the GPU paths.
         let prefetcher = FramePrefetcher(indices: Array(0..<frameCount),
                                          lookahead: decodeLookahead
@@ -2375,7 +2386,7 @@ public enum PyramidFusion {
             tDecode += now() - t0
             if workspace == nil {
                 // Canvas = the warp's output size (common-coverage crop) or
-                // the frame's own — decided before any warp so frames can be
+                // the frame's own â€” decided before any warp so frames can be
                 // resampled straight into the workspace's level 0.
                 let w = warp?.outputWidth ?? img.width
                 let h = warp?.outputHeight ?? img.height
@@ -2384,7 +2395,7 @@ public enum PyramidFusion {
                 ws.burtExpand = expand5
                 workspace = ws
                 if envClamp {
-                    // −1 / ∞ so the first frame installs unconditionally.
+                    // âˆ’1 / âˆž so the first frame installs unconditionally.
                     for l in 0..<Self.envClampOctaves {
                         let g = ws.envGridSize(level: l)
                         envMax[l] = [Float](repeating: -1, count: g.gw * g.gh)
@@ -2392,8 +2403,8 @@ public enum PyramidFusion {
                     let g0 = ws.envGridSize(level: 0)
                     env0Min = [Float](repeating: .infinity, count: g0.gw * g0.gh)
                 }
-                // bestEnergy = −1: the first frame's bands install
-                // unconditionally (energies are ≥ 0) — same convention as
+                // bestEnergy = âˆ’1: the first frame's bands install
+                // unconditionally (energies are â‰¥ 0) â€” same convention as
                 // the GPU paths' bestE fill.
                 fused = ws.sizes.map { ImageBuffer(width: $0.w, height: $0.h) }
                 bestEnergy = ws.sizes.dropLast().map {
@@ -2438,10 +2449,10 @@ public enum PyramidFusion {
                             ? [Float](repeating: 0, count: ws.sizes[l].w * ws.sizes[l].h)
                             : []
                     }
-                    // Track C: the plain max-energy winner over ALL frames — the
+                    // Track C: the plain max-energy winner over ALL frames â€” the
                     // un-debloomed selection, kept so bright regions can fall
                     // back to it (see the near-black gate at the merge). Cheap:
-                    // these are only the coarsest levels, ≤ 1/1024 of full res.
+                    // these are only the coarsest levels, â‰¤ 1/1024 of full res.
                     plainC = (0..<levels).map { l in
                         (l >= levels - darkCoarse)
                             ? ImageBuffer(width: ws.sizes[l].w, height: ws.sizes[l].h)
@@ -2453,25 +2464,25 @@ public enum PyramidFusion {
                             : []
                     }
                     // FULL-RES max-over-frames of the grit-blurred level-0
-                    // focus energy — "was this pixel ever sharp in any
+                    // focus energy â€” "was this pixel ever sharp in any
                     // frame". The focus membership's input, measured at full
                     // res for the same reason lumMin0 is (below).
                     focusMax0 = [Float](repeating: 0, count: ws.sizes[0].w * ws.sizes[0].h)
                     focusMin0 = [Float](repeating: .infinity, count: ws.sizes[0].w * ws.sizes[0].h)
-                    // FULL-RES per-cell min luminance over all frames — the
+                    // FULL-RES per-cell min luminance over all frames â€” the
                     // near-black test's input.
                     //
                     // Two things had to be right here. The statistic is the
                     // *min*, because the test asks what this cell's true
                     // background level is and the least-contaminated estimate of
                     // that is the darkest frame; a max-based test reads the glow
-                    // band — debloom's whole purpose — as a lit surface, because
+                    // band â€” debloom's whole purpose â€” as a lit surface, because
                     // bloom is exactly what makes it bright in some frame.
                     //
                     // And it is measured at level 0, not at the coarse level
-                    // being gated. Track B runs at 1/32…1/1024 scale, where one
+                    // being gated. Track B runs at 1/32â€¦1/1024 scale, where one
                     // cell spans the subject *and* the thin band beside it, so
-                    // no per-cell brightness test there can separate them — a
+                    // no per-cell brightness test there can separate them â€” a
                     // level-local test collapses the two regimes together
                     // (measured: no lo/hi pair satisfies both a dark-background
                     // and a bright-background stack). At full res they separate
@@ -2522,7 +2533,7 @@ public enum PyramidFusion {
             ws.level0BandEnergy()
             if envClamp {
                 // Envelope statistics from the RAW level-0 band (`band` is
-                // still this frame's — see the pooling note in `CPUWorkspace`).
+                // still this frame's â€” see the pooling note in `CPUWorkspace`).
                 let g0 = ws.envGridSize(level: 0)
                 let p = CPUWorkspace.poolBandEnergy(ws.band, width: cw, height: ch,
                                                     factor: g0.f)
@@ -2533,7 +2544,7 @@ public enum PyramidFusion {
             }
             if focusGate {
                 // Running full-res max of the grit-blurred level-0 focus
-                // energy — the focus membership's input.
+                // energy â€” the focus membership's input.
                 ws.energy.withUnsafeBufferPointer { ep in
                     focusMax0.withUnsafeMutableBufferPointer { fp in
                         focusMin0.withUnsafeMutableBufferPointer { np in
@@ -2549,9 +2560,9 @@ public enum PyramidFusion {
             }
             if governance {
                 // Per-cell extrema of this frame's box-pooled level-0 focus
-                // (max − min is the baseline-subtracted vote: a noise-floor
+                // (max âˆ’ min is the baseline-subtracted vote: a noise-floor
                 // cell whose energy never moves with the sweep contributes
-                // exactly nothing), and the block × frame energy table the
+                // exactly nothing), and the block Ã— frame energy table the
                 // regional frame decision reads.
                 let grid = DMapFusion.boxDownsample(ws.energy, width: cw, height: ch,
                                                     factor: DMapFusion.sharpnessDownsample)
@@ -2569,7 +2580,7 @@ public enum PyramidFusion {
             if onSharpness != nil {
                 // Reduction of a buffer that is live right here and nowhere
                 // else: `energy` is the grit-blurred level-0 focus
-                // `level0BandEnergy` just wrote — retained per frame, the
+                // `level0BandEnergy` just wrote â€” retained per frame, the
                 // sharpness planes retouch's space auto-pick queries (a PMax
                 // primary has no DMap pass to retain them from).
                 let f = DMapFusion.sharpnessDownsample
@@ -2631,7 +2642,7 @@ public enum PyramidFusion {
             }
             if texBase {
                 // Keep the base RGB of the frame with the highest local
-                // deviation at each cell — the in-focus frame's low-pass,
+                // deviation at each cell â€” the in-focus frame's low-pass,
                 // whatever the backdrop polarity (see Options.texturedBase).
                 ws.updateTexturedBase(fused: &fused![levels], bestDev: &baseBestDev)
             } else if useDarkBase {
@@ -2655,7 +2666,7 @@ public enum PyramidFusion {
                     }
                 }
             } else {
-                // Base level accumulates a running sum for averaging — the one
+                // Base level accumulates a running sum for averaging â€” the one
                 // buffer in the pyramid that is a true ACCUMULATOR, so it stays
                 // f32. Summing a stack into f16 would quantize catastrophically
                 // (the running total leaves the [0,1] range where f16's steps
@@ -2686,7 +2697,7 @@ public enum PyramidFusion {
         }
         // Focus-gate merge. Two steps: the debloom result is track A
         // (max-energy among in-focus frames) where any frame was in focus, else
-        // track B (darkest, bloom-free) — then the whole thing is gated to the
+        // track B (darkest, bloom-free) â€” then the whole thing is gated to the
         // near-black regions it is valid in, falling back to track C (the plain
         // max-energy selection) everywhere else.
         //
@@ -2694,12 +2705,12 @@ public enum PyramidFusion {
         // subject blooming into a dark background, which is the regime the
         // focus gate was built and tuned for. Where the neighbouring subject is
         // *darker* than the background the sign reverses, and "keep the darkest
-        // frame" keeps the most contaminated one — a dark halo hugging the
+        // frame" keeps the most contaminated one â€” a dark halo hugging the
         // silhouette, plus desaturation as the darker background mixes in.
         // Inverting track B to keep the brightest does not fix it (measured: it
         // trades the dark halo for a larger bright flare, because max-of-N grabs
         // the brightest outlier exactly as min-of-N grabs the darkest). The
-        // failure is the extreme order statistic, not its direction — so where
+        // failure is the extreme order statistic, not its direction â€” so where
         // the premise does not hold, the fix is to not use it. Track C is the
         // un-debloomed selection, which measures closest to DMap in that regime.
         //
@@ -2753,7 +2764,7 @@ public enum PyramidFusion {
                                     // the unfocused rendition nearest the clean
                                     // field. Near-black-only cells keep the
                                     // shipped behavior (max-energy A, darkest
-                                    // B) — their clean field is extrapolated.
+                                    // B) â€” their clean field is extrapolated.
                                     var d: SIMD4<Float>
                                     if hf[i] >= 0.5 {
                                         d = hfLoadRGBA(ap, pi)
@@ -2833,7 +2844,7 @@ public enum PyramidFusion {
             lo = pointwiseMin(lo, g)
             hi = pointwiseMax(hi, g)
         }
-        log?(String(format: "pmax exposure gains r %.4f…%.4f g %.4f…%.4f b %.4f…%.4f",
+        log?(String(format: "pmax exposure gains r %.4fâ€¦%.4f g %.4fâ€¦%.4f b %.4fâ€¦%.4f",
                     lo.x, hi.x, lo.y, hi.y, lo.z, hi.z))
         onGains?(fin.gains)
     }
@@ -2845,18 +2856,18 @@ public enum PyramidFusion {
     }
 
     /// Preallocated buffers + fused passes for the CPU streaming loop. The
-    /// naive per-frame pipeline (laplacianPyramid → selectionEnergy → select)
+    /// naive per-frame pipeline (laplacianPyramid â†’ selectionEnergy â†’ select)
     /// materialized every intermediate and allocated fresh buffers per level
-    /// per frame — measured ~1.4 s per 11 MP frame against ~0.6 s for the
+    /// per frame â€” measured ~1.4 s per 11 MP frame against ~0.6 s for the
     /// same arithmetic fused (2-core reference VM). Per-pixel math and
     /// ordering are identical to the naive helpers (and to the GPU kernels):
-    /// 5-tap H-then-V blur with edge clamps, min(2x, w−1) decimation,
-    /// (x+0.5)·s−0.5 bilinear upsampling, |R|+|G|+|B| energy, grit blur on
+    /// 5-tap H-then-V blur with edge clamps, min(2x, wâˆ’1) decimation,
+    /// (x+0.5)Â·sâˆ’0.5 bilinear upsampling, |R|+|G|+|B| energy, grit blur on
     /// level 0's energy only.
     final class CPUWorkspace {
         let levels: Int
         let sizes: [(w: Int, h: Int)]
-        // Gaussian levels and the level-0 band are f16 STORAGE — this is the
+        // Gaussian levels and the level-0 band are f16 STORAGE â€” this is the
         // pyramid working set, the largest transient in a PMax fuse, and every
         // read below widens to f32 before it does arithmetic. `energy` and the
         // per-level `best*` planes stay f32: they are scalar, a quarter the
@@ -2865,11 +2876,11 @@ public enum PyramidFusion {
         var band: [Float16]       // level-0 band, RGBA (kept for post-blur select)
         var energy: [Float]       // level-0 selection energy plane
         var energyTmp: [Float]    // blur scratch
-        // Smoothed-selection scratch (levels ≥ 1; sized for level 1, reused by
+        // Smoothed-selection scratch (levels â‰¥ 1; sized for level 1, reused by
         // every coarser level). Allocated on first use so the default
         // configuration pays nothing. Separate from `band`/`energy` because
         // `focusDownsampled` reads the level-0 energy plane inside the level
-        // loop — overwriting it per level would corrupt the focus gate.
+        // loop â€” overwriting it per level would corrupt the focus gate.
         var bandL: [Float16] = []
         var energyL: [Float] = []
         var energyLTmp: [Float] = []
@@ -2944,14 +2955,14 @@ public enum PyramidFusion {
             }
         }
 
-        /// Burt–Adelson expand of the corner-aligned pyramid grid
-        /// (`coarse[m] ↔ fine[2m]`, the decimation `fusedDownsample` applies):
-        /// zero-stuff + 5-tap `downKernel`, folded to per-parity taps — even
-        /// fine samples read coarse m−1/m/m+1 at (1/8, 6/8, 1/8), odd read
+        /// Burtâ€“Adelson expand of the corner-aligned pyramid grid
+        /// (`coarse[m] â†” fine[2m]`, the decimation `fusedDownsample` applies):
+        /// zero-stuff + 5-tap `downKernel`, folded to per-parity taps â€” even
+        /// fine samples read coarse mâˆ’1/m/m+1 at (1/8, 6/8, 1/8), odd read
         /// m/m+1 at (1/2, 1/2); exact unity gain because the kernel's odd taps
         /// are exactly 1/4. The bilinear `upsampleAt` below is both a leakier
-        /// reconstruction low-pass and *center*-aligned — mismatched with the
-        /// decimation grid — so bands computed against it keep more residual
+        /// reconstruction low-pass and *center*-aligned â€” mismatched with the
+        /// decimation grid â€” so bands computed against it keep more residual
         /// low-frequency, which is extra bloom for max-selection to pick up.
         /// Collapse and band computation must switch together (either operator
         /// reconstructs exactly when used for both). The default operator;
@@ -2995,8 +3006,8 @@ public enum PyramidFusion {
         }
 
         /// Bilinear sample of `gauss[l+1]` at the position `resizeBilinear`
-        /// maps output pixel (x, y) to — replicated exactly (incl. the
-        /// (x+0.5)·scale−0.5 mapping and edge clamps).
+        /// maps output pixel (x, y) to â€” replicated exactly (incl. the
+        /// (x+0.5)Â·scaleâˆ’0.5 mapping and edge clamps).
         @inline(__always)
         private static func upsampleAt(_ src: UnsafePointer<Float16>,
                                        sw: Int, sh: Int, x: Int, y: Int,
@@ -3018,7 +3029,7 @@ public enum PyramidFusion {
             return top * (1 - wy) + bot * wy
         }
 
-        /// Level 0: band + energy in one streaming pass (band kept — the
+        /// Level 0: band + energy in one streaming pass (band kept â€” the
         /// select must wait for the grit blur), then the energy blur.
         func level0BandEnergy() {
             let (w, h) = sizes[0]
@@ -3048,7 +3059,7 @@ public enum PyramidFusion {
             blurEnergy()
         }
 
-        /// Separable grit blur of the energy plane, in workspace buffers —
+        /// Separable grit blur of the energy plane, in workspace buffers â€”
         /// same taps and clamps as `Filters.blurPlane`.
         private func blurEnergy() {
             blurPlane(&energy, tmp: &energyTmp, width: sizes[0].w, height: sizes[0].h)
@@ -3107,7 +3118,7 @@ public enum PyramidFusion {
                                         // bands, so the winner copies verbatim.
                                         // (Making this band f32 was measured:
                                         // exactly 0 dB of parity, so it stays
-                                        // half — see WgpuParity's notes.)
+                                        // half â€” see WgpuParity's notes.)
                                         let pi = i * 4
                                         fp[pi] = bp[pi]
                                         fp[pi + 1] = bp[pi + 1]
@@ -3123,7 +3134,7 @@ public enum PyramidFusion {
         }
 
         /// This frame's fine-scale focus (the blurred level-0 selection energy)
-        /// box-downsampled to level `l` — high where the frame carries real
+        /// box-downsampled to level `l` â€” high where the frame carries real
         /// in-focus detail, ~0 where it is smooth/defocused/dark.
         func focusDownsampled(toLevel l: Int) -> [Float] {
             DMapFusion.boxDownsample(energy, width: sizes[0].w, height: sizes[0].h,
@@ -3137,11 +3148,11 @@ public enum PyramidFusion {
         /// keep the max-energy band (track A, `fused`/`bestE`); among defocused
         /// frames keep the darkest (track B, `trackB`/`bestDarkLum`). `hasFocus`
         /// records whether any frame was in focus; the caller keeps A there and
-        /// B elsewhere — so bloom can never win in a focused region, and a
+        /// B elsewhere â€” so bloom can never win in a focused region, and a
         /// featureless region falls to the least-bloomed frame.
         ///
         /// Track C (`plainC`/`plainBestE`) accumulates the ordinary max-energy
-        /// winner over *every* frame in parallel — the un-debloomed selection,
+        /// winner over *every* frame in parallel â€” the un-debloomed selection,
         /// which the caller's near-black gate falls back to outside the regime
         /// track B is valid in.
         func selectStreamingFocusGated(level l: Int, focus: [Float], threshold: Float,
@@ -3224,7 +3235,7 @@ public enum PyramidFusion {
         /// its Gaussian at this level (least bloomed), not the max-energy band.
         /// A defocused bright feature spreads a smooth bright gradient whose
         /// coarse band would win max-selection and leak into the dark neighbor;
-        /// the darkest frame there is the in-focus one, whose coarse band is ≈ 0.
+        /// the darkest frame there is the in-focus one, whose coarse band is â‰ˆ 0.
         func selectStreamingDark(level l: Int, fused: inout ImageBuffer, bestLum: inout [Float]) {
             let (w, h) = sizes[l]
             let (nw, nh) = sizes[l + 1]
@@ -3256,8 +3267,8 @@ public enum PyramidFusion {
             }
         }
 
-        /// Levels ≥ 1: upsample, band, energy, and winner update in one
-        /// streaming pass — nothing is materialized.
+        /// Levels â‰¥ 1: upsample, band, energy, and winner update in one
+        /// streaming pass â€” nothing is materialized.
         func selectStreaming(level l: Int, fused: inout ImageBuffer, best: inout [Float]) {
             let (w, h) = sizes[l]
             let (nw, nh) = sizes[l + 1]
@@ -3289,8 +3300,8 @@ public enum PyramidFusion {
             }
         }
 
-        /// Smoothed selection (levels ≥ 1): materialize level `l`'s band into
-        /// `bandL` and its grit-blurred energy into `energyL` — level 0's
+        /// Smoothed selection (levels â‰¥ 1): materialize level `l`'s band into
+        /// `bandL` and its grit-blurred energy into `energyL` â€” level 0's
         /// band/energy/blur/select shape, applied at this level's own scale.
         /// The `selectSmoothed*` variants below then read these instead of
         /// recomputing raw energy inline. See `Options.smoothedSelection`.
@@ -3442,7 +3453,7 @@ public enum PyramidFusion {
 
         /// Envelope-grid geometry for a level: cells cover `envCell` full-res
         /// pixels at every level a full-res cell can hold (`f = envCell >> l`,
-        /// so `f · 2^l = envCell` through the level where `f` reaches 1),
+        /// so `f Â· 2^l = envCell` through the level where `f` reaches 1),
         /// coarser beyond. A level-independent footprint is what lets the
         /// full-res focus-membership grid map onto every level's clamp grid.
         func envGridSize(level l: Int) -> (gw: Int, gh: Int, f: Int) {
@@ -3451,11 +3462,11 @@ public enum PyramidFusion {
             return ((w + f - 1) / f, (h + f - 1) / f, f)
         }
 
-        /// Mean SQUARED band energy (|R|²+|G|²+|B|²) of an RGBA plane per
-        /// envelope cell. Squared, not |·|: the clamp must hold in the same
+        /// Mean SQUARED band energy (|R|Â²+|G|Â²+|B|Â²) of an RGBA plane per
+        /// envelope cell. Squared, not |Â·|: the clamp must hold in the same
         /// units quality is measured in (squared-Laplacian family). A
         /// max-of-N mosaic has a different L1:L2 ratio than a coherent
-        /// frame — matching mean |band| over-clamps it ~25% in energy
+        /// frame â€” matching mean |band| over-clamps it ~25% in energy
         /// (measured: 40 of 77 background tiles pushed BELOW the envelope's
         /// low side on the defocused-foliage stack).
         static func poolBandEnergy(_ pixels: [Float16], width: Int, height: Int,
@@ -3514,8 +3525,8 @@ public enum PyramidFusion {
         }
 
         /// Textured-base winner update: keep this frame's base RGB where its
-        /// local (5×5, edge-clamped) luminance deviation beats every previous
-        /// frame's. The base plane is tiny (≤ 1/2^levels per side), so the
+        /// local (5Ã—5, edge-clamped) luminance deviation beats every previous
+        /// frame's. The base plane is tiny (â‰¤ 1/2^levels per side), so the
         /// windowed pass is noise-level cost. See `Options.texturedBase`.
         func updateTexturedBase(fused: inout ImageBuffer, bestDev: inout [Float]) {
             let (w, h) = sizes[levels]
@@ -3567,7 +3578,7 @@ public enum PyramidFusion {
     /// Per-pixel selection energy of a band-pass level: sum of |RGB| coefficients.
     /// Grit-suppression blur applied to the finest level's selection energy.
     /// At full resolution the max-selector can't distinguish focused detail
-    /// from single-pixel sensor noise — the documented cause of pyramid
+    /// from single-pixel sensor noise â€” the documented cause of pyramid
     /// fusion's noise amplification (commercial stackers note it and ship
     /// default-on "grit suppression"). Smoothing the *energy* (never
     /// the coefficients) makes selection favor spatially supported detail:
