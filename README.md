@@ -208,7 +208,7 @@ Hyperfocal hits one, it transcodes it to a cached DNG via the free
 [Adobe DNG Converter](https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html)
 and decodes that transparently — no action needed once the converter is
 installed (converted DNGs are cached in `%LOCALAPPDATA%\Hyperfocal\DNGCache`).
-If it isn't installed, the app points you to the download page. Set
+If it isn't installed, the app names the file that needs it. Set
 `HYPERFOCAL_DNG_CONVERTER` to the converter's `.exe` to override the standard
 install location. (macOS decodes these formats natively and needs none of
 this.)

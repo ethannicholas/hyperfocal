@@ -7,15 +7,21 @@ import Foundation
 /// missing-converter case to a guided-install prompt.
 public enum RawConverterError: Error, CustomStringConvertible, LocalizedError {
     /// The Adobe DNG Converter is not installed. `file` is the raw file that
-    /// needed it (display name, not a path) and `downloadURL` points at Adobe's
-    /// download page so the caller can guide the user there.
+    /// needed it (display name, not a path).
     ///
     /// The file travels with the error because the message names it. An earlier
     /// wording blamed "this camera's raw files", which is wrong twice over: the
     /// same camera can be set to emit raws LibRaw reads perfectly, so the fault
     /// is the encoding of this particular file, and a stack can mix files that
     /// do and don't need the converter.
-    case converterMissing(file: String, downloadURL: String)
+    ///
+    /// The message states the requirement and stops there: no download URL
+    /// travels with it, and no shell offers a button that opens one. Microsoft
+    /// Store policy 10.1.5 is an allowlist — a product may enable acquisition
+    /// only of the publisher's own Store-distributed products, or of add-ons
+    /// and extensions — and a third-party standalone converter is neither, so
+    /// an in-app link to its download page fails certification.
+    case converterMissing(file: String)
     /// The converter was found and launched but produced no usable DNG.
     case conversionFailed(String)
 
@@ -24,11 +30,11 @@ public enum RawConverterError: Error, CustomStringConvertible, LocalizedError {
 
     public var description: String {
         switch self {
-        case .converterMissing(let file, let url):
+        case .converterMissing(let file):
             return String(format: localizedString(
-                "%1$@ requires the free Adobe DNG Converter to decode. Download it from %2$@",
-                comment: "Shown when an undecodable raw is opened without the Adobe DNG Converter; %1$@ is the file name, %2$@ the download URL"),
-                file, url)
+                "%@ requires the free Adobe DNG Converter, which does not appear to be installed.",
+                comment: "Shown when an undecodable raw is opened without the Adobe DNG Converter; %@ is the file name"),
+                file)
         case .conversionFailed(let detail):
             return String(format: localizedString(
                 "Adobe DNG Converter could not convert this file: %@",
@@ -36,10 +42,6 @@ public enum RawConverterError: Error, CustomStringConvertible, LocalizedError {
         }
     }
 }
-
-/// Adobe's free DNG Converter download page.
-public let adobeDNGConverterDownloadURL =
-    "https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html"
 
 #if !canImport(CoreGraphics)
 
@@ -229,8 +231,7 @@ public final class RawConverter {
         if isUsable(cachePath) { return cachePath }
 
         guard let exe = locateConverter() else {
-            throw RawConverterError.converterMissing(file: url.lastPathComponent,
-                                                     downloadURL: adobeDNGConverterDownloadURL)
+            throw RawConverterError.converterMissing(file: url.lastPathComponent)
         }
 
         // This frame is the first of its stack to need transcoding, so convert

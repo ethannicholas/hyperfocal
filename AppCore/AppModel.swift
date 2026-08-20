@@ -2996,13 +2996,13 @@ public final class AppModel: ObservableObject {
                     return nil
                 }
             }()
-            // Missing converter carries its own wording and its own offer: the
-            // preview is where this is met first, so waiting until Fuse to
-            // mention the converter makes the app look broken in between.
-            let converterMissing: (detail: String, url: String)? = {
+            // Missing converter carries its own wording: the preview is where
+            // this is met first, so waiting until Fuse to mention the converter
+            // makes the app look broken in between.
+            let converterMissing: String? = {
                 guard let e = decodeError as? RawConverterError,
-                      case .converterMissing(_, let downloadURL) = e else { return nil }
-                return (detail: "\(e)", url: downloadURL)
+                      case .converterMissing = e else { return nil }
+                return "\(e)"
             }()
             let error: String? = decoded != nil ? nil
                 : converterMissing != nil
@@ -3020,8 +3020,7 @@ public final class AppModel: ObservableObject {
                 self.inputPixelSize = decoded?.pixelSize
                 self.inputPreviewError = error
                 if let converterMissing {
-                    self.offerConverterDownload(downloadURL: converterMissing.url,
-                                                detail: converterMissing.detail)
+                    self.noteConverterMissing(detail: converterMissing)
                 }
             }
         }
@@ -3444,8 +3443,8 @@ public final class AppModel: ObservableObject {
                     if error is CancellationError {
                         self.phase = self.frames.isEmpty ? .empty : .loaded
                     } else if let e = error as? RawConverterError,
-                              case .converterMissing(_, let url) = e {
-                        self.reportConverterMissing(downloadURL: url, detail: "\(e)")
+                              case .converterMissing = e {
+                        self.reportConverterMissing(detail: "\(e)")
                     } else {
                         self.reportFuseFailure("\(error)")
                     }
@@ -3564,47 +3563,51 @@ public final class AppModel: ObservableObject {
 
     /// The fuse failed only because the Adobe DNG Converter — needed to decode
     /// one of the raw files — isn't installed. Instead of the generic "Fuse
-    /// failed" notice, guide the user to Adobe's download page. Same batch/probe
-    /// gating as `reportFuseFailure`.
+    /// failed" notice, name the requirement. Same batch/probe gating as
+    /// `reportFuseFailure`.
+    ///
+    /// It states the requirement and stops there; it does not link to the
+    /// converter, and neither shell offers a button that would — see
+    /// `RawConverterError.converterMissing` for the constraint.
     ///
     /// The title names the problem, not the camera: the same body can be set to
     /// emit raws LibRaw decodes without help, so "this camera's raw files" both
     /// misattributes the fault and implies the hardware is unsupported. `detail`
     /// carries the file name (see `RawConverterError.converterMissing`).
-    func reportConverterMissing(downloadURL: String, detail: String) {
+    func reportConverterMissing(detail: String) {
         phase = .failed(detail)
         guard !batchMode else { return }
         if let fuseFailureAlertOverride {
             fuseFailureAlertOverride(detail)
             return
         }
-        dialogs?.openDownloadPage(
+        dialogs?.notify(
             message: localizedString("Cannot decode raw file", comment: ""),
-            informative: detail, url: downloadURL)
+            informative: detail, warning: true)
     }
 
-    /// Same offer, raised from the *preview* rather than from a fuse, so the
-    /// converter can be installed at the point the problem is first visible.
+    /// Same notice, raised from the *preview* rather than from a fuse, so the
+    /// problem is named at the point it is first visible.
     ///
     /// One-shot per session, which is the whole difference from
     /// `reportConverterMissing`: previews load on every selection change, so
     /// arrowing through a stack of High-Efficiency NEFs would otherwise throw a
     /// modal per keystroke. The flag is deliberately never reset — once the
-    /// offer has been declined, repeating it on the next selection is nagging,
+    /// notice has been dismissed, repeating it on the next selection is nagging,
     /// and Fuse still reports it if the user gets that far. Nothing here
     /// touches `phase`: a preview that can't decode is not a failed fuse.
     private var converterPromptShown = false
 
-    func offerConverterDownload(downloadURL: String, detail: String) {
+    func noteConverterMissing(detail: String) {
         guard !batchMode, !converterPromptShown else { return }
         converterPromptShown = true
         if let fuseFailureAlertOverride {
             fuseFailureAlertOverride(detail)
             return
         }
-        dialogs?.openDownloadPage(
+        dialogs?.notify(
             message: localizedString("Cannot decode raw file", comment: ""),
-            informative: detail, url: downloadURL)
+            informative: detail, warning: true)
     }
 
     /// Maps a per-stage fraction into the fuse's single progress span.

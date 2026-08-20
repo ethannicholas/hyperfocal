@@ -7,7 +7,6 @@
 
 #include <QComboBox>
 #include <QCursor>
-#include <QDesktopServices>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -116,19 +115,6 @@ void shellNotify(const char *message, const char *informative, int warning,
     box.exec();
 }
 
-void shellGuideDownload(const char *message, const char *informative,
-                        const char *url, void *) {
-    QMessageBox box(QMessageBox::Warning, QString::fromUtf8(message),
-                    alertBody(QString::fromUtf8(message), QString::fromUtf8(informative)));
-    applyAlertIcon(box);
-    QAbstractButton *download =
-        box.addButton(QObject::tr("Open Download Page"), QMessageBox::AcceptRole);
-    box.addButton(bridgeUIString("cancel"), QMessageBox::RejectRole);
-    box.exec();
-    if (box.clickedButton() == download)
-        QDesktopServices::openUrl(QUrl(QString::fromUtf8(url)));
-}
-
 void bridgeChanged(void *) {
     // Fires on the main thread; queue the refresh so QML never re-enters
     // a half-applied model turn.
@@ -148,7 +134,6 @@ Shell::Shell(QObject *parent) : QObject(parent) {
     liveShell = this;
     hf_set_changed_callback(bridgeChanged, nullptr);
     hf_set_dialog_callbacks(shellConfirm, shellNotify, nullptr);
-    hf_set_guide_callback(shellGuideDownload, nullptr);
     if (qApp) qApp->installEventFilter(this);
     refreshFromBridge();
 }
@@ -265,7 +250,6 @@ QVariantList Shell::fingerprint() const {
 }
 
 Shell::~Shell() {
-    hf_set_guide_callback(nullptr, nullptr);
     hf_set_dialog_callbacks(nullptr, nullptr, nullptr);
     hf_set_changed_callback(nullptr, nullptr);
     liveShell = nullptr;
